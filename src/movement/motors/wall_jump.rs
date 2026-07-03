@@ -12,7 +12,7 @@ use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, Player};
+use crate::movement::{Actor, BodyVelocity};
 
 const JUMP_UP_IMPULSE: f32 = 7.0;
 const STAMINA_COST: f32 = 15.0;
@@ -36,7 +36,7 @@ pub struct WallJumpState {
 }
 
 pub fn propose(
-    mut q: Single<
+    mut q: Query<
         (
             &Intents,
             &LocomotionState,
@@ -44,60 +44,57 @@ pub fn propose(
             &mut WallJumpState,
             &mut ProposalBuffer,
         ),
-        With<Player>,
+        With<Actor>,
     >,
 ) {
-    let (intents, current, stamina, state, buffer) = &mut *q;
+    for (intents, current, stamina, mut state, mut buffer) in &mut q {
+        if !intents.wants_jump {
+            state.needs_release = false;
+        }
 
-    if !intents.wants_jump {
-        state.needs_release = false;
-    }
+        if *current == LocomotionState::Climb && intents.wants_jump && !state.needs_release {
+            if !stamina.is_exhausted() {
+                // Arm the jump for this activation.
+                state.needs_release = true;
+                state.is_jumping = true;
+                state.timer = JUMP_DURATION;
+                let _ = buffer.push(TransitionProposal::new(
+                    LocomotionState::WallJump,
+                    Priority::Forced,
+                    FORCED_WEIGHT,
+                    "wall_jump",
+                ));
+                continue;
+            }
+        }
 
-    if **current == LocomotionState::Climb && intents.wants_jump && !state.needs_release {
-        if !stamina.is_exhausted() {
-            // Arm the jump for this activation.
-            state.needs_release = true;
-            state.is_jumping = true;
-            state.timer = JUMP_DURATION;
+        if *current == LocomotionState::WallJump && state.is_jumping {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::WallJump,
                 Priority::Forced,
                 FORCED_WEIGHT,
                 "wall_jump",
             ));
-            return;
         }
-    }
-
-    if **current == LocomotionState::WallJump && state.is_jumping {
-        let _ = buffer.push(TransitionProposal::new(
-            LocomotionState::WallJump,
-            Priority::Forced,
-            FORCED_WEIGHT,
-            "wall_jump",
-        ));
     }
 }
 
-pub fn tick(
-    player: Single<
-        (
-            Entity,
-            &Collider,
-            &mut Transform,
-            &mut BodyVelocity,
-            &mut BodyContact,
-            &mut WallJumpState,
-            &Intents,
-            &mut Stamina,
-            &LedgeFacts,
-        ),
-        With<Player>,
-    >,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
-    let (
+type TickQuery<'a> = (
+    Entity,
+    &'a Collider,
+    &'a mut Transform,
+    &'a mut BodyVelocity,
+    &'a mut BodyContact,
+    &'a mut WallJumpState,
+    &'a Intents,
+    &'a mut Stamina,
+    &'a LedgeFacts,
+    &'a LocomotionState,
+);
+
+pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+    let dt = time.delta_secs();
+    for (
         entity,
         collider,
         mut transform,
@@ -107,67 +104,72 @@ pub fn tick(
         intents,
         mut stamina,
         ledge,
-    ) = player.into_inner();
-    let dt = time.delta_secs();
+        loco_state,
+    ) in &mut q
+    {
+        if *loco_state != LocomotionState::WallJump {
+            continue;
+        }
 
-    let mut v = vel.0;
+        let mut v = vel.0;
 
-    // First tick: apply the launch impulse (timer freshly set to JUMP_DURATION).
-    if state.timer == JUMP_DURATION {
-        let mut normal = ledge.climb_normal;
-        if normal == Vec3::ZERO {
-            normal = if contact.on_wall {
-                -contact.wall_normal
+        // First tick: apply the launch impulse (timer freshly set to JUMP_DURATION).
+        if state.timer == JUMP_DURATION {
+            let mut normal = ledge.climb_normal;
+            if normal == Vec3::ZERO {
+                normal = if contact.on_wall {
+                    -contact.wall_normal
+                } else {
+                    transform.rotation * Vec3::Z
+                };
+            }
+            let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
+
+            if intents.is_climbing_up() {
+                v = Vec3::Y * JUMP_UP_IMPULSE - normal * WALL_CONTACT_PUSH;
+            } else if intents.is_climbing_down() {
+                let away = (normal + Vec3::Y * AWAY_UP_BLEND).normalize_or_zero();
+                v = away * AWAY_LEAP_SPEED + normal * AWAY_NORMAL_PUSH;
+            } else if intents.is_climbing_left() {
+                v = -right_dir * (JUMP_UP_IMPULSE * LATERAL_SPEED_FRACTION);
+                v.y = LATERAL_VERTICAL_LIFT;
+                v -= normal * LATERAL_NORMAL_RETRACTION;
+            } else if intents.is_climbing_right() {
+                v = right_dir * (JUMP_UP_IMPULSE * LATERAL_SPEED_FRACTION);
+                v.y = LATERAL_VERTICAL_LIFT;
+                v -= normal * LATERAL_NORMAL_RETRACTION;
             } else {
-                transform.rotation * Vec3::Z
-            };
+                let away = (normal + Vec3::Y * AWAY_UP_BLEND).normalize_or_zero();
+                v = away * AWAY_LEAP_SPEED + normal * AWAY_NORMAL_PUSH;
+            }
+            stamina.drain(STAMINA_COST);
         }
-        let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
 
-        if intents.is_climbing_up() {
-            v = Vec3::Y * JUMP_UP_IMPULSE - normal * WALL_CONTACT_PUSH;
-        } else if intents.is_climbing_down() {
-            let away = (normal + Vec3::Y * AWAY_UP_BLEND).normalize_or_zero();
-            v = away * AWAY_LEAP_SPEED + normal * AWAY_NORMAL_PUSH;
-        } else if intents.is_climbing_left() {
-            v = -right_dir * (JUMP_UP_IMPULSE * LATERAL_SPEED_FRACTION);
-            v.y = LATERAL_VERTICAL_LIFT;
-            v -= normal * LATERAL_NORMAL_RETRACTION;
-        } else if intents.is_climbing_right() {
-            v = right_dir * (JUMP_UP_IMPULSE * LATERAL_SPEED_FRACTION);
-            v.y = LATERAL_VERTICAL_LIFT;
-            v -= normal * LATERAL_NORMAL_RETRACTION;
-        } else {
-            let away = (normal + Vec3::Y * AWAY_UP_BLEND).normalize_or_zero();
-            v = away * AWAY_LEAP_SPEED + normal * AWAY_NORMAL_PUSH;
+        state.timer -= dt;
+
+        // Soft ceiling clip (same as climb).
+        if ledge.lip_height > 0.0 && v.y > 0.0 {
+            let feet_y = transform.translation.y - BODY_HALF_HEIGHT;
+            let max_y = feet_y + ledge.lip_height - LEDGE_TOP_OFFSET;
+            if transform.translation.y >= max_y {
+                transform.translation.y = max_y;
+                v.y = 0.0;
+                state.is_jumping = false;
+            }
         }
-        stamina.drain(STAMINA_COST);
-    }
 
-    state.timer -= dt;
+        vel.0 = body_move_and_slide(
+            &mas,
+            entity,
+            collider,
+            &mut transform,
+            v,
+            time.delta(),
+            &mut contact,
+        );
 
-    // Soft ceiling clip (same as climb).
-    if ledge.lip_height > 0.0 && v.y > 0.0 {
-        let feet_y = transform.translation.y - BODY_HALF_HEIGHT;
-        let max_y = feet_y + ledge.lip_height - LEDGE_TOP_OFFSET;
-        if transform.translation.y >= max_y {
-            transform.translation.y = max_y;
-            v.y = 0.0;
+        if state.timer <= 0.0 {
             state.is_jumping = false;
         }
-    }
-
-    vel.0 = body_move_and_slide(
-        &mas,
-        entity,
-        collider,
-        &mut transform,
-        v,
-        time.delta(),
-        &mut contact,
-    );
-
-    if state.timer <= 0.0 {
-        state.is_jumping = false;
     }
 }

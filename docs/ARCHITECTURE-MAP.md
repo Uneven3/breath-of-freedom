@@ -53,11 +53,11 @@ explícitamente — el objetivo es que este inventario nunca oculte un hueco.
 | Combate | Movement | `READ` + `MESSAGE` | Lee `LocomotionState` (bonus sigilo); pide restricciones/interrupciones locomotoras vía `LocomotionConstraintMessage`; Movement decide el estado físico válido |
 | Enemies | Movement, Combate | `SHARED-CONTRACT` | Mismo `Intents`/`CombatIntents`, Brain de IA en vez de hardware |
 | Enemies | World | `READ` | Lee `TimeOfDay` para spawn/comportamiento |
-| Enemies | *(fundacional)* | `BLOCKING-PREREQUISITE` | Requiere el contrato multi-actor `Query<Actor>` (`rationale/multi-actor-dispatch.md`) |
+| Enemies | *(fundacional)* | `BLOCKING-PREREQUISITE` | **Resuelto** — Movement ya opera sobre `Query<Actor>` (ticket `multi-actor-migration`); Enemies puede empezar (`rationale/multi-actor-dispatch.md`) |
 | Mounts | Movement | `READ` + `WRITE-OWN` | Mounts lee `movement::Intents` del jinete y escribe `MountIntents` en la montura mediante `translate_mount_intents`; Movement no conoce Mounts |
 | Movement, Combat, Mounts | *(núcleo compartido `src/proposal.rs`)* | `SHARED-CONTRACT` | Cada uno usa un type alias sobre `proposal::ProposalBuffer<S, N>` de capacidad fija — mismo algoritmo de arbitración, tipos concretos propios por sistema (`rationale/proposal-arbitration-core.md`) |
 | Multiplayer | Movement, Combate, Mounts | `SHARED-CONTRACT` | Un jugador remoto es un `Actor` más, controlado por un `InputSource` de red; corren los mismos Brains genéricos |
-| Multiplayer | *(fundacional)* | `BLOCKING-PREREQUISITE` | Mismo contrato multi-actor que Enemies |
+| Multiplayer | *(fundacional)* | `BLOCKING-PREREQUISITE` | **Resuelto** — mismo contrato multi-actor que Enemies, ya implementado |
 | Multiplayer | World | `SHARED-CONTRACT` | `TimeOfDay`/`Weather` son estado de sesión; solo el host los simula |
 | UI | Movement, Combate, Mounts, Health | `READ` | Nunca escribe hacia atrás (Constitución §20) |
 | SFX, VFX | Movement, Combate, World | `MESSAGE` + `READ` | `CueMessage` para sucesos discretos emitidos por simulación o colas de transición; lectura read-only en `Update` para parámetros continuos (`rationale/presentation-cues.md`) |
@@ -99,8 +99,10 @@ explícitamente — el objetivo es que este inventario nunca oculte un hueco.
 
 - **Trabajo aditivo:** World, UI, SFX/VFX y Combat se diseñan como consumidores
   o extensiones aditivas de contratos existentes.
-- **Prerequisito fundacional:** Enemies y Multiplayer requieren que Movement y
-  Combat operen sobre `Actor` genérico en vez de asumir un único jugador.
+- **Prerequisito fundacional (Movement: resuelto):** Enemies y Multiplayer
+  requieren que Movement y Combat operen sobre `Actor` genérico en vez de
+  asumir un único jugador. Movement ya lo cumple (`multi-actor-migration`);
+  Combat sigue pendiente de la misma migración.
 - **Mounts:** usa pipeline propio y un sistema de traducción de input ordenado
   después de `MovementSet::ReadIntents` y antes de `MountSet::GatherProposals`;
   no requiere que `movement::brain` importe tipos de Mounts.

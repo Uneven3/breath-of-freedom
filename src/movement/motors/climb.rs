@@ -12,7 +12,7 @@ use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, Player};
+use crate::movement::{Actor, BodyVelocity};
 
 const CLIMB_SPEED: f32 = 2.5;
 const STAMINA_COST_PER_SEC: f32 = 5.0;
@@ -20,65 +20,59 @@ const WALL_APPROACH_SPEED: f32 = 0.5;
 const LEDGE_TOP_OFFSET: f32 = 0.33;
 const MIN_DIR_SQ: f32 = 0.001;
 
-pub fn propose(
-    mut q: Single<
-        (
-            &GroundFacts,
-            &LedgeFacts,
-            &Stamina,
-            &Intents,
-            &LocomotionState,
-            &mut ProposalBuffer,
-        ),
-        With<Player>,
-    >,
-) {
-    let (ground, ledge, stamina, intents, current, buffer) = &mut *q;
+type ProposeQuery<'a> = (
+    &'a GroundFacts,
+    &'a LedgeFacts,
+    &'a Stamina,
+    &'a Intents,
+    &'a LocomotionState,
+    &'a mut ProposalBuffer,
+);
 
-    if stamina.is_exhausted() || !intents.wants_climb {
-        return;
-    }
-    let climbing = **current == LocomotionState::Climb;
-    // Sticky-on-floor at curved apexes where is_on_floor flickers (sphere/cylinder top).
-    let near_apex =
-        ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
+pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
+    for (ground, ledge, stamina, intents, current, mut buffer) in &mut q {
+        if stamina.is_exhausted() || !intents.wants_climb {
+            continue;
+        }
+        let climbing = *current == LocomotionState::Climb;
+        // Sticky-on-floor at curved apexes where is_on_floor flickers (sphere/cylinder top).
+        let near_apex =
+            ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
 
-    if climbing && (near_apex || ledge.can_continue_climb) {
-        let _ = buffer.push(TransitionProposal::new(
-            LocomotionState::Climb,
-            Priority::Opportunistic,
-            5,
-            "climb",
-        ));
-    } else if !climbing && ledge.can_climb {
-        let _ = buffer.push(TransitionProposal::new(
-            LocomotionState::Climb,
-            Priority::PlayerRequested,
-            5,
-            "climb",
-        ));
+        if climbing && (near_apex || ledge.can_continue_climb) {
+            let _ = buffer.push(TransitionProposal::new(
+                LocomotionState::Climb,
+                Priority::Opportunistic,
+                5,
+                "climb",
+            ));
+        } else if !climbing && ledge.can_climb {
+            let _ = buffer.push(TransitionProposal::new(
+                LocomotionState::Climb,
+                Priority::PlayerRequested,
+                5,
+                "climb",
+            ));
+        }
     }
 }
 
-pub fn tick(
-    player: Single<
-        (
-            Entity,
-            &Collider,
-            &mut Transform,
-            &mut BodyVelocity,
-            &Intents,
-            &mut Stamina,
-            &mut BodyContact,
-            &LedgeFacts,
-            &GroundFacts,
-        ),
-        With<Player>,
-    >,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
-    let (
+type TickQuery<'a> = (
+    Entity,
+    &'a Collider,
+    &'a mut Transform,
+    &'a mut BodyVelocity,
+    &'a Intents,
+    &'a mut Stamina,
+    &'a mut BodyContact,
+    &'a LedgeFacts,
+    &'a GroundFacts,
+    &'a LocomotionState,
+);
+
+pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+    let dt = time.delta_secs();
+    for (
         entity,
         collider,
         mut transform,
@@ -88,85 +82,90 @@ pub fn tick(
         mut contact,
         ledge,
         ground,
-    ) = player.into_inner();
-    let dt = time.delta_secs();
-
-    let climb_normal = ledge.climb_normal;
-    if climb_normal == Vec3::ZERO {
-        return;
-    }
-
-    let near_apex =
-        ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
-    let touching_wall = ledge.can_continue_climb;
-
-    // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
-    if !near_apex {
-        let mut face_dir = if !touching_wall {
-            ledge.wall_point - transform.translation
-        } else {
-            -climb_normal
-        };
-        face_dir.y = 0.0;
-        if face_dir.length_squared() > MIN_DIR_SQ {
-            let fd = face_dir.normalize();
-            transform.rotation = Quat::from_rotation_y((-fd.x).atan2(-fd.z));
+        state,
+    ) in &mut q
+    {
+        if *state != LocomotionState::Climb {
+            continue;
         }
-    }
 
-    let mut v = vel.0;
-    v.y = -intents.raw_input.y * CLIMB_SPEED;
-
-    // Lateral movement, gated by side-wall presence.
-    let mut lateral_input = intents.raw_input.x;
-    if intents.is_climbing_right() && !ledge.has_wall_right {
-        lateral_input = 0.0;
-    } else if intents.is_climbing_left() && !ledge.has_wall_left {
-        lateral_input = 0.0;
-    }
-    let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
-    let lateral_vel = right_dir * lateral_input * CLIMB_SPEED;
-
-    // Wall-stick: pull toward the actual contact point while approaching.
-    let mut wall_stick = Vec3::ZERO;
-    if !near_apex && !touching_wall {
-        let mut to_wall = ledge.wall_point - transform.translation;
-        to_wall.y = 0.0;
-        if to_wall.length_squared() > MIN_DIR_SQ {
-            wall_stick = to_wall.normalize() * WALL_APPROACH_SPEED;
+        let climb_normal = ledge.climb_normal;
+        if climb_normal == Vec3::ZERO {
+            continue;
         }
-    }
-    v.x = lateral_vel.x + wall_stick.x;
-    v.z = lateral_vel.z + wall_stick.z;
 
-    // Soft ceiling: cap climb just below the lip so the player can't climb over —
-    // forces a Mantle. (lip_height > 0 means the down-cast found the ledge top.)
-    if ledge.lip_height > 0.0 && v.y > 0.0 {
-        let feet_y = transform.translation.y - 1.0;
-        let ledge_global_y = feet_y + ledge.lip_height;
-        let max_y = ledge_global_y - LEDGE_TOP_OFFSET;
-        if transform.translation.y >= max_y {
-            v.y = 0.0;
-            transform.translation.y = max_y;
-        } else {
-            let max_safe = (max_y - transform.translation.y) / dt;
-            if v.y > max_safe {
-                v.y = max_safe;
+        let near_apex =
+            ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
+        let touching_wall = ledge.can_continue_climb;
+
+        // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
+        if !near_apex {
+            let mut face_dir = if !touching_wall {
+                ledge.wall_point - transform.translation
+            } else {
+                -climb_normal
+            };
+            face_dir.y = 0.0;
+            if face_dir.length_squared() > MIN_DIR_SQ {
+                let fd = face_dir.normalize();
+                transform.rotation = Quat::from_rotation_y((-fd.x).atan2(-fd.z));
             }
         }
+
+        let mut v = vel.0;
+        v.y = -intents.raw_input.y * CLIMB_SPEED;
+
+        // Lateral movement, gated by side-wall presence.
+        let mut lateral_input = intents.raw_input.x;
+        if intents.is_climbing_right() && !ledge.has_wall_right {
+            lateral_input = 0.0;
+        } else if intents.is_climbing_left() && !ledge.has_wall_left {
+            lateral_input = 0.0;
+        }
+        let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
+        let lateral_vel = right_dir * lateral_input * CLIMB_SPEED;
+
+        // Wall-stick: pull toward the actual contact point while approaching.
+        let mut wall_stick = Vec3::ZERO;
+        if !near_apex && !touching_wall {
+            let mut to_wall = ledge.wall_point - transform.translation;
+            to_wall.y = 0.0;
+            if to_wall.length_squared() > MIN_DIR_SQ {
+                wall_stick = to_wall.normalize() * WALL_APPROACH_SPEED;
+            }
+        }
+        v.x = lateral_vel.x + wall_stick.x;
+        v.z = lateral_vel.z + wall_stick.z;
+
+        // Soft ceiling: cap climb just below the lip so the player can't climb over —
+        // forces a Mantle. (lip_height > 0 means the down-cast found the ledge top.)
+        if ledge.lip_height > 0.0 && v.y > 0.0 {
+            let feet_y = transform.translation.y - 1.0;
+            let ledge_global_y = feet_y + ledge.lip_height;
+            let max_y = ledge_global_y - LEDGE_TOP_OFFSET;
+            if transform.translation.y >= max_y {
+                v.y = 0.0;
+                transform.translation.y = max_y;
+            } else {
+                let max_safe = (max_y - transform.translation.y) / dt;
+                if v.y > max_safe {
+                    v.y = max_safe;
+                }
+            }
+        }
+
+        vel.0 = body_move_and_slide(
+            &mas,
+            entity,
+            collider,
+            &mut transform,
+            v,
+            time.delta(),
+            &mut contact,
+        );
+
+        stamina.drain(STAMINA_COST_PER_SEC * dt);
     }
-
-    vel.0 = body_move_and_slide(
-        &mas,
-        entity,
-        collider,
-        &mut transform,
-        v,
-        time.delta(),
-        &mut contact,
-    );
-
-    stamina.drain(STAMINA_COST_PER_SEC * dt);
 }
 
 #[cfg(test)]
@@ -175,6 +174,7 @@ mod tests {
     //! apex/wall-continuation rules. The tick assertions need a physics world
     //! and are covered by play-testing.
     use super::*;
+    use crate::movement::Player;
     use bevy::ecs::system::RunSystemOnce;
 
     /// Spawn a lone player, run `climb::propose`, return its resulting proposals.
@@ -189,6 +189,7 @@ mod tests {
         let e = world
             .spawn((
                 Player,
+                Actor,
                 ground,
                 ledge,
                 stamina,
@@ -203,7 +204,7 @@ mod tests {
             .get::<ProposalBuffer>()
             .unwrap()
             .iter()
-            .copied()
+            .cloned()
             .collect()
     }
 

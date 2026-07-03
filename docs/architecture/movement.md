@@ -14,6 +14,8 @@
 | `Stamina` | `stamina.rs` | Pool de esfuerzo. Solo sus propios métodos `drain`/`recover` la mutan. |
 | `BodyContact`, `GroundFacts`, `LedgeFacts`, `StairsFacts`, `LadderFacts` | `facts.rs` | Hechos del mundo que los servicios calculan y los motores leen. |
 | `ClimbInputState` | `brain.rs` | Estado del toggle de escalar por actor/controlador (tecla `1`, no un hold). No es `Resource` global, porque el contrato multi-actor requiere input independiente por actor. |
+| `JumpPhase`, `JumpLocal`, `GlideLocal`, `SprintLock` | `motors/jump.rs`, `motors/glide.rs`, `motors/sprint.rs` | Estado propio de cada motor (timers, latches), por-actor. Eran `Local<T>` de sistema antes de `multi-actor-migration` — promovidos a componente para no compartir estado entre actores. |
+| `MantleState`, `VaultState`, `WallJumpState`, `EdgeLeapState` | `motors/mantle.rs`, `motors/auto_vault.rs`, `motors/wall_jump.rs`, `motors/edge_leap.rs` | Máquina de fase compartida entre `propose` y `tick` de cada motor, por-actor desde su diseño original (`Local` no se puede compartir entre dos sistemas). |
 
 `brain::read_intents` no lee `ButtonInput<KeyCode>` — lee
 `input::ActiveActions` para el `InputSource` enlazado por
@@ -83,5 +85,6 @@ requieren el contrato multi-actor descrito abajo.
   mismo plugin — ver `swim.md`, `snowboard.md` y
   `rationale/traversal-extensions-in-movement.md`.
 - **Contrato multi-actor:** `Query<.., With<Actor>>` + guard interno por
-  entidad es prerequisito de Enemies y Multiplayer — ver
+  entidad — implementado (ticket `multi-actor-migration`), ya no es un
+  prerequisito pendiente de Enemies y Multiplayer. Ver
   `rationale/multi-actor-dispatch.md` y `docs/ARCHITECTURE-MAP.md`.

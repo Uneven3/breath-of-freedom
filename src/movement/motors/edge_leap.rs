@@ -11,7 +11,7 @@ use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, GRAVITY, Player};
+use crate::movement::{Actor, BodyVelocity, GRAVITY};
 
 const LEAP_AWAY_IMPULSE: f32 = 8.0;
 const VERTICAL_BOOST: f32 = 2.0;
@@ -27,72 +27,66 @@ pub struct EdgeLeapState {
     needs_release: bool,
 }
 
-pub fn propose(
-    mut q: Single<
-        (
-            &Intents,
-            &LocomotionState,
-            &Stamina,
-            &LedgeFacts,
-            &mut EdgeLeapState,
-            &mut ProposalBuffer,
-        ),
-        With<Player>,
-    >,
-) {
-    let (intents, current, stamina, ledge, state, buffer) = &mut *q;
+type ProposeQuery<'a> = (
+    &'a Intents,
+    &'a LocomotionState,
+    &'a Stamina,
+    &'a LedgeFacts,
+    &'a mut EdgeLeapState,
+    &'a mut ProposalBuffer,
+);
 
-    if !intents.wants_jump {
-        state.needs_release = false;
-    }
+pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
+    for (intents, current, stamina, ledge, mut state, mut buffer) in &mut q {
+        if !intents.wants_jump {
+            state.needs_release = false;
+        }
 
-    if **current == LocomotionState::Climb && intents.wants_jump && !state.needs_release {
-        let at_left_edge = intents.is_climbing_left() && !ledge.has_wall_left;
-        let at_right_edge = intents.is_climbing_right() && !ledge.has_wall_right;
-        if (at_left_edge || at_right_edge) && !stamina.is_exhausted() {
-            state.needs_release = true;
-            state.is_leaping = true;
-            state.timer = LEAP_DURATION;
+        if *current == LocomotionState::Climb && intents.wants_jump && !state.needs_release {
+            let at_left_edge = intents.is_climbing_left() && !ledge.has_wall_left;
+            let at_right_edge = intents.is_climbing_right() && !ledge.has_wall_right;
+            if (at_left_edge || at_right_edge) && !stamina.is_exhausted() {
+                state.needs_release = true;
+                state.is_leaping = true;
+                state.timer = LEAP_DURATION;
+                let _ = buffer.push(TransitionProposal::new(
+                    LocomotionState::EdgeLeap,
+                    Priority::Forced,
+                    FORCED_WEIGHT,
+                    "edge_leap",
+                ));
+                continue;
+            }
+        }
+
+        if *current == LocomotionState::EdgeLeap && state.is_leaping {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::EdgeLeap,
                 Priority::Forced,
                 FORCED_WEIGHT,
                 "edge_leap",
             ));
-            return;
         }
-    }
-
-    if **current == LocomotionState::EdgeLeap && state.is_leaping {
-        let _ = buffer.push(TransitionProposal::new(
-            LocomotionState::EdgeLeap,
-            Priority::Forced,
-            FORCED_WEIGHT,
-            "edge_leap",
-        ));
     }
 }
 
-pub fn tick(
-    player: Single<
-        (
-            Entity,
-            &Collider,
-            &mut Transform,
-            &mut BodyVelocity,
-            &mut BodyContact,
-            &mut EdgeLeapState,
-            &Intents,
-            &mut Stamina,
-            &LedgeFacts,
-            &GroundFacts,
-        ),
-        With<Player>,
-    >,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
-    let (
+type TickQuery<'a> = (
+    Entity,
+    &'a Collider,
+    &'a mut Transform,
+    &'a mut BodyVelocity,
+    &'a mut BodyContact,
+    &'a mut EdgeLeapState,
+    &'a Intents,
+    &'a mut Stamina,
+    &'a LedgeFacts,
+    &'a GroundFacts,
+    &'a LocomotionState,
+);
+
+pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+    let dt = time.delta_secs();
+    for (
         entity,
         collider,
         mut transform,
@@ -103,47 +97,52 @@ pub fn tick(
         mut stamina,
         ledge,
         ground,
-    ) = player.into_inner();
-    let dt = time.delta_secs();
-
-    let mut v = vel.0;
-
-    if state.timer == LEAP_DURATION {
-        let mut normal = ledge.climb_normal;
-        if normal == Vec3::ZERO {
-            normal = if contact.on_wall {
-                -contact.wall_normal
-            } else {
-                transform.rotation * Vec3::Z
-            };
+        loco_state,
+    ) in &mut q
+    {
+        if *loco_state != LocomotionState::EdgeLeap {
+            continue;
         }
-        let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
-        let jump_dir = if intents.is_climbing_left() {
-            -right_dir
-        } else if intents.is_climbing_right() {
-            right_dir
-        } else {
-            normal
-        };
-        v = jump_dir * LEAP_AWAY_IMPULSE + normal * WALL_PUSH_SPEED + Vec3::Y * VERTICAL_BOOST;
-        stamina.drain(STAMINA_COST);
-    }
 
-    state.timer -= dt;
-    v.y -= GRAVITY * dt;
+        let mut v = vel.0;
 
-    vel.0 = body_move_and_slide(
-        &mas,
-        entity,
-        collider,
-        &mut transform,
-        v,
-        time.delta(),
-        &mut contact,
-    );
+        if state.timer == LEAP_DURATION {
+            let mut normal = ledge.climb_normal;
+            if normal == Vec3::ZERO {
+                normal = if contact.on_wall {
+                    -contact.wall_normal
+                } else {
+                    transform.rotation * Vec3::Z
+                };
+            }
+            let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
+            let jump_dir = if intents.is_climbing_left() {
+                -right_dir
+            } else if intents.is_climbing_right() {
+                right_dir
+            } else {
+                normal
+            };
+            v = jump_dir * LEAP_AWAY_IMPULSE + normal * WALL_PUSH_SPEED + Vec3::Y * VERTICAL_BOOST;
+            stamina.drain(STAMINA_COST);
+        }
 
-    if state.timer <= 0.0 || ground.grounded {
-        state.is_leaping = false;
+        state.timer -= dt;
+        v.y -= GRAVITY * dt;
+
+        vel.0 = body_move_and_slide(
+            &mas,
+            entity,
+            collider,
+            &mut transform,
+            v,
+            time.delta(),
+            &mut contact,
+        );
+
+        if state.timer <= 0.0 || ground.grounded {
+            state.is_leaping = false;
+        }
     }
 }
 
@@ -152,6 +151,7 @@ mod tests {
     //! Covers the `propose` half: triggers at a wall edge, not mid-wall, and the
     //! needs-release latch. The impulse tick is play-tested.
     use super::*;
+    use crate::movement::Player;
     use bevy::ecs::system::RunSystemOnce;
 
     /// Player climbing while pressing left (`is_climbing_left`) and holding jump.
@@ -168,6 +168,7 @@ mod tests {
         let e = world
             .spawn((
                 Player,
+                Actor,
                 intents,
                 LocomotionState::Climb,
                 stamina,
@@ -185,7 +186,7 @@ mod tests {
             .get::<ProposalBuffer>()
             .unwrap()
             .iter()
-            .copied()
+            .cloned()
             .collect()
     }
 

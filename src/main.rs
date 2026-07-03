@@ -8,6 +8,8 @@
 mod camera;
 mod debug;
 mod movement;
+mod presentation;
+mod sfx;
 mod visuals;
 mod world;
 
@@ -24,6 +26,8 @@ fn main() {
             camera::CameraPlugin,
             visuals::VisualsPlugin,
             debug::DebugPlugin,
+            sfx::SfxPlugin,
         ))
+        .add_message::<presentation::cues::CueMessage>()
         .run();
 }

@@ -38,6 +38,10 @@ pub const GRAVITY: f32 = 9.8;
 #[derive(Component)]
 pub struct Player;
 
+/// Marker for any actor entity (Player, Enemy, etc.)
+#[derive(Component)]
+pub struct Actor;
+
 /// Our kinematic body velocity — the analog of `CharacterBody3D.velocity`.
 /// Kept separate from Avian's `LinearVelocity`: we integrate position ourselves
 /// through `move_and_slide`, so the physics engine must not also move us.
@@ -171,6 +175,7 @@ fn spawn_player(mut commands: Commands) {
     // Radius 0.5, total height 2.0 ⇒ Avian cylinder length 1.0 (excludes hemispheres).
     commands.spawn((
         Player,
+        Actor,
         Name::new("Player"),
         Transform::from_xyz(0.0, 1.5, 0.0),
         RigidBody::Kinematic,

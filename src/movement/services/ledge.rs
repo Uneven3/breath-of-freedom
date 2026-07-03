@@ -91,7 +91,8 @@ pub fn ledge_service(
     let feet_y = pos.y - VAULT_BODY_HALF_HEIGHT;
 
     // --- Mantle lip down-cast ---
-    let down_origin = pos + facing * FORWARD_SAMPLE_OFFSET + Vec3::Y * (MANTLE_MAX_HEIGHT + DOWN_CAST_MARGIN);
+    let down_origin =
+        pos + facing * FORWARD_SAMPLE_OFFSET + Vec3::Y * (MANTLE_MAX_HEIGHT + DOWN_CAST_MARGIN);
     let down_hit = spatial.cast_shape(
         &sphere,
         down_origin,
@@ -102,7 +103,8 @@ pub fn ledge_service(
     );
 
     // --- Vault landing cast ---
-    let landing_origin = pos + facing * VAULT_LANDING_PROBE_DISTANCE + Vec3::Y * VAULT_LANDING_PROBE_HEIGHT;
+    let landing_origin =
+        pos + facing * VAULT_LANDING_PROBE_DISTANCE + Vec3::Y * VAULT_LANDING_PROBE_HEIGHT;
     let landing_hit = spatial.cast_shape(
         &sphere,
         landing_origin,
@@ -114,13 +116,16 @@ pub fn ledge_service(
 
     // --- Vault down-cast (positioned just past the nearest wall hit) ---
     let v_dist = min_dist + VAULT_DIST_MARGIN;
-    let vault_down_origin = pos + facing * v_dist + Vec3::Y * (VAULT_DETECTION_RANGE + DOWN_CAST_MARGIN);
+    let vault_down_origin =
+        pos + facing * v_dist + Vec3::Y * (VAULT_DETECTION_RANGE + DOWN_CAST_MARGIN);
     let vault_down_hit = spatial.cast_shape(
         &sphere,
         vault_down_origin,
         Quat::IDENTITY,
         down,
-        &ShapeCastConfig::from_max_distance(VAULT_DETECTION_RANGE + DOWN_CAST_MARGIN + VAULT_BODY_HALF_HEIGHT),
+        &ShapeCastConfig::from_max_distance(
+            VAULT_DETECTION_RANGE + DOWN_CAST_MARGIN + VAULT_BODY_HALF_HEIGHT,
+        ),
         &filter,
     );
 
@@ -137,7 +142,8 @@ pub fn ledge_service(
             // climb_normal is still zero at this point in the pass, so the mantle
             // forward direction falls back to facing.
             let fwd = facing;
-            facts.mantle_target_position = pos + fwd * (MANTLE_BODY_RADIUS * MANTLE_FORWARD_RADIUS_MULTIPLIER);
+            facts.mantle_target_position =
+                pos + fwd * (MANTLE_BODY_RADIUS * MANTLE_FORWARD_RADIUS_MULTIPLIER);
             facts.mantle_target_position.y =
                 facts.mantle_ledge_point.y + MANTLE_BODY_HALF_HEIGHT + MANTLE_SURFACE_CLEARANCE;
         }
@@ -205,7 +211,8 @@ fn detect_vault(
             // "Step-up" vault: place the body slightly over the lip.
             let vault_forward = MANTLE_BODY_RADIUS * VAULT_FORWARD_RADIUS_MULT;
             facts.vault_target_position = pos + facing * vault_forward;
-            facts.vault_target_position.y = lip.y + VAULT_BODY_HALF_HEIGHT + VAULT_SURFACE_CLEARANCE;
+            facts.vault_target_position.y =
+                lip.y + VAULT_BODY_HALF_HEIGHT + VAULT_SURFACE_CLEARANCE;
         }
     }
 }

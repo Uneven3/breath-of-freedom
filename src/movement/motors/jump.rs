@@ -85,7 +85,7 @@ pub fn propose(
         s.buffer = 0.0;
         s.needs_release = true;
         jump_phase.is_player_jump = true;
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Jump,
             Priority::Forced,
             0,
@@ -116,5 +116,13 @@ pub fn tick(
 
     let mut v = vel.0;
     v.y = JUMP_IMPULSE;
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

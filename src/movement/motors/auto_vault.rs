@@ -13,7 +13,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
 
-const WEIGHT: i32 = 20;
+const WEIGHT: u32 = 20;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.1;
 const VAULT_SPEED: f32 = 5.0;
@@ -30,14 +30,21 @@ pub struct VaultState {
 
 pub fn propose(
     mut q: Single<
-        (&GroundFacts, &LedgeFacts, &Intents, &LocomotionState, &VaultState, &mut ProposalBuffer),
+        (
+            &GroundFacts,
+            &LedgeFacts,
+            &Intents,
+            &LocomotionState,
+            &VaultState,
+            &mut ProposalBuffer,
+        ),
         With<Player>,
     >,
 ) {
     let (ground, ledge, intents, current, state, buffer) = &mut *q;
 
     if **current == LocomotionState::AutoVault && state.running {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::AutoVault,
             Priority::Forced,
             WEIGHT,
@@ -47,7 +54,7 @@ pub fn propose(
     }
 
     if ground.grounded && ledge.is_vaultable && intents.wants_vault {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::AutoVault,
             Priority::PlayerRequested,
             WEIGHT,
@@ -90,7 +97,15 @@ pub fn tick(
 
     transform.translation = next;
     vel.0 = Vec3::ZERO;
-    body_move_and_slide(&mas, entity, collider, &mut transform, Vec3::ZERO, time.delta(), &mut contact);
+    body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        Vec3::ZERO,
+        time.delta(),
+        &mut contact,
+    );
 
     if raw >= 1.0 {
         transform.translation = state.target;

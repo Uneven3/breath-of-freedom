@@ -11,9 +11,9 @@ use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
-use crate::movement::stamina::Stamina;
 
 const MAX_SPEED: f32 = 5.0;
 const ACCELERATION: f32 = 20.0;
@@ -24,7 +24,7 @@ const STAMINA_RECOVER_PER_SEC: f32 = 15.0;
 pub fn propose(mut q: Single<(&GroundFacts, &mut ProposalBuffer), With<Player>>) {
     let (ground, buffer) = &mut *q;
     if ground.grounded {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Walk,
             Priority::PlayerRequested,
             0,
@@ -69,5 +69,13 @@ pub fn tick(
 
     stamina.recover(STAMINA_RECOVER_PER_SEC * dt);
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

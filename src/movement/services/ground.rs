@@ -28,7 +28,16 @@ const GROUND_PROBE_DISTANCE: f32 = 0.2;
 const ASCEND_EPSILON: f32 = 0.1;
 
 pub fn ground_service(
-    q: Single<(Entity, &Transform, &Collider, &BodyVelocity, &mut GroundFacts), With<Player>>,
+    q: Single<
+        (
+            Entity,
+            &Transform,
+            &Collider,
+            &BodyVelocity,
+            &mut GroundFacts,
+        ),
+        With<Player>,
+    >,
     spatial: SpatialQuery,
 ) {
     let (entity, transform, collider, velocity, mut facts) = q.into_inner();

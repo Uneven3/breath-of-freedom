@@ -9,6 +9,7 @@ mod camera;
 mod debug;
 mod movement;
 mod presentation;
+mod proposal;
 mod sfx;
 mod visuals;
 mod world;

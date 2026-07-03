@@ -9,11 +9,11 @@ use bevy::prelude::*;
 use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
-use crate::movement::state::LocomotionState;
 use crate::movement::motors::jump::JumpPhase;
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
-use crate::movement::{BodyVelocity, Player, GRAVITY};
+use crate::movement::state::LocomotionState;
+use crate::movement::{BodyVelocity, GRAVITY, Player};
 
 const MAX_AIR_SPEED: f32 = 5.0;
 const AIR_ACCELERATION: f32 = 5.0;
@@ -27,7 +27,7 @@ const FALL_STAMINA_RECOVER_FRACTION: f32 = 0.25;
 pub fn propose(mut q: Single<(&GroundFacts, &mut ProposalBuffer), With<Player>>) {
     let (ground, buffer) = &mut *q;
     if !ground.grounded {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Fall,
             Priority::Default,
             0,
@@ -81,5 +81,13 @@ pub fn tick(
 
     stamina.recover(STAMINA_RECOVER_PER_SEC * FALL_STAMINA_RECOVER_FRACTION * dt);
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

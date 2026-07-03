@@ -161,12 +161,12 @@ pub fn in_loco_state(
 /// `LocomotionState` (see `docs/architecture/movement.md`).
 fn arbitrate(mut q: Single<(&mut LocomotionState, &mut ProposalBuffer), With<Player>>) {
     let (state, buffer) = &mut *q;
-    let winner = buffer.arbitrate();
+    let winner = buffer.arbitrate(**state);
     if **state != winner {
         **state = winner;
         // (Activated/Deactivated events land with the motors that need them.)
     }
-    buffer.0.clear();
+    buffer.clear();
 }
 
 fn spawn_player(mut commands: Commands) {

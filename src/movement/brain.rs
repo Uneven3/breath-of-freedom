@@ -145,14 +145,19 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(ClimbToggle(true));
         world.spawn((Player, state, intents));
-        world.run_system_once(reset_climb_toggle).expect("reset runs");
+        world
+            .run_system_once(reset_climb_toggle)
+            .expect("reset runs");
         world.resource::<ClimbToggle>().0
     }
 
     #[test]
     fn resets_on_mantle_vault_edgeleap() {
         assert!(!toggle_after(LocomotionState::Mantle, Intents::default()));
-        assert!(!toggle_after(LocomotionState::AutoVault, Intents::default()));
+        assert!(!toggle_after(
+            LocomotionState::AutoVault,
+            Intents::default()
+        ));
         assert!(!toggle_after(LocomotionState::EdgeLeap, Intents::default()));
     }
 
@@ -164,13 +169,19 @@ mod tests {
 
     #[test]
     fn wall_jump_back_resets() {
-        let back = Intents { wish_dir: IVec2::new(0, -1), ..default() }; // is_climbing_down
+        let back = Intents {
+            wish_dir: IVec2::new(0, -1),
+            ..default()
+        }; // is_climbing_down
         assert!(!toggle_after(LocomotionState::WallJump, back));
     }
 
     #[test]
     fn wall_jump_lateral_keeps_climb() {
-        let left = Intents { wish_dir: IVec2::new(-1, 0), ..default() }; // is_climbing_left
+        let left = Intents {
+            wish_dir: IVec2::new(-1, 0),
+            ..default()
+        }; // is_climbing_left
         assert!(toggle_after(LocomotionState::WallJump, left));
     }
 

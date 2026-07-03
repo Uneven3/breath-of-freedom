@@ -16,7 +16,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
 
-const PRIORITY_WEIGHT: i32 = 10;
+const PRIORITY_WEIGHT: u32 = 10;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.08;
 const VERTICAL_SPEED: f32 = 4.0;
@@ -37,7 +37,13 @@ pub struct MantleState {
 
 pub fn propose(
     mut q: Single<
-        (&Intents, &LocomotionState, &LedgeFacts, &mut MantleState, &mut ProposalBuffer),
+        (
+            &Intents,
+            &LocomotionState,
+            &LedgeFacts,
+            &mut MantleState,
+            &mut ProposalBuffer,
+        ),
         With<Player>,
     >,
 ) {
@@ -49,7 +55,7 @@ pub fn propose(
 
     // Sticky: once running, keep MANTLE until tick() finishes.
     if **current == LocomotionState::Mantle && state.running {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Mantle,
             Priority::Forced,
             PRIORITY_WEIGHT,
@@ -71,7 +77,7 @@ pub fn propose(
     if ledge.is_at_mantle_edge && ledge.lip_height >= TALL_ENOUGH_LIP {
         let requesting = intents.wants_mantle;
         if requesting || (from_walljump && intents.is_climbing_up()) {
-            buffer.0.push(TransitionProposal::new(
+            let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Mantle,
                 Priority::Forced,
                 PRIORITY_WEIGHT,
@@ -105,7 +111,15 @@ pub fn tick(
     if !state.running && !begin_mantle(&mut state, transform.translation, ledge) {
         // No valid target — hold still for this frame; mantle will drop next frame.
         vel.0 = Vec3::ZERO;
-        vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, Vec3::ZERO, time.delta(), &mut contact);
+        vel.0 = body_move_and_slide(
+            &mas,
+            entity,
+            collider,
+            &mut transform,
+            Vec3::ZERO,
+            time.delta(),
+            &mut contact,
+        );
         return;
     }
 
@@ -117,7 +131,15 @@ pub fn tick(
 
     transform.translation = next;
     vel.0 = Vec3::ZERO;
-    body_move_and_slide(&mas, entity, collider, &mut transform, Vec3::ZERO, time.delta(), &mut contact);
+    body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        Vec3::ZERO,
+        time.delta(),
+        &mut contact,
+    );
 
     if raw >= 1.0 {
         transform.translation = state.target;
@@ -134,8 +156,8 @@ fn begin_mantle(state: &mut MantleState, pos: Vec3, ledge: &LedgeFacts) -> bool 
     state.needs_release = true;
 
     let vertical = (state.target.y - state.start.y).abs();
-    let horizontal = Vec2::new(state.start.x, state.start.z)
-        .distance(Vec2::new(state.target.x, state.target.z));
+    let horizontal =
+        Vec2::new(state.start.x, state.start.z).distance(Vec2::new(state.target.x, state.target.z));
     let v_dur = vertical / VERTICAL_SPEED.max(MIN_SPEED);
     let h_dur = horizontal / FORWARD_SPEED.max(MIN_SPEED);
     state.duration = v_dur.max(h_dur).max(MIN_DURATION);

@@ -101,10 +101,26 @@ fn setup_world(
     let vault_c = Color::srgb(0.7, 0.5, 0.3);
 
     // --- Floor 50×1×50 at (0,-0.5,0) ---
-    spawn_box(&mut commands, m, mat, "Floor", Vec3::new(0.0, -0.5, 0.0), Vec3::new(50.0, 1.0, 50.0), floor_c);
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "Floor",
+        Vec3::new(0.0, -0.5, 0.0),
+        Vec3::new(50.0, 1.0, 50.0),
+        floor_c,
+    );
 
     // --- Wall 10×4×1 at (0,2,-10) ---
-    spawn_box(&mut commands, m, mat, "Wall", Vec3::new(0.0, 2.0, -10.0), Vec3::new(10.0, 4.0, 1.0), prop_c);
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "Wall",
+        Vec3::new(0.0, 2.0, -10.0),
+        Vec3::new(10.0, 4.0, 1.0),
+        prop_c,
+    );
 
     // --- Rock: sphere r=2 at (-10,1,-5) ---
     commands.spawn((
@@ -138,10 +154,42 @@ fn setup_world(
     ));
 
     // --- Auto-vault obstacles ---
-    spawn_box(&mut commands, m, mat, "AutoVaultSingleBlock", Vec3::new(0.0, 0.5, 4.0), Vec3::new(2.0, 1.0, 0.5), vault_c);
-    spawn_box(&mut commands, m, mat, "AutoVaultWideRail", Vec3::new(-3.0, 0.45, 7.0), Vec3::new(3.5, 0.9, 0.5), vault_c);
-    spawn_box(&mut commands, m, mat, "AutoVaultNarrowPost", Vec3::new(3.0, 0.55, 7.0), Vec3::new(0.8, 1.1, 0.5), vault_c);
-    spawn_box(&mut commands, m, mat, "AutoVaultTallBlocker", Vec3::new(0.0, 1.1, 10.5), Vec3::new(2.5, 2.2, 0.5), prop_c);
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "AutoVaultSingleBlock",
+        Vec3::new(0.0, 0.5, 4.0),
+        Vec3::new(2.0, 1.0, 0.5),
+        vault_c,
+    );
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "AutoVaultWideRail",
+        Vec3::new(-3.0, 0.45, 7.0),
+        Vec3::new(3.5, 0.9, 0.5),
+        vault_c,
+    );
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "AutoVaultNarrowPost",
+        Vec3::new(3.0, 0.55, 7.0),
+        Vec3::new(0.8, 1.1, 0.5),
+        vault_c,
+    );
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "AutoVaultTallBlocker",
+        Vec3::new(0.0, 1.1, 10.5),
+        Vec3::new(2.5, 2.2, 0.5),
+        prop_c,
+    );
 
     // --- Stairs: 8 steps, depth 0.5, rise 0.25, base near x=-5 going to x=-9 ---
     let step_count = 8;
@@ -162,7 +210,15 @@ fn setup_world(
         );
     }
     // Landing 4×2×3 at (-11,1,0)
-    spawn_box(&mut commands, m, mat, "Landing", Vec3::new(-11.0, 1.0, 0.0), Vec3::new(4.0, 2.0, 3.0), floor_c);
+    spawn_box(
+        &mut commands,
+        m,
+        mat,
+        "Landing",
+        Vec3::new(-11.0, 1.0, 0.0),
+        Vec3::new(4.0, 2.0, 3.0),
+        floor_c,
+    );
 
     // Stairs marker (trigger region + step geometry).
     commands.spawn((

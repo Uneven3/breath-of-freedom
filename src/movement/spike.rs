@@ -104,7 +104,7 @@ impl Plugin for SpikePlugin {
 fn walk_propose(mut q: Query<(&Grounded, &mut ProposalBuffer), With<Actor>>) {
     for (ground, mut buffer) in &mut q {
         if ground.0 {
-            buffer.0.push(TransitionProposal::new(
+            let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Walk,
                 Priority::PlayerRequested,
                 0,
@@ -118,7 +118,7 @@ fn fall_propose(mut q: Query<&mut ProposalBuffer, With<Actor>>) {
     // Fall is the floor (Default priority): it wins only when nothing else proposes,
     // mirroring `ProposalBuffer::arbitrate`'s empty-buffer default.
     for mut buffer in &mut q {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Fall,
             Priority::Default,
             0,
@@ -170,7 +170,7 @@ fn jump_propose(
             s.coyote = 0.0;
             s.buffer = 0.0;
             s.needs_release = true;
-            buffer.0.push(TransitionProposal::new(
+            let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Jump,
                 Priority::Forced,
                 0,
@@ -184,11 +184,11 @@ fn jump_propose(
 
 fn arbitrate(mut q: Query<(&mut LocomotionState, &mut ProposalBuffer), With<Actor>>) {
     for (mut state, mut buffer) in &mut q {
-        let winner = buffer.arbitrate();
+        let winner = buffer.arbitrate(*state);
         if *state != winner {
             *state = winner;
         }
-        buffer.0.clear();
+        buffer.clear();
     }
 }
 
@@ -198,7 +198,13 @@ fn arbitrate(mut q: Query<(&mut LocomotionState, &mut ProposalBuffer), With<Acto
 fn walk_tick(
     time: Res<Time>,
     mut q: Query<
-        (&LocomotionState, &Intents, &mut BodyVelocity, &mut Transform, &mut TickCount),
+        (
+            &LocomotionState,
+            &Intents,
+            &mut BodyVelocity,
+            &mut Transform,
+            &mut TickCount,
+        ),
         With<Actor>,
     >,
 ) {
@@ -217,7 +223,15 @@ fn walk_tick(
 
 fn fall_tick(
     time: Res<Time>,
-    mut q: Query<(&LocomotionState, &mut BodyVelocity, &mut Transform, &mut TickCount), With<Actor>>,
+    mut q: Query<
+        (
+            &LocomotionState,
+            &mut BodyVelocity,
+            &mut Transform,
+            &mut TickCount,
+        ),
+        With<Actor>,
+    >,
 ) {
     let dt = time.delta_secs();
     for (state, mut vel, mut transform, mut ticks) in &mut q {
@@ -232,7 +246,15 @@ fn fall_tick(
 
 fn jump_tick(
     time: Res<Time>,
-    mut q: Query<(&LocomotionState, &mut BodyVelocity, &mut Transform, &mut TickCount), With<Actor>>,
+    mut q: Query<
+        (
+            &LocomotionState,
+            &mut BodyVelocity,
+            &mut Transform,
+            &mut TickCount,
+        ),
+        With<Actor>,
+    >,
 ) {
     let dt = time.delta_secs();
     for (state, mut vel, mut transform, mut ticks) in &mut q {
@@ -301,7 +323,10 @@ mod tests {
         let walker = spawn_actor(
             &mut app,
             true,
-            Intents { move_dir: Vec2::new(1.0, 0.0), ..default() },
+            Intents {
+                move_dir: Vec2::new(1.0, 0.0),
+                ..default()
+            },
         );
         let faller = spawn_actor(&mut app, false, Intents::default());
 
@@ -315,7 +340,10 @@ mod tests {
         // Faller: resolved to Fall, dropped −Y, no lateral drift.
         assert_eq!(state(&app, faller), LocomotionState::Fall);
         assert!(pos(&app, faller).y < -0.1, "faller should drop");
-        assert!(pos(&app, faller).x.abs() < 1e-4, "faller has no lateral motion");
+        assert!(
+            pos(&app, faller).x.abs() < 1e-4,
+            "faller has no lateral motion"
+        );
     }
 
     /// 2. Exactly one motor ticks each actor per frame, even though all three tick
@@ -343,7 +371,10 @@ mod tests {
         let jumper = spawn_actor(
             &mut app,
             true,
-            Intents { wants_jump: true, ..default() },
+            Intents {
+                wants_jump: true,
+                ..default()
+            },
         );
         let neutral = spawn_actor(&mut app, true, Intents::default());
 

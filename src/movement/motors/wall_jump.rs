@@ -26,7 +26,7 @@ const LATERAL_VERTICAL_LIFT: f32 = 0.5;
 const LATERAL_NORMAL_RETRACTION: f32 = 0.5;
 const BODY_HALF_HEIGHT: f32 = 1.0;
 const LEDGE_TOP_OFFSET: f32 = 0.33;
-const FORCED_WEIGHT: i32 = 5;
+const FORCED_WEIGHT: u32 = 5;
 
 #[derive(Component, Default)]
 pub struct WallJumpState {
@@ -37,7 +37,13 @@ pub struct WallJumpState {
 
 pub fn propose(
     mut q: Single<
-        (&Intents, &LocomotionState, &Stamina, &mut WallJumpState, &mut ProposalBuffer),
+        (
+            &Intents,
+            &LocomotionState,
+            &Stamina,
+            &mut WallJumpState,
+            &mut ProposalBuffer,
+        ),
         With<Player>,
     >,
 ) {
@@ -53,7 +59,7 @@ pub fn propose(
             state.needs_release = true;
             state.is_jumping = true;
             state.timer = JUMP_DURATION;
-            buffer.0.push(TransitionProposal::new(
+            let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::WallJump,
                 Priority::Forced,
                 FORCED_WEIGHT,
@@ -64,7 +70,7 @@ pub fn propose(
     }
 
     if **current == LocomotionState::WallJump && state.is_jumping {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::WallJump,
             Priority::Forced,
             FORCED_WEIGHT,
@@ -91,8 +97,17 @@ pub fn tick(
     mas: MoveAndSlide,
     time: Res<Time>,
 ) {
-    let (entity, collider, mut transform, mut vel, mut contact, mut state, intents, mut stamina, ledge) =
-        player.into_inner();
+    let (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        mut contact,
+        mut state,
+        intents,
+        mut stamina,
+        ledge,
+    ) = player.into_inner();
     let dt = time.delta_secs();
 
     let mut v = vel.0;
@@ -142,7 +157,15 @@ pub fn tick(
         }
     }
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 
     if state.timer <= 0.0 {
         state.is_jumping = false;

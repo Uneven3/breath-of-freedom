@@ -19,7 +19,15 @@ const MOVE_DIR_THRESHOLD_SQ: f32 = 0.01;
 const TOP_EXIT_CLEARANCE: f32 = 0.1;
 
 pub fn propose(
-    mut q: Single<(&LadderFacts, &Intents, &LocomotionState, &mut ProposalBuffer), With<Player>>,
+    mut q: Single<
+        (
+            &LadderFacts,
+            &Intents,
+            &LocomotionState,
+            &mut ProposalBuffer,
+        ),
+        With<Player>,
+    >,
 ) {
     let (ladder, intents, current, buffer) = &mut *q;
     if !ladder.on_ladder {
@@ -30,7 +38,7 @@ pub fn propose(
         || intents.move_dir.length_squared() > MOVE_DIR_THRESHOLD_SQ
         || intents.wants_climb
     {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Ladder,
             Priority::Forced,
             0,
@@ -72,5 +80,13 @@ pub fn tick(
         v.y = TOP_EXIT_BUMP;
     }
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

@@ -26,7 +26,14 @@ const SPRINT_RECHARGE_THRESHOLD: f32 = 20.0;
 pub fn propose(
     mut stamina_locked: Local<bool>,
     mut q: Single<
-        (&GroundFacts, &StairsFacts, &LedgeFacts, &Intents, &Stamina, &mut ProposalBuffer),
+        (
+            &GroundFacts,
+            &StairsFacts,
+            &LedgeFacts,
+            &Intents,
+            &Stamina,
+            &mut ProposalBuffer,
+        ),
         With<Player>,
     >,
 ) {
@@ -47,7 +54,7 @@ pub fn propose(
     }
 
     if ground.grounded && intents.wants_sprint && !*stamina_locked {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Sprint,
             Priority::Opportunistic,
             0,
@@ -91,5 +98,13 @@ pub fn tick(
 
     stamina.drain(STAMINA_COST_PER_SEC * dt);
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

@@ -13,7 +13,7 @@ use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_sli
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, Player, GRAVITY};
+use crate::movement::{BodyVelocity, GRAVITY, Player};
 
 const CAPSULE_HALF_HEIGHT: f32 = 1.0;
 const CAPSULE_RADIUS: f32 = 0.5;
@@ -34,7 +34,15 @@ const SNAP_EPSILON: f32 = 0.08;
 const GROUND_TOLERANCE: f32 = 0.15;
 
 pub fn propose(
-    mut q: Single<(&StairsFacts, &GroundFacts, &LocomotionState, &mut ProposalBuffer), With<Player>>,
+    mut q: Single<
+        (
+            &StairsFacts,
+            &GroundFacts,
+            &LocomotionState,
+            &mut ProposalBuffer,
+        ),
+        With<Player>,
+    >,
 ) {
     let (stairs, ground, current, buffer) = &mut *q;
     if !stairs.on_stairs {
@@ -42,7 +50,7 @@ pub fn propose(
     }
     // Sticky once active; else require grounded entry (airborne stays in Fall).
     if **current == LocomotionState::Stairs || ground.grounded {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Stairs,
             Priority::Forced,
             0,
@@ -81,8 +89,16 @@ pub fn tick(
     let lateral = world_input.dot(lateral_axis);
 
     let sprinting = intents.wants_sprint && stamina.current() > 0.0;
-    let base_speed = if along >= 0.0 { ASCEND_SPEED } else { DESCEND_SPEED };
-    let speed = if sprinting { base_speed * SPRINT_MULTIPLIER } else { base_speed };
+    let base_speed = if along >= 0.0 {
+        ASCEND_SPEED
+    } else {
+        DESCEND_SPEED
+    };
+    let speed = if sprinting {
+        base_speed * SPRINT_MULTIPLIER
+    } else {
+        base_speed
+    };
     let target_h = horiz_axis * along * speed + lateral_axis * lateral * speed * LATERAL_FACTOR;
 
     let has_input = world_input.length_squared() > INPUT_THRESHOLD_SQ;
@@ -122,5 +138,13 @@ pub fn tick(
         v.y = 0.0;
     }
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

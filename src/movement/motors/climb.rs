@@ -40,17 +40,18 @@ pub fn propose(
     }
     let climbing = **current == LocomotionState::Climb;
     // Sticky-on-floor at curved apexes where is_on_floor flickers (sphere/cylinder top).
-    let near_apex = ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
+    let near_apex =
+        ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
 
     if climbing && (near_apex || ledge.can_continue_climb) {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Climb,
             Priority::Opportunistic,
             5,
             "climb",
         ));
     } else if !climbing && ledge.can_climb {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Climb,
             Priority::PlayerRequested,
             5,
@@ -77,8 +78,17 @@ pub fn tick(
     mas: MoveAndSlide,
     time: Res<Time>,
 ) {
-    let (entity, collider, mut transform, mut vel, intents, mut stamina, mut contact, ledge, ground) =
-        player.into_inner();
+    let (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        intents,
+        mut stamina,
+        mut contact,
+        ledge,
+        ground,
+    ) = player.into_inner();
     let dt = time.delta_secs();
 
     let climb_normal = ledge.climb_normal;
@@ -86,7 +96,8 @@ pub fn tick(
         return;
     }
 
-    let near_apex = ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
+    let near_apex =
+        ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point != Vec3::ZERO;
     let touching_wall = ledge.can_continue_climb;
 
     // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
@@ -145,7 +156,15 @@ pub fn tick(
         }
     }
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 
     stamina.drain(STAMINA_COST_PER_SEC * dt);
 }
@@ -168,10 +187,24 @@ mod tests {
     ) -> Vec<TransitionProposal> {
         let mut world = World::new();
         let e = world
-            .spawn((Player, ground, ledge, stamina, intents, state, ProposalBuffer::default()))
+            .spawn((
+                Player,
+                ground,
+                ledge,
+                stamina,
+                intents,
+                state,
+                ProposalBuffer::default(),
+            ))
             .id();
         world.run_system_once(propose).expect("propose runs");
-        world.entity(e).get::<ProposalBuffer>().unwrap().0.clone()
+        world
+            .entity(e)
+            .get::<ProposalBuffer>()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect()
     }
 
     fn exhausted() -> Stamina {
@@ -184,22 +217,37 @@ mod tests {
     fn does_not_climb_the_air() {
         // Flat ground, climb toggled on, but no climbable ledge under the sensors.
         let out = propose_with(
-            GroundFacts { grounded: true, ..default() },
+            GroundFacts {
+                grounded: true,
+                ..default()
+            },
             LedgeFacts::default(), // can_climb = false
             Stamina::default(),
-            Intents { wants_climb: true, ..default() },
+            Intents {
+                wants_climb: true,
+                ..default()
+            },
             LocomotionState::Fall,
         );
-        assert!(out.is_empty(), "must not propose Climb on flat ground with no ledge");
+        assert!(
+            out.is_empty(),
+            "must not propose Climb on flat ground with no ledge"
+        );
     }
 
     #[test]
     fn proposes_climb_when_can_climb() {
         let out = propose_with(
             GroundFacts::default(),
-            LedgeFacts { can_climb: true, ..default() },
+            LedgeFacts {
+                can_climb: true,
+                ..default()
+            },
             Stamina::default(),
-            Intents { wants_climb: true, ..default() },
+            Intents {
+                wants_climb: true,
+                ..default()
+            },
             LocomotionState::Fall,
         );
         assert_eq!(out.len(), 1);
@@ -212,9 +260,15 @@ mod tests {
     fn stays_climbing_while_wall_continues() {
         let out = propose_with(
             GroundFacts::default(),
-            LedgeFacts { can_continue_climb: true, ..default() },
+            LedgeFacts {
+                can_continue_climb: true,
+                ..default()
+            },
             Stamina::default(),
-            Intents { wants_climb: true, ..default() },
+            Intents {
+                wants_climb: true,
+                ..default()
+            },
             LocomotionState::Climb,
         );
         assert_eq!(out.len(), 1);
@@ -228,14 +282,20 @@ mod tests {
         // Grounded on a sphere/cylinder top where is_on_floor flickers: a found ledge
         // point with no head hit must keep Climb alive (Opportunistic), not drop to Walk.
         let out = propose_with(
-            GroundFacts { grounded: true, ..default() },
+            GroundFacts {
+                grounded: true,
+                ..default()
+            },
             LedgeFacts {
                 has_head_hit: false,
                 mantle_ledge_point: Vec3::new(0.0, 1.0, 0.0),
                 ..default()
             },
             Stamina::default(),
-            Intents { wants_climb: true, ..default() },
+            Intents {
+                wants_climb: true,
+                ..default()
+            },
             LocomotionState::Climb,
         );
         assert_eq!(out.len(), 1);
@@ -246,9 +306,15 @@ mod tests {
     fn no_climb_when_exhausted() {
         let out = propose_with(
             GroundFacts::default(),
-            LedgeFacts { can_climb: true, ..default() },
+            LedgeFacts {
+                can_climb: true,
+                ..default()
+            },
             exhausted(),
-            Intents { wants_climb: true, ..default() },
+            Intents {
+                wants_climb: true,
+                ..default()
+            },
             LocomotionState::Fall,
         );
         assert!(out.is_empty());
@@ -258,7 +324,10 @@ mod tests {
     fn no_climb_without_intent() {
         let out = propose_with(
             GroundFacts::default(),
-            LedgeFacts { can_climb: true, ..default() },
+            LedgeFacts {
+                can_climb: true,
+                ..default()
+            },
             Stamina::default(),
             Intents::default(), // wants_climb = false
             LocomotionState::Fall,

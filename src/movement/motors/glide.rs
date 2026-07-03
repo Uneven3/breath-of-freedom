@@ -12,7 +12,7 @@ use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_sli
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, Player, GRAVITY};
+use crate::movement::{BodyVelocity, GRAVITY, Player};
 
 const GLIDE_FALL_SPEED: f32 = 1.5;
 const GLIDE_GRAVITY_MULTIPLIER: f32 = 0.25;
@@ -30,7 +30,13 @@ pub struct GlideLocal {
 pub fn propose(
     mut s: Local<GlideLocal>,
     mut q: Single<
-        (&GroundFacts, &LedgeFacts, &Intents, &LocomotionState, &mut ProposalBuffer),
+        (
+            &GroundFacts,
+            &LedgeFacts,
+            &Intents,
+            &LocomotionState,
+            &mut ProposalBuffer,
+        ),
         With<Player>,
     >,
 ) {
@@ -59,7 +65,7 @@ pub fn propose(
             } else {
                 Priority::Forced
             };
-            buffer.0.push(TransitionProposal::new(
+            let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Glide,
                 category,
                 0,
@@ -72,7 +78,7 @@ pub fn propose(
     let fresh_press = intents.wants_glide && !s.prev_wants;
     s.prev_wants = intents.wants_glide;
     if **current == LocomotionState::Fall && fresh_press {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Glide,
             Priority::PlayerRequested,
             0,
@@ -115,5 +121,13 @@ pub fn tick(
 
     stamina.recover(STAMINA_RECOVER_PER_SEC * STAMINA_RECOVERY_FACTOR * dt);
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }

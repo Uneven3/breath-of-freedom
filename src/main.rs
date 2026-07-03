@@ -8,6 +8,7 @@
 mod camera;
 mod debug;
 mod movement;
+mod proposal;
 mod visuals;
 mod world;
 

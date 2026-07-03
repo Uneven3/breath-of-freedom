@@ -31,7 +31,7 @@ pub const STAND_COLLIDER_LENGTH: f32 = 1.0;
 pub fn propose(mut q: Single<(&GroundFacts, &Intents, &mut ProposalBuffer), With<Player>>) {
     let (ground, intents, buffer) = &mut *q;
     if ground.grounded && intents.wants_sneak {
-        buffer.0.push(TransitionProposal::new(
+        let _ = buffer.push(TransitionProposal::new(
             LocomotionState::Sneak,
             Priority::PlayerRequested,
             1,
@@ -76,7 +76,15 @@ pub fn tick(
 
     stamina.recover(STAMINA_RECOVER_RATE * dt);
 
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
+    vel.0 = body_move_and_slide(
+        &mas,
+        entity,
+        collider,
+        &mut transform,
+        v,
+        time.delta(),
+        &mut contact,
+    );
 }
 
 /// Keep the collider crouched exactly while in Sneak, driven by current state

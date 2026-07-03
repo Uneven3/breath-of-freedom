@@ -134,6 +134,11 @@ fn mouse_look(motion: Res<AccumulatedMouseMotion>, mut rig: Single<&mut CameraRi
 }
 
 /// Add a downward dip when the player lands (Fall → Walk/Sprint).
+///
+/// Intentionally scoped to `Player`, not `Actor`: the camera always follows
+/// the one local human-controlled entity, which stays singular even once
+/// other `Actor`-tagged entities (NPCs, remote players) exist — see
+/// `docs/architecture/rationale/multi-actor-dispatch.md`.
 fn camera_landing_dip(
     player: Single<&LocomotionState, With<Player>>,
     mut rig: Single<&mut CameraRig>,
@@ -150,6 +155,7 @@ fn camera_landing_dip(
     *prev = Some(current);
 }
 
+/// Intentionally scoped to `Player`, not `Actor` — see `camera_landing_dip`.
 fn follow_player(
     player: Single<(Entity, &Transform), (With<Player>, Without<CameraRig>)>,
     mut cam: Single<(&mut Transform, &mut CameraRig)>,

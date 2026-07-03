@@ -66,39 +66,51 @@ No leer nada fuera de esta lista para decidir diseño.
 
 ## Definición de terminado
 
-- [ ] `Player` se conserva como marker (sigue siendo el jugador local),
+- [x] `Player` se conserva como marker (sigue siendo el jugador local),
       pero se introduce `Actor` como marker genérico que `Player` también
       lleva — los 13 motores corren sobre `Query<.., With<Actor>>` con
       guard interno por entidad (`if *state != LocomotionState::X {
       continue }`), no `run_if` global.
-- [ ] `arbitrate()` corre sobre `Query<(&mut LocomotionState, &mut
+- [x] `arbitrate()` corre sobre `Query<(&mut LocomotionState, &mut
       ProposalBuffer), With<Actor>>`, no `Single<.., With<Player>>`.
-- [ ] `spawn_player` sigue existiendo tal cual (un solo actor hoy), pero
+- [x] `spawn_player` sigue existiendo tal cual (un solo actor hoy), pero
       el shape de sus componentes es el que cualquier `Actor` futuro
-      (enemigo, remoto) necesitará replicar — documentarlo si no es obvio
-      por el código.
-- [ ] `src/camera.rs` sigue al actor local marcado explícitamente (no
+      (enemigo, remoto) necesitará replicar — documentado en
+      `movement.md` § Datos (fila de componentes promovidos).
+- [x] `src/camera.rs` sigue al actor local marcado explícitamente (no
       asume que "el único actor" es siempre la cámara — importante para
       cuando existan NPCs/enemigos con el mismo componente `Actor`).
-- [ ] `src/movement/spike.rs` sigue pasando sin cambios (era la prueba
-      del patrón; si algo de su forma quedó desactualizado respecto al
-      código real migrado, esto es una señal de alerta a documentar, no a
-      ignorar).
-- [ ] Test nuevo (no de *feeling*, invariante de arquitectura): dos
-      actores simulados en el mismo `World` (uno `Walk`, uno `Fall`, por
-      ejemplo) no comparten `LocomotionState` ni bloquean el tick del
-      otro — análogo a los 3 tests de `spike.rs` pero contra el código de
-      producción real, no la copia de prueba.
-- [ ] `cargo fmt` limpio.
-- [ ] `cargo clippy` sin warnings nuevos — ningún `#[allow(...)]` sin
-      justificación explícita en el commit.
-- [ ] `cargo check` / `cargo test` pasa completo (incluye `spike.rs`).
-- [ ] Si el comportamiento terminó divergiendo de `movement.md`, el doc
-      se actualiza en este mismo ticket.
-- [ ] Sin `unsafe`; sin `unwrap()`/`expect()` fuera de un bug de
-      programador genuino.
-- [ ] Si esto cambia una relación entre sistemas, se refleja en
-      `ARCHITECTURE-MAP.md` **y** `COUPLING-MAP.md`.
+      Cambio solo de comentario, sin lógica nueva.
+- [x] `src/movement/spike.rs` sigue pasando sin cambios (`git diff` vacío,
+      sus 3 tests pasan). No se encontró drift respecto al código real
+      migrado.
+- [x] Test nuevo (no de *feeling*, invariante de arquitectura):
+      `src/movement/mod.rs::actor_isolation_tests`, 3 tests contra
+      `propose`/`arbitrate` reales (no `spike.rs`) — confirman que
+      `LocomotionState`/`JumpLocal`/`SprintLock` no cruzan entre dos
+      actores. **Cobertura parcial, a propósito:** un 4to test que
+      corriera `tick` real bajo física de Avian se intentó y se descartó
+      (ver `docs/implement-feature/multi-actor-migration-plan.md` §
+      Fidelity Check, fila 16, para el detalle de por qué) — la
+      correctitud de `tick` bajo física real queda como terreno de
+      play-test, mismo límite que ya trazan `motors::climb::tests`/
+      `motors::edge_leap::tests`, confirmado explícitamente por el
+      usuario.
+- [x] `cargo fmt` limpio.
+- [x] `cargo clippy` sin warnings nuevos — ningún `#[allow(...)]` sin
+      justificación explícita en el commit (20 warnings nuevos de
+      `type_complexity` resueltos con alias de tipo, no con `#[allow]`).
+- [x] `cargo check` / `cargo test` pasa completo (27/27, incluye
+      `spike.rs`).
+- [x] El comportamiento coincide con `movement.md` — doc actualizado en
+      este mismo ticket (tabla de Datos + nota de prerequisito resuelto).
+- [x] Sin `unsafe`; sin `unwrap()`/`expect()` nuevo fuera de código de
+      test (confirmado por sweep `rg` contra el baseline pre-migración).
+- [x] No aplica cambio de relación entre sistemas (`Movement` no cambió
+      su contrato con otros sistemas, solo su mecanismo interno) — sí se
+      actualizó `ARCHITECTURE-MAP.md` para marcar el `BLOCKING-PREREQUISITE`
+      de Enemies/Multiplayer como resuelto. `COUPLING-MAP.md` no requiere
+      cambio (el nivel de acoplamiento declarado no varió).
 
 ## Notas para el agente que lo toma
 

@@ -13,7 +13,7 @@ use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_sli
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, Player, GRAVITY};
+use crate::movement::{Actor, BodyVelocity, GRAVITY};
 
 const CAPSULE_HALF_HEIGHT: f32 = 1.0;
 const CAPSULE_RADIUS: f32 = 0.5;
@@ -34,93 +34,128 @@ const SNAP_EPSILON: f32 = 0.08;
 const GROUND_TOLERANCE: f32 = 0.15;
 
 pub fn propose(
-    mut q: Single<(&StairsFacts, &GroundFacts, &LocomotionState, &mut ProposalBuffer), With<Player>>,
+    mut q: Query<
+        (
+            &StairsFacts,
+            &GroundFacts,
+            &LocomotionState,
+            &mut ProposalBuffer,
+        ),
+        With<Actor>,
+    >,
 ) {
-    let (stairs, ground, current, buffer) = &mut *q;
-    if !stairs.on_stairs {
-        return;
-    }
-    // Sticky once active; else require grounded entry (airborne stays in Fall).
-    if **current == LocomotionState::Stairs || ground.grounded {
-        buffer.0.push(TransitionProposal::new(
-            LocomotionState::Stairs,
-            Priority::Forced,
-            0,
-            "stairs",
-        ));
+    for (stairs, ground, current, mut buffer) in &mut q {
+        if !stairs.on_stairs {
+            continue;
+        }
+        // Sticky once active; else require grounded entry (airborne stays in Fall).
+        if *current == LocomotionState::Stairs || ground.grounded {
+            buffer.0.push(TransitionProposal::new(
+                LocomotionState::Stairs,
+                Priority::Forced,
+                0,
+                "stairs",
+            ));
+        }
     }
 }
 
-pub fn tick(
-    player: Single<
-        (
-            Entity,
-            &Collider,
-            &mut Transform,
-            &mut BodyVelocity,
-            &mut BodyContact,
-            &Intents,
-            &mut Stamina,
-            &StairsFacts,
-        ),
-        With<Player>,
-    >,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
-    let (entity, collider, mut transform, mut vel, mut contact, intents, mut stamina, stairs) =
-        player.into_inner();
+type TickQuery<'a> = (
+    Entity,
+    &'a Collider,
+    &'a mut Transform,
+    &'a mut BodyVelocity,
+    &'a mut BodyContact,
+    &'a Intents,
+    &'a mut Stamina,
+    &'a StairsFacts,
+    &'a LocomotionState,
+);
+
+pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
     let dt = time.delta_secs();
+    for (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        mut contact,
+        intents,
+        mut stamina,
+        stairs,
+        state,
+    ) in &mut q
+    {
+        if *state != LocomotionState::Stairs {
+            continue;
+        }
 
-    apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
+        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
 
-    let horiz_axis = stairs.slope_axis();
-    let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();
-    let world_input = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y);
-    let along = world_input.dot(horiz_axis);
-    let lateral = world_input.dot(lateral_axis);
+        let horiz_axis = stairs.slope_axis();
+        let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();
+        let world_input = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y);
+        let along = world_input.dot(horiz_axis);
+        let lateral = world_input.dot(lateral_axis);
 
-    let sprinting = intents.wants_sprint && stamina.current() > 0.0;
-    let base_speed = if along >= 0.0 { ASCEND_SPEED } else { DESCEND_SPEED };
-    let speed = if sprinting { base_speed * SPRINT_MULTIPLIER } else { base_speed };
-    let target_h = horiz_axis * along * speed + lateral_axis * lateral * speed * LATERAL_FACTOR;
+        let sprinting = intents.wants_sprint && stamina.current() > 0.0;
+        let base_speed = if along >= 0.0 {
+            ASCEND_SPEED
+        } else {
+            DESCEND_SPEED
+        };
+        let speed = if sprinting {
+            base_speed * SPRINT_MULTIPLIER
+        } else {
+            base_speed
+        };
+        let target_h = horiz_axis * along * speed + lateral_axis * lateral * speed * LATERAL_FACTOR;
 
-    let has_input = world_input.length_squared() > INPUT_THRESHOLD_SQ;
-    let rate = if has_input { ACCELERATION } else { FRICTION };
-    let mut v = vel.0;
-    v.x = move_toward(v.x, target_h.x, rate * dt);
-    v.z = move_toward(v.z, target_h.z, rate * dt);
+        let has_input = world_input.length_squared() > INPUT_THRESHOLD_SQ;
+        let rate = if has_input { ACCELERATION } else { FRICTION };
+        let mut v = vel.0;
+        v.x = move_toward(v.x, target_h.x, rate * dt);
+        v.z = move_toward(v.z, target_h.z, rate * dt);
 
-    if sprinting {
-        stamina.drain(SPRINT_STAMINA_COST_PER_SEC * dt);
+        if sprinting {
+            stamina.drain(SPRINT_STAMINA_COST_PER_SEC * dt);
+        }
+
+        // Per-step Y-snap. Sample point leads (ascent) or trails (descent) the body.
+        let slope_input = along;
+        let look_ahead = if slope_input > ASCEND_THRESHOLD {
+            horiz_axis * (CAPSULE_RADIUS + LOOKAHEAD_MARGIN)
+        } else if slope_input < DESCEND_THRESHOLD {
+            horiz_axis * DESCEND_TRAIL
+        } else {
+            Vec3::ZERO
+        };
+        let sample_pos = transform.translation + look_ahead;
+        let expected_feet_y = stairs.expected_feet_y(sample_pos);
+        let current_feet_y = transform.translation.y - CAPSULE_HALF_HEIGHT;
+        let feet_gap = expected_feet_y - current_feet_y;
+        let max_snap = stairs.step_rise + GROUND_TOLERANCE;
+
+        if slope_input > ASCEND_THRESHOLD && feet_gap > 0.0 && feet_gap <= max_snap {
+            transform.translation.y = expected_feet_y + CAPSULE_HALF_HEIGHT + SNAP_EPSILON;
+            v.y = 0.0;
+        } else if slope_input < DESCEND_THRESHOLD && feet_gap < 0.0 && feet_gap >= -max_snap {
+            transform.translation.y = expected_feet_y + CAPSULE_HALF_HEIGHT + SNAP_EPSILON;
+            v.y = 0.0;
+        } else if feet_gap < -max_snap {
+            v.y -= GRAVITY * dt;
+        } else {
+            v.y = 0.0;
+        }
+
+        vel.0 = body_move_and_slide(
+            &mas,
+            entity,
+            collider,
+            &mut transform,
+            v,
+            time.delta(),
+            &mut contact,
+        );
     }
-
-    // Per-step Y-snap. Sample point leads (ascent) or trails (descent) the body.
-    let slope_input = along;
-    let look_ahead = if slope_input > ASCEND_THRESHOLD {
-        horiz_axis * (CAPSULE_RADIUS + LOOKAHEAD_MARGIN)
-    } else if slope_input < DESCEND_THRESHOLD {
-        horiz_axis * DESCEND_TRAIL
-    } else {
-        Vec3::ZERO
-    };
-    let sample_pos = transform.translation + look_ahead;
-    let expected_feet_y = stairs.expected_feet_y(sample_pos);
-    let current_feet_y = transform.translation.y - CAPSULE_HALF_HEIGHT;
-    let feet_gap = expected_feet_y - current_feet_y;
-    let max_snap = stairs.step_rise + GROUND_TOLERANCE;
-
-    if slope_input > ASCEND_THRESHOLD && feet_gap > 0.0 && feet_gap <= max_snap {
-        transform.translation.y = expected_feet_y + CAPSULE_HALF_HEIGHT + SNAP_EPSILON;
-        v.y = 0.0;
-    } else if slope_input < DESCEND_THRESHOLD && feet_gap < 0.0 && feet_gap >= -max_snap {
-        transform.translation.y = expected_feet_y + CAPSULE_HALF_HEIGHT + SNAP_EPSILON;
-        v.y = 0.0;
-    } else if feet_gap < -max_snap {
-        v.y -= GRAVITY * dt;
-    } else {
-        v.y = 0.0;
-    }
-
-    vel.0 = body_move_and_slide(&mas, entity, collider, &mut transform, v, time.delta(), &mut contact);
 }

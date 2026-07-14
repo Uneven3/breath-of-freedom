@@ -7,13 +7,15 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::GroundMovement;
+use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, GroundFacts, StairsFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity, GRAVITY, body};
+use crate::movement::{Actor, BodyVelocity, GRAVITY};
 
 const LOOKAHEAD_MARGIN: f32 = 0.1;
 const DESCEND_TRAIL: f32 = 0.49;
@@ -21,27 +23,17 @@ const INPUT_THRESHOLD_SQ: f32 = 0.01;
 const ASCEND_THRESHOLD: f32 = 0.3;
 const DESCEND_THRESHOLD: f32 = -0.3;
 
-const ASCEND_SPEED: f32 = 3.5;
-const DESCEND_SPEED: f32 = 4.5;
-const SPRINT_MULTIPLIER: f32 = 1.7;
-const SPRINT_STAMINA_COST_PER_SEC: f32 = 10.0;
-const LATERAL_FACTOR: f32 = 0.6;
-const ACCELERATION: f32 = 80.0;
-const FRICTION: f32 = 60.0;
 const SNAP_EPSILON: f32 = 0.08;
 const GROUND_TOLERANCE: f32 = 0.15;
 
-pub fn propose(
-    mut q: Query<
-        (
-            &StairsFacts,
-            &GroundFacts,
-            &LocomotionState,
-            &mut ProposalBuffer,
-        ),
-        With<Actor>,
-    >,
-) {
+type ProposeQuery<'a> = (
+    &'a StairsFacts,
+    &'a GroundFacts,
+    &'a LocomotionState,
+    &'a mut ProposalBuffer,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) {
     for (stairs, ground, current, mut buffer) in &mut q {
         if !stairs.on_stairs {
             continue;
@@ -67,10 +59,16 @@ type TickQuery<'a> = (
     &'a Intents,
     &'a mut Stamina,
     &'a StairsFacts,
+    &'a GroundMovement,
+    &'a BodyDimensions,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<GroundMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
     for (
         entity,
@@ -81,6 +79,8 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         intents,
         mut stamina,
         stairs,
+        movement,
+        body,
         state,
     ) in &mut q
     {
@@ -88,7 +88,8 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             continue;
         }
 
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
+        let profile = movement.stairs;
+        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, profile.rotation_speed);
 
         let horiz_axis = stair_axis(stairs);
         let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();
@@ -98,31 +99,36 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         let sprinting = intents.wants_sprint && stamina.current() > 0.0;
         let base_speed = if along >= 0.0 {
-            ASCEND_SPEED
+            profile.ascend_speed
         } else {
-            DESCEND_SPEED
+            profile.descend_speed
         };
         let speed = if sprinting {
-            base_speed * SPRINT_MULTIPLIER
+            base_speed * profile.sprint_multiplier
         } else {
             base_speed
         };
-        let target_h = horiz_axis * along * speed + lateral_axis * lateral * speed * LATERAL_FACTOR;
+        let target_h =
+            horiz_axis * along * speed + lateral_axis * lateral * speed * profile.lateral_factor;
 
         let has_input = world_input.length_squared() > INPUT_THRESHOLD_SQ;
-        let rate = if has_input { ACCELERATION } else { FRICTION };
+        let rate = if has_input {
+            profile.acceleration
+        } else {
+            profile.friction
+        };
         let mut v = vel.0;
         v.x = move_toward(v.x, target_h.x, rate * dt);
         v.z = move_toward(v.z, target_h.z, rate * dt);
 
         if sprinting {
-            stamina.drain(SPRINT_STAMINA_COST_PER_SEC * dt);
+            stamina.drain(profile.sprint_stamina_cost_per_sec * dt);
         }
 
         // Per-step Y-snap. Sample point leads (ascent) or trails (descent) the body.
         let slope_input = along;
         let look_ahead = if slope_input > ASCEND_THRESHOLD {
-            horiz_axis * (body::RADIUS + LOOKAHEAD_MARGIN).min(stairs.step_depth)
+            horiz_axis * (body.radius + LOOKAHEAD_MARGIN).min(stairs.step_depth)
         } else if slope_input < DESCEND_THRESHOLD {
             horiz_axis * DESCEND_TRAIL.min(stairs.step_depth)
         } else {
@@ -130,7 +136,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         };
         let sample_pos = transform.translation + look_ahead;
         let expected_feet_y = expected_feet_y(stairs, sample_pos);
-        let current_feet_y = transform.translation.y - body::HALF_HEIGHT;
+        let current_feet_y = transform.translation.y - body.standing_half_height();
         let feet_gap = expected_feet_y - current_feet_y;
         let max_snap = stairs.step_rise + GROUND_TOLERANCE;
 
@@ -141,7 +147,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         let descending_snap =
             slope_input < DESCEND_THRESHOLD && feet_gap < 0.0 && feet_gap >= -max_snap;
         if ascending_snap || descending_snap {
-            transform.translation.y = expected_feet_y + body::HALF_HEIGHT + SNAP_EPSILON;
+            transform.translation.y = expected_feet_y + body.standing_half_height() + SNAP_EPSILON;
             v.y = 0.0;
         } else if feet_gap < -max_snap {
             v.y -= GRAVITY * dt;

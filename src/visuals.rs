@@ -7,8 +7,9 @@
 
 use bevy::prelude::*;
 
+use crate::movement::Player;
+use crate::movement::body::BodyDimensions;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Player, body};
 
 const INTERPOLATION_SPEED: f32 = 20.0;
 const SNEAK_Y_OFFSET: f32 = -0.4;
@@ -33,7 +34,10 @@ fn spawn_visual(
     commands.spawn((
         PlayerVisual,
         Name::new("PlayerVisual"),
-        Mesh3d(meshes.add(Capsule3d::new(body::RADIUS, body::STAND_CAPSULE_LENGTH))),
+        Mesh3d(meshes.add(Capsule3d::new(
+            BodyDimensions::PLAYER.radius,
+            BodyDimensions::PLAYER.standing_capsule_length,
+        ))),
         MeshMaterial3d(materials.add(Color::srgb(0.3, 0.6, 0.9))),
         Transform::from_xyz(0.0, 1.5, 0.0),
     ));

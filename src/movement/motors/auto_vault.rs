@@ -6,6 +6,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
@@ -16,8 +17,6 @@ use crate::movement::{Actor, BodyVelocity};
 const WEIGHT: u32 = 20;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.1;
-const VAULT_SPEED: f32 = 5.0;
-const ARC_HEIGHT: f32 = 0.4;
 
 #[derive(Component, Default)]
 pub struct VaultState {
@@ -33,7 +32,7 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) {
     for (ground, ledge, intents, current, state, mut buffer) in &mut q {
         if *current == LocomotionState::AutoVault && state.arc.running {
             let _ = buffer.push(TransitionProposal::new(
@@ -64,23 +63,37 @@ type TickQuery<'a> = (
     &'a mut BodyContact,
     &'a mut VaultState,
     &'a LedgeFacts,
+    &'a LedgeTraversal,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<LedgeTraversal>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, mut contact, mut state, ledge, loco_state) in
-        &mut q
+    for (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        mut contact,
+        mut state,
+        ledge,
+        movement,
+        loco_state,
+    ) in &mut q
     {
         if *loco_state != LocomotionState::AutoVault {
             continue;
         }
 
-        if !state.arc.running && !begin_vault(&mut state, transform.translation, ledge) {
+        if !state.arc.running && !begin_vault(&mut state, transform.translation, ledge, movement) {
             continue;
         }
 
-        transform.translation = state.arc.step(dt, ARC_HEIGHT);
+        transform.translation = state.arc.step(dt, movement.vault.arc_height);
         vel.0 = Vec3::ZERO;
         body_move_and_slide(
             &mas,
@@ -94,11 +107,59 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
     }
 }
 
-fn begin_vault(state: &mut VaultState, pos: Vec3, ledge: &LedgeFacts) -> bool {
+fn begin_vault(
+    state: &mut VaultState,
+    pos: Vec3,
+    ledge: &LedgeFacts,
+    movement: &LedgeTraversal,
+) -> bool {
     let Some(target) = ledge.vault_target_position else {
         return false;
     };
-    let duration = (pos.distance(target) / VAULT_SPEED.max(MIN_SPEED)).max(MIN_DURATION);
+    let duration = (pos.distance(target) / movement.vault.speed.max(MIN_SPEED)).max(MIN_DURATION);
     state.arc.begin(pos, target, duration);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn actor_without_ledge_traversal_cannot_propose_auto_vault() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                GroundFacts {
+                    grounded: true,
+                    ..default()
+                },
+                LedgeFacts {
+                    is_vaultable: true,
+                    ..default()
+                },
+                Intents {
+                    wants_vault: true,
+                    ..default()
+                },
+                LocomotionState::Walk,
+                VaultState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none()
+        );
+    }
 }

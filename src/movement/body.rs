@@ -1,16 +1,42 @@
-//! Shared body dimensions — the single source of truth for the actor capsule.
-//!
-//! Motors and services used to hardcode these in six different places; any
-//! change to the capsule (or a future non-capsule actor) starts here.
+//! Per-actor capsule dimensions used by movement simulation.
 
-/// Capsule radius.
-pub const RADIUS: f32 = 0.5;
-/// Avian capsule cylinder length while standing (excludes the hemispheres):
-/// total height 2.0 ⇒ length = 2.0 − 2·RADIUS.
-pub const STAND_CAPSULE_LENGTH: f32 = 1.0;
-/// Cylinder length while crouched: design height 1.2 ⇒ 1.2 − 2·RADIUS.
-pub const CROUCH_CAPSULE_LENGTH: f32 = 0.2;
-/// Half the standing total height (feet-to-center distance while standing).
-pub const HALF_HEIGHT: f32 = RADIUS + STAND_CAPSULE_LENGTH / 2.0;
-/// Half the crouched total height (feet-to-center distance while crouched).
-pub const CROUCH_HALF_HEIGHT: f32 = RADIUS + CROUCH_CAPSULE_LENGTH / 2.0;
+use avian3d::prelude::*;
+use bevy::prelude::*;
+
+/// Semantic capsule measurements for a kinematic movement actor.
+///
+/// `Collider` remains the physical shape used by Avian. This component keeps
+/// the measurements Movement needs for feet, ledges, ladders, stairs, and the
+/// Sneak collider transition.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct BodyDimensions {
+    pub radius: f32,
+    /// Capsule cylinder length while standing, excluding hemispheres.
+    pub standing_capsule_length: f32,
+    /// Capsule cylinder length while crouched, excluding hemispheres.
+    pub crouched_capsule_length: f32,
+}
+
+impl BodyDimensions {
+    pub const PLAYER: Self = Self {
+        radius: 0.5,
+        standing_capsule_length: 1.0,
+        crouched_capsule_length: 0.2,
+    };
+
+    pub fn standing_half_height(self) -> f32 {
+        self.radius + self.standing_capsule_length / 2.0
+    }
+
+    pub fn crouched_half_height(self) -> f32 {
+        self.radius + self.crouched_capsule_length / 2.0
+    }
+
+    pub fn standing_collider(self) -> Collider {
+        Collider::capsule(self.radius, self.standing_capsule_length)
+    }
+
+    pub fn crouched_collider(self) -> Collider {
+        Collider::capsule(self.radius, self.crouched_capsule_length)
+    }
+}

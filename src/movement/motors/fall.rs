@@ -6,6 +6,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::AirborneMovement;
 use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
@@ -15,16 +16,10 @@ use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
 
-const MAX_AIR_SPEED: f32 = 5.0;
-const AIR_ACCELERATION: f32 = 5.0;
-const RISE_GRAVITY_MULTIPLIER: f32 = 1.3;
-const FALL_GRAVITY_MULTIPLIER: f32 = 2.5;
-const JUMP_CUT_VELOCITY: f32 = 2.0;
-const STAMINA_RECOVER_PER_SEC: f32 = 15.0;
-const FALL_STAMINA_RECOVER_FRACTION: f32 = 0.25;
-
 /// Propose FALL at DEFAULT priority whenever airborne.
-pub fn propose(mut q: Query<(&GroundFacts, &mut ProposalBuffer), With<Actor>>) {
+type FallProposalFilter = (With<Actor>, With<AirborneMovement>);
+
+pub fn propose(mut q: Query<(&GroundFacts, &mut ProposalBuffer), FallProposalFilter>) {
     for (ground, mut buffer) in &mut q {
         if !ground.grounded {
             let _ = buffer.push(TransitionProposal::new(
@@ -47,9 +42,14 @@ type TickQuery<'a> = (
     &'a mut BodyContact,
     &'a JumpPhase,
     &'a LocomotionState,
+    &'a AirborneMovement,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<AirborneMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
     for (
         entity,
@@ -61,35 +61,44 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         mut contact,
         jump_phase,
         state,
+        profile,
     ) in &mut q
     {
         if *state != LocomotionState::Fall {
             continue;
         }
 
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
+        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, profile.rotation_speed);
 
         let mut v = vel.0;
 
         // Jump cut: releasing jump on the way up clips upward velocity for a short hop.
-        if jump_phase.is_player_jump && !intents.wants_jump && v.y > JUMP_CUT_VELOCITY {
-            v.y = JUMP_CUT_VELOCITY;
+        if jump_phase.is_player_jump && !intents.wants_jump && v.y > profile.jump_cut_velocity {
+            v.y = profile.jump_cut_velocity;
         }
 
         // Asymmetric gravity: snappier rise, heavier fall.
         if v.y < 0.0 {
-            v.y -= GRAVITY * FALL_GRAVITY_MULTIPLIER * dt;
+            v.y -= GRAVITY * profile.fall_gravity_multiplier * dt;
         } else {
-            v.y -= GRAVITY * RISE_GRAVITY_MULTIPLIER * dt;
+            v.y -= GRAVITY * profile.rise_gravity_multiplier * dt;
         }
 
         let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
         if move_dir != Vec3::ZERO {
-            v.x = move_toward(v.x, move_dir.x * MAX_AIR_SPEED, AIR_ACCELERATION * dt);
-            v.z = move_toward(v.z, move_dir.z * MAX_AIR_SPEED, AIR_ACCELERATION * dt);
+            v.x = move_toward(
+                v.x,
+                move_dir.x * profile.max_speed,
+                profile.acceleration * dt,
+            );
+            v.z = move_toward(
+                v.z,
+                move_dir.z * profile.max_speed,
+                profile.acceleration * dt,
+            );
         }
 
-        stamina.recover(STAMINA_RECOVER_PER_SEC * FALL_STAMINA_RECOVER_FRACTION * dt);
+        stamina.recover(profile.stamina_recover_per_sec * profile.stamina_recovery_factor * dt);
 
         vel.0 = body_move_and_slide(
             &mas,

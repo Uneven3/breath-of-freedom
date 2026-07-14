@@ -11,11 +11,24 @@
 | `ProposalBuffer` | `proposal.rs` | Type alias sobre el núcleo genérico compartido de capacidad fija `proposal::ProposalBuffer<LocomotionState, N>` (`src/proposal.rs`), drenado por `arbitrate(current)`. Ver `rationale/proposal-arbitration-core.md`. |
 | `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. |
 | `BodyVelocity` | `mod.rs` | Velocidad del cuerpo cinemático (análogo a `CharacterBody3D.velocity`). Solo el motor activo la escribe. |
+| `BodyDimensions` | `body.rs` | Perfil físico persistente de la cápsula del actor: radio y longitudes de pie/agachado. Los servicios y motores usan sus alturas semánticas; `Collider` sigue siendo la forma física de Avian. |
+| `GroundMovement` | `abilities.rs` | Capacidad persistente y perfiles de tuning de Walk, Sprint, Sneak y Stairs por actor. Esos motores solo consideran actores que llevan este componente. |
+| `AirborneMovement` | `abilities.rs` | Perfil base de locomoción aérea para un actor sujeto a gravedad: controla Fall con velocidad, gravedad, salto corto, giro y recuperación por actor. No representa una acción discreta del jugador. |
+| `ClimbMovement` | `abilities.rs` | Capacidad persistente y tuning por actor de Climb. |
+| `LadderMovement` | `abilities.rs` | Capacidad persistente y velocidad por actor de Ladder. |
+| `LedgeTraversal` | `abilities.rs` | Capacidad persistente y perfiles por actor de Mantle y AutoVault. |
+| `WallJumpMovement` | `abilities.rs` | Capacidad persistente y perfiles por actor de WallJump y EdgeLeap. |
+| `JumpMovement` | `abilities.rs` | Capacidad persistente y tuning por actor de Jump, incluidos impulso, coyote time y buffer. |
+| `GlideMovement` | `abilities.rs` | Capacidad persistente y perfil por actor de Glide. |
+| `GroundSensing` | `sensing.rs` | Perfil físico de GroundService: distancia del probe y umbral de ascenso por actor. Forma parte del núcleo cinemático. |
+| `LedgeSensing` | `sensing.rs` | Perfil físico opcional de LedgeService: muestras de altura, alcances y umbrales de pared, borde y vault por actor. No concede acciones. |
 | `Stamina` | `stamina.rs` | Pool de esfuerzo. Solo sus propios métodos `drain`/`recover` la mutan. |
 | `BodyContact`, `GroundFacts`, `LedgeFacts`, `StairsFacts`, `LadderFacts` | `facts.rs` | Hechos del mundo que los servicios calculan y los motores leen. |
 | `ClimbInputState` | `brain.rs` | Estado del toggle de escalar por actor/controlador (tecla `1`, no un hold). No es `Resource` global, porque el contrato multi-actor requiere input independiente por actor. |
 | `JumpPhase`, `JumpLocal`, `GlideLocal`, `SprintLock` | `motors/jump.rs`, `motors/glide.rs`, `motors/sprint.rs` | Estado propio de cada motor (timers, latches), por-actor. Eran `Local<T>` de sistema antes de `multi-actor-migration` — promovidos a componente para no compartir estado entre actores. |
 | `MantleState`, `VaultState`, `WallJumpState`, `EdgeLeapState` | `motors/mantle.rs`, `motors/auto_vault.rs`, `motors/wall_jump.rs`, `motors/edge_leap.rs` | Máquina de fase compartida entre `propose` y `tick` de cada motor, por-actor desde su diseño original (`Local` no se puede compartir entre dos sistemas). |
+| `KinematicActorBundle` | `bundles.rs` | Conveniencia de construccion para el contrato físico y de pipeline de un actor cinemático. No es una capacidad ni activa sistemas. |
+| `GroundMovementBundle`, `JumpMovementBundle`, `GlideMovementBundle`, `LedgeTraversalBundle`, `WallJumpMovementBundle` | `bundles.rs` | Conveniencias de construccion: emparejan cada capacidad con el estado runtime privado de sus propios motores. |
 
 `brain::read_intents` no lee `ButtonInput<KeyCode>` — lee
 `input::ActiveActions` para el `InputSource` enlazado por
@@ -34,6 +47,25 @@ permitirse perder una pulsación entre ticks fijos (`Jump`, `WallJump`,
 En un borde válido de `Climb` o `Ladder`, Jump se interpreta como Mantle
 (prioridad mayor que WallJump); fuera de ese contexto, Jump conserva el
 WallJump de retroceso.
+
+La composicion de capacidades persistentes y la frontera entre `Climb`,
+`Mantle`, `AutoVault`, `WallJump` y `Ladder` esta definida en
+[`rationale/movement-capability-composition.md`](rationale/movement-capability-composition.md).
+Las capacidades no son estados activos ni activan sistemas: los motores se
+seleccionan por `Query` y `LocomotionState` permanece exclusivo.
+
+Los bundles de `bundles.rs` son un limite de construccion, no de ejecucion:
+`KinematicActorBundle` instala el contrato común de simulación y cada bundle
+de capacidad instala su tuning más sus fases/latches privados. Un sistema no
+consulta bundles; sigue consultando los componentes concretos. Input local,
+cámara, IA y red se componen por fuera para que el mismo actor físico pueda
+tener controladores distintos.
+
+Los servicios también seleccionan perfiles explícitos: GroundService requiere
+`GroundSensing`, incluido por `KinematicActorBundle`; LedgeService requiere
+`LedgeSensing`, que se agrega solo a actores que deben publicar hechos de
+pared/borde. Los perfiles no reemplazan `BodyDimensions`: describen cómo se
+sondea el mundo, mientras que las dimensiones describen el cuerpo.
 
 ## Estados (`LocomotionState`)
 

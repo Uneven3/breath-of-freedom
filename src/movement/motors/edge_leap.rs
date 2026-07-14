@@ -5,6 +5,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::WallJumpMovement;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{body_move_and_slide, launch_normal};
@@ -13,12 +14,7 @@ use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
 
-const LEAP_AWAY_IMPULSE: f32 = 8.0;
-const VERTICAL_BOOST: f32 = 2.0;
-const STAMINA_COST: f32 = 10.0;
-const LEAP_DURATION: f32 = 0.3;
 const FORCED_WEIGHT: u32 = 10;
-const WALL_PUSH_SPEED: f32 = 2.0;
 
 #[derive(Component, Default)]
 pub struct EdgeLeapState {
@@ -35,12 +31,13 @@ type ProposeQuery<'a> = (
     &'a LocomotionState,
     &'a Stamina,
     &'a LedgeFacts,
+    &'a WallJumpMovement,
     &'a mut EdgeLeapState,
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
-    for (intents, current, stamina, ledge, mut state, mut buffer) in &mut q {
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>) {
+    for (intents, current, stamina, ledge, movement, mut state, mut buffer) in &mut q {
         let jump_requested = intents.wants_jump || intents.jump_pressed;
         if !intents.wants_jump {
             state.needs_release = false;
@@ -52,7 +49,7 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
             if (at_left_edge || at_right_edge) && !stamina.is_exhausted() {
                 state.needs_release = true;
                 state.is_leaping = true;
-                state.timer = LEAP_DURATION;
+                state.timer = movement.edge_leap.duration;
                 state.launch_pending = true;
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::EdgeLeap,
@@ -86,10 +83,15 @@ type TickQuery<'a> = (
     &'a mut Stamina,
     &'a LedgeFacts,
     &'a GroundFacts,
+    &'a WallJumpMovement,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<WallJumpMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
     for (
         entity,
@@ -102,6 +104,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         mut stamina,
         ledge,
         ground,
+        movement,
         loco_state,
     ) in &mut q
     {
@@ -113,6 +116,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         if state.launch_pending {
             state.launch_pending = false;
+            let profile = movement.edge_leap;
             let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
             let jump_dir = if intents.is_climbing_left() {
@@ -122,8 +126,10 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             } else {
                 normal
             };
-            v = jump_dir * LEAP_AWAY_IMPULSE + normal * WALL_PUSH_SPEED + Vec3::Y * VERTICAL_BOOST;
-            stamina.drain(STAMINA_COST);
+            v = jump_dir * profile.away_impulse
+                + normal * profile.wall_push_speed
+                + Vec3::Y * profile.vertical_boost;
+            stamina.drain(profile.stamina_cost);
         }
 
         state.timer -= dt;
@@ -168,6 +174,7 @@ mod tests {
             .spawn((
                 Player,
                 Actor,
+                WallJumpMovement::PLAYER,
                 intents,
                 LocomotionState::Climb,
                 stamina,
@@ -210,7 +217,7 @@ mod tests {
 
         let st = world.entity(e).get::<EdgeLeapState>().unwrap();
         assert!(st.is_leaping);
-        assert_eq!(st.timer, LEAP_DURATION);
+        assert_eq!(st.timer, WallJumpMovement::PLAYER.edge_leap.duration);
         assert!(st.needs_release);
     }
 
@@ -267,5 +274,36 @@ mod tests {
         );
         world.run_system_once(propose).expect("propose runs");
         assert!(buffer(&world, e).is_empty());
+    }
+
+    #[test]
+    fn actor_without_wall_jump_movement_cannot_propose_edge_leap() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                climbing_left(),
+                LocomotionState::Climb,
+                Stamina::default(),
+                LedgeFacts {
+                    has_wall_left: false,
+                    ..default()
+                },
+                EdgeLeapState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none()
+        );
     }
 }

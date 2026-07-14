@@ -26,6 +26,7 @@ use std::fmt::Write;
 use crate::movement::diag::{CastKind, CastTrace};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use crate::movement::proposal::ProposalBuffer;
+use crate::movement::sensing::GroundSensing;
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, MovementSet, Player};
@@ -146,16 +147,24 @@ fn handle_toggles(
 
 /// Log every `GroundFacts.grounded` flip with the decomposed reason — this is
 /// the primary tool for "why did I fall?" investigations.
+type GroundFlipQuery<'a> = (
+    Entity,
+    &'a GroundFacts,
+    &'a BodyVelocity,
+    &'a GroundSensing,
+    Option<&'a Name>,
+);
+
 fn log_ground_flips(
     config: Res<DebugConfig>,
     tick: Res<SimTick>,
-    q: Query<(Entity, &GroundFacts, &BodyVelocity, Option<&Name>), With<Actor>>,
+    q: Query<GroundFlipQuery, With<Actor>>,
     mut prev: Local<HashMap<Entity, bool>>,
 ) {
     if !config.log_transitions {
         return;
     }
-    for (entity, ground, vel, name) in &q {
+    for (entity, ground, vel, sensing, name) in &q {
         let was = prev.insert(entity, ground.grounded);
         if was == Some(ground.grounded) {
             continue;
@@ -171,7 +180,7 @@ fn log_ground_flips(
             ground.probe_hit,
             ground.slope_ok,
             ground.ascend_dot,
-            crate::movement::services::ground::ASCEND_EPSILON,
+            sensing.ascend_epsilon,
             vel.0.x,
             vel.0.y,
             vel.0.z,
@@ -498,6 +507,7 @@ fn draw_sensor_gizmos(
             &BodyVelocity,
             &GroundFacts,
             &BodyContact,
+            &crate::movement::body::BodyDimensions,
             Option<&StairsFacts>,
         ),
         With<Actor>,
@@ -543,14 +553,14 @@ fn draw_sensor_gizmos(
     }
 
     // --- Per-actor arrows ---
-    for (transform, vel, ground, contact, stairs_facts) in &actors {
+    for (transform, vel, ground, contact, body, stairs_facts) in &actors {
         let pos = transform.translation;
         // Velocity (scaled down to stay readable).
         if vel.0.length_squared() > 0.001 {
             gizmos.arrow(pos, pos + vel.0 * 0.25, css::GOLD);
         }
         // Floor normal from the feet, green when grounded, red when not.
-        let feet = pos - Vec3::Y * crate::movement::body::HALF_HEIGHT;
+        let feet = pos - Vec3::Y * body.standing_half_height();
         let n_color = if ground.grounded { css::LIME } else { css::RED };
         gizmos.arrow(feet, feet + ground.floor_normal * 0.6, n_color);
         // Wall contact normal.

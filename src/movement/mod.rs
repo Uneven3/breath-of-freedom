@@ -7,17 +7,19 @@
 //! one motor moves the body" structurally, not just by convention. See
 //! `docs/architecture/movement.md`.
 
-use avian3d::prelude::*;
 use bevy::prelude::*;
 
+pub mod abilities;
 pub mod body;
 pub mod brain;
+pub mod bundles;
 pub mod diag;
 pub mod facts;
 pub mod intents;
 pub mod motor_common;
 pub mod motors;
 pub mod proposal;
+pub mod sensing;
 pub mod services;
 pub mod stamina;
 pub mod state;
@@ -26,10 +28,16 @@ pub mod state;
 #[cfg(test)]
 mod spike;
 
-use facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
-use intents::Intents;
+use abilities::{
+    AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
+    LedgeTraversal, WallJumpMovement,
+};
+use bundles::{
+    GlideMovementBundle, GroundMovementBundle, JumpMovementBundle, KinematicActorBundle,
+    LedgeTraversalBundle, WallJumpMovementBundle,
+};
 use proposal::ProposalBuffer;
-use stamina::Stamina;
+use sensing::LedgeSensing;
 use state::LocomotionState;
 
 /// World gravity magnitude (Earth gravity, 9.8 m/s²).
@@ -186,46 +194,25 @@ fn spawn_player(mut commands: Commands) {
     // The Player is an invisible kinematic collider; the mesh lives on a separate
     // PlayerVisual entity that interpolates toward this body (see `visuals.rs`).
     // Capsule dimensions live in `body` (shared with services and motors).
+    let body_dimensions = body::BodyDimensions::PLAYER;
     commands.spawn((
         Player,
-        Actor,
         crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
         crate::input::frame::ControlOrientation::default(),
         Name::new("Player"),
-        Transform::from_xyz(0.0, 1.5, 0.0),
-        RigidBody::Kinematic,
-        Collider::capsule(body::RADIUS, body::STAND_CAPSULE_LENGTH),
-        BodyVelocity::default(),
-        Intents::default(),
-        LocomotionState::default(),
-        ProposalBuffer::default(),
-        Stamina::default(),
-        // Nested tuples keep us under Bevy's 15-element tuple-bundle arity limit.
+        KinematicActorBundle::new(Transform::from_xyz(0.0, 1.5, 0.0), body_dimensions),
         (
-            BodyContact::default(),
-            GroundFacts::default(),
-            LedgeFacts::default(),
-            StairsFacts::default(),
-            LadderFacts::default(),
-        ),
-        // Per-motor shared phase state (read by both propose and tick systems).
-        (
-            motors::jump::JumpPhase::default(),
+            GroundMovementBundle::new(GroundMovement::PLAYER, body_dimensions),
+            AirborneMovement::PLAYER,
+            JumpMovementBundle::new(JumpMovement::PLAYER),
+            GlideMovementBundle::new(GlideMovement::PLAYER),
+            ClimbMovement::PLAYER,
+            LadderMovement::PLAYER,
+            LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
+            WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
+            LedgeSensing::PLAYER,
             brain::ClimbInputState::default(),
             crate::input::InputConsumeCursor::default(),
-            motors::jump::JumpLocal::default(),
-            motors::glide::GlideLocal::default(),
-            motors::sprint::SprintLock::default(),
-            motors::sneak::Crouched::default(),
-            motors::sneak::StandClearance::default(),
-            motors::sneak::StandCollider(Collider::capsule(
-                body::RADIUS,
-                body::STAND_CAPSULE_LENGTH,
-            )),
-            motors::mantle::MantleState::default(),
-            motors::auto_vault::VaultState::default(),
-            motors::wall_jump::WallJumpState::default(),
-            motors::edge_leap::EdgeLeapState::default(),
         ),
     ));
 }
@@ -242,9 +229,11 @@ fn spawn_player(mut commands: Commands) {
 #[cfg(test)]
 mod actor_isolation_tests {
     use super::*;
-    use crate::movement::facts::GroundFacts;
+    use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
+    use crate::movement::intents::Intents;
     use crate::movement::motors::jump::{JumpLocal, JumpPhase};
     use crate::movement::motors::sprint::SprintLock;
+    use crate::movement::stamina::Stamina;
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]
@@ -253,6 +242,8 @@ mod actor_isolation_tests {
         let walker = world
             .spawn((
                 Actor,
+                GroundMovement::PLAYER,
+                JumpMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -264,6 +255,9 @@ mod actor_isolation_tests {
         let faller = world
             .spawn((
                 Actor,
+                AirborneMovement::PLAYER,
+                JumpMovement::PLAYER,
+                GroundMovement::PLAYER,
                 GroundFacts {
                     grounded: false,
                     ..default()
@@ -316,6 +310,8 @@ mod actor_isolation_tests {
         let jumper = world
             .spawn((
                 Actor,
+                GroundMovement::PLAYER,
+                JumpMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -333,6 +329,7 @@ mod actor_isolation_tests {
         let neutral = world
             .spawn((
                 Actor,
+                JumpMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -395,6 +392,7 @@ mod actor_isolation_tests {
         let exhausted = world
             .spawn((
                 Actor,
+                GroundMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -413,6 +411,7 @@ mod actor_isolation_tests {
         let full = world
             .spawn((
                 Actor,
+                GroundMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -466,6 +465,8 @@ mod actor_isolation_tests {
             let e = world
                 .spawn((
                     Actor,
+                    GroundMovement::PLAYER,
+                    JumpMovement::PLAYER,
                     GroundFacts {
                         grounded: true,
                         ..default()
@@ -500,6 +501,101 @@ mod actor_isolation_tests {
                 "jump_first = {jump_first}"
             );
         }
+    }
+
+    #[test]
+    fn air_and_stairs_motors_require_their_capabilities() {
+        let mut world = World::new();
+        world.init_resource::<Time>();
+
+        let jumper = world
+            .spawn((
+                Actor,
+                GroundFacts {
+                    grounded: true,
+                    ..default()
+                },
+                Intents {
+                    wants_jump: true,
+                    ..default()
+                },
+                LocomotionState::Walk,
+                JumpPhase::default(),
+                JumpLocal::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+        let glider = world
+            .spawn((
+                Actor,
+                GroundFacts::default(),
+                LedgeFacts::default(),
+                Intents {
+                    wants_glide: true,
+                    ..default()
+                },
+                LocomotionState::Fall,
+                motors::glide::GlideLocal::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+        let stair_walker = world
+            .spawn((
+                Actor,
+                GroundFacts {
+                    grounded: true,
+                    ..default()
+                },
+                StairsFacts {
+                    on_stairs: true,
+                    ..default()
+                },
+                LocomotionState::Walk,
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(motors::jump::propose).unwrap();
+        world.run_system_once(motors::glide::propose).unwrap();
+        world.run_system_once(motors::stairs::propose).unwrap();
+
+        for entity in [jumper, glider, stair_walker] {
+            assert!(
+                world
+                    .entity(entity)
+                    .get::<ProposalBuffer>()
+                    .unwrap()
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn fall_motor_requires_an_airborne_profile() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                GroundFacts::default(),
+                LocomotionState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(motors::fall::propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none(),
+            "an actor without AirborneMovement must not propose Fall"
+        );
     }
 
     // `tick` correctness under real physics (does a `tick`'s in-body guard

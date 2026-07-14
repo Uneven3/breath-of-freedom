@@ -18,7 +18,7 @@ pub struct BodyContact {
 ///
 /// The three diagnostic fields decompose `grounded` so the debug HUD/logs can
 /// say *which* condition dropped it: `grounded = probe_hit && slope_ok &&
-/// ascend_dot <= ASCEND_EPSILON`.
+/// ascend_dot <= GroundSensing::ascend_epsilon`.
 #[derive(Component, Debug, Clone, Default)]
 pub struct GroundFacts {
     pub grounded: bool,

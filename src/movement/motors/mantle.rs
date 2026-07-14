@@ -9,6 +9,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{BodyContact, LedgeFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
@@ -19,9 +20,6 @@ use crate::movement::{Actor, BodyVelocity};
 const PRIORITY_WEIGHT: u32 = 10;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.08;
-const VERTICAL_SPEED: f32 = 4.0;
-const FORWARD_SPEED: f32 = 3.0;
-const ARC_HEIGHT: f32 = 0.25;
 const TALL_ENOUGH_LIP: f32 = 1.2;
 
 /// Shared phase state for the mantle.
@@ -31,18 +29,15 @@ pub struct MantleState {
     needs_release: bool,
 }
 
-pub fn propose(
-    mut q: Query<
-        (
-            &Intents,
-            &LocomotionState,
-            &LedgeFacts,
-            &mut MantleState,
-            &mut ProposalBuffer,
-        ),
-        With<Actor>,
-    >,
-) {
+type ProposeQuery<'a> = (
+    &'a Intents,
+    &'a LocomotionState,
+    &'a LedgeFacts,
+    &'a mut MantleState,
+    &'a mut ProposalBuffer,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) {
     for (intents, current, ledge, mut state, mut buffer) in &mut q {
         if !intents.wants_mantle {
             state.needs_release = false;
@@ -94,13 +89,27 @@ type TickQuery<'a> = (
     &'a mut BodyContact,
     &'a mut MantleState,
     &'a LedgeFacts,
+    &'a LedgeTraversal,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<LedgeTraversal>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, mut contact, mut state, ledge, loco_state) in
-        &mut q
+    for (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        mut contact,
+        mut state,
+        ledge,
+        movement,
+        loco_state,
+    ) in &mut q
     {
         if *loco_state != LocomotionState::Mantle {
             continue;
@@ -108,8 +117,8 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         // First active frame: begin the mantle. No valid target — hold still
         // for this frame; mantle will drop next frame.
-        if state.arc.running || begin_mantle(&mut state, transform.translation, ledge) {
-            transform.translation = state.arc.step(dt, ARC_HEIGHT);
+        if state.arc.running || begin_mantle(&mut state, transform.translation, ledge, movement) {
+            transform.translation = state.arc.step(dt, movement.mantle.arc_height);
         }
 
         vel.0 = Vec3::ZERO;
@@ -125,7 +134,12 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
     }
 }
 
-fn begin_mantle(state: &mut MantleState, pos: Vec3, ledge: &LedgeFacts) -> bool {
+fn begin_mantle(
+    state: &mut MantleState,
+    pos: Vec3,
+    ledge: &LedgeFacts,
+    movement: &LedgeTraversal,
+) -> bool {
     let Some(target) = ledge.mantle_target_position else {
         return false;
     };
@@ -133,8 +147,8 @@ fn begin_mantle(state: &mut MantleState, pos: Vec3, ledge: &LedgeFacts) -> bool 
 
     let vertical = (target.y - pos.y).abs();
     let horizontal = Vec2::new(pos.x, pos.z).distance(Vec2::new(target.x, target.z));
-    let v_dur = vertical / VERTICAL_SPEED.max(MIN_SPEED);
-    let h_dur = horizontal / FORWARD_SPEED.max(MIN_SPEED);
+    let v_dur = vertical / movement.mantle.vertical_speed.max(MIN_SPEED);
+    let h_dur = horizontal / movement.mantle.forward_speed.max(MIN_SPEED);
     state
         .arc
         .begin(pos, target, v_dur.max(h_dur).max(MIN_DURATION));
@@ -152,6 +166,8 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                LedgeTraversal::PLAYER,
+                crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
                     wants_mantle: true,
                     ..default()
@@ -184,6 +200,8 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                LedgeTraversal::PLAYER,
+                crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
                     wish_dir: IVec2::Y,
                     ..default()
@@ -218,11 +236,13 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                LedgeTraversal::PLAYER,
                 Intents {
                     jump_pressed: true,
                     ..default()
                 },
                 LocomotionState::Climb,
+                crate::movement::abilities::WallJumpMovement::PLAYER,
                 LedgeFacts {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
@@ -259,11 +279,13 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                LedgeTraversal::PLAYER,
                 Intents {
                     jump_pressed: true,
                     ..default()
                 },
                 LocomotionState::Ladder,
+                crate::movement::abilities::WallJumpMovement::PLAYER,
                 LedgeFacts {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
@@ -289,6 +311,40 @@ mod tests {
                 .unwrap()
                 .arbitrate(LocomotionState::Ladder),
             LocomotionState::Mantle
+        );
+    }
+
+    #[test]
+    fn actor_without_ledge_traversal_cannot_propose_mantle() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    wants_mantle: true,
+                    ..default()
+                },
+                LocomotionState::Climb,
+                LedgeFacts {
+                    is_at_mantle_edge: true,
+                    lip_height: TALL_ENOUGH_LIP,
+                    ..default()
+                },
+                MantleState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none()
         );
     }
 }

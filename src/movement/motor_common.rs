@@ -10,11 +10,13 @@ use bevy::prelude::*;
 use std::f32::consts::PI;
 use std::time::Duration;
 
+use super::BodyVelocity;
+use super::abilities::GroundLocomotion;
+use super::body::BodyDimensions;
 use super::facts::{BodyContact, GroundFacts};
 use super::intents::Intents;
 use super::stamina::Stamina;
 use super::state::LocomotionState;
-use super::{Actor, BodyVelocity, body};
 
 /// A surface counts as floor if its normal is within this dot of straight up.
 /// `cos(60°) = 0.5` matches `GroundService`'s `max_slope_angle_deg = 60`.
@@ -158,17 +160,6 @@ pub fn snap_to_ground(
     }
 }
 
-/// Tuning knobs distinguishing the flat-ground motors (Walk / Sprint / Sneak).
-pub struct GroundLocomotion {
-    pub max_speed: f32,
-    pub acceleration: f32,
-    /// Deceleration toward zero when there is no input.
-    pub friction: f32,
-    pub rotation_speed: f32,
-    /// Stamina change per second: positive recovers, negative drains.
-    pub stamina_per_sec: f32,
-}
-
 /// The query row shared by every flat-ground motor's `tick`.
 pub type GroundTickQuery<'a> = (
     Entity,
@@ -199,84 +190,101 @@ pub fn align_with_floor(planar: Vec3, floor_normal: Vec3) -> Vec3 {
     tangent * speed
 }
 
-/// Shared `tick` body for the flat-ground motors: rotate toward input,
-/// accelerate on the XZ plane, zero `velocity.y` (strictly flat-floor), apply
-/// the stamina delta, slide, then re-attach to descending slopes.
-pub fn ground_locomotion_tick(
-    q: &mut Query<GroundTickQuery, With<Actor>>,
+/// Advance one actor through a flat-ground locomotion mode.
+pub struct GroundLocomotionStep<'a> {
+    pub entity: Entity,
+    pub collider: &'a Collider,
+    pub transform: &'a mut Transform,
+    pub velocity: &'a mut BodyVelocity,
+    pub intents: &'a Intents,
+    pub stamina: &'a mut Stamina,
+    pub contact: &'a mut BodyContact,
+    pub ground: &'a GroundFacts,
+    pub state: LocomotionState,
+}
+
+pub fn ground_locomotion_step(
+    step: GroundLocomotionStep,
+    active: LocomotionState,
     mas: &MoveAndSlide,
     time: &Time,
-    active: LocomotionState,
     params: &GroundLocomotion,
 ) {
-    let dt = time.delta_secs();
-    for (
-        entity,
-        collider,
-        mut transform,
-        mut vel,
-        intents,
-        mut stamina,
-        mut contact,
-        ground,
-        state,
-    ) in q.iter_mut()
-    {
-        if *state != active {
-            continue;
-        }
-
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, params.rotation_speed);
-
-        let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
-        let mut v = vel.0;
-        if move_dir != Vec3::ZERO {
-            v.x = move_toward(v.x, move_dir.x * params.max_speed, params.acceleration * dt);
-            v.z = move_toward(v.z, move_dir.z * params.max_speed, params.acceleration * dt);
-        } else {
-            v.x = move_toward(v.x, 0.0, params.friction * dt);
-            v.z = move_toward(v.z, 0.0, params.friction * dt);
-        }
-        // Flat-ground motors own velocity.y: bookkeeping stays planar…
-        v.y = 0.0;
-        let planar_velocity = v;
-        // …but the sweep follows the floor plane, so slopes move at full
-        // speed tangentially instead of paying a projection tax every tick.
-        if ground.grounded {
-            v = align_with_floor(v, ground.floor_normal);
-        }
-
-        if params.stamina_per_sec >= 0.0 {
-            stamina.recover(params.stamina_per_sec * dt);
-        } else {
-            stamina.drain(-params.stamina_per_sec * dt);
-        }
-
-        let projected_velocity = body_move_and_slide(
-            mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
-        // A floor sweep can hit a ramp's sharp lower edge before its downward
-        // probe sees the ramp. `move_and_slide` projects against that corner,
-        // which is correct for displacement but must not erase the motor's
-        // planar target speed. Preserve it unless an actual wall stopped us.
-        vel.0 = if contact.on_wall {
-            projected_velocity
-        } else {
-            planar_velocity
-        };
-        snap_to_ground(mas, entity, collider, &mut transform, &contact);
-        // Flat-ground motors are strictly planar: discard the tangential Y the
-        // slide projected onto ramps. Leaving it in `BodyVelocity` made
-        // `GroundService`'s ascend check read slope-walking as "launching off
-        // the floor" (the Walk↔Fall flicker on the test ramp).
-        vel.0.y = 0.0;
+    if step.state != active {
+        return;
     }
+
+    let dt = time.delta_secs();
+    apply_locomotion_rotation(
+        step.transform,
+        step.intents.move_dir,
+        dt,
+        params.rotation_speed,
+    );
+
+    let move_dir =
+        Vec3::new(step.intents.move_dir.x, 0.0, step.intents.move_dir.y).normalize_or_zero();
+    let mut next_velocity = step.velocity.0;
+    if move_dir != Vec3::ZERO {
+        next_velocity.x = move_toward(
+            next_velocity.x,
+            move_dir.x * params.max_speed,
+            params.acceleration * dt,
+        );
+        next_velocity.z = move_toward(
+            next_velocity.z,
+            move_dir.z * params.max_speed,
+            params.acceleration * dt,
+        );
+    } else {
+        next_velocity.x = move_toward(next_velocity.x, 0.0, params.friction * dt);
+        next_velocity.z = move_toward(next_velocity.z, 0.0, params.friction * dt);
+    }
+    // Flat-ground motors own velocity.y: bookkeeping stays planar…
+    next_velocity.y = 0.0;
+    let planar_velocity = next_velocity;
+    // …but the sweep follows the floor plane, so slopes move at full speed
+    // tangentially instead of paying a projection tax every tick.
+    if step.ground.grounded {
+        next_velocity = align_with_floor(next_velocity, step.ground.floor_normal);
+    }
+
+    if params.stamina_per_sec >= 0.0 {
+        step.stamina.recover(params.stamina_per_sec * dt);
+    } else {
+        step.stamina.drain(-params.stamina_per_sec * dt);
+    }
+
+    let projected_velocity = body_move_and_slide(
+        mas,
+        step.entity,
+        step.collider,
+        step.transform,
+        next_velocity,
+        time.delta(),
+        step.contact,
+    );
+    // A floor sweep can hit a ramp's sharp lower edge before its downward
+    // probe sees the ramp. `move_and_slide` projects against that corner,
+    // which is correct for displacement but must not erase the motor's planar
+    // target speed. Preserve it unless an actual wall stopped us.
+    step.velocity.0 = if step.contact.on_wall {
+        projected_velocity
+    } else {
+        planar_velocity
+    };
+    snap_to_ground(
+        mas,
+        step.entity,
+        step.collider,
+        step.transform,
+        step.contact,
+    );
+    // Flat-ground motors are strictly planar: discard the tangential Y the
+    // slide projected onto ramps. Leaving it in `BodyVelocity` made
+    // `GroundService`'s ascend check read slope-walking as "launching off the
+    // floor" (the Walk<->Fall flicker on the test ramp).
+    step.velocity.0.y = 0.0;
 }
 
 /// Position-lerped arc shared by Mantle and AutoVault: smoothstep from `start`
@@ -331,12 +339,13 @@ pub fn clip_below_ledge_lip(
     transform: &mut Transform,
     v: &mut Vec3,
     lip_height: f32,
+    body: BodyDimensions,
     dt: f32,
 ) -> bool {
     if lip_height <= 0.0 || v.y <= 0.0 {
         return false;
     }
-    let feet_y = transform.translation.y - body::HALF_HEIGHT;
+    let feet_y = transform.translation.y - body.standing_half_height();
     let max_y = feet_y + lip_height - LEDGE_TOP_OFFSET;
     if transform.translation.y >= max_y {
         v.y = 0.0;

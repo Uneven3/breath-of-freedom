@@ -5,36 +5,35 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::LadderMovement;
+use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, LadderFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity, body};
+use crate::movement::{Actor, BodyVelocity};
 
-const CLIMB_SPEED: f32 = 2.5;
 const BOTTOM_EXIT_CLEARANCE: f32 = 0.1;
 const TOP_HOLD_CLEARANCE: f32 = 0.25;
 
-pub fn propose(
-    mut q: Query<
-        (
-            &LadderFacts,
-            &Intents,
-            &LocomotionState,
-            &Transform,
-            &mut ProposalBuffer,
-        ),
-        With<Actor>,
-    >,
-) {
-    for (ladder, intents, current, transform, mut buffer) in &mut q {
+type ProposeQuery<'a> = (
+    &'a LadderFacts,
+    &'a Intents,
+    &'a LocomotionState,
+    &'a Transform,
+    &'a BodyDimensions,
+    &'a mut ProposalBuffer,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LadderMovement>)>) {
+    for (ladder, intents, current, transform, body, mut buffer) in &mut q {
         if !ladder.on_ladder {
             continue;
         }
         let descending_to_ground = intents.raw_input.y > 0.0
             && transform.translation.y
-                <= ladder.bottom_y + body::HALF_HEIGHT + BOTTOM_EXIT_CLEARANCE;
+                <= ladder.bottom_y + body.standing_half_height() + BOTTOM_EXIT_CLEARANCE;
         if intents.wants_jump || intents.jump_pressed || descending_to_ground {
             continue;
         }
@@ -57,12 +56,30 @@ type TickQuery<'a> = (
     &'a mut BodyContact,
     &'a Intents,
     &'a LadderFacts,
+    &'a LadderMovement,
+    &'a BodyDimensions,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<LadderMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, mut contact, intents, ladder, state) in &mut q {
+    for (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        mut contact,
+        intents,
+        ladder,
+        movement,
+        body,
+        state,
+    ) in &mut q
+    {
         if *state != LocomotionState::Ladder {
             continue;
         }
@@ -72,9 +89,9 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         face_ladder(&mut transform, ladder.outward_normal);
 
         // A ladder is an attachment constraint: it accepts only vertical input.
-        let min_y = ladder.bottom_y + body::HALF_HEIGHT;
+        let min_y = ladder.bottom_y + body.standing_half_height();
         let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
-        let target_y = (transform.translation.y - intents.raw_input.y * CLIMB_SPEED * dt)
+        let target_y = (transform.translation.y - intents.raw_input.y * movement.speed * dt)
             .clamp(min_y, max_y.max(min_y));
         let v = Vec3::Y * ((target_y - transform.translation.y) / dt.max(f32::EPSILON));
 
@@ -112,6 +129,8 @@ mod tests {
         let e = world
             .spawn((
                 Actor,
+                LadderMovement::PLAYER,
+                BodyDimensions::PLAYER,
                 LadderFacts {
                     on_ladder: true,
                     outward_normal: Vec3::Z,
@@ -190,5 +209,75 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].target_state, LocomotionState::Ladder);
+    }
+
+    #[test]
+    fn actor_without_ladder_movement_cannot_propose_ladder() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                BodyDimensions::PLAYER,
+                LadderFacts {
+                    on_ladder: true,
+                    ..default()
+                },
+                Intents {
+                    wants_climb: true,
+                    ..default()
+                },
+                LocomotionState::Walk,
+                Transform::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ladder_movement_requires_body_dimensions() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                LadderMovement::PLAYER,
+                LadderFacts {
+                    on_ladder: true,
+                    outward_normal: Vec3::Z,
+                    ..default()
+                },
+                Intents {
+                    wants_climb: true,
+                    ..default()
+                },
+                LocomotionState::Walk,
+                Transform::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none(),
+            "Ladder must not run without the body profile it uses for its limits"
+        );
     }
 }

@@ -7,6 +7,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::GlideMovement;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
@@ -14,13 +15,6 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
-
-const GLIDE_FALL_SPEED: f32 = 1.5;
-const GLIDE_GRAVITY_MULTIPLIER: f32 = 0.25;
-const MAX_GLIDE_SPEED: f32 = 6.0;
-const GLIDE_ACCELERATION: f32 = 4.0;
-const STAMINA_RECOVER_PER_SEC: f32 = 8.0;
-const STAMINA_RECOVERY_FACTOR: f32 = 0.25;
 
 #[derive(Component, Default)]
 pub struct GlideLocal {
@@ -37,7 +31,7 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
     for (ground, ledge, intents, current, mut s, mut buffer) in &mut q {
         // Clear glide-press memory when leaving GLIDE, so a fresh press right after
         // (e.g. leaving a wall) is not suppressed.
@@ -93,31 +87,58 @@ type TickQuery<'a> = (
     &'a Intents,
     &'a mut Stamina,
     &'a mut BodyContact,
+    &'a GlideMovement,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<GlideMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, intents, mut stamina, mut contact, state) in
-        &mut q
+    for (
+        entity,
+        collider,
+        mut transform,
+        mut vel,
+        intents,
+        mut stamina,
+        mut contact,
+        movement,
+        state,
+    ) in &mut q
     {
         if *state != LocomotionState::Glide {
             continue;
         }
 
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
+        apply_locomotion_rotation(
+            &mut transform,
+            intents.move_dir,
+            dt,
+            movement.rotation_speed,
+        );
 
         let mut v = vel.0;
-        v.y -= GRAVITY * GLIDE_GRAVITY_MULTIPLIER * dt;
-        v.y = v.y.max(-GLIDE_FALL_SPEED);
+        v.y -= GRAVITY * movement.gravity_multiplier * dt;
+        v.y = v.y.max(-movement.fall_speed);
 
         let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
         if move_dir != Vec3::ZERO {
-            v.x = move_toward(v.x, move_dir.x * MAX_GLIDE_SPEED, GLIDE_ACCELERATION * dt);
-            v.z = move_toward(v.z, move_dir.z * MAX_GLIDE_SPEED, GLIDE_ACCELERATION * dt);
+            v.x = move_toward(
+                v.x,
+                move_dir.x * movement.max_speed,
+                movement.acceleration * dt,
+            );
+            v.z = move_toward(
+                v.z,
+                move_dir.z * movement.max_speed,
+                movement.acceleration * dt,
+            );
         }
 
-        stamina.recover(STAMINA_RECOVER_PER_SEC * STAMINA_RECOVERY_FACTOR * dt);
+        stamina.recover(movement.stamina_recover_per_sec * movement.stamina_recovery_factor * dt);
 
         vel.0 = body_move_and_slide(
             &mas,

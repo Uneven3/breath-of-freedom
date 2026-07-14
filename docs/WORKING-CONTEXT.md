@@ -1,0 +1,170 @@
+# Working Context
+
+This file preserves the active implementation intent across agent sessions and
+context compaction. It complements, but does not replace, the scoped work
+records in `docs/tickets/`.
+
+## Update Protocol
+
+- Read this file before continuing the current refactor.
+- Update it after each accepted design decision, implementation checkpoint, or
+  user playtest result.
+- Keep tickets as the source of truth for ownership and scope; keep this file
+  focused on the cross-session technical handoff.
+
+## Current Objective
+
+Refactor locomotion toward ECS composition without changing its stable
+behavior. Actors should receive persistent capability/configuration components
+with per-actor values, while systems select compatible actors through queries.
+
+The target composition should allow, for example:
+
+- Link and a bokobo to share ground and climb capabilities with different
+  tuning.
+- A horse to have a faster ground profile but no climb capability.
+- Player input, network control, and AI to write the same `Intents` contract.
+
+## Architecture Decisions
+
+- An actor is an entity with data components such as `Health`, `Stamina`,
+  `Intents`, capability/configuration components, and exactly one active
+  `LocomotionState`.
+- Persistent capabilities describe what an actor may do. Active locomotion
+  state describes what it is doing now. Do not use an active state as an
+  ability flag.
+- Systems are always scheduled. A component does not activate a system;
+  `Query` filters select the entities for which that system runs.
+- Keep the current pipeline: input/control writes `Intents`, sensing writes
+  facts, motors propose transitions, the arbiter selects one state, and the
+  active motor writes movement.
+- Do not replace the central arbiter or make locomotion states concurrent in
+  this refactor. That would change the behavioral model rather than merely
+  composing actor capabilities.
+- Bevy assets are shared data in `Assets<T>` resources; entities normally hold
+  handles and presentation components rather than owning asset collections.
+- La taxonomia de capacidades y su orden de migracion vive en
+  `docs/architecture/rationale/movement-capability-composition.md`. Esa
+  rationale es la fuente de verdad para decidir si un motor comparte una
+  capacidad o necesita una propia; no usar la cercania entre estados como
+  criterio.
+
+## Current Checkpoint
+
+The user accepted the Ground, traversal, air/stairs, airborne-profile,
+body-dimensions, and composition-bundles migration batches in `cargo run`.
+sensor-profiles migration batches in `cargo run`. No movement migration ticket
+is active.
+
+All locomotion tuning and capsule geometry are now per actor. Construction
+ergonomics is implemented: `KinematicActorBundle` owns the shared Movement
+contract and capability bundles own each motor family's runtime components,
+while systems remain driven by individual component queries. The next cut
+should be selected from a fresh architecture review; the capability,
+construction, body, and sensor-profile foundations are complete.
+
+### Implemented
+
+- `src/movement/abilities.rs` defines:
+  - `GroundLocomotion`, a pure per-actor tuning profile.
+  - `GroundMovement`, the persistent ground capability with `walk`, `sprint`,
+    and `sneak` profiles.
+  - `GroundMovement::PLAYER`, preserving all prior values exactly:
+    Walk `(5.0, 20.0, 25.0, 15.0, +15.0)`, Sprint
+    `(10.0, 25.0, 35.0, 15.0, -10.0)`, Sneak
+    `(2.5, 15.0, 20.0, 10.0, +5.0)`, in the order max speed,
+    acceleration, friction, rotation speed, stamina/sec.
+- `GroundMovement` additionally owns the `StairsLocomotion` profile.
+- `BodyDimensions` owns capsule radius plus standing/crouched cylinder
+  lengths. Ledge, Stairs, Ladder, Climb/WallJump lip clipping, Sneak, debug
+  gizmos, and Player presentation use its derived heights or colliders rather
+  than global dimensions.
+- `JumpMovement`, `GlideMovement`, `ClimbMovement`, `LadderMovement`,
+  `LedgeTraversal`, and `WallJumpMovement` are implemented with their Player
+  values preserved exactly.
+- Every migrated motor filters its proposal and tick query by the component
+  that owns its tuning. `Stairs` uses `GroundMovement`.
+- `KinematicActorBundle` constructs the actor's physical/pipeline contract;
+  capability bundles construct `GroundMovement` with Sprint/Sneak state,
+  `JumpMovement` with its phase/timers, `GlideMovement` with press memory,
+  `LedgeTraversal` with Mantle/AutoVault state, and `WallJumpMovement` with
+  WallJump/EdgeLeap state. They are construction helpers only, not runtime
+  capability gates.
+- `GroundSensing` and `LedgeSensing` are the active physical sensor-profile
+  migration: Ground belongs to the kinematic core, while Ledge remains an
+  optional producer of facts independent from gameplay abilities.
+- The player currently receives all existing locomotion profiles. The
+  actor-isolation tests cover absence-of-capability proposal contracts.
+
+### Changed Files
+
+- `src/movement/abilities.rs` (new)
+- `src/movement/bundles.rs` (new)
+- `src/movement/mod.rs`
+- `src/movement/motor_common.rs`
+- `src/movement/motors/walk.rs`
+- `src/movement/motors/sprint.rs`, `src/movement/motors/sneak.rs`, and
+  `src/movement/motors/stairs.rs`
+- `src/movement/motors/jump.rs`, `src/movement/motors/glide.rs`,
+  `src/movement/motors/climb.rs`, `src/movement/motors/ladder.rs`,
+  `src/movement/motors/mantle.rs`, `src/movement/motors/auto_vault.rs`,
+  `src/movement/motors/wall_jump.rs`, and `src/movement/motors/edge_leap.rs`
+- `src/movement/body.rs`, `src/movement/services/ledge.rs`, and
+  `src/debug.rs`
+- `docs/architecture/movement.md`
+- `docs/tickets/movement-ground-ability.md`
+- `docs/tickets/movement-ground-modes.md`
+
+### Validation Already Run
+
+Before this handoff, the implementation passed:
+
+```text
+cargo fmt
+cargo test                 # 73 passed
+cargo clippy --all-targets -- -D warnings
+git diff --check
+```
+
+## Accepted Checkpoints
+
+- Walk: flat ground, ramp, and stairs were accepted before the Sprint/Sneak
+  slice.
+- Ground modes: Walk, Sprint stamina drain/lock/recovery, Sneak ceiling
+  clearance, ramp, and stairs were accepted by the user after the current
+  slice.
+- Traversal: Climb, Ladder, Mantle, AutoVault, WallJump, and EdgeLeap were
+  accepted together after the user-requested mechanical migration batch.
+- Air and stairs: Jump, Glide, and the Stairs profile of `GroundMovement` were
+  accepted together.
+- Airborne profile: Fall, released short jump, ledge exit, and leaving Glide
+  were accepted after `AirborneMovement` replaced global Fall tuning.
+- Body dimensions: all existing traversal remained stable after capsule
+  geometry became persistent actor data.
+- Composition bundles: the full map remained stable after Player construction
+  moved into core and capability bundles.
+- Sensor profiles: the full map remained stable after Ground/Ledge cast
+  parameters moved from globals into per-actor physical data.
+
+## Next Step After Confirmation
+
+Run an architecture review before opening the next movement ticket. Prefer a
+consumer of the new composition contracts (for example an actor recipe or
+controller boundary) over another speculative data migration.
+
+## Invariants To Preserve
+
+- `LocomotionState` remains exclusive per actor.
+- `Intents` remains the control boundary shared by player, AI, and future
+  networking.
+- Facts/sensors remain separate from motor execution.
+- Only the active motor writes an actor's movement in a tick.
+- Existing schedule ordering and the transition arbiter remain intact.
+- Do not revert unrelated working-tree changes.
+
+## Repository State
+
+- Stable traversal work was previously committed as `f5b8700`
+  (`feat: stabilize traversal locomotion`) and pushed by the user.
+- The accepted locomotion-capability migration slices are intentionally
+  uncommitted and should be committed together only when the user requests it.

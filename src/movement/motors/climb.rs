@@ -6,6 +6,8 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::ClimbMovement;
+use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip};
@@ -14,9 +16,6 @@ use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
-const CLIMB_SPEED: f32 = 2.5;
-const STAMINA_COST_PER_SEC: f32 = 5.0;
-const WALL_APPROACH_SPEED: f32 = 0.5;
 const MIN_DIR_SQ: f32 = 0.001;
 
 type ProposeQuery<'a> = (
@@ -28,7 +27,7 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<ClimbMovement>)>) {
     for (ground, ledge, stamina, intents, current, mut buffer) in &mut q {
         if stamina.is_exhausted() || !intents.wants_climb {
             continue;
@@ -66,10 +65,16 @@ type TickQuery<'a> = (
     &'a mut BodyContact,
     &'a LedgeFacts,
     &'a GroundFacts,
+    &'a ClimbMovement,
+    &'a BodyDimensions,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<ClimbMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
     for (
         entity,
@@ -81,6 +86,8 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         mut contact,
         ledge,
         ground,
+        movement,
+        body,
         state,
     ) in &mut q
     {
@@ -113,7 +120,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         }
 
         let mut v = vel.0;
-        v.y = -intents.raw_input.y * CLIMB_SPEED;
+        v.y = -intents.raw_input.y * movement.speed;
 
         // Lateral movement, gated by side-wall presence.
         let mut lateral_input = intents.raw_input.x;
@@ -123,7 +130,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             lateral_input = 0.0;
         }
         let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
-        let lateral_vel = right_dir * lateral_input * CLIMB_SPEED;
+        let lateral_vel = right_dir * lateral_input * movement.speed;
 
         // Wall-stick: pull toward the actual contact point while approaching.
         // Only when the sensor still sees the wall — with no `wall_point` there
@@ -137,7 +144,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             let mut to_wall = wall_point - transform.translation;
             to_wall.y = 0.0;
             if to_wall.length_squared() > MIN_DIR_SQ {
-                wall_stick = to_wall.normalize() * WALL_APPROACH_SPEED;
+                wall_stick = to_wall.normalize() * movement.wall_approach_speed;
             }
         }
         v.x = lateral_vel.x + wall_stick.x;
@@ -145,7 +152,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         // Soft ceiling: cap climb just below the lip so the player can't climb
         // over — forces a Mantle.
-        clip_below_ledge_lip(&mut transform, &mut v, ledge.lip_height, dt);
+        clip_below_ledge_lip(&mut transform, &mut v, ledge.lip_height, *body, dt);
 
         vel.0 = body_move_and_slide(
             &mas,
@@ -157,7 +164,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             &mut contact,
         );
 
-        stamina.drain(STAMINA_COST_PER_SEC * dt);
+        stamina.drain(movement.stamina_cost_per_sec * dt);
     }
 }
 
@@ -183,6 +190,7 @@ mod tests {
             .spawn((
                 Player,
                 Actor,
+                ClimbMovement::PLAYER,
                 ground,
                 ledge,
                 stamina,
@@ -327,5 +335,39 @@ mod tests {
             LocomotionState::Fall,
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn actor_without_climb_movement_cannot_propose_climb() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                GroundFacts::default(),
+                LedgeFacts {
+                    can_climb: true,
+                    ..default()
+                },
+                Stamina::default(),
+                Intents {
+                    wants_climb: true,
+                    ..default()
+                },
+                LocomotionState::Fall,
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none()
+        );
     }
 }

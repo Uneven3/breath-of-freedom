@@ -7,6 +7,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::JumpMovement;
 use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide};
@@ -14,9 +15,6 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
-const JUMP_IMPULSE: f32 = 5.5;
-const COYOTE_TIME: f32 = 0.12;
-const JUMP_BUFFER_TIME: f32 = 0.12;
 /// Above Stairs/Ladder (weight 0) so jumping off them is deterministic, below
 /// the specialized climb-state jumps (WallJump 5, EdgeLeap 10, Mantle 10).
 /// Ties in arbitration otherwise fall back to system execution order, which
@@ -47,15 +45,16 @@ pub struct JumpPhase {
 type ProposeQuery<'a> = (
     &'a GroundFacts,
     &'a Intents,
+    &'a JumpMovement,
     &'a LocomotionState,
     &'a mut JumpPhase,
     &'a mut JumpLocal,
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, With<Actor>>) {
+pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, (With<Actor>, With<JumpMovement>)>) {
     let dt = time.delta_secs();
-    for (ground, intents, current, mut jump_phase, mut s, mut buffer) in &mut q {
+    for (ground, intents, movement, current, mut jump_phase, mut s, mut buffer) in &mut q {
         // Treat stair mode as grounded (stair Y-snap can flicker `grounded` off for a frame).
         let on_floor = ground.grounded || *current == LocomotionState::Stairs;
         let in_jump_arc = *current == LocomotionState::Jump || *current == LocomotionState::Fall;
@@ -70,7 +69,7 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, With<Actor>>) {
 
         // Coyote time: open the window only when walking off a ledge, not after a jump.
         if s.was_on_floor && !on_floor && *current != LocomotionState::Jump {
-            s.coyote = COYOTE_TIME;
+            s.coyote = movement.coyote_time;
         } else if !on_floor {
             s.coyote = (s.coyote - dt).max(0.0);
         }
@@ -78,7 +77,7 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, With<Actor>>) {
 
         // Jump buffer: capture the rising edge of wants_jump, hold the intent briefly.
         if intents.jump_pressed || (intents.wants_jump && !s.prev_wants) {
-            s.buffer = JUMP_BUFFER_TIME;
+            s.buffer = movement.buffer_time;
         } else if s.buffer > 0.0 {
             s.buffer = (s.buffer - dt).max(0.0);
         }
@@ -110,20 +109,31 @@ type TickQuery<'a> = (
     &'a mut BodyVelocity,
     &'a Intents,
     &'a mut BodyContact,
+    &'a JumpMovement,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<JumpMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, intents, mut contact, state) in &mut q {
+    for (entity, collider, mut transform, mut vel, intents, mut contact, movement, state) in &mut q
+    {
         if *state != LocomotionState::Jump {
             continue;
         }
 
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
+        apply_locomotion_rotation(
+            &mut transform,
+            intents.move_dir,
+            dt,
+            movement.rotation_speed,
+        );
 
         let mut v = vel.0;
-        v.y = JUMP_IMPULSE;
+        v.y = movement.impulse;
         vel.0 = body_move_and_slide(
             &mas,
             entity,

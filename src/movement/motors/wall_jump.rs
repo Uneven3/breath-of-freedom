@@ -6,6 +6,8 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::abilities::WallJumpMovement;
+use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, LedgeFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip, launch_normal};
@@ -14,16 +16,6 @@ use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
-const JUMP_UP_IMPULSE: f32 = 7.0;
-const STAMINA_COST: f32 = 15.0;
-const JUMP_DURATION: f32 = 0.2;
-const WALL_CONTACT_PUSH: f32 = 1.0;
-const AWAY_UP_BLEND: f32 = 0.4;
-const AWAY_LEAP_SPEED: f32 = 3.5;
-const AWAY_NORMAL_PUSH: f32 = 4.0;
-const LATERAL_SPEED_FRACTION: f32 = 0.8;
-const LATERAL_VERTICAL_LIFT: f32 = 0.5;
-const LATERAL_NORMAL_RETRACTION: f32 = 0.5;
 const FORCED_WEIGHT: u32 = 5;
 
 #[derive(Component, Default)]
@@ -37,19 +29,17 @@ pub struct WallJumpState {
     launch_pending: bool,
 }
 
-pub fn propose(
-    mut q: Query<
-        (
-            &Intents,
-            &LocomotionState,
-            &Stamina,
-            &mut WallJumpState,
-            &mut ProposalBuffer,
-        ),
-        With<Actor>,
-    >,
-) {
-    for (intents, current, stamina, mut state, mut buffer) in &mut q {
+type ProposeQuery<'a> = (
+    &'a Intents,
+    &'a LocomotionState,
+    &'a Stamina,
+    &'a WallJumpMovement,
+    &'a mut WallJumpState,
+    &'a mut ProposalBuffer,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>) {
+    for (intents, current, stamina, movement, mut state, mut buffer) in &mut q {
         let jump_requested = intents.wants_jump || intents.jump_pressed;
         if !intents.wants_jump {
             state.needs_release = false;
@@ -63,7 +53,7 @@ pub fn propose(
             // Arm the jump for this activation.
             state.needs_release = true;
             state.is_jumping = true;
-            state.timer = JUMP_DURATION;
+            state.timer = movement.wall_jump.duration;
             state.launch_pending = true;
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::WallJump,
@@ -95,10 +85,16 @@ type TickQuery<'a> = (
     &'a Intents,
     &'a mut Stamina,
     &'a LedgeFacts,
+    &'a WallJumpMovement,
+    &'a BodyDimensions,
     &'a LocomotionState,
 );
 
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+pub fn tick(
+    mut q: Query<TickQuery, (With<Actor>, With<WallJumpMovement>)>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
     let dt = time.delta_secs();
     for (
         entity,
@@ -110,6 +106,8 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         intents,
         mut stamina,
         ledge,
+        movement,
+        body,
         loco_state,
     ) in &mut q
     {
@@ -122,33 +120,34 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         // First tick: apply the launch impulse.
         if state.launch_pending {
             state.launch_pending = false;
+            let profile = movement.wall_jump;
             let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
 
             if intents.is_climbing_up() {
-                v = Vec3::Y * JUMP_UP_IMPULSE - normal * WALL_CONTACT_PUSH;
+                v = Vec3::Y * profile.jump_up_impulse - normal * profile.wall_contact_push;
             } else if intents.is_climbing_down() {
-                let away = (normal + Vec3::Y * AWAY_UP_BLEND).normalize_or_zero();
-                v = away * AWAY_LEAP_SPEED + normal * AWAY_NORMAL_PUSH;
+                let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
+                v = away * profile.away_leap_speed + normal * profile.away_normal_push;
             } else if intents.is_climbing_left() {
-                v = -right_dir * (JUMP_UP_IMPULSE * LATERAL_SPEED_FRACTION);
-                v.y = LATERAL_VERTICAL_LIFT;
-                v -= normal * LATERAL_NORMAL_RETRACTION;
+                v = -right_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
+                v.y = profile.lateral_vertical_lift;
+                v -= normal * profile.lateral_normal_retraction;
             } else if intents.is_climbing_right() {
-                v = right_dir * (JUMP_UP_IMPULSE * LATERAL_SPEED_FRACTION);
-                v.y = LATERAL_VERTICAL_LIFT;
-                v -= normal * LATERAL_NORMAL_RETRACTION;
+                v = right_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
+                v.y = profile.lateral_vertical_lift;
+                v -= normal * profile.lateral_normal_retraction;
             } else {
-                let away = (normal + Vec3::Y * AWAY_UP_BLEND).normalize_or_zero();
-                v = away * AWAY_LEAP_SPEED + normal * AWAY_NORMAL_PUSH;
+                let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
+                v = away * profile.away_leap_speed + normal * profile.away_normal_push;
             }
-            stamina.drain(STAMINA_COST);
+            stamina.drain(profile.stamina_cost);
         }
 
         state.timer -= dt;
 
         // Soft ceiling clip (shared with climb); pinning at the lip ends the jump.
-        if clip_below_ledge_lip(&mut transform, &mut v, ledge.lip_height, dt) {
+        if clip_below_ledge_lip(&mut transform, &mut v, ledge.lip_height, *body, dt) {
             state.is_jumping = false;
         }
 
@@ -179,6 +178,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                WallJumpMovement::PLAYER,
                 Intents {
                     jump_pressed: true,
                     ..default()
@@ -206,6 +206,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                WallJumpMovement::PLAYER,
                 Intents {
                     jump_pressed: true,
                     ..default()
@@ -226,6 +227,36 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|proposal| proposal.target_state == LocomotionState::WallJump)
+        );
+    }
+
+    #[test]
+    fn actor_without_wall_jump_movement_cannot_propose_wall_jump() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    jump_pressed: true,
+                    ..default()
+                },
+                LocomotionState::Climb,
+                Stamina::default(),
+                WallJumpState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none()
         );
     }
 }

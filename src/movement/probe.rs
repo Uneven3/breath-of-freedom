@@ -17,7 +17,7 @@ use super::bundles::{
 use super::facts::LedgeFacts;
 use super::intents::{ClimbIntent, ClimbVerticalIntent, Intents, PlanarMoveIntent};
 use super::probe_data::{ProbeCoverage, ProbeScript, ProbeStage, TraversalProbe};
-use super::sensing::LedgeSensing;
+use super::sensing::{GroundSensing, LedgeSensing};
 use super::state::LocomotionState;
 
 const STAGE_TIMEOUT_SECS: f32 = 8.0;
@@ -43,6 +43,7 @@ pub fn spawn(mut commands: Commands) {
         KinematicActorBundle::new(
             Transform::from_xyz(0.0, PROBE_STANDING_CENTER_Y, -3.0),
             dimensions,
+            GroundSensing::PLAYER,
         ),
         (
             GroundMovementBundle::new(ground, dimensions),

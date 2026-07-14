@@ -2,10 +2,12 @@
 //!
 //! Per-frame flow, expressed as ordered system sets in `FixedUpdate` (pinned to
 //! 60 Hz): read intents → sense world → gather proposals → arbitrate → tick
-//! active motor. Only the active motor's `tick` system runs each frame, gated
-//! by a run condition on `LocomotionState` — this is what enforces "exactly
-//! one motor moves the body" structurally, not just by convention. See
-//! `docs/architecture/movement.md`.
+//! active motor. Every motor's `tick` system runs each frame, but each one
+//! self-gates per entity on `LocomotionState` (`if *state != X { continue }`),
+//! so exactly one motor moves each body — the per-entity contract that lets
+//! multiple `Actor`s run independently. The guard is a convention every motor
+//! must uphold, checked by review, not by the schedule. See
+//! `docs/architecture/movement.md` and `rationale/multi-actor-dispatch.md`.
 
 use bevy::prelude::*;
 
@@ -30,16 +32,7 @@ pub mod state;
 #[cfg(test)]
 mod spike;
 
-use abilities::{
-    AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
-    LedgeTraversal, WallJumpMovement,
-};
-use bundles::{
-    GlideMovementBundle, GroundMovementBundle, JumpMovementBundle, KinematicActorBundle,
-    LedgeTraversalBundle, WallJumpMovementBundle,
-};
 use proposal::ProposalBuffer;
-use sensing::LedgeSensing;
 use state::LocomotionState;
 
 /// World gravity magnitude (Earth gravity, 9.8 m/s²).
@@ -99,7 +92,7 @@ impl Plugin for MovementPlugin {
                 .chain(),
         );
 
-        app.add_systems(Startup, (spawn_player, probe::spawn));
+        app.add_systems(Startup, probe::spawn);
 
         app.add_systems(
             FixedUpdate,
@@ -138,10 +131,13 @@ impl Plugin for MovementPlugin {
                 .in_set(MovementSet::GatherProposals),
         );
         app.add_systems(FixedUpdate, arbitrate.in_set(MovementSet::Arbitrate));
-        // Clear climb intent on the relevant transitions, right after the SSoT write.
+        // Clear climb intent on the relevant transitions, right after the SSoT
+        // write and before any motor ticks on it.
         app.add_systems(
             FixedUpdate,
-            brain::reset_climb_toggle.after(MovementSet::Arbitrate),
+            brain::reset_climb_toggle
+                .after(MovementSet::Arbitrate)
+                .before(MovementSet::TickActiveMotor),
         );
 
         // Tick systems: all 13 register unconditionally now — each self-gates
@@ -194,33 +190,6 @@ fn arbitrate(mut q: Query<(&mut LocomotionState, &mut ProposalBuffer), With<Acto
     }
 }
 
-fn spawn_player(mut commands: Commands) {
-    // The Player is an invisible kinematic collider; the mesh lives on a separate
-    // PlayerVisual entity that interpolates toward this body (see `visuals.rs`).
-    // Capsule dimensions live in `body` (shared with services and motors).
-    let body_dimensions = body::BodyDimensions::PLAYER;
-    commands.spawn((
-        Player,
-        crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
-        crate::input::frame::ControlOrientation::default(),
-        Name::new("Player"),
-        KinematicActorBundle::new(Transform::from_xyz(0.0, 1.5, 0.0), body_dimensions),
-        (
-            GroundMovementBundle::new(GroundMovement::PLAYER, body_dimensions),
-            AirborneMovement::PLAYER,
-            JumpMovementBundle::new(JumpMovement::PLAYER),
-            GlideMovementBundle::new(GlideMovement::PLAYER),
-            ClimbMovement::PLAYER,
-            LadderMovement::PLAYER,
-            LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
-            WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
-            LedgeSensing::PLAYER,
-            brain::ClimbInputState::default(),
-            crate::input::InputConsumeCursor::default(),
-        ),
-    ));
-}
-
 /// Architecture-invariant tests for the `multi-actor-migration` (Query<Actor>)
 /// contract — mandatory deliverable, not gated on a *feeling* checkpoint
 /// (Constitución §11 Tier-3 exception). Runs the real production `propose`
@@ -233,9 +202,11 @@ fn spawn_player(mut commands: Commands) {
 #[cfg(test)]
 mod actor_isolation_tests {
     use super::*;
+    use crate::movement::abilities::{AirborneMovement, GroundMovement, JumpMovement};
     use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
     use crate::movement::intents::Intents;
     use crate::movement::motors::jump::{JumpLocal, JumpPhase};
+    use crate::movement::motors::sneak::{Crouched, StandClearance};
     use crate::movement::motors::sprint::SprintLock;
     use crate::movement::stamina::Stamina;
     use bevy::ecs::system::RunSystemOnce;
@@ -411,6 +382,8 @@ mod actor_isolation_tests {
                     ..default()
                 },
                 exhausted_stamina,
+                Crouched::default(),
+                StandClearance::default(),
                 SprintLock::default(),
                 ProposalBuffer::default(),
             ))
@@ -430,6 +403,8 @@ mod actor_isolation_tests {
                     ..default()
                 },
                 Stamina::default(),
+                Crouched::default(),
+                StandClearance::default(),
                 SprintLock::default(),
                 ProposalBuffer::default(),
             ))
@@ -509,6 +484,62 @@ mod actor_isolation_tests {
                 *world.entity(e).get::<LocomotionState>().unwrap(),
                 LocomotionState::Jump,
                 "jump_first = {jump_first}"
+            );
+        }
+    }
+
+    #[test]
+    fn edge_leap_beats_mantle_regardless_of_propose_order() {
+        // From Climb at a corner (mantle edge above, open lateral edge beside),
+        // jump + lateral input makes both motors propose Forced. EdgeLeap's
+        // heavier weight must win either way: the deliberate lateral input
+        // outranks Mantle's bare jump-at-lip trigger (see `proposal::weight`).
+        for edge_leap_first in [true, false] {
+            let mut world = World::new();
+            let e = world
+                .spawn((
+                    Actor,
+                    abilities::LedgeTraversal::PLAYER,
+                    abilities::WallJumpMovement::PLAYER,
+                    Intents {
+                        jump: crate::movement::intents::JumpIntent {
+                            pressed: true,
+                            held: true,
+                        },
+                        climb: crate::movement::intents::ClimbIntent {
+                            lateral: crate::movement::intents::ClimbLateralIntent::Left,
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    LocomotionState::Climb,
+                    LedgeFacts {
+                        is_at_mantle_edge: true,
+                        lip_height: 1.5,
+                        has_wall_left: false,
+                        mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
+                        ..default()
+                    },
+                    Stamina::default(),
+                    motors::mantle::MantleState::default(),
+                    motors::edge_leap::EdgeLeapState::default(),
+                    ProposalBuffer::default(),
+                ))
+                .id();
+
+            if edge_leap_first {
+                world.run_system_once(motors::edge_leap::propose).unwrap();
+                world.run_system_once(motors::mantle::propose).unwrap();
+            } else {
+                world.run_system_once(motors::mantle::propose).unwrap();
+                world.run_system_once(motors::edge_leap::propose).unwrap();
+            }
+            world.run_system_once(arbitrate).unwrap();
+
+            assert_eq!(
+                *world.entity(e).get::<LocomotionState>().unwrap(),
+                LocomotionState::EdgeLeap,
+                "edge_leap_first = {edge_leap_first}"
             );
         }
     }

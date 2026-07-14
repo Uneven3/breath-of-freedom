@@ -10,11 +10,10 @@ use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::{Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
-const WEIGHT: u32 = 20;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.1;
 
@@ -38,7 +37,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::AutoVault,
                 Priority::Forced,
-                WEIGHT,
+                weight::AUTO_VAULT,
                 "auto_vault",
             ));
             continue;
@@ -51,7 +50,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::AutoVault,
                 Priority::PlayerRequested,
-                WEIGHT,
+                weight::AUTO_VAULT,
                 "auto_vault",
             ));
         }

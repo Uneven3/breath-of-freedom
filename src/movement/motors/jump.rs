@@ -11,15 +11,9 @@ use crate::movement::abilities::JumpMovement;
 use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
-
-/// Above Stairs/Ladder (weight 0) so jumping off them is deterministic, below
-/// the specialized climb-state jumps (WallJump 5, EdgeLeap 10, Mantle 10).
-/// Ties in arbitration otherwise fall back to system execution order, which
-/// Bevy does not guarantee.
-const FORCED_WEIGHT: u32 = 1;
 
 /// Persistent jump bookkeeping, per-actor.
 ///
@@ -95,7 +89,7 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, (With<Actor>, With<Ju
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Jump,
                 Priority::Forced,
-                FORCED_WEIGHT,
+                weight::JUMP,
                 "jump",
             ));
         }

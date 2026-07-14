@@ -10,7 +10,7 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, LadderFacts};
 use crate::movement::intents::{Intents, LadderIntent};
 use crate::movement::motor_common::body_move_and_slide;
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
@@ -41,7 +41,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LadderMovement>)>) 
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Ladder,
                 Priority::Forced,
-                0,
+                weight::LADDER,
                 "ladder",
             ));
         }

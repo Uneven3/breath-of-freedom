@@ -11,12 +11,10 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, LedgeFacts};
 use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip, launch_normal};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
-
-const FORCED_WEIGHT: u32 = 5;
 
 #[derive(Component, Default)]
 pub struct WallJumpState {
@@ -58,7 +56,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::WallJump,
                 Priority::Forced,
-                FORCED_WEIGHT,
+                weight::WALL_JUMP,
                 "wall_jump",
             ));
             continue;
@@ -68,7 +66,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::WallJump,
                 Priority::Forced,
-                FORCED_WEIGHT,
+                weight::WALL_JUMP,
                 "wall_jump",
             ));
         }
@@ -117,30 +115,36 @@ pub fn tick(
 
         let mut v = vel.0;
 
-        // First tick: apply the launch impulse.
+        // First tick: apply the launch impulse. Vertical intent wins over
+        // lateral; a neutral stick leaps away from the wall.
         if state.launch_pending {
             state.launch_pending = false;
             let profile = movement.wall_jump;
             let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
+            let away_leap = || {
+                let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
+                away * profile.away_leap_speed + normal * profile.away_normal_push
+            };
+            let lateral_leap = |side_dir: Vec3| {
+                let mut v = side_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
+                v.y = profile.lateral_vertical_lift;
+                v - normal * profile.lateral_normal_retraction
+            };
 
-            if intents.climb.vertical == ClimbVerticalIntent::Up {
-                v = Vec3::Y * profile.jump_up_impulse - normal * profile.wall_contact_push;
-            } else if intents.climb.vertical == ClimbVerticalIntent::Down {
-                let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
-                v = away * profile.away_leap_speed + normal * profile.away_normal_push;
-            } else if intents.climb.lateral == ClimbLateralIntent::Left {
-                v = -right_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
-                v.y = profile.lateral_vertical_lift;
-                v -= normal * profile.lateral_normal_retraction;
-            } else if intents.climb.lateral == ClimbLateralIntent::Right {
-                v = right_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
-                v.y = profile.lateral_vertical_lift;
-                v -= normal * profile.lateral_normal_retraction;
-            } else {
-                let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
-                v = away * profile.away_leap_speed + normal * profile.away_normal_push;
-            }
+            v = match (intents.climb.vertical, intents.climb.lateral) {
+                (ClimbVerticalIntent::Up, _) => {
+                    Vec3::Y * profile.jump_up_impulse - normal * profile.wall_contact_push
+                }
+                (ClimbVerticalIntent::Down, _) => away_leap(),
+                (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Left) => {
+                    lateral_leap(-right_dir)
+                }
+                (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Right) => {
+                    lateral_leap(right_dir)
+                }
+                (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Neutral) => away_leap(),
+            };
             stamina.drain(profile.stamina_cost);
         }
 

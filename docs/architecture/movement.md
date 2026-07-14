@@ -9,7 +9,7 @@
 | `Intents` | `intents.rs` | Snapshot semantico del frame: `PlanarMoveIntent`, `GaitIntent`, `JumpIntent`, `ClimbIntent`, `LadderIntent`, `TraversalActionIntent` y `GlideIntent`. Solo el Brain/controlador del actor lo escribe. |
 | `LocomotionState` | `state.rs` | Enum SSoT del modo activo. Solo `arbitrate` lo escribe. |
 | `ProposalBuffer` | `proposal.rs` | Type alias sobre el núcleo genérico compartido de capacidad fija `proposal::ProposalBuffer<LocomotionState, N>` (`src/proposal.rs`), drenado por `arbitrate(current)`. Ver `rationale/proposal-arbitration-core.md`. |
-| `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. |
+| `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. Los pesos de desempate de los 13 motores viven juntos en `proposal.rs` (`mod weight`), con su orden total fijado por `const` asserts — dos motores que pueden co-proponer en la misma categoría nunca empatan. |
 | `BodyVelocity` | `mod.rs` | Velocidad del cuerpo cinemático (análogo a `CharacterBody3D.velocity`). Solo el motor activo la escribe. |
 | `BodyDimensions` | `body.rs` | Perfil físico persistente de la cápsula del actor: radio y longitudes de pie/agachado. Los servicios y motores usan sus alturas semánticas; `Collider` sigue siendo la forma física de Avian. |
 | `GroundMovement` | `abilities.rs` | Capacidad persistente y perfiles de tuning de Walk, Sprint, Sneak y Stairs por actor. Esos motores solo consideran actores que llevan este componente. |
@@ -71,11 +71,13 @@ si sensores y arbitraje normales alcanzan su condicion observada; el brain no
 reescribe la posicion ni la velocidad para pasar una estacion.
 
 Los bundles de `bundles.rs` son un limite de construccion, no de ejecucion:
-`KinematicActorBundle` instala el contrato común de simulación y cada bundle
-de capacidad instala su tuning más sus fases/latches privados. Un sistema no
-consulta bundles; sigue consultando los componentes concretos. Input local,
-cámara, IA y red se componen por fuera para que el mismo actor físico pueda
-tener controladores distintos.
+`KinematicActorBundle` instala el contrato común de simulación (incluido el
+perfil `GroundSensing`, que recibe como parámetro) y cada bundle de capacidad
+instala su tuning más sus fases/latches privados. Un sistema no consulta
+bundles; sigue consultando los componentes concretos. Input local, cámara,
+IA y red se componen por fuera para que el mismo actor físico pueda tener
+controladores distintos — el jugador local se arma en `src/player.rs`
+(`PlayerPlugin`), no dentro de `MovementPlugin`.
 
 Los servicios también seleccionan perfiles explícitos: GroundService requiere
 `GroundSensing`, incluido por `KinematicActorBundle`; LedgeService requiere

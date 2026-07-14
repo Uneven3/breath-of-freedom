@@ -11,7 +11,7 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
@@ -40,15 +40,15 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<ClimbMovement>)>) {
         if climbing && (near_apex || ledge.can_continue_climb) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Climb,
-                Priority::Opportunistic,
-                5,
+                Priority::Continuation,
+                weight::CLIMB,
                 "climb",
             ));
         } else if !climbing && ledge.can_climb {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Climb,
                 Priority::PlayerRequested,
-                5,
+                weight::CLIMB,
                 "climb",
             ));
         }
@@ -287,14 +287,14 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].target_state, LocomotionState::Climb);
-        assert_eq!(out[0].category, Priority::Opportunistic);
+        assert_eq!(out[0].category, Priority::Continuation);
         assert_eq!(out[0].override_weight, 5);
     }
 
     #[test]
     fn stays_climbing_at_curved_apex() {
         // Grounded on a sphere/cylinder top where is_on_floor flickers: a found ledge
-        // point with no head hit must keep Climb alive (Opportunistic), not drop to Walk.
+        // point with no head hit must keep Climb alive (Continuation), not drop to Walk.
         let out = propose_with(
             GroundFacts {
                 grounded: true,
@@ -316,7 +316,7 @@ mod tests {
             LocomotionState::Climb,
         );
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].category, Priority::Opportunistic);
+        assert_eq!(out[0].category, Priority::Continuation);
     }
 
     #[test]

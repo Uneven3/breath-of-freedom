@@ -15,20 +15,21 @@ use crate::movement::facts::GroundFacts;
 use crate::movement::motor_common::{
     GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
 };
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 
 type WalkProposalQuery<'a> = (&'a GroundFacts, &'a mut ProposalBuffer);
 type WalkProposalFilter = (With<Actor>, With<GroundMovement>);
 
-/// Propose WALK at PLAYER_REQUESTED priority whenever grounded.
+/// Propose WALK at DEFAULT priority whenever grounded — the standing-still
+/// fallback (there is no Idle state), not a player request.
 pub fn propose(mut q: Query<WalkProposalQuery, WalkProposalFilter>) {
     for (ground, mut buffer) in &mut q {
         if ground.grounded {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Walk,
-                Priority::PlayerRequested,
-                0,
+                Priority::Default,
+                weight::WALK,
                 "walk",
             ));
         }

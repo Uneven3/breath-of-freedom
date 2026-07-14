@@ -23,7 +23,7 @@ Un módulo nuevo en la raíz del crate, `src/proposal.rs`, sin plugin propio
 aplica a sistemas de gameplay, no a esto):
 
 ```rust
-pub enum Priority { Default, PlayerRequested, Opportunistic, Forced }
+pub enum Priority { Default, PlayerRequested, Continuation, Forced }
 
 pub struct TransitionProposal<S> {
     pub target_state: S,
@@ -80,7 +80,15 @@ El núcleo compartido no puede conocer estados concretos ni reglas de dominio.
 Solo ordena propuestas. La validez física de una transición sigue viviendo
 en el sistema dueño del estado (`Movement`, `Combat` o `Mounts`). (codex)
 
-## Reconciliar con el `ProposalBuffer` real de Movement (pendiente, resolver en el ticket de extracción)
+El orden del enum es monotónico en compromiso: un fallback pierde contra un
+pedido fresco del jugador, que pierde contra continuar una maniobra en curso
+(`Continuation`, ex-`Opportunistic`), que pierde contra movimiento
+comprometido (`Forced`). Los pesos de desempate dentro de una categoría son
+conocimiento de dominio de cada sistema: Movement centraliza los suyos en
+`movement::proposal::weight`, con el orden total fijado por `const` asserts
+en tiempo de compilación.
+
+## Reconciliar con el `ProposalBuffer` real de Movement (resuelto por el ticket de extracción)
 
 `src/movement/proposal.rs` (código real, pre-extracción) difiere de este
 diseño en dos puntos concretos — el ticket `proposal-core-extraction`

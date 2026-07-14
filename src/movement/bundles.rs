@@ -52,7 +52,7 @@ pub struct KinematicActorBundle {
 }
 
 impl KinematicActorBundle {
-    pub fn new(transform: Transform, dimensions: BodyDimensions) -> Self {
+    pub fn new(transform: Transform, dimensions: BodyDimensions, sensing: GroundSensing) -> Self {
         Self {
             actor: Actor,
             transform,
@@ -69,7 +69,7 @@ impl KinematicActorBundle {
             ledge: LedgeFacts::default(),
             stairs: StairsFacts::default(),
             ladder: LadderFacts::default(),
-            ground_sensing: GroundSensing::PLAYER,
+            ground_sensing: sensing,
         }
     }
 }
@@ -179,7 +179,11 @@ mod tests {
         let dimensions = BodyDimensions::PLAYER;
         let mut world = World::new();
         let entity = world
-            .spawn(KinematicActorBundle::new(Transform::IDENTITY, dimensions))
+            .spawn(KinematicActorBundle::new(
+                Transform::IDENTITY,
+                dimensions,
+                GroundSensing::PLAYER,
+            ))
             .id();
         let actor = world.entity(entity);
 

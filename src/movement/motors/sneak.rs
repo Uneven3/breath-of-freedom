@@ -18,7 +18,7 @@ use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{
     GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
 };
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 
 /// Whether the crouch capsule is currently applied. Lets `sync_sneak_collider`
@@ -74,7 +74,7 @@ pub fn update_stand_clearance(
     }
 }
 
-/// Propose SNEAK at PLAYER_REQUESTED with weight 1 (beats Walk's weight 0).
+/// Propose SNEAK at PLAYER_REQUESTED (outranks Walk's DEFAULT fallback).
 type SneakProposalQuery<'a> = (
     &'a GroundFacts,
     &'a Intents,
@@ -91,7 +91,7 @@ pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sneak,
                 Priority::PlayerRequested,
-                1,
+                weight::SNEAK,
                 "sneak",
             ));
         }

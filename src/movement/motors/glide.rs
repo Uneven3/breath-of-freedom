@@ -11,7 +11,7 @@ use crate::movement::abilities::GlideMovement;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::{GlideIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
@@ -50,7 +50,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
             s.prev_wants = intents.glide == GlideIntent::Requested;
             if intents.glide == GlideIntent::Requested {
                 // Downgrade to PLAYER_REQUESTED on a climbable wall so ClimbMotor's
-                // weight-5 PLAYER_REQUESTED out-arbitrates glide.
+                // heavier PLAYER_REQUESTED out-arbitrates glide (see `weight`).
                 let category = if ledge.can_climb && intents.climb.requested {
                     Priority::PlayerRequested
                 } else {
@@ -59,7 +59,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::Glide,
                     category,
-                    0,
+                    weight::GLIDE,
                     "glide",
                 ));
             }
@@ -73,7 +73,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Glide,
                 Priority::PlayerRequested,
-                0,
+                weight::GLIDE,
                 "glide",
             ));
         }

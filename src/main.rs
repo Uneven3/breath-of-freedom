@@ -9,6 +9,7 @@ mod camera;
 mod debug;
 mod input;
 mod movement;
+mod player;
 mod presentation;
 mod proposal;
 mod sfx;
@@ -29,6 +30,7 @@ fn main() {
             world::WorldPlugin,
             input::InputPlugin,
             movement::MovementPlugin,
+            player::PlayerPlugin,
             camera::CameraPlugin,
             visuals::VisualsPlugin,
             debug::DebugPlugin,

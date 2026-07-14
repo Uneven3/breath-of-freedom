@@ -12,7 +12,7 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, GroundFacts, StairsFacts};
 use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
@@ -43,7 +43,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Stairs,
                 Priority::Forced,
-                0,
+                weight::STAIRS,
                 "stairs",
             ));
         }

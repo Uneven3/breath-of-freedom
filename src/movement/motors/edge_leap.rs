@@ -9,12 +9,10 @@ use crate::movement::abilities::WallJumpMovement;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::{ClimbLateralIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, launch_normal};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
-
-const FORCED_WEIGHT: u32 = 10;
 
 #[derive(Component, Default)]
 pub struct EdgeLeapState {
@@ -56,7 +54,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::EdgeLeap,
                     Priority::Forced,
-                    FORCED_WEIGHT,
+                    weight::EDGE_LEAP,
                     "edge_leap",
                 ));
                 continue;
@@ -67,7 +65,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::EdgeLeap,
                 Priority::Forced,
-                FORCED_WEIGHT,
+                weight::EDGE_LEAP,
                 "edge_leap",
             ));
         }
@@ -221,7 +219,7 @@ mod tests {
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0].target_state, LocomotionState::EdgeLeap);
         assert_eq!(buf[0].category, Priority::Forced);
-        assert_eq!(buf[0].override_weight, FORCED_WEIGHT);
+        assert_eq!(buf[0].override_weight, weight::EDGE_LEAP);
 
         let st = world.entity(e).get::<EdgeLeapState>().unwrap();
         assert!(st.is_leaping);

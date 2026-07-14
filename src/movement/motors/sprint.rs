@@ -14,7 +14,8 @@ use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{
     GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
 };
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::motors::sneak::{Crouched, StandClearance};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
@@ -26,21 +27,36 @@ pub struct SprintLock(pub bool);
 
 const SPRINT_RECHARGE_THRESHOLD: f32 = 20.0;
 
-/// Propose SPRINT at OPPORTUNISTIC priority while grounded, holding sprint, and not
-/// stamina-locked. Abstains on stairs (StairsMotor owns the climb) and on a climbable
-/// wall the player wants to climb (so ClimbMotor can win).
+/// Propose SPRINT at PLAYER_REQUESTED priority while grounded, holding sprint,
+/// and not stamina-locked. Abstains on stairs (StairsMotor owns the climb), on
+/// a climbable wall the player wants to climb (so ClimbMotor can win), and
+/// while forced to stay crouched (standing up would expand into a ceiling —
+/// SneakMotor keeps the actor down until the full capsule fits).
 type ProposeQuery<'a> = (
     &'a GroundFacts,
     &'a StairsFacts,
     &'a LedgeFacts,
     &'a Intents,
     &'a Stamina,
+    &'a Crouched,
+    &'a StandClearance,
     &'a mut SprintLock,
     &'a mut ProposalBuffer,
 );
 
 pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) {
-    for (ground, stairs, ledge, intents, stamina, mut stamina_locked, mut buffer) in &mut q {
+    for (
+        ground,
+        stairs,
+        ledge,
+        intents,
+        stamina,
+        crouched,
+        clearance,
+        mut stamina_locked,
+        mut buffer,
+    ) in &mut q
+    {
         let cur = stamina.current();
         if cur <= 0.0 {
             stamina_locked.0 = true;
@@ -48,19 +64,22 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
             stamina_locked.0 = false;
         }
 
-        // Abstain so StairsMotor / ClimbMotor can take over.
+        // Abstain so StairsMotor / ClimbMotor / SneakMotor can take over.
         if stairs.on_stairs {
             continue;
         }
         if ledge.can_climb && intents.climb.requested {
             continue;
         }
+        if crouched.0 && !clearance.0 {
+            continue;
+        }
 
         if ground.grounded && intents.gait == GaitIntent::Sprint && !stamina_locked.0 {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sprint,
-                Priority::Opportunistic,
-                0,
+                Priority::PlayerRequested,
+                weight::SPRINT,
                 "sprint",
             ));
         }
@@ -109,28 +128,39 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
+    fn sprint_actor(crouched: bool, clearance: bool) -> impl Bundle {
+        (
+            Actor,
+            GroundMovement::PLAYER,
+            GroundFacts {
+                grounded: true,
+                ..default()
+            },
+            StairsFacts::default(),
+            LedgeFacts::default(),
+            Intents {
+                gait: crate::movement::intents::GaitIntent::Sprint,
+                ..default()
+            },
+            Stamina::default(),
+            Crouched(crouched),
+            StandClearance(clearance),
+            SprintLock::default(),
+            ProposalBuffer::default(),
+        )
+    }
+
+    fn proposes_sprint(world: &World, entity: Entity) -> bool {
+        world
+            .entity(entity)
+            .get::<ProposalBuffer>()
+            .is_some_and(|buffer| buffer.iter().next().is_some())
+    }
+
     #[test]
     fn only_ground_movement_actors_propose_sprint() {
         let mut world = World::new();
-        let capable = world
-            .spawn((
-                Actor,
-                GroundMovement::PLAYER,
-                GroundFacts {
-                    grounded: true,
-                    ..default()
-                },
-                StairsFacts::default(),
-                LedgeFacts::default(),
-                Intents {
-                    gait: crate::movement::intents::GaitIntent::Sprint,
-                    ..default()
-                },
-                Stamina::default(),
-                SprintLock::default(),
-                ProposalBuffer::default(),
-            ))
-            .id();
+        let capable = world.spawn(sprint_actor(false, true)).id();
         let incapable = world
             .spawn((
                 Actor,
@@ -145,6 +175,8 @@ mod tests {
                     ..default()
                 },
                 Stamina::default(),
+                Crouched::default(),
+                StandClearance::default(),
                 SprintLock::default(),
                 ProposalBuffer::default(),
             ))
@@ -152,17 +184,22 @@ mod tests {
 
         world.run_system_once(propose).unwrap();
 
-        assert!(
-            world
-                .entity(capable)
-                .get::<ProposalBuffer>()
-                .is_some_and(|buffer| buffer.iter().next().is_some())
-        );
-        assert!(
-            world
-                .entity(incapable)
-                .get::<ProposalBuffer>()
-                .is_some_and(|buffer| buffer.iter().next().is_none())
-        );
+        assert!(proposes_sprint(&world, capable));
+        assert!(!proposes_sprint(&world, incapable));
+    }
+
+    #[test]
+    fn sprint_yields_while_forced_to_stay_crouched() {
+        // Crouched under a ceiling with no room to stand: Sneak's
+        // must-remain-crouched proposal must win, or the collider swap on
+        // leaving Sneak would expand the capsule into the ceiling.
+        let mut world = World::new();
+        let blocked = world.spawn(sprint_actor(true, false)).id();
+        let free = world.spawn(sprint_actor(true, true)).id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(!proposes_sprint(&world, blocked));
+        assert!(proposes_sprint(&world, free));
     }
 }

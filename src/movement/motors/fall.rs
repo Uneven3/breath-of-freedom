@@ -11,7 +11,7 @@ use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
 use crate::movement::motors::jump::JumpPhase;
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, GRAVITY};
@@ -25,7 +25,7 @@ pub fn propose(mut q: Query<(&GroundFacts, &mut ProposalBuffer), FallProposalFil
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Fall,
                 Priority::Default,
-                0,
+                weight::FALL,
                 "fall",
             ));
         }

@@ -13,11 +13,10 @@ use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{BodyContact, LedgeFacts};
 use crate::movement::intents::{ClimbVerticalIntent, Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
-use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
+use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
-const PRIORITY_WEIGHT: u32 = 10;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.08;
 const TALL_ENOUGH_LIP: f32 = 1.2;
@@ -48,7 +47,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Mantle,
                 Priority::Forced,
-                PRIORITY_WEIGHT,
+                weight::MANTLE,
                 "mantle",
             ));
             continue;
@@ -76,7 +75,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::Mantle,
                     Priority::Forced,
-                    PRIORITY_WEIGHT,
+                    weight::MANTLE,
                     "mantle",
                 ));
             }

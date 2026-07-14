@@ -3,16 +3,19 @@
 use bevy::prelude::*;
 
 /// Arbitration category. **Declaration order is load-bearing**: the derived
-/// `Ord` makes later variants beat earlier ones, and — counterintuitively —
-/// `Opportunistic` outranks `PlayerRequested` on purpose (e.g. Sprint proposes
-/// `Opportunistic` precisely so it beats Walk's `PlayerRequested` while both
-/// are grounded). Do not reorder "for readability"; the
-/// `priority_order_is_total_and_fixed` test pins this.
+/// `Ord` makes later variants beat earlier ones, in increasing commitment —
+/// a fallback loses to a fresh player request, which loses to continuing an
+/// in-progress maneuver, which loses to a committed/physical necessity. The
+/// `priority_order_is_total_and_fixed` test pins this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
+    /// Fallback when nothing stronger applies (Fall, Walk).
     Default,
+    /// A fresh request derived from player intent this frame.
     PlayerRequested,
-    Opportunistic,
+    /// Keep an already-active maneuver going (e.g. an ongoing climb).
+    Continuation,
+    /// Committed motion the actor cannot simply abandon mid-way.
     Forced,
 }
 
@@ -95,18 +98,16 @@ impl<S, const N: usize> ProposalBuffer<S, N> {
 
 impl<S: Copy, const N: usize> ProposalBuffer<S, N> {
     pub fn arbitrate(&self, current: S) -> S {
+        // Strict `>` keeps the first-inserted proposal on exact ties.
         let mut best: Option<&TransitionProposal<S>> = None;
         for proposal in self.iter() {
-            best = match best {
-                None => Some(proposal),
-                Some(winner)
-                    if (proposal.category, proposal.override_weight)
-                        > (winner.category, winner.override_weight) =>
-                {
-                    Some(proposal)
-                }
-                Some(winner) => Some(winner),
-            };
+            let beats_best = best.is_none_or(|winner| {
+                (proposal.category, proposal.override_weight)
+                    > (winner.category, winner.override_weight)
+            });
+            if beats_best {
+                best = Some(proposal);
+            }
         }
 
         best.map(|proposal| proposal.target_state)
@@ -132,8 +133,8 @@ mod tests {
         // The arbitration semantics depend on this exact total order (see the
         // enum's doc comment). A reorder of the variants must fail here.
         assert!(Priority::Default < Priority::PlayerRequested);
-        assert!(Priority::PlayerRequested < Priority::Opportunistic);
-        assert!(Priority::Opportunistic < Priority::Forced);
+        assert!(Priority::PlayerRequested < Priority::Continuation);
+        assert!(Priority::Continuation < Priority::Forced);
     }
 
     #[test]

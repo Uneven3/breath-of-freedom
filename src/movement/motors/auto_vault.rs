@@ -1,14 +1,14 @@
 //! Auto-vault motor — kinematic hop over a waist-high obstacle.
 //!
-//! Same phase-component pattern as mantle.
+//! Same phase-component pattern as mantle, sharing its
+//! `motor_common::KinematicArc`.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use std::f32::consts::PI;
 
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::Intents;
-use crate::movement::motor_common::body_move_and_slide;
+use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
@@ -21,11 +21,7 @@ const ARC_HEIGHT: f32 = 0.4;
 
 #[derive(Component, Default)]
 pub struct VaultState {
-    running: bool,
-    elapsed: f32,
-    duration: f32,
-    start: Vec3,
-    target: Vec3,
+    pub(crate) arc: KinematicArc,
 }
 
 type ProposeQuery<'a> = (
@@ -39,7 +35,7 @@ type ProposeQuery<'a> = (
 
 pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
     for (ground, ledge, intents, current, state, mut buffer) in &mut q {
-        if *current == LocomotionState::AutoVault && state.running {
+        if *current == LocomotionState::AutoVault && state.arc.running {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::AutoVault,
                 Priority::Forced,
@@ -80,19 +76,11 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             continue;
         }
 
-        if !state.running && !begin_vault(&mut state, transform.translation, ledge) {
-            state.running = false;
+        if !state.arc.running && !begin_vault(&mut state, transform.translation, ledge) {
             continue;
         }
 
-        state.elapsed = (state.elapsed + dt).min(state.duration);
-        let raw = state.elapsed / state.duration;
-        let eased = raw.clamp(0.0, 1.0);
-        let eased = eased * eased * (3.0 - 2.0 * eased);
-        let mut next = state.start.lerp(state.target, eased);
-        next.y += (raw * PI).sin() * ARC_HEIGHT;
-
-        transform.translation = next;
+        transform.translation = state.arc.step(dt, ARC_HEIGHT);
         vel.0 = Vec3::ZERO;
         body_move_and_slide(
             &mas,
@@ -103,23 +91,14 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             time.delta(),
             &mut contact,
         );
-
-        if raw >= 1.0 {
-            transform.translation = state.target;
-            state.running = false;
-        }
     }
 }
 
 fn begin_vault(state: &mut VaultState, pos: Vec3, ledge: &LedgeFacts) -> bool {
-    if ledge.vault_target_position == Vec3::ZERO {
+    let Some(target) = ledge.vault_target_position else {
         return false;
-    }
-    state.start = pos;
-    state.target = ledge.vault_target_position;
-    let distance = state.start.distance(state.target);
-    state.duration = (distance / VAULT_SPEED.max(MIN_SPEED)).max(MIN_DURATION);
-    state.elapsed = 0.0;
-    state.running = true;
+    };
+    let duration = (pos.distance(target) / VAULT_SPEED.max(MIN_SPEED)).max(MIN_DURATION);
+    state.arc.begin(pos, target, duration);
     true
 }

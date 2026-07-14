@@ -18,18 +18,23 @@ const WISH_DIR_THRESHOLD: f32 = 0.5;
 #[derive(Resource, Default)]
 pub struct ClimbToggle(pub bool);
 
-/// `MovementSet::ReadIntents`: hardware → `Intents` on the player.
-pub fn read_intents(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut climb_toggle: ResMut<ClimbToggle>,
-    camera: Single<&CameraRig>,
-    mut intents: Single<&mut Intents, With<Player>>,
-) {
-    // Toggle climb on key-down edge.
+/// Key-down edge detection for the climb toggle. Runs in `Update`, not
+/// `FixedUpdate`: `just_pressed` is true for exactly one render frame, but
+/// `FixedUpdate` may run 0 times (press dropped) or 2+ times (toggle flipped
+/// twice = no-op) during that frame depending on the render framerate.
+pub fn toggle_climb_input(keys: Res<ButtonInput<KeyCode>>, mut climb_toggle: ResMut<ClimbToggle>) {
     if keys.just_pressed(KeyCode::Digit1) {
         climb_toggle.0 = !climb_toggle.0;
     }
+}
 
+/// `MovementSet::ReadIntents`: hardware → `Intents` on the player.
+pub fn read_intents(
+    keys: Res<ButtonInput<KeyCode>>,
+    climb_toggle: Res<ClimbToggle>,
+    camera: Single<&CameraRig>,
+    mut intents: Single<&mut Intents, With<Player>>,
+) {
     // Raw WASD combined into one vector:
     // x = right−left, y = back−forward (so forward is negative Y).
     let mut input = Vec2::ZERO;
@@ -106,11 +111,13 @@ pub fn read_intents(
     }
 }
 
+type PlayerTransition = (With<Player>, Changed<LocomotionState>);
+
 /// Clear the climb toggle after moves that should drop climb intent.
 /// Keyed on `Changed<LocomotionState>` so it fires exactly on a transition.
 pub fn reset_climb_toggle(
     mut toggle: ResMut<ClimbToggle>,
-    q: Query<(&LocomotionState, &Intents), (With<Player>, Changed<LocomotionState>)>,
+    q: Query<(&LocomotionState, &Intents), PlayerTransition>,
 ) {
     let Ok((state, intents)) = q.single() else {
         return;

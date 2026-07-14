@@ -33,6 +33,11 @@ pub fn propose(
         if !ladder.on_ladder {
             continue;
         }
+        // Jump releases the latch (and gates re-entry until Space is let go —
+        // otherwise holding a move key would re-latch on the very next frame).
+        if intents.wants_jump {
+            continue;
+        }
         // Latch on once entered; release only when the player jumps or leaves the area.
         if *current == LocomotionState::Ladder
             || intents.move_dir.length_squared() > MOVE_DIR_THRESHOLD_SQ
@@ -89,5 +94,72 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             time.delta(),
             &mut contact,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Covers the latch/release rules of `propose`; the rail-snap tick is
+    //! play-tested.
+    use super::*;
+    use crate::movement::Actor;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn proposals(intents: Intents, state: LocomotionState) -> Vec<TransitionProposal> {
+        let mut world = World::new();
+        let e = world
+            .spawn((
+                Actor,
+                LadderFacts {
+                    on_ladder: true,
+                    ..default()
+                },
+                intents,
+                state,
+                ProposalBuffer::default(),
+            ))
+            .id();
+        world.run_system_once(propose).expect("propose runs");
+        world
+            .entity(e)
+            .get::<ProposalBuffer>()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn latched_ladder_keeps_proposing() {
+        let out = proposals(Intents::default(), LocomotionState::Ladder);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].target_state, LocomotionState::Ladder);
+    }
+
+    #[test]
+    fn jump_releases_the_latch() {
+        let out = proposals(
+            Intents {
+                wants_jump: true,
+                ..default()
+            },
+            LocomotionState::Ladder,
+        );
+        assert!(out.is_empty(), "jump must release the ladder latch");
+    }
+
+    #[test]
+    fn held_jump_blocks_re_entry() {
+        // Falling next to the ladder while still holding Space and a move key
+        // must not re-latch (that would undo the jump release instantly).
+        let out = proposals(
+            Intents {
+                wants_jump: true,
+                move_dir: Vec2::new(0.0, 1.0),
+                ..default()
+            },
+            LocomotionState::Fall,
+        );
+        assert!(out.is_empty());
     }
 }

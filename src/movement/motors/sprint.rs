@@ -1,18 +1,19 @@
 //! Sprint motor — faster ground locomotion that drains stamina.
 //!
 //! Motor-local state (`SprintLock`) is a per-entity component — one instance
-//! per actor, so stamina-lock state never bleeds between actors.
+//! per actor, so stamina-lock state never bleeds between actors. The tick body
+//! is the shared `motor_common::ground_locomotion_tick`.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts, StairsFacts};
+use crate::movement::Actor;
+use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
 use crate::movement::intents::Intents;
-use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
+use crate::movement::motor_common::{GroundLocomotion, GroundTickQuery, ground_locomotion_tick};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
 
 /// Per-actor stamina-lock latch: set when stamina hits zero, cleared once it
 /// recovers past `SPRINT_RECHARGE_THRESHOLD`. Was a `Local<bool>`; promoted to
@@ -20,11 +21,15 @@ use crate::movement::{Actor, BodyVelocity};
 #[derive(Component, Default)]
 pub struct SprintLock(pub bool);
 
-const SPRINT_SPEED: f32 = 10.0;
-const SPRINT_ACCELERATION: f32 = 25.0;
-const SPRINT_DECELERATION: f32 = 35.0;
-const STAMINA_COST_PER_SEC: f32 = 10.0;
 const SPRINT_RECHARGE_THRESHOLD: f32 = 20.0;
+
+const PARAMS: GroundLocomotion = GroundLocomotion {
+    max_speed: 10.0,
+    acceleration: 25.0,
+    friction: 35.0,
+    rotation_speed: 15.0,
+    stamina_per_sec: -10.0,
+};
 
 /// Propose SPRINT at OPPORTUNISTIC priority while grounded, holding sprint, and not
 /// stamina-locked. Abstains on stairs (StairsMotor owns the climb) and on a climbable
@@ -67,49 +72,6 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a Intents,
-    &'a mut Stamina,
-    &'a mut BodyContact,
-    &'a LocomotionState,
-);
-
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
-    let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, intents, mut stamina, mut contact, state) in
-        &mut q
-    {
-        if *state != LocomotionState::Sprint {
-            continue;
-        }
-
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
-
-        let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
-        let mut v = vel.0;
-        if move_dir != Vec3::ZERO {
-            v.x = move_toward(v.x, move_dir.x * SPRINT_SPEED, SPRINT_ACCELERATION * dt);
-            v.z = move_toward(v.z, move_dir.z * SPRINT_SPEED, SPRINT_ACCELERATION * dt);
-        } else {
-            v.x = move_toward(v.x, 0.0, SPRINT_DECELERATION * dt);
-            v.z = move_toward(v.z, 0.0, SPRINT_DECELERATION * dt);
-        }
-        v.y = 0.0;
-
-        stamina.drain(STAMINA_COST_PER_SEC * dt);
-
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
-    }
+pub fn tick(mut q: Query<GroundTickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+    ground_locomotion_tick(&mut q, &mas, &time, LocomotionState::Sprint, &PARAMS);
 }

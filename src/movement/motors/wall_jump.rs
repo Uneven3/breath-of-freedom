@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use crate::movement::facts::{BodyContact, LedgeFacts};
 use crate::movement::intents::Intents;
-use crate::movement::motor_common::body_move_and_slide;
+use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip, launch_normal};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -24,8 +24,6 @@ const AWAY_NORMAL_PUSH: f32 = 4.0;
 const LATERAL_SPEED_FRACTION: f32 = 0.8;
 const LATERAL_VERTICAL_LIFT: f32 = 0.5;
 const LATERAL_NORMAL_RETRACTION: f32 = 0.5;
-const BODY_HALF_HEIGHT: f32 = 1.0;
-const LEDGE_TOP_OFFSET: f32 = 0.33;
 const FORCED_WEIGHT: u32 = 5;
 
 #[derive(Component, Default)]
@@ -33,6 +31,10 @@ pub struct WallJumpState {
     is_jumping: bool,
     timer: f32,
     needs_release: bool,
+    /// Armed by `propose`, consumed by `tick`'s first active frame (the launch
+    /// impulse). An explicit flag, not a `timer == JUMP_DURATION` float
+    /// comparison — the timer value can't reliably identify "first tick".
+    launch_pending: bool,
 }
 
 pub fn propose(
@@ -52,20 +54,23 @@ pub fn propose(
             state.needs_release = false;
         }
 
-        if *current == LocomotionState::Climb && intents.wants_jump && !state.needs_release {
-            if !stamina.is_exhausted() {
-                // Arm the jump for this activation.
-                state.needs_release = true;
-                state.is_jumping = true;
-                state.timer = JUMP_DURATION;
-                let _ = buffer.push(TransitionProposal::new(
-                    LocomotionState::WallJump,
-                    Priority::Forced,
-                    FORCED_WEIGHT,
-                    "wall_jump",
-                ));
-                continue;
-            }
+        if *current == LocomotionState::Climb
+            && intents.wants_jump
+            && !state.needs_release
+            && !stamina.is_exhausted()
+        {
+            // Arm the jump for this activation.
+            state.needs_release = true;
+            state.is_jumping = true;
+            state.timer = JUMP_DURATION;
+            state.launch_pending = true;
+            let _ = buffer.push(TransitionProposal::new(
+                LocomotionState::WallJump,
+                Priority::Forced,
+                FORCED_WEIGHT,
+                "wall_jump",
+            ));
+            continue;
         }
 
         if *current == LocomotionState::WallJump && state.is_jumping {
@@ -113,16 +118,10 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         let mut v = vel.0;
 
-        // First tick: apply the launch impulse (timer freshly set to JUMP_DURATION).
-        if state.timer == JUMP_DURATION {
-            let mut normal = ledge.climb_normal;
-            if normal == Vec3::ZERO {
-                normal = if contact.on_wall {
-                    -contact.wall_normal
-                } else {
-                    transform.rotation * Vec3::Z
-                };
-            }
+        // First tick: apply the launch impulse.
+        if state.launch_pending {
+            state.launch_pending = false;
+            let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
 
             if intents.is_climbing_up() {
@@ -147,15 +146,9 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         state.timer -= dt;
 
-        // Soft ceiling clip (same as climb).
-        if ledge.lip_height > 0.0 && v.y > 0.0 {
-            let feet_y = transform.translation.y - BODY_HALF_HEIGHT;
-            let max_y = feet_y + ledge.lip_height - LEDGE_TOP_OFFSET;
-            if transform.translation.y >= max_y {
-                transform.translation.y = max_y;
-                v.y = 0.0;
-                state.is_jumping = false;
-            }
+        // Soft ceiling clip (shared with climb); pinning at the lip ends the jump.
+        if clip_below_ledge_lip(&mut transform, &mut v, ledge.lip_height, dt) {
+            state.is_jumping = false;
         }
 
         vel.0 = body_move_and_slide(

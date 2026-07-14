@@ -17,6 +17,11 @@ use crate::movement::{Actor, BodyVelocity};
 const JUMP_IMPULSE: f32 = 5.5;
 const COYOTE_TIME: f32 = 0.12;
 const JUMP_BUFFER_TIME: f32 = 0.12;
+/// Above Stairs/Ladder (weight 0) so jumping off them is deterministic, below
+/// the specialized climb-state jumps (WallJump 5, EdgeLeap 10, Mantle 10).
+/// Ties in arbitration otherwise fall back to system execution order, which
+/// Bevy does not guarantee.
+const FORCED_WEIGHT: u32 = 1;
 
 /// Persistent jump bookkeeping, per-actor.
 ///
@@ -90,7 +95,7 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, With<Actor>>) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Jump,
                 Priority::Forced,
-                0,
+                FORCED_WEIGHT,
                 "jump",
             ));
         }

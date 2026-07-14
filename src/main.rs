@@ -21,14 +21,17 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default())
+        // Collider-wireframe rendering; starts disabled, toggled with F1
+        // (see `debug.rs`).
+        .add_plugins(PhysicsDebugPlugin)
         .add_plugins((
             world::WorldPlugin,
             movement::MovementPlugin,
             camera::CameraPlugin,
             visuals::VisualsPlugin,
             debug::DebugPlugin,
+            presentation::PresentationPlugin,
             sfx::SfxPlugin,
         ))
-        .add_message::<presentation::cues::CueMessage>()
         .run();
 }

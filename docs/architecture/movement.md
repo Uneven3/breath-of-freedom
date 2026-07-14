@@ -30,8 +30,9 @@ cambios para `Gamepad`/`KeyboardOnly`/`KeyboardMouse`.
 
 ## Estados (`LocomotionState`)
 
-`Idle`, `Walk`, `Sprint`, `Fall`, `Jump`, `AutoVault`, `Climb`, `Mantle`,
+`Walk`, `Sprint`, `Fall`, `Jump`, `AutoVault`, `Climb`, `Mantle`,
 `Stairs`, `Ladder`, `Glide`, `Sneak`, `WallJump`, `EdgeLeap`. Default: `Fall`.
+(No hay `Idle`: quieto en el suelo es `Walk` con input cero.)
 
 ## Sistemas (comportamiento)
 
@@ -50,9 +51,11 @@ Pipeline en `FixedUpdate` a 60Hz, `SystemSet`s encadenados (`MovementSet`):
    jugadores locales, remotos, enemigos y otros cuerpos controlables. Ver
    `rationale/multi-actor-dispatch.md`.
 
-`motors::sneak::sync_sneak_collider` corre en `Update` (swap de collider,
-declarativo sobre `Changed<LocomotionState>`). Es presentación/forma física
-derivada; no decide locomoción.
+`motors::sneak::sync_sneak_collider` corre en `FixedUpdate`, justo después
+de `Arbitrate` y antes de `TickActiveMotor` (swap de collider, declarativo
+sobre `Changed<LocomotionState>` + cruce del límite Sneak vía `Crouched`),
+para que el motor activo tique con la cápsula correcta en el mismo frame.
+Es forma física derivada; no decide locomoción.
 
 ## Relaciones con otros sistemas
 

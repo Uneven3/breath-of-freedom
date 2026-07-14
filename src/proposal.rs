@@ -2,6 +2,12 @@
 
 use bevy::prelude::*;
 
+/// Arbitration category. **Declaration order is load-bearing**: the derived
+/// `Ord` makes later variants beat earlier ones, and — counterintuitively —
+/// `Opportunistic` outranks `PlayerRequested` on purpose (e.g. Sprint proposes
+/// `Opportunistic` precisely so it beats Walk's `PlayerRequested` while both
+/// are grounded). Do not reorder "for readability"; the
+/// `priority_order_is_total_and_fixed` test pins this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
     Default,
@@ -58,6 +64,12 @@ impl<S, const N: usize> Default for ProposalBuffer<S, N> {
 impl<S, const N: usize> ProposalBuffer<S, N> {
     pub fn push(&mut self, proposal: TransitionProposal<S>) -> Result<(), ProposalOverflow> {
         if self.len == N {
+            // Callers ignore the Err by design (an overflowing proposal simply
+            // doesn't compete); log centrally so a mis-sized buffer is visible.
+            warn!(
+                "ProposalBuffer full (capacity {N}): dropping proposal from '{}'",
+                proposal.source_id
+            );
             return Err(ProposalOverflow {
                 capacity: N,
                 source_id: proposal.source_id,
@@ -113,6 +125,15 @@ mod tests {
         Jump,
         Sneak,
         Sprint,
+    }
+
+    #[test]
+    fn priority_order_is_total_and_fixed() {
+        // The arbitration semantics depend on this exact total order (see the
+        // enum's doc comment). A reorder of the variants must fail here.
+        assert!(Priority::Default < Priority::PlayerRequested);
+        assert!(Priority::PlayerRequested < Priority::Opportunistic);
+        assert!(Priority::Opportunistic < Priority::Forced);
     }
 
     #[test]

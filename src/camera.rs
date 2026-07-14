@@ -145,19 +145,20 @@ fn camera_landing_dip(
     mut prev: Local<Option<LocomotionState>>,
 ) {
     let current = **player;
-    if let Some(old) = *prev {
-        if old == LocomotionState::Fall
-            && (current == LocomotionState::Walk || current == LocomotionState::Sprint)
-        {
-            rig.current_dip += LANDING_DIP_INTENSITY;
-        }
+    if let Some(old) = *prev
+        && old == LocomotionState::Fall
+        && (current == LocomotionState::Walk || current == LocomotionState::Sprint)
+    {
+        rig.current_dip += LANDING_DIP_INTENSITY;
     }
     *prev = Some(current);
 }
 
+type FollowFilter = (With<Player>, Without<CameraRig>);
+
 /// Intentionally scoped to `Player`, not `Actor` — see `camera_landing_dip`.
 fn follow_player(
-    player: Single<(Entity, &Transform), (With<Player>, Without<CameraRig>)>,
+    player: Single<(Entity, &Transform), FollowFilter>,
     mut cam: Single<(&mut Transform, &mut CameraRig)>,
     spatial: SpatialQuery,
     time: Res<Time>,

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
 use crate::movement::intents::Intents;
-use crate::movement::motor_common::body_move_and_slide;
+use crate::movement::motor_common::{body_move_and_slide, launch_normal};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -25,6 +25,9 @@ pub struct EdgeLeapState {
     is_leaping: bool,
     timer: f32,
     needs_release: bool,
+    /// Armed by `propose`, consumed by `tick`'s first active frame (the launch
+    /// impulse). See `WallJumpState::launch_pending`.
+    launch_pending: bool,
 }
 
 type ProposeQuery<'a> = (
@@ -49,6 +52,7 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
                 state.needs_release = true;
                 state.is_leaping = true;
                 state.timer = LEAP_DURATION;
+                state.launch_pending = true;
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::EdgeLeap,
                     Priority::Forced,
@@ -106,15 +110,9 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         let mut v = vel.0;
 
-        if state.timer == LEAP_DURATION {
-            let mut normal = ledge.climb_normal;
-            if normal == Vec3::ZERO {
-                normal = if contact.on_wall {
-                    -contact.wall_normal
-                } else {
-                    transform.rotation * Vec3::Z
-                };
-            }
+        if state.launch_pending {
+            state.launch_pending = false;
+            let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
             let jump_dir = if intents.is_climbing_left() {
                 -right_dir

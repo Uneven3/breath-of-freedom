@@ -2,16 +2,16 @@
 //!
 //! Its phase machine is shared between `propose` (sticky check) and `tick`
 //! (the run), so it must be a **component** (`MantleState`) — `Local` can't be
-//! shared across two systems. Movement is a position lerp, not velocity, so
+//! shared across two systems. Movement is a position lerp
+//! (`motor_common::KinematicArc`, shared with AutoVault), not velocity, so
 //! `tick` writes `Transform` directly.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use std::f32::consts::PI;
 
 use crate::movement::facts::{BodyContact, LedgeFacts};
 use crate::movement::intents::Intents;
-use crate::movement::motor_common::body_move_and_slide;
+use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
@@ -27,12 +27,8 @@ const TALL_ENOUGH_LIP: f32 = 1.2;
 /// Shared phase state for the mantle.
 #[derive(Component, Default)]
 pub struct MantleState {
-    running: bool,
+    pub(crate) arc: KinematicArc,
     needs_release: bool,
-    elapsed: f32,
-    duration: f32,
-    start: Vec3,
-    target: Vec3,
 }
 
 pub fn propose(
@@ -53,7 +49,7 @@ pub fn propose(
         }
 
         // Sticky: once running, keep MANTLE until tick() finishes.
-        if *current == LocomotionState::Mantle && state.running {
+        if *current == LocomotionState::Mantle && state.arc.running {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Mantle,
                 Priority::Forced,
@@ -107,29 +103,12 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             continue;
         }
 
-        // First active frame: begin the mantle.
-        if !state.running && !begin_mantle(&mut state, transform.translation, ledge) {
-            // No valid target — hold still for this frame; mantle will drop next frame.
-            vel.0 = Vec3::ZERO;
-            vel.0 = body_move_and_slide(
-                &mas,
-                entity,
-                collider,
-                &mut transform,
-                Vec3::ZERO,
-                time.delta(),
-                &mut contact,
-            );
-            continue;
+        // First active frame: begin the mantle. No valid target — hold still
+        // for this frame; mantle will drop next frame.
+        if state.arc.running || begin_mantle(&mut state, transform.translation, ledge) {
+            transform.translation = state.arc.step(dt, ARC_HEIGHT);
         }
 
-        state.elapsed = (state.elapsed + dt).min(state.duration);
-        let raw = state.elapsed / state.duration;
-        let eased = smoothstep(raw);
-        let mut next = state.start.lerp(state.target, eased);
-        next.y += (raw * PI).sin() * ARC_HEIGHT;
-
-        transform.translation = next;
         vel.0 = Vec3::ZERO;
         body_move_and_slide(
             &mas,
@@ -140,35 +119,21 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             time.delta(),
             &mut contact,
         );
-
-        if raw >= 1.0 {
-            transform.translation = state.target;
-            state.running = false;
-        }
     }
 }
 
 fn begin_mantle(state: &mut MantleState, pos: Vec3, ledge: &LedgeFacts) -> bool {
-    if ledge.mantle_target_position == Vec3::ZERO {
+    let Some(target) = ledge.mantle_target_position else {
         return false;
-    }
-    state.start = pos;
-    state.target = ledge.mantle_target_position;
+    };
     state.needs_release = true;
 
-    let vertical = (state.target.y - state.start.y).abs();
-    let horizontal =
-        Vec2::new(state.start.x, state.start.z).distance(Vec2::new(state.target.x, state.target.z));
+    let vertical = (target.y - pos.y).abs();
+    let horizontal = Vec2::new(pos.x, pos.z).distance(Vec2::new(target.x, target.z));
     let v_dur = vertical / VERTICAL_SPEED.max(MIN_SPEED);
     let h_dur = horizontal / FORWARD_SPEED.max(MIN_SPEED);
-    state.duration = v_dur.max(h_dur).max(MIN_DURATION);
-    state.elapsed = 0.0;
-    state.running = true;
+    state
+        .arc
+        .begin(pos, target, v_dur.max(h_dur).max(MIN_DURATION));
     true
-}
-
-/// `smoothstep(0, 1, x)` = x²(3 − 2x).
-fn smoothstep(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    x * x * (3.0 - 2.0 * x)
 }

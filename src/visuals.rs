@@ -7,8 +7,8 @@
 
 use bevy::prelude::*;
 
-use crate::movement::Player;
 use crate::movement::state::LocomotionState;
+use crate::movement::{Player, body};
 
 const INTERPOLATION_SPEED: f32 = 20.0;
 const SNEAK_Y_OFFSET: f32 = -0.4;
@@ -33,14 +33,16 @@ fn spawn_visual(
     commands.spawn((
         PlayerVisual,
         Name::new("PlayerVisual"),
-        Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
+        Mesh3d(meshes.add(Capsule3d::new(body::RADIUS, body::STAND_CAPSULE_LENGTH))),
         MeshMaterial3d(materials.add(Color::srgb(0.3, 0.6, 0.9))),
         Transform::from_xyz(0.0, 1.5, 0.0),
     ));
 }
 
+type BodyFilter = (With<Player>, Without<PlayerVisual>);
+
 fn interpolate_visual(
-    player: Single<(&Transform, &LocomotionState), (With<Player>, Without<PlayerVisual>)>,
+    player: Single<(&Transform, &LocomotionState), BodyFilter>,
     mut visual: Single<&mut Transform, With<PlayerVisual>>,
     time: Res<Time>,
 ) {

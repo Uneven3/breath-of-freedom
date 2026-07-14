@@ -2,23 +2,26 @@
 //!
 //! Each motor is two systems: `propose` (runs every frame, in
 //! `GatherProposals`) and `tick` (runs only when Walk is the active state, in
-//! `TickActiveMotor`). See `docs/architecture/movement.md`.
+//! `TickActiveMotor`). The tick body is the shared
+//! `motor_common::ground_locomotion_tick`; only the tuning differs from
+//! Sprint/Sneak. See `docs/architecture/movement.md`.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::facts::{BodyContact, GroundFacts};
-use crate::movement::intents::Intents;
-use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
+use crate::movement::Actor;
+use crate::movement::facts::GroundFacts;
+use crate::movement::motor_common::{GroundLocomotion, GroundTickQuery, ground_locomotion_tick};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
-use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
 
-const MAX_SPEED: f32 = 5.0;
-const ACCELERATION: f32 = 20.0;
-const FRICTION: f32 = 25.0;
-const STAMINA_RECOVER_PER_SEC: f32 = 15.0;
+const PARAMS: GroundLocomotion = GroundLocomotion {
+    max_speed: 5.0,
+    acceleration: 20.0,
+    friction: 25.0,
+    rotation_speed: 15.0,
+    stamina_per_sec: 15.0,
+};
 
 /// Propose WALK at PLAYER_REQUESTED priority whenever grounded.
 pub fn propose(mut q: Query<(&GroundFacts, &mut ProposalBuffer), With<Actor>>) {
@@ -34,50 +37,6 @@ pub fn propose(mut q: Query<(&GroundFacts, &mut ProposalBuffer), With<Actor>>) {
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a Intents,
-    &'a mut Stamina,
-    &'a mut BodyContact,
-    &'a LocomotionState,
-);
-
-pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
-    let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, intents, mut stamina, mut contact, state) in
-        &mut q
-    {
-        if *state != LocomotionState::Walk {
-            continue;
-        }
-
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
-
-        let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
-        let mut v = vel.0;
-        if move_dir != Vec3::ZERO {
-            v.x = move_toward(v.x, move_dir.x * MAX_SPEED, ACCELERATION * dt);
-            v.z = move_toward(v.z, move_dir.z * MAX_SPEED, ACCELERATION * dt);
-        } else {
-            v.x = move_toward(v.x, 0.0, FRICTION * dt);
-            v.z = move_toward(v.z, 0.0, FRICTION * dt);
-        }
-        // WalkMotor owns velocity.y in walk mode and is strictly flat-floor.
-        v.y = 0.0;
-
-        stamina.recover(STAMINA_RECOVER_PER_SEC * dt);
-
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
-    }
+pub fn tick(mut q: Query<GroundTickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<Time>) {
+    ground_locomotion_tick(&mut q, &mas, &time, LocomotionState::Walk, &PARAMS);
 }

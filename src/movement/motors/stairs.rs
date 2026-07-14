@@ -13,10 +13,8 @@ use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_sli
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity, GRAVITY};
+use crate::movement::{Actor, BodyVelocity, GRAVITY, body};
 
-const CAPSULE_HALF_HEIGHT: f32 = 1.0;
-const CAPSULE_RADIUS: f32 = 0.5;
 const LOOKAHEAD_MARGIN: f32 = 0.1;
 const DESCEND_TRAIL: f32 = 0.49;
 const INPUT_THRESHOLD_SQ: f32 = 0.01;
@@ -124,7 +122,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         // Per-step Y-snap. Sample point leads (ascent) or trails (descent) the body.
         let slope_input = along;
         let look_ahead = if slope_input > ASCEND_THRESHOLD {
-            horiz_axis * (CAPSULE_RADIUS + LOOKAHEAD_MARGIN)
+            horiz_axis * (body::RADIUS + LOOKAHEAD_MARGIN)
         } else if slope_input < DESCEND_THRESHOLD {
             horiz_axis * DESCEND_TRAIL
         } else {
@@ -132,15 +130,18 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         };
         let sample_pos = transform.translation + look_ahead;
         let expected_feet_y = stairs.expected_feet_y(sample_pos);
-        let current_feet_y = transform.translation.y - CAPSULE_HALF_HEIGHT;
+        let current_feet_y = transform.translation.y - body::HALF_HEIGHT;
         let feet_gap = expected_feet_y - current_feet_y;
         let max_snap = stairs.step_rise + GROUND_TOLERANCE;
 
-        if slope_input > ASCEND_THRESHOLD && feet_gap > 0.0 && feet_gap <= max_snap {
-            transform.translation.y = expected_feet_y + CAPSULE_HALF_HEIGHT + SNAP_EPSILON;
-            v.y = 0.0;
-        } else if slope_input < DESCEND_THRESHOLD && feet_gap < 0.0 && feet_gap >= -max_snap {
-            transform.translation.y = expected_feet_y + CAPSULE_HALF_HEIGHT + SNAP_EPSILON;
+        // Snap up to the next tread while ascending, down to the previous one
+        // while descending; free-fall past a whole-step drop; hold Y otherwise.
+        let ascending_snap =
+            slope_input > ASCEND_THRESHOLD && feet_gap > 0.0 && feet_gap <= max_snap;
+        let descending_snap =
+            slope_input < DESCEND_THRESHOLD && feet_gap < 0.0 && feet_gap >= -max_snap;
+        if ascending_snap || descending_snap {
+            transform.translation.y = expected_feet_y + body::HALF_HEIGHT + SNAP_EPSILON;
             v.y = 0.0;
         } else if feet_gap < -max_snap {
             v.y -= GRAVITY * dt;

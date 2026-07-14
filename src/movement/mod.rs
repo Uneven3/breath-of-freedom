@@ -10,7 +10,9 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+pub mod body;
 pub mod brain;
+pub mod diag;
 pub mod facts;
 pub mod intents;
 pub mod motor_common;
@@ -68,6 +70,14 @@ impl Plugin for MovementPlugin {
         // Pinned to 60 Hz (Bevy defaults to 64 Hz).
         app.insert_resource(Time::<Fixed>::from_hz(60.0));
         app.init_resource::<ClimbToggle>();
+        // Sensor-cast capture for the debug gizmos (no-op until enabled).
+        app.init_resource::<diag::CastTrace>();
+        app.add_systems(
+            FixedUpdate,
+            diag::clear_cast_trace
+                .after(MovementSet::ReadIntents)
+                .before(MovementSet::SenseWorld),
+        );
 
         app.configure_sets(
             FixedUpdate,
@@ -82,6 +92,9 @@ impl Plugin for MovementPlugin {
         );
 
         app.add_systems(Startup, spawn_player);
+
+        // Key-edge input runs per render frame (see `toggle_climb_input`).
+        app.add_systems(Update, brain::toggle_climb_input);
 
         app.add_systems(
             FixedUpdate,
@@ -147,8 +160,15 @@ impl Plugin for MovementPlugin {
                 .in_set(MovementSet::TickActiveMotor),
         );
 
-        // Declarative collider swap for sneak.
-        app.add_systems(Update, motors::sneak::sync_sneak_collider);
+        // Declarative collider swap for sneak. Runs in FixedUpdate right after
+        // the SSoT write so the newly active motor ticks with the correct
+        // capsule this same frame (physics never sees a stale collider).
+        app.add_systems(
+            FixedUpdate,
+            motors::sneak::sync_sneak_collider
+                .after(MovementSet::Arbitrate)
+                .before(MovementSet::TickActiveMotor),
+        );
     }
 }
 
@@ -169,14 +189,14 @@ fn arbitrate(mut q: Query<(&mut LocomotionState, &mut ProposalBuffer), With<Acto
 fn spawn_player(mut commands: Commands) {
     // The Player is an invisible kinematic collider; the mesh lives on a separate
     // PlayerVisual entity that interpolates toward this body (see `visuals.rs`).
-    // Radius 0.5, total height 2.0 ⇒ Avian cylinder length 1.0 (excludes hemispheres).
+    // Capsule dimensions live in `body` (shared with services and motors).
     commands.spawn((
         Player,
         Actor,
         Name::new("Player"),
         Transform::from_xyz(0.0, 1.5, 0.0),
         RigidBody::Kinematic,
-        Collider::capsule(0.5, 1.0),
+        Collider::capsule(body::RADIUS, body::STAND_CAPSULE_LENGTH),
         BodyVelocity::default(),
         Intents::default(),
         LocomotionState::default(),
@@ -196,6 +216,7 @@ fn spawn_player(mut commands: Commands) {
             motors::jump::JumpLocal::default(),
             motors::glide::GlideLocal::default(),
             motors::sprint::SprintLock::default(),
+            motors::sneak::Crouched::default(),
             motors::mantle::MantleState::default(),
             motors::auto_vault::VaultState::default(),
             motors::wall_jump::WallJumpState::default(),
@@ -427,6 +448,53 @@ mod actor_isolation_tests {
             .collect();
         assert_eq!(full_proposals.len(), 1);
         assert_eq!(full_proposals[0].target_state, LocomotionState::Sprint);
+    }
+
+    #[test]
+    fn jump_beats_stairs_regardless_of_propose_order() {
+        // Both used to propose (Forced, 0); the winner then depended on system
+        // execution order, which Bevy does not guarantee. Jump now carries a
+        // higher Forced weight, so the outcome is fixed either way.
+        for jump_first in [true, false] {
+            let mut world = World::new();
+            world.init_resource::<Time>();
+            let e = world
+                .spawn((
+                    Actor,
+                    GroundFacts {
+                        grounded: true,
+                        ..default()
+                    },
+                    StairsFacts {
+                        on_stairs: true,
+                        ..default()
+                    },
+                    Intents {
+                        wants_jump: true,
+                        ..default()
+                    },
+                    LocomotionState::Stairs,
+                    JumpPhase::default(),
+                    JumpLocal::default(),
+                    ProposalBuffer::default(),
+                ))
+                .id();
+
+            if jump_first {
+                world.run_system_once(motors::jump::propose).unwrap();
+                world.run_system_once(motors::stairs::propose).unwrap();
+            } else {
+                world.run_system_once(motors::stairs::propose).unwrap();
+                world.run_system_once(motors::jump::propose).unwrap();
+            }
+            world.run_system_once(arbitrate).unwrap();
+
+            assert_eq!(
+                *world.entity(e).get::<LocomotionState>().unwrap(),
+                LocomotionState::Jump,
+                "jump_first = {jump_first}"
+            );
+        }
     }
 
     // `tick` correctness under real physics (does a `tick`'s in-body guard

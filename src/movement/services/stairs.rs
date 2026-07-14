@@ -6,27 +6,28 @@
 
 use bevy::prelude::*;
 
-use crate::movement::Player;
+use crate::movement::Actor;
 use crate::movement::facts::StairsFacts;
 use crate::world::Stairs;
 
 pub fn stairs_service(
-    mut player: Single<(&Transform, &mut StairsFacts), With<Player>>,
+    mut actors: Query<(&Transform, &mut StairsFacts), With<Actor>>,
     stairs: Query<&Stairs>,
 ) {
-    let (transform, facts) = &mut *player;
-    let pos = transform.translation;
+    for (transform, mut facts) in &mut actors {
+        let pos = transform.translation;
 
-    **facts = StairsFacts::default();
-    for stair in &stairs {
-        if stair.contains(pos) {
-            facts.on_stairs = true;
-            facts.base = stair.base;
-            facts.top = stair.top;
-            facts.step_count = stair.step_count;
-            facts.step_depth = stair.step_depth;
-            facts.step_rise = stair.step_rise;
-            break;
+        *facts = StairsFacts::default();
+        for stair in &stairs {
+            if stair.contains(pos) {
+                facts.on_stairs = true;
+                facts.base = stair.base;
+                facts.top = stair.top;
+                facts.step_count = stair.step_count;
+                facts.step_depth = stair.step_depth;
+                facts.step_rise = stair.step_rise;
+                break;
+            }
         }
     }
 }

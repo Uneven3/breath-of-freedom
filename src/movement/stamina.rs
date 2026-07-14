@@ -36,9 +36,6 @@ impl Stamina {
     pub fn max(&self) -> f32 {
         self.max
     }
-    pub fn normalized(&self) -> f32 {
-        self.current / self.max
-    }
 }
 
 #[cfg(test)]
@@ -53,6 +50,5 @@ mod tests {
         assert!(s.is_exhausted());
         s.recover(250.0);
         assert_eq!(s.current(), s.max());
-        assert_eq!(s.normalized(), 1.0);
     }
 }

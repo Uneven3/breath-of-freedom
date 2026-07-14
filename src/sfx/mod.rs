@@ -2,11 +2,17 @@ use bevy::prelude::*;
 
 pub mod components;
 
-use crate::movement::stamina::Stamina;
 use crate::movement::Actor;
 use crate::movement::BodyVelocity;
+use crate::movement::stamina::Stamina;
 use crate::presentation::cues::{CueKind, CueMessage};
 use components::ContinuousSfxTracker;
+
+/// Log a modulation update only when the change is audible-sized. Stamina
+/// drains/recovers 5–15 per second (≈0.1–0.25 per 60 Hz tick), so a threshold
+/// below one tick's delta would fire every frame.
+const SPEED_DELTA_THRESHOLD: f32 = 0.5;
+const STAMINA_DELTA_THRESHOLD: f32 = 1.0;
 
 /// Plugin managing SFX presentation systems, reacting to discrete cues
 /// and modulating continuous audio parameters.
@@ -49,7 +55,7 @@ fn modulate_continuous_sfx(
             let speed_delta = (current_speed - tracker.last_speed).abs();
             let stamina_delta = (current_stamina - tracker.last_stamina).abs();
 
-            if speed_delta > 0.5 || stamina_delta > 0.05 {
+            if speed_delta > SPEED_DELTA_THRESHOLD || stamina_delta > STAMINA_DELTA_THRESHOLD {
                 debug!(
                     "[audio] continuous modulation update for entity {:?}: speed = {:.2}, stamina = {:.2}",
                     entity, current_speed, current_stamina

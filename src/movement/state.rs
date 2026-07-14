@@ -13,20 +13,19 @@ use bevy::prelude::*;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LocomotionState {
-    Idle = 0,
-    Walk = 1,
-    Sprint = 2,
-    Fall = 3,
-    Jump = 4,
-    AutoVault = 5,
-    Climb = 6,
-    Mantle = 7,
-    Stairs = 8,
-    Ladder = 9,
-    Glide = 10,
-    Sneak = 11,
-    WallJump = 12,
-    EdgeLeap = 13,
+    Walk,
+    Sprint,
+    Fall,
+    Jump,
+    AutoVault,
+    Climb,
+    Mantle,
+    Stairs,
+    Ladder,
+    Glide,
+    Sneak,
+    WallJump,
+    EdgeLeap,
 }
 
 impl Default for LocomotionState {

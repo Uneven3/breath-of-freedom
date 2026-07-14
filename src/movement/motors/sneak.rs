@@ -55,13 +55,31 @@ pub fn tick(mut q: Query<GroundTickQuery, With<Actor>>, mas: MoveAndSlide, time:
 type ColliderSyncFilter = (With<Actor>, Changed<LocomotionState>);
 
 pub fn sync_sneak_collider(
-    mut q: Query<(&LocomotionState, &mut Collider, &mut Crouched), ColliderSyncFilter>,
+    mut q: Query<
+        (
+            &LocomotionState,
+            &mut Collider,
+            &mut Transform,
+            &mut Crouched,
+        ),
+        ColliderSyncFilter,
+    >,
 ) {
-    for (state, mut collider, mut crouched) in &mut q {
+    for (state, mut collider, mut transform, mut crouched) in &mut q {
         let want_crouch = *state == LocomotionState::Sneak;
         if want_crouch == crouched.0 {
             continue;
         }
+        let old_half_height = if crouched.0 {
+            body::CROUCH_HALF_HEIGHT
+        } else {
+            body::HALF_HEIGHT
+        };
+        let new_half_height = if want_crouch {
+            body::CROUCH_HALF_HEIGHT
+        } else {
+            body::HALF_HEIGHT
+        };
         crouched.0 = want_crouch;
         let length = if want_crouch {
             body::CROUCH_CAPSULE_LENGTH
@@ -69,5 +87,6 @@ pub fn sync_sneak_collider(
             body::STAND_CAPSULE_LENGTH
         };
         *collider = Collider::capsule(body::RADIUS, length);
+        transform.translation.y += new_half_height - old_half_height;
     }
 }

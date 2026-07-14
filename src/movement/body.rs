@@ -11,6 +11,6 @@ pub const STAND_CAPSULE_LENGTH: f32 = 1.0;
 /// Cylinder length while crouched: design height 1.2 ⇒ 1.2 − 2·RADIUS.
 pub const CROUCH_CAPSULE_LENGTH: f32 = 0.2;
 /// Half the standing total height (feet-to-center distance while standing).
-/// NOTE: while crouched the real value is smaller; consumers that care about
-/// feet position during Sneak must account for that themselves.
 pub const HALF_HEIGHT: f32 = RADIUS + STAND_CAPSULE_LENGTH / 2.0;
+/// Half the crouched total height (feet-to-center distance while crouched).
+pub const CROUCH_HALF_HEIGHT: f32 = RADIUS + CROUCH_CAPSULE_LENGTH / 2.0;

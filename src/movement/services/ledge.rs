@@ -189,12 +189,14 @@ fn sense_ledges(
             facts.climb_normal = Some(waist.normal);
             if knee_hit && head_hit {
                 facts.can_climb = true;
-                update_lateral_walls(spatial, &filter, facts, pos, waist.normal, entity, trace);
             }
         }
-        // can_continue_climbing uses the same waist hit with a looser angle gate.
-        if facing.angle_between(-waist.normal).to_degrees() <= CONTINUE_CLIMB_ANGLE_MAX_DEG {
+        // Continuation has a looser gate than initial climbing. Its lateral
+        // rays must follow that same gate: on a sphere the head cast can miss
+        // while the waist still has a valid curved contact.
+        if angle <= CONTINUE_CLIMB_ANGLE_MAX_DEG {
             facts.can_continue_climb = true;
+            update_lateral_walls(spatial, &filter, facts, pos, waist.normal, entity, trace);
         }
     }
 

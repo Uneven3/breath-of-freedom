@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use crate::movement::abilities::WallJumpMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, LedgeFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip, launch_normal};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
@@ -40,8 +40,8 @@ type ProposeQuery<'a> = (
 
 pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>) {
     for (intents, current, stamina, movement, mut state, mut buffer) in &mut q {
-        let jump_requested = intents.wants_jump || intents.jump_pressed;
-        if !intents.wants_jump {
+        let jump_requested = intents.jump.held || intents.jump.pressed;
+        if !intents.jump.held {
             state.needs_release = false;
         }
 
@@ -124,16 +124,16 @@ pub fn tick(
             let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
 
-            if intents.is_climbing_up() {
+            if intents.climb.vertical == ClimbVerticalIntent::Up {
                 v = Vec3::Y * profile.jump_up_impulse - normal * profile.wall_contact_push;
-            } else if intents.is_climbing_down() {
+            } else if intents.climb.vertical == ClimbVerticalIntent::Down {
                 let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
                 v = away * profile.away_leap_speed + normal * profile.away_normal_push;
-            } else if intents.is_climbing_left() {
+            } else if intents.climb.lateral == ClimbLateralIntent::Left {
                 v = -right_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
                 v.y = profile.lateral_vertical_lift;
                 v -= normal * profile.lateral_normal_retraction;
-            } else if intents.is_climbing_right() {
+            } else if intents.climb.lateral == ClimbLateralIntent::Right {
                 v = right_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
                 v.y = profile.lateral_vertical_lift;
                 v -= normal * profile.lateral_normal_retraction;
@@ -180,7 +180,10 @@ mod tests {
                 Actor,
                 WallJumpMovement::PLAYER,
                 Intents {
-                    jump_pressed: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        pressed: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Climb,
@@ -208,7 +211,10 @@ mod tests {
                 Actor,
                 WallJumpMovement::PLAYER,
                 Intents {
-                    jump_pressed: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        pressed: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Ladder,
@@ -237,7 +243,10 @@ mod tests {
             .spawn((
                 Actor,
                 Intents {
-                    jump_pressed: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        pressed: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Climb,

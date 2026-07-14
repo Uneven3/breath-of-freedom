@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use crate::movement::abilities::GlideMovement;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{GlideIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
@@ -41,17 +41,17 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
         }
 
         if ground.grounded {
-            s.prev_wants = intents.wants_glide;
+            s.prev_wants = intents.glide == GlideIntent::Requested;
             continue;
         }
 
         if *current == LocomotionState::Glide {
             s.was_glide = true;
-            s.prev_wants = intents.wants_glide;
-            if intents.wants_glide {
+            s.prev_wants = intents.glide == GlideIntent::Requested;
+            if intents.glide == GlideIntent::Requested {
                 // Downgrade to PLAYER_REQUESTED on a climbable wall so ClimbMotor's
                 // weight-5 PLAYER_REQUESTED out-arbitrates glide.
-                let category = if ledge.can_climb && intents.wants_climb {
+                let category = if ledge.can_climb && intents.climb.requested {
                     Priority::PlayerRequested
                 } else {
                     Priority::Forced
@@ -66,8 +66,9 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
             continue;
         }
 
-        let fresh_press = intents.wants_glide && !s.prev_wants;
-        s.prev_wants = intents.wants_glide;
+        let requesting = intents.glide == GlideIntent::Requested;
+        let fresh_press = requesting && !s.prev_wants;
+        s.prev_wants = requesting;
         if *current == LocomotionState::Fall && fresh_press {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Glide,
@@ -115,7 +116,7 @@ pub fn tick(
 
         apply_locomotion_rotation(
             &mut transform,
-            intents.move_dir,
+            intents.planar.direction,
             dt,
             movement.rotation_speed,
         );
@@ -124,7 +125,8 @@ pub fn tick(
         v.y -= GRAVITY * movement.gravity_multiplier * dt;
         v.y = v.y.max(-movement.fall_speed);
 
-        let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
+        let move_dir = Vec3::new(intents.planar.direction.x, 0.0, intents.planar.direction.y)
+            .normalize_or_zero();
         if move_dir != Vec3::ZERO {
             v.x = move_toward(
                 v.x,

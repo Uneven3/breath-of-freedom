@@ -14,9 +14,10 @@ records in `docs/tickets/`.
 
 ## Current Objective
 
-Refactor locomotion toward ECS composition without changing its stable
-behavior. Actors should receive persistent capability/configuration components
-with per-actor values, while systems select compatible actors through queries.
+Validate the completed ECS locomotion composition with a second, AI-controlled
+actor without changing stable motor behavior. Actors receive persistent
+capability/configuration components with per-actor values, while systems
+select compatible actors through queries.
 
 The target composition should allow, for example:
 
@@ -62,6 +63,21 @@ contract and capability bundles own each motor family's runtime components,
 while systems remain driven by individual component queries. The next cut
 should be selected from a fresh architecture review; the capability,
 construction, body, and sensor-profile foundations are complete.
+
+### Active Ticket
+
+`docs/tickets/traversal-probe.md` is active. It adds a visible,
+AI-controlled `TraversalProbe` to the graybox course. Its controller writes
+only its own `Intents` in `MovementSet::ReadIntents`; it never writes
+`LocomotionState`, facts, motor-private state, `Transform`, or body velocity.
+The current checkpoint is a continuous climb scenario: approach the climbable
+wall, request `Climb` after the observed wall fact, then ascend and hold below
+the lip without requesting `Jump` or `Mantle`. It passes only after the
+ordinary sensor/proposal/arbiter pipeline reaches those observed conditions.
+
+The probe is deliberately not an Enemy or a Debug command. It is an
+integration consumer of Movement's existing multi-actor contract, and its
+name avoids third-party game IP.
 
 ### Implemented
 
@@ -148,9 +164,9 @@ git diff --check
 
 ## Next Step After Confirmation
 
-Run an architecture review before opening the next movement ticket. Prefer a
-consumer of the new composition contracts (for example an actor recipe or
-controller boundary) over another speculative data migration.
+Implement and play-test `traversal-probe`. After user acceptance, close its
+ticket and use its results to decide whether a production Enemy brain needs a
+separate architecture ticket.
 
 ## Invariants To Preserve
 

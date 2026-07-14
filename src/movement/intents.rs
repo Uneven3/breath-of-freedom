@@ -1,50 +1,85 @@
-//! Per-frame input snapshot.
+//! Per-frame semantic locomotion intent snapshot.
 //!
-//! Modeled as a **Component on the player entity** so an AI brain can drive
-//! other entities with the same shape later (input enters the simulation only
-//! through a Brain — see `docs/architecture/movement.md`).
+//! Controllers translate device, AI, network, or cinematic commands into this
+//! component. Motors consume these values without knowing the controller.
 
 use bevy::prelude::*;
 
-#[derive(Component, Debug, Clone, Default)]
-pub struct Intents {
-    /// Camera-relative world-space direction on the XZ plane.
-    /// `x` = strafe (right positive), `y` = forward (forward positive).
-    pub move_dir: Vec2,
-    /// Raw hardware stick/WASD vector before camera rotation.
-    pub raw_input: Vec2,
-    /// Discrete -1/0/1 per axis: `x` = left/right, `y` = back/forward.
-    pub wish_dir: IVec2,
-    /// 0..1 magnitude of the raw input.
-    pub input_strength: f32,
-
-    pub wants_jump: bool,
-    /// Rising edge of Jump, preserved independently from the held action so
-    /// specialized jumps cannot miss a short press between fixed ticks.
-    pub jump_pressed: bool,
-    pub wants_sprint: bool,
-    pub wants_sneak: bool,
-    pub wants_climb: bool,
-    pub wants_mantle: bool,
-    pub wants_vault: bool,
-    pub wants_glide: bool,
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PlanarMoveIntent {
+    pub direction: Vec2,
+    pub strength: f32,
 }
 
-impl Intents {
-    // Climb/wall-context semantic getters (G4: data carries zero logic beyond
-    // pure reads).
-    pub fn is_climbing_up(&self) -> bool {
-        self.wish_dir.y == 1
-    }
-    pub fn is_climbing_down(&self) -> bool {
-        self.wish_dir.y == -1
-    }
-    pub fn is_climbing_left(&self) -> bool {
-        self.wish_dir.x == -1
-    }
-    pub fn is_climbing_right(&self) -> bool {
-        self.wish_dir.x == 1
-    }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GaitIntent {
+    #[default]
+    Walk,
+    Sprint,
+    Sneak,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JumpIntent {
+    pub held: bool,
+    pub pressed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClimbVerticalIntent {
+    #[default]
+    Neutral,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClimbLateralIntent {
+    #[default]
+    Neutral,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClimbIntent {
+    pub requested: bool,
+    pub vertical: ClimbVerticalIntent,
+    pub lateral: ClimbLateralIntent,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LadderIntent {
+    #[default]
+    Hold,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TraversalActionIntent {
+    #[default]
+    None,
+    Mantle,
+    Vault,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GlideIntent {
+    #[default]
+    Inactive,
+    Requested,
+}
+
+#[derive(Component, Debug, Clone, Default)]
+pub struct Intents {
+    pub planar: PlanarMoveIntent,
+    pub gait: GaitIntent,
+    pub jump: JumpIntent,
+    pub climb: ClimbIntent,
+    pub ladder: LadderIntent,
+    pub traversal: TraversalActionIntent,
+    pub glide: GlideIntent,
 }
 
 #[cfg(test)]
@@ -52,14 +87,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn semantic_getters_follow_wish_dir() {
-        let mut i = Intents {
-            wish_dir: IVec2::new(1, 1),
+    fn climb_intent_represents_diagonal_motion_with_named_axes() {
+        let intent = ClimbIntent {
+            vertical: ClimbVerticalIntent::Up,
+            lateral: ClimbLateralIntent::Right,
             ..default()
         };
-        assert!(i.is_climbing_up() && i.is_climbing_right());
-        assert!(!i.is_climbing_down() && !i.is_climbing_left());
-        i.wish_dir = IVec2::new(-1, -1);
-        assert!(i.is_climbing_down() && i.is_climbing_left());
+
+        assert_eq!(intent.vertical, ClimbVerticalIntent::Up);
+        assert_eq!(intent.lateral, ClimbLateralIntent::Right);
+    }
+
+    #[test]
+    fn traversal_action_is_mutually_exclusive() {
+        let intents = Intents {
+            traversal: TraversalActionIntent::Mantle,
+            ..default()
+        };
+
+        assert_ne!(intents.traversal, TraversalActionIntent::Vault);
     }
 }

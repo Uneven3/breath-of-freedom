@@ -145,7 +145,7 @@ fn jump_propose(
     for (ground, intents, current, mut s, mut buffer) in &mut q {
         let on_floor = ground.0;
 
-        if !intents.wants_jump {
+        if !intents.jump.held {
             s.needs_release = false;
         }
 
@@ -156,15 +156,15 @@ fn jump_propose(
         }
         s.was_on_floor = on_floor;
 
-        if intents.wants_jump && !s.prev_wants {
+        if intents.jump.held && !s.prev_wants {
             s.buffer = JUMP_BUFFER_TIME;
         } else if s.buffer > 0.0 {
             s.buffer = (s.buffer - dt).max(0.0);
         }
-        s.prev_wants = intents.wants_jump;
+        s.prev_wants = intents.jump.held;
 
         let can_jump = on_floor || s.coyote > 0.0;
-        let wants = (intents.wants_jump || s.buffer > 0.0) && !s.needs_release;
+        let wants = (intents.jump.held || s.buffer > 0.0) && !s.needs_release;
 
         if can_jump && wants {
             s.coyote = 0.0;
@@ -213,8 +213,8 @@ fn walk_tick(
         if *state != LocomotionState::Walk {
             continue;
         }
-        vel.0.x = intents.move_dir.x * WALK_SPEED;
-        vel.0.z = intents.move_dir.y * WALK_SPEED;
+        vel.0.x = intents.planar.direction.x * WALK_SPEED;
+        vel.0.z = intents.planar.direction.y * WALK_SPEED;
         vel.0.y = 0.0;
         transform.translation += vel.0 * dt;
         ticks.0 += 1;
@@ -324,7 +324,10 @@ mod tests {
             &mut app,
             true,
             Intents {
-                move_dir: Vec2::new(1.0, 0.0),
+                planar: crate::movement::intents::PlanarMoveIntent {
+                    direction: Vec2::new(1.0, 0.0),
+                    strength: 1.0,
+                },
                 ..default()
             },
         );
@@ -372,7 +375,10 @@ mod tests {
             &mut app,
             true,
             Intents {
-                wants_jump: true,
+                jump: crate::movement::intents::JumpIntent {
+                    held: true,
+                    ..default()
+                },
                 ..default()
             },
         );

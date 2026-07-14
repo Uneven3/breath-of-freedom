@@ -3,7 +3,10 @@
 use bevy::prelude::*;
 
 use super::Actor;
-use super::intents::Intents;
+use super::intents::{
+    ClimbLateralIntent, ClimbVerticalIntent, GaitIntent, GlideIntent, Intents, JumpIntent,
+    LadderIntent, TraversalActionIntent,
+};
 use super::state::LocomotionState;
 use crate::input::InputConsumeCursor;
 use crate::input::action::IntentAction;
@@ -50,41 +53,61 @@ pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<A
         }
 
         *intents = Intents::default();
-        intents.raw_input = input;
-        intents.input_strength = input.length();
-        intents.wish_dir.x = if input.x > WISH_DIR_THRESHOLD {
-            1
+        intents.planar.strength = input.length();
+        intents.climb.lateral = if input.x > WISH_DIR_THRESHOLD {
+            ClimbLateralIntent::Right
         } else if input.x < -WISH_DIR_THRESHOLD {
-            -1
+            ClimbLateralIntent::Left
         } else {
-            0
+            ClimbLateralIntent::Neutral
         };
-        intents.wish_dir.y = if input.y < -WISH_DIR_THRESHOLD {
-            1
+        intents.climb.vertical = if input.y < -WISH_DIR_THRESHOLD {
+            ClimbVerticalIntent::Up
         } else if input.y > WISH_DIR_THRESHOLD {
-            -1
+            ClimbVerticalIntent::Down
         } else {
-            0
+            ClimbVerticalIntent::Neutral
         };
 
         if input != Vec2::ZERO {
             let yaw_rot = Quat::from_rotation_y(orientation.yaw);
             let world =
                 (yaw_rot * Vec3::X * input.x - yaw_rot * Vec3::NEG_Z * input.y).normalize_or_zero();
-            intents.move_dir = Vec2::new(world.x, world.z);
+            intents.planar.direction = Vec2::new(world.x, world.z);
         }
 
         if cursor.consume(frame, IntentAction::ClimbToggle) {
             climb.0 = !climb.0;
         }
-        intents.wants_jump = frame.pressed(IntentAction::Jump);
-        intents.jump_pressed = cursor.consume(frame, IntentAction::Jump);
-        intents.wants_glide = frame.pressed(IntentAction::Glide);
-        intents.wants_sprint = frame.pressed(IntentAction::Sprint);
-        intents.wants_sneak = frame.pressed(IntentAction::Sneak);
-        intents.wants_climb = climb.0;
-        intents.wants_mantle = frame.pressed(IntentAction::Mantle);
-        intents.wants_vault = frame.pressed(IntentAction::Vault);
+        intents.jump = JumpIntent {
+            held: frame.pressed(IntentAction::Jump),
+            pressed: cursor.consume(frame, IntentAction::Jump),
+        };
+        intents.glide = if frame.pressed(IntentAction::Glide) {
+            GlideIntent::Requested
+        } else {
+            GlideIntent::Inactive
+        };
+        intents.gait = if frame.pressed(IntentAction::Sneak) {
+            GaitIntent::Sneak
+        } else if frame.pressed(IntentAction::Sprint) {
+            GaitIntent::Sprint
+        } else {
+            GaitIntent::Walk
+        };
+        intents.climb.requested = climb.0;
+        intents.ladder = match intents.climb.vertical {
+            ClimbVerticalIntent::Up => LadderIntent::Up,
+            ClimbVerticalIntent::Down => LadderIntent::Down,
+            ClimbVerticalIntent::Neutral => LadderIntent::Hold,
+        };
+        intents.traversal = if frame.pressed(IntentAction::Mantle) {
+            TraversalActionIntent::Mantle
+        } else if frame.pressed(IntentAction::Vault) {
+            TraversalActionIntent::Vault
+        } else {
+            TraversalActionIntent::None
+        };
     }
 }
 
@@ -100,9 +123,8 @@ pub fn reset_climb_toggle(
                 climb.0 = false;
             }
             LocomotionState::WallJump => {
-                let sticking = intents.is_climbing_up()
-                    || intents.is_climbing_left()
-                    || intents.is_climbing_right();
+                let sticking = intents.climb.vertical == ClimbVerticalIntent::Up
+                    || intents.climb.lateral != ClimbLateralIntent::Neutral;
                 if !sticking {
                     climb.0 = false;
                 }
@@ -116,6 +138,7 @@ pub fn reset_climb_toggle(
 mod tests {
     use super::*;
     use crate::input::frame::{InputSource, LOCAL_INPUT_SOURCE, MAX_INPUT_SOURCES};
+    use crate::movement::intents::ClimbIntent;
     use bevy::ecs::system::RunSystemOnce;
 
     fn latch_after(state: LocomotionState, intents: Intents) -> bool {
@@ -139,7 +162,10 @@ mod tests {
         assert!(latch_after(
             LocomotionState::WallJump,
             Intents {
-                wish_dir: IVec2::new(-1, 0),
+                climb: ClimbIntent {
+                    lateral: ClimbLateralIntent::Left,
+                    ..default()
+                },
                 ..default()
             },
         ));
@@ -151,7 +177,10 @@ mod tests {
         assert!(!latch_after(
             LocomotionState::WallJump,
             Intents {
-                wish_dir: IVec2::new(0, -1),
+                climb: ClimbIntent {
+                    vertical: ClimbVerticalIntent::Down,
+                    ..default()
+                },
                 ..default()
             },
         ));
@@ -183,8 +212,11 @@ mod tests {
             ))
             .id();
         let ai_intents = Intents {
-            wants_sprint: true,
-            move_dir: Vec2::X,
+            gait: crate::movement::intents::GaitIntent::Sprint,
+            planar: crate::movement::intents::PlanarMoveIntent {
+                direction: Vec2::X,
+                strength: 1.0,
+            },
             ..default()
         };
         let ai = world.spawn((Actor, ai_intents)).id();
@@ -192,11 +224,11 @@ mod tests {
         world.run_system_once(read_intents).unwrap();
 
         let player_intents = world.entity(player).get::<Intents>().unwrap();
-        assert!(player_intents.move_dir.x < -0.99);
-        assert!(player_intents.move_dir.y.abs() < 1e-5);
+        assert!(player_intents.planar.direction.x < -0.99);
+        assert!(player_intents.planar.direction.y.abs() < 1e-5);
         let preserved = world.entity(ai).get::<Intents>().unwrap();
-        assert!(preserved.wants_sprint);
-        assert_eq!(preserved.move_dir, Vec2::X);
+        assert_eq!(preserved.gait, GaitIntent::Sprint);
+        assert_eq!(preserved.planar.direction, Vec2::X);
     }
 
     #[test]
@@ -220,6 +252,46 @@ mod tests {
         world.run_system_once(read_intents).unwrap();
 
         let intents = world.entity(remote_actor).get::<Intents>().unwrap();
-        assert_eq!(intents.wish_dir, IVec2::X);
+        assert_eq!(intents.climb.lateral, ClimbLateralIntent::Right);
+    }
+
+    #[test]
+    fn actions_translate_to_named_locomotion_intents() {
+        let mut world = World::new();
+        let mut actions = ActiveActions::default();
+        for action in [
+            IntentAction::MoveForward,
+            IntentAction::Jump,
+            IntentAction::Sneak,
+            IntentAction::Mantle,
+            IntentAction::Glide,
+        ] {
+            actions.set_pressed(LOCAL_INPUT_SOURCE, action, true);
+        }
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Jump);
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::ClimbToggle);
+        world.insert_resource(actions);
+
+        let actor = world
+            .spawn((
+                Actor,
+                InputControlledBy(LOCAL_INPUT_SOURCE),
+                ControlOrientation::default(),
+                Intents::default(),
+                ClimbInputState::default(),
+                InputConsumeCursor::default(),
+            ))
+            .id();
+        world.run_system_once(read_intents).unwrap();
+
+        let intents = world.entity(actor).get::<Intents>().unwrap();
+        assert_eq!(intents.planar.direction, Vec2::NEG_Y);
+        assert_eq!(intents.climb.vertical, ClimbVerticalIntent::Up);
+        assert_eq!(intents.ladder, LadderIntent::Up);
+        assert_eq!(intents.gait, GaitIntent::Sneak);
+        assert!(intents.jump.held && intents.jump.pressed);
+        assert!(intents.climb.requested);
+        assert_eq!(intents.traversal, TraversalActionIntent::Mantle);
+        assert_eq!(intents.glide, GlideIntent::Requested);
     }
 }

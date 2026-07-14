@@ -6,7 +6,7 @@
 
 | Tipo | Dónde | Qué es |
 |---|---|---|
-| `Intents` | `intents.rs` | Snapshot de input del frame (move_dir, wish_dir, wants_jump, wants_sprint, wants_sneak, wants_climb, wants_mantle, wants_vault, wants_glide). Solo el Brain lo escribe. |
+| `Intents` | `intents.rs` | Snapshot semantico del frame: `PlanarMoveIntent`, `GaitIntent`, `JumpIntent`, `ClimbIntent`, `LadderIntent`, `TraversalActionIntent` y `GlideIntent`. Solo el Brain/controlador del actor lo escribe. |
 | `LocomotionState` | `state.rs` | Enum SSoT del modo activo. Solo `arbitrate` lo escribe. |
 | `ProposalBuffer` | `proposal.rs` | Type alias sobre el núcleo genérico compartido de capacidad fija `proposal::ProposalBuffer<LocomotionState, N>` (`src/proposal.rs`), drenado por `arbitrate(current)`. Ver `rationale/proposal-arbitration-core.md`. |
 | `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. |
@@ -33,17 +33,22 @@
 `brain::read_intents` no lee `ButtonInput<KeyCode>` — lee
 `input::ActiveActions` para el `InputSource` enlazado por
 `input::InputControlledBy` en el actor (ver `input.md`) y arma
-`move_dir`/`wish_dir` a partir de
-`MoveForward/Back/Left/Right`, y `wants_jump`/`wants_sprint`/etc. a partir
-de `Jump`/`Sprint`/etc. Los gatillos discretos usan un
+`PlanarMoveIntent`/`ClimbIntent`/`LadderIntent` a partir de
+`MoveForward/Back/Left/Right`, y los demas tipos semanticos a partir de
+`Jump`/`Sprint`/etc. Los gatillos discretos usan un
 `input::InputConsumeCursor` propio de Movement/actor; Movement no muta el
 snapshot global de input. Qué entrada física dispara cada `IntentAction` es
 una tabla rebindeable que Movement no conoce — el mismo código sirve sin
 cambios para `Gamepad`/`KeyboardOnly`/`KeyboardMouse`.
 
-`Intents::jump_pressed` conserva el borde de Jump para motores que no pueden
+`Intents` es un contrato semantico de simulacion, no un reflejo de teclado o
+gamepad: modela movimiento planar, gait, salto, climb, ladder, acciones de
+travesia y glide con tipos nombrados. Las acciones de control se traducen en
+el brain; los motores nunca interpretan ejes crudos ni acciones de hardware.
+
+`JumpIntent::pressed` conserva el borde de Jump para motores que no pueden
 permitirse perder una pulsación entre ticks fijos (`Jump`, `WallJump`,
-`EdgeLeap` y salida de `Ladder`); `wants_jump` sigue representando el hold.
+`EdgeLeap` y salida de `Ladder`); `JumpIntent::held` sigue representando el hold.
 En un borde válido de `Climb` o `Ladder`, Jump se interpreta como Mantle
 (prioridad mayor que WallJump); fuera de ese contexto, Jump conserva el
 WallJump de retroceso.
@@ -53,6 +58,17 @@ La composicion de capacidades persistentes y la frontera entre `Climb`,
 [`rationale/movement-capability-composition.md`](rationale/movement-capability-composition.md).
 Las capacidades no son estados activos ni activan sistemas: los motores se
 seleccionan por `Query` y `LocomotionState` permanece exclusivo.
+
+El curso gris puede incluir un `TraversalProbe`: un segundo `Actor` sin
+`Player` ni `InputControlledBy` cuyo brain de integracion escribe solo sus
+propios `Intents` dentro de `ReadIntents`. No es un enemigo ni una excepcion
+de Debug; demuestra que un controlador AI puede reutilizar capacidades,
+sensores, propuestas y motores sin que Movement conozca su implementacion.
+El primer escenario es una escalada continua: avanza hasta que los sensores
+publican una pared escalable, solicita `Climb`, asciende y se sostiene bajo el
+borde sin emitir `Jump` ni `Mantle`. Una maniobra solo se considera cubierta
+si sensores y arbitraje normales alcanzan su condicion observada; el brain no
+reescribe la posicion ni la velocidad para pasar una estacion.
 
 Los bundles de `bundles.rs` son un limite de construccion, no de ejecucion:
 `KinematicActorBundle` instala el contrato común de simulación y cada bundle

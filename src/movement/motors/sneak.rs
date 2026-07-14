@@ -14,7 +14,7 @@ use crate::movement::Actor;
 use crate::movement::abilities::GroundMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::GroundFacts;
-use crate::movement::intents::Intents;
+use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{
     GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
 };
@@ -87,7 +87,7 @@ type SneakProposalFilter = (With<Actor>, With<GroundMovement>);
 pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
     for (ground, intents, crouched, clearance, mut buffer) in &mut q {
         let must_remain_crouched = crouched.0 && !clearance.0;
-        if ground.grounded && (intents.wants_sneak || must_remain_crouched) {
+        if ground.grounded && (intents.gait == GaitIntent::Sneak || must_remain_crouched) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sneak,
                 Priority::PlayerRequested,
@@ -207,7 +207,7 @@ mod tests {
                     ..default()
                 },
                 Intents {
-                    wants_sneak: true,
+                    gait: crate::movement::intents::GaitIntent::Sneak,
                     ..default()
                 },
                 Crouched::default(),
@@ -223,7 +223,7 @@ mod tests {
                     ..default()
                 },
                 Intents {
-                    wants_sneak: true,
+                    gait: crate::movement::intents::GaitIntent::Sneak,
                     ..default()
                 },
                 Crouched::default(),

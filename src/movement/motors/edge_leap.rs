@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use crate::movement::abilities::WallJumpMovement;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{ClimbLateralIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, launch_normal};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
@@ -38,14 +38,16 @@ type ProposeQuery<'a> = (
 
 pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>) {
     for (intents, current, stamina, ledge, movement, mut state, mut buffer) in &mut q {
-        let jump_requested = intents.wants_jump || intents.jump_pressed;
-        if !intents.wants_jump {
+        let jump_requested = intents.jump.held || intents.jump.pressed;
+        if !intents.jump.held {
             state.needs_release = false;
         }
 
         if *current == LocomotionState::Climb && jump_requested && !state.needs_release {
-            let at_left_edge = intents.is_climbing_left() && !ledge.has_wall_left;
-            let at_right_edge = intents.is_climbing_right() && !ledge.has_wall_right;
+            let at_left_edge =
+                intents.climb.lateral == ClimbLateralIntent::Left && !ledge.has_wall_left;
+            let at_right_edge =
+                intents.climb.lateral == ClimbLateralIntent::Right && !ledge.has_wall_right;
             if (at_left_edge || at_right_edge) && !stamina.is_exhausted() {
                 state.needs_release = true;
                 state.is_leaping = true;
@@ -119,9 +121,9 @@ pub fn tick(
             let profile = movement.edge_leap;
             let normal = launch_normal(ledge.climb_normal, &contact, &transform);
             let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
-            let jump_dir = if intents.is_climbing_left() {
+            let jump_dir = if intents.climb.lateral == ClimbLateralIntent::Left {
                 -right_dir
-            } else if intents.is_climbing_right() {
+            } else if intents.climb.lateral == ClimbLateralIntent::Right {
                 right_dir
             } else {
                 normal
@@ -159,11 +161,17 @@ mod tests {
     use crate::movement::Player;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// Player climbing while pressing left (`is_climbing_left`) and holding jump.
+    /// Player climbing left while holding jump.
     fn climbing_left() -> Intents {
         Intents {
-            wants_jump: true,
-            wish_dir: IVec2::new(-1, 0),
+            jump: crate::movement::intents::JumpIntent {
+                held: true,
+                ..default()
+            },
+            climb: crate::movement::intents::ClimbIntent {
+                lateral: ClimbLateralIntent::Left,
+                ..default()
+            },
             ..default()
         }
     }

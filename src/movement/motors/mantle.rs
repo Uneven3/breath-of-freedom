@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{BodyContact, LedgeFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{ClimbVerticalIntent, Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
@@ -39,7 +39,7 @@ type ProposeQuery<'a> = (
 
 pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) {
     for (intents, current, ledge, mut state, mut buffer) in &mut q {
-        if !intents.wants_mantle {
+        if intents.traversal != TraversalActionIntent::Mantle {
             state.needs_release = false;
         }
 
@@ -66,10 +66,13 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
         }
 
         if ledge.is_at_mantle_edge && ledge.lip_height >= TALL_ENOUGH_LIP {
-            let requesting = intents.wants_mantle;
+            let requesting = intents.traversal == TraversalActionIntent::Mantle;
             let jump_at_lip =
-                (from_climb || from_ladder) && (intents.wants_jump || intents.jump_pressed);
-            if requesting || jump_at_lip || (from_walljump && intents.is_climbing_up()) {
+                (from_climb || from_ladder) && (intents.jump.held || intents.jump.pressed);
+            if requesting
+                || jump_at_lip
+                || (from_walljump && intents.climb.vertical == ClimbVerticalIntent::Up)
+            {
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::Mantle,
                     Priority::Forced,
@@ -169,7 +172,7 @@ mod tests {
                 LedgeTraversal::PLAYER,
                 crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
-                    wants_mantle: true,
+                    traversal: crate::movement::intents::TraversalActionIntent::Mantle,
                     ..default()
                 },
                 LocomotionState::Ladder,
@@ -203,7 +206,10 @@ mod tests {
                 LedgeTraversal::PLAYER,
                 crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
-                    wish_dir: IVec2::Y,
+                    climb: crate::movement::intents::ClimbIntent {
+                        vertical: ClimbVerticalIntent::Up,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Ladder,
@@ -238,7 +244,10 @@ mod tests {
                 Actor,
                 LedgeTraversal::PLAYER,
                 Intents {
-                    jump_pressed: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        pressed: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Climb,
@@ -281,7 +290,10 @@ mod tests {
                 Actor,
                 LedgeTraversal::PLAYER,
                 Intents {
-                    jump_pressed: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        pressed: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Ladder,
@@ -321,7 +333,7 @@ mod tests {
             .spawn((
                 Actor,
                 Intents {
-                    wants_mantle: true,
+                    traversal: crate::movement::intents::TraversalActionIntent::Mantle,
                     ..default()
                 },
                 LocomotionState::Climb,

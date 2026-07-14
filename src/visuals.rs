@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use crate::movement::Player;
 use crate::movement::body::BodyDimensions;
+use crate::movement::probe_data::TraversalProbe;
 use crate::movement::state::LocomotionState;
 
 const INTERPOLATION_SPEED: f32 = 20.0;
@@ -17,12 +18,29 @@ const SNEAK_Y_OFFSET: f32 = -0.4;
 #[derive(Component)]
 struct PlayerVisual;
 
+#[derive(Component)]
+struct TraversalProbeVisual {
+    actor: Entity,
+}
+
+type ProbeActorQuery<'a> = (&'a Transform, &'a LocomotionState);
+type ProbeActorFilter = (With<TraversalProbe>, Without<TraversalProbeVisual>);
+type ProbeVisualQuery<'a> = (&'a mut Transform, &'a TraversalProbeVisual);
+type ProbeVisualFilter = (With<TraversalProbeVisual>, Without<TraversalProbe>);
+
 pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_visual);
-        app.add_systems(Update, interpolate_visual);
+        app.add_systems(
+            Update,
+            (
+                spawn_probe_visual,
+                interpolate_visual,
+                interpolate_probe_visual,
+            ),
+        );
     }
 }
 
@@ -64,4 +82,43 @@ fn interpolate_visual(
     visual.translation.z = body.translation.z;
     visual.translation.y += (target_y - visual.translation.y) * t;
     visual.rotation = visual.rotation.slerp(body.rotation, t);
+}
+
+fn spawn_probe_visual(
+    mut commands: Commands,
+    probes: Query<(Entity, &Transform, &BodyDimensions), Added<TraversalProbe>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (actor, transform, body) in &probes {
+        commands.spawn((
+            TraversalProbeVisual { actor },
+            Name::new("TraversalProbeVisual"),
+            Mesh3d(meshes.add(Capsule3d::new(body.radius, body.standing_capsule_length))),
+            MeshMaterial3d(materials.add(Color::srgb(0.85, 0.3, 0.25))),
+            *transform,
+        ));
+    }
+}
+
+fn interpolate_probe_visual(
+    actors: Query<ProbeActorQuery, ProbeActorFilter>,
+    mut visuals: Query<ProbeVisualQuery, ProbeVisualFilter>,
+    time: Res<Time>,
+) {
+    let t = (INTERPOLATION_SPEED * time.delta_secs()).clamp(0.0, 1.0);
+    for (mut visual, probe) in &mut visuals {
+        let Ok((body, state)) = actors.get(probe.actor) else {
+            continue;
+        };
+        let offset = if *state == LocomotionState::Sneak {
+            SNEAK_Y_OFFSET
+        } else {
+            0.0
+        };
+        visual.translation.x = body.translation.x;
+        visual.translation.z = body.translation.z;
+        visual.translation.y += (body.translation.y + offset - visual.translation.y) * t;
+        visual.rotation = visual.rotation.slerp(body.rotation, t);
+    }
 }

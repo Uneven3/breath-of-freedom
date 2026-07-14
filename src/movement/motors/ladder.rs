@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crate::movement::abilities::LadderMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, LadderFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{Intents, LadderIntent};
 use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
@@ -31,13 +31,13 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LadderMovement>)>) 
         if !ladder.on_ladder {
             continue;
         }
-        let descending_to_ground = intents.raw_input.y > 0.0
+        let descending_to_ground = intents.ladder == LadderIntent::Down
             && transform.translation.y
                 <= ladder.bottom_y + body.standing_half_height() + BOTTOM_EXIT_CLEARANCE;
-        if intents.wants_jump || intents.jump_pressed || descending_to_ground {
+        if intents.jump.held || intents.jump.pressed || descending_to_ground {
             continue;
         }
-        if *current == LocomotionState::Ladder || intents.wants_climb {
+        if *current == LocomotionState::Ladder || intents.climb.requested {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Ladder,
                 Priority::Forced,
@@ -91,8 +91,13 @@ pub fn tick(
         // A ladder is an attachment constraint: it accepts only vertical input.
         let min_y = ladder.bottom_y + body.standing_half_height();
         let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
-        let target_y = (transform.translation.y - intents.raw_input.y * movement.speed * dt)
-            .clamp(min_y, max_y.max(min_y));
+        let vertical_speed = match intents.ladder {
+            LadderIntent::Up => movement.speed,
+            LadderIntent::Down => -movement.speed,
+            LadderIntent::Hold => 0.0,
+        };
+        let target_y =
+            (transform.translation.y + vertical_speed * dt).clamp(min_y, max_y.max(min_y));
         let v = Vec3::Y * ((target_y - transform.translation.y) / dt.max(f32::EPSILON));
 
         vel.0 = body_move_and_slide(
@@ -163,7 +168,10 @@ mod tests {
     fn jump_releases_the_latch() {
         let out = proposals(
             Intents {
-                wants_jump: true,
+                jump: crate::movement::intents::JumpIntent {
+                    held: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Ladder,
@@ -177,8 +185,14 @@ mod tests {
         // must not re-latch (that would undo the jump release instantly).
         let out = proposals(
             Intents {
-                wants_jump: true,
-                move_dir: Vec2::new(0.0, 1.0),
+                jump: crate::movement::intents::JumpIntent {
+                    held: true,
+                    ..default()
+                },
+                planar: crate::movement::intents::PlanarMoveIntent {
+                    direction: Vec2::new(0.0, 1.0),
+                    strength: 1.0,
+                },
                 ..default()
             },
             LocomotionState::Fall,
@@ -190,7 +204,10 @@ mod tests {
     fn lateral_input_does_not_attach() {
         let out = proposals(
             Intents {
-                move_dir: Vec2::X,
+                planar: crate::movement::intents::PlanarMoveIntent {
+                    direction: Vec2::X,
+                    strength: 1.0,
+                },
                 ..default()
             },
             LocomotionState::Walk,
@@ -202,7 +219,10 @@ mod tests {
     fn climb_toggle_attaches() {
         let out = proposals(
             Intents {
-                wants_climb: true,
+                climb: crate::movement::intents::ClimbIntent {
+                    requested: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Walk,
@@ -223,7 +243,10 @@ mod tests {
                     ..default()
                 },
                 Intents {
-                    wants_climb: true,
+                    climb: crate::movement::intents::ClimbIntent {
+                        requested: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Walk,
@@ -258,7 +281,10 @@ mod tests {
                     ..default()
                 },
                 Intents {
-                    wants_climb: true,
+                    climb: crate::movement::intents::ClimbIntent {
+                        requested: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Walk,

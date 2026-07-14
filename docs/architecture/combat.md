@@ -54,8 +54,8 @@ encadenados en `FixedUpdate`:
    conflicto a evitar.
 
    Por qué se generalizó más allá de `Aiming`: `sprint::propose` en
-   Movement no exige `move_dir != 0` para proponer `Sprint` (alcanza con
-   `grounded && wants_sprint`), así que sostener el modifier de esprintar
+   Movement no exige direccion planar distinta de cero para proponer `Sprint`
+   (alcanza con `grounded && GaitIntent::Sprint`), así que sostener el modifier de esprintar
    mientras se ataca cuerpo a cuerpo (no solo apuntando el arco) puede
    ganarle a `Walk` en arbitración aunque el jugador esté quieto atacando —
    `Windup`/`Active`/`Recovery`/`Parrying` necesitan la misma restricción

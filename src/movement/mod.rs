@@ -18,6 +18,8 @@ pub mod facts;
 pub mod intents;
 pub mod motor_common;
 pub mod motors;
+pub mod probe;
+pub mod probe_data;
 pub mod proposal;
 pub mod sensing;
 pub mod services;
@@ -97,11 +99,13 @@ impl Plugin for MovementPlugin {
                 .chain(),
         );
 
-        app.add_systems(Startup, spawn_player);
+        app.add_systems(Startup, (spawn_player, probe::spawn));
 
         app.add_systems(
             FixedUpdate,
-            brain::read_intents.in_set(MovementSet::ReadIntents),
+            (probe::drive_intents, brain::read_intents)
+                .chain()
+                .in_set(MovementSet::ReadIntents),
         );
         app.add_systems(
             FixedUpdate,
@@ -317,7 +321,10 @@ mod actor_isolation_tests {
                     ..default()
                 },
                 Intents {
-                    wants_jump: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        held: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::default(),
@@ -400,7 +407,7 @@ mod actor_isolation_tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    wants_sprint: true,
+                    gait: crate::movement::intents::GaitIntent::Sprint,
                     ..default()
                 },
                 exhausted_stamina,
@@ -419,7 +426,7 @@ mod actor_isolation_tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    wants_sprint: true,
+                    gait: crate::movement::intents::GaitIntent::Sprint,
                     ..default()
                 },
                 Stamina::default(),
@@ -476,7 +483,10 @@ mod actor_isolation_tests {
                         ..default()
                     },
                     Intents {
-                        wants_jump: true,
+                        jump: crate::movement::intents::JumpIntent {
+                            held: true,
+                            ..default()
+                        },
                         ..default()
                     },
                     LocomotionState::Stairs,
@@ -516,7 +526,10 @@ mod actor_isolation_tests {
                     ..default()
                 },
                 Intents {
-                    wants_jump: true,
+                    jump: crate::movement::intents::JumpIntent {
+                        held: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Walk,
@@ -531,7 +544,7 @@ mod actor_isolation_tests {
                 GroundFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    wants_glide: true,
+                    glide: crate::movement::intents::GlideIntent::Requested,
                     ..default()
                 },
                 LocomotionState::Fall,

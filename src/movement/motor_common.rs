@@ -217,13 +217,17 @@ pub fn ground_locomotion_step(
     let dt = time.delta_secs();
     apply_locomotion_rotation(
         step.transform,
-        step.intents.move_dir,
+        step.intents.planar.direction,
         dt,
         params.rotation_speed,
     );
 
-    let move_dir =
-        Vec3::new(step.intents.move_dir.x, 0.0, step.intents.move_dir.y).normalize_or_zero();
+    let move_dir = Vec3::new(
+        step.intents.planar.direction.x,
+        0.0,
+        step.intents.planar.direction.y,
+    )
+    .normalize_or_zero();
     let mut next_velocity = step.velocity.0;
     if move_dir != Vec3::ZERO {
         next_velocity.x = move_toward(

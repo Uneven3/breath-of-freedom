@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
@@ -44,7 +44,10 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
             continue;
         }
 
-        if ground.grounded && ledge.is_vaultable && intents.wants_vault {
+        if ground.grounded
+            && ledge.is_vaultable
+            && intents.traversal == TraversalActionIntent::Vault
+        {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::AutoVault,
                 Priority::PlayerRequested,
@@ -141,7 +144,7 @@ mod tests {
                     ..default()
                 },
                 Intents {
-                    wants_vault: true,
+                    traversal: crate::movement::intents::TraversalActionIntent::Vault,
                     ..default()
                 },
                 LocomotionState::Walk,

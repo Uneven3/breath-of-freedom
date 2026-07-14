@@ -68,12 +68,17 @@ pub fn tick(
             continue;
         }
 
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, profile.rotation_speed);
+        apply_locomotion_rotation(
+            &mut transform,
+            intents.planar.direction,
+            dt,
+            profile.rotation_speed,
+        );
 
         let mut v = vel.0;
 
         // Jump cut: releasing jump on the way up clips upward velocity for a short hop.
-        if jump_phase.is_player_jump && !intents.wants_jump && v.y > profile.jump_cut_velocity {
+        if jump_phase.is_player_jump && !intents.jump.held && v.y > profile.jump_cut_velocity {
             v.y = profile.jump_cut_velocity;
         }
 
@@ -84,7 +89,8 @@ pub fn tick(
             v.y -= GRAVITY * profile.rise_gravity_multiplier * dt;
         }
 
-        let move_dir = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y).normalize_or_zero();
+        let move_dir = Vec3::new(intents.planar.direction.x, 0.0, intents.planar.direction.y)
+            .normalize_or_zero();
         if move_dir != Vec3::ZERO {
             v.x = move_toward(
                 v.x,

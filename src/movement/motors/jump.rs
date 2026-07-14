@@ -63,7 +63,7 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, (With<Actor>, With<Ju
             jump_phase.is_player_jump = false;
         }
 
-        if !intents.wants_jump {
+        if !intents.jump.held {
             s.needs_release = false;
         }
 
@@ -75,17 +75,17 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, (With<Actor>, With<Ju
         }
         s.was_on_floor = on_floor;
 
-        // Jump buffer: capture the rising edge of wants_jump, hold the intent briefly.
-        if intents.jump_pressed || (intents.wants_jump && !s.prev_wants) {
+        // Jump buffer: capture the rising edge of JumpIntent::held, hold it briefly.
+        if intents.jump.pressed || (intents.jump.held && !s.prev_wants) {
             s.buffer = movement.buffer_time;
         } else if s.buffer > 0.0 {
             s.buffer = (s.buffer - dt).max(0.0);
         }
-        s.prev_wants = intents.wants_jump;
+        s.prev_wants = intents.jump.held;
 
         let can_jump = on_floor || s.coyote > 0.0;
         let wants =
-            (intents.wants_jump || intents.jump_pressed || s.buffer > 0.0) && !s.needs_release;
+            (intents.jump.held || intents.jump.pressed || s.buffer > 0.0) && !s.needs_release;
 
         if can_jump && wants {
             s.coyote = 0.0;
@@ -127,7 +127,7 @@ pub fn tick(
 
         apply_locomotion_rotation(
             &mut transform,
-            intents.move_dir,
+            intents.planar.direction,
             dt,
             movement.rotation_speed,
         );

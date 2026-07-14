@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use crate::movement::Actor;
 use crate::movement::abilities::GroundMovement;
 use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{
     GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
 };
@@ -52,11 +52,11 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
         if stairs.on_stairs {
             continue;
         }
-        if ledge.can_climb && intents.wants_climb {
+        if ledge.can_climb && intents.climb.requested {
             continue;
         }
 
-        if ground.grounded && intents.wants_sprint && !stamina_locked.0 {
+        if ground.grounded && intents.gait == GaitIntent::Sprint && !stamina_locked.0 {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sprint,
                 Priority::Opportunistic,
@@ -123,7 +123,7 @@ mod tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    wants_sprint: true,
+                    gait: crate::movement::intents::GaitIntent::Sprint,
                     ..default()
                 },
                 Stamina::default(),
@@ -141,7 +141,7 @@ mod tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    wants_sprint: true,
+                    gait: crate::movement::intents::GaitIntent::Sprint,
                     ..default()
                 },
                 Stamina::default(),

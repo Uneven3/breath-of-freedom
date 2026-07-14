@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use crate::movement::abilities::GroundMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, GroundFacts, StairsFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
@@ -89,15 +89,20 @@ pub fn tick(
         }
 
         let profile = movement.stairs;
-        apply_locomotion_rotation(&mut transform, intents.move_dir, dt, profile.rotation_speed);
+        apply_locomotion_rotation(
+            &mut transform,
+            intents.planar.direction,
+            dt,
+            profile.rotation_speed,
+        );
 
         let horiz_axis = stair_axis(stairs);
         let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();
-        let world_input = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y);
+        let world_input = Vec3::new(intents.planar.direction.x, 0.0, intents.planar.direction.y);
         let along = world_input.dot(horiz_axis);
         let lateral = world_input.dot(lateral_axis);
 
-        let sprinting = intents.wants_sprint && stamina.current() > 0.0;
+        let sprinting = intents.gait == GaitIntent::Sprint && stamina.current() > 0.0;
         let base_speed = if along >= 0.0 {
             profile.ascend_speed
         } else {

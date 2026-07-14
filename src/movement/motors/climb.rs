@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use crate::movement::abilities::ClimbMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
-use crate::movement::intents::Intents;
+use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::stamina::Stamina;
@@ -29,7 +29,7 @@ type ProposeQuery<'a> = (
 
 pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<ClimbMovement>)>) {
     for (ground, ledge, stamina, intents, current, mut buffer) in &mut q {
-        if stamina.is_exhausted() || !intents.wants_climb {
+        if stamina.is_exhausted() || !intents.climb.requested {
             continue;
         }
         let climbing = *current == LocomotionState::Climb;
@@ -120,15 +120,18 @@ pub fn tick(
         }
 
         let mut v = vel.0;
-        v.y = -intents.raw_input.y * movement.speed;
+        v.y = match intents.climb.vertical {
+            ClimbVerticalIntent::Up => movement.speed,
+            ClimbVerticalIntent::Down => -movement.speed,
+            ClimbVerticalIntent::Neutral => 0.0,
+        };
 
         // Lateral movement, gated by side-wall presence.
-        let mut lateral_input = intents.raw_input.x;
-        if (intents.is_climbing_right() && !ledge.has_wall_right)
-            || (intents.is_climbing_left() && !ledge.has_wall_left)
-        {
-            lateral_input = 0.0;
-        }
+        let lateral_input = match intents.climb.lateral {
+            ClimbLateralIntent::Left if ledge.has_wall_left => -1.0,
+            ClimbLateralIntent::Right if ledge.has_wall_right => 1.0,
+            _ => 0.0,
+        };
         let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
         let lateral_vel = right_dir * lateral_input * movement.speed;
 
@@ -226,7 +229,10 @@ mod tests {
             LedgeFacts::default(), // can_climb = false
             Stamina::default(),
             Intents {
-                wants_climb: true,
+                climb: crate::movement::intents::ClimbIntent {
+                    requested: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Fall,
@@ -247,7 +253,10 @@ mod tests {
             },
             Stamina::default(),
             Intents {
-                wants_climb: true,
+                climb: crate::movement::intents::ClimbIntent {
+                    requested: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Fall,
@@ -268,7 +277,10 @@ mod tests {
             },
             Stamina::default(),
             Intents {
-                wants_climb: true,
+                climb: crate::movement::intents::ClimbIntent {
+                    requested: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Climb,
@@ -295,7 +307,10 @@ mod tests {
             },
             Stamina::default(),
             Intents {
-                wants_climb: true,
+                climb: crate::movement::intents::ClimbIntent {
+                    requested: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Climb,
@@ -314,7 +329,10 @@ mod tests {
             },
             exhausted(),
             Intents {
-                wants_climb: true,
+                climb: crate::movement::intents::ClimbIntent {
+                    requested: true,
+                    ..default()
+                },
                 ..default()
             },
             LocomotionState::Fall,
@@ -331,7 +349,7 @@ mod tests {
                 ..default()
             },
             Stamina::default(),
-            Intents::default(), // wants_climb = false
+            Intents::default(), // climb.requested = false
             LocomotionState::Fall,
         );
         assert!(out.is_empty());
@@ -350,7 +368,10 @@ mod tests {
                 },
                 Stamina::default(),
                 Intents {
-                    wants_climb: true,
+                    climb: crate::movement::intents::ClimbIntent {
+                        requested: true,
+                        ..default()
+                    },
                     ..default()
                 },
                 LocomotionState::Fall,

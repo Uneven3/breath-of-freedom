@@ -204,16 +204,47 @@ fn setup_world(
     let prop_c = Color::srgb(0.55, 0.5, 0.45);
     let vault_c = Color::srgb(0.7, 0.5, 0.3);
 
-    // --- Floor 50×1×50 at (0,-0.5,0) ---
+    // --- Floor 100×1×100 at (0,-0.5,0) ---
     spawn_box(
         &mut commands,
         m,
         mat,
         "Floor",
         Vec3::new(0.0, -0.5, 0.0),
-        Vec3::new(50.0, 1.0, 50.0),
+        Vec3::new(100.0, 1.0, 100.0),
         floor_c,
     );
+
+    // --- Perimeter containment: intentionally non-climbable and taller than
+    // the ledge traversal range, so autonomous graybox actors stay in course. ---
+    let perimeter_half_extent = 49.5;
+    let perimeter_height = 12.0;
+    let perimeter_thickness = 1.0;
+    for (name, position, dimensions) in [
+        (
+            "NorthPerimeterWall",
+            Vec3::new(0.0, perimeter_height * 0.5, -perimeter_half_extent),
+            Vec3::new(100.0, perimeter_height, perimeter_thickness),
+        ),
+        (
+            "SouthPerimeterWall",
+            Vec3::new(0.0, perimeter_height * 0.5, perimeter_half_extent),
+            Vec3::new(100.0, perimeter_height, perimeter_thickness),
+        ),
+        (
+            "WestPerimeterWall",
+            Vec3::new(-perimeter_half_extent, perimeter_height * 0.5, 0.0),
+            Vec3::new(perimeter_thickness, perimeter_height, 100.0),
+        ),
+        (
+            "EastPerimeterWall",
+            Vec3::new(perimeter_half_extent, perimeter_height * 0.5, 0.0),
+            Vec3::new(perimeter_thickness, perimeter_height, 100.0),
+        ),
+    ] {
+        let wall = spawn_box(&mut commands, m, mat, name, position, dimensions, prop_c);
+        commands.entity(wall).insert(NonClimbable);
+    }
 
     // --- Wall 10×4×1 at (0,2,-10) ---
     spawn_box(

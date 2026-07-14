@@ -9,22 +9,35 @@ valida jugando; lo que la arquitectura debe garantizar es que **ningún**
 Brain de gameplay tenga una tecla concreta hardcodeada, para que cualquier
 remapeo sea posible sin tocar Movement/Combat/NPCs/Camera.
 
-## Datos (Components/Messages/Resources) — propuesta
+## Estado de implementación
+
+El núcleo local está implementado en `src/input/`: `IntentAction`,
+`InputSource`, `InputControlledBy`, `ActiveActions`, `ActionFrame`,
+`InputConsumeCursor` y `ControlOrientation`. `resolve_local_actions` corre en
+`PreUpdate`, publica el mapping local actual y preserva generaciones de
+gatillos para `FixedUpdate`. Movement ya consume ese contrato; Camera solo lee
+`ControlOrientation`.
+
+Quedan pendientes los chords configurables, gamepad, persistencia/UI de
+rebinding y la aplicación de frames remotos. Esos añadidos deben extender el
+mismo snapshot, nunca volver a introducir hardware crudo en gameplay.
+
+## Datos (Components/Messages/Resources)
 
 | Tipo | Dónde | Qué es |
 |---|---|---|
-| `InputScheme` | `input.rs` (Resource) | `Gamepad`, `KeyboardOnly`, `KeyboardMouse`. Selecciona qué tabla de `Keybindings` por defecto se carga y qué sistemas de hardware corren. |
+| `InputScheme` | `input.rs` (Resource) | Pendiente: `Gamepad`, `KeyboardOnly`, `KeyboardMouse`. Seleccionará qué tabla de `Keybindings` por defecto se carga y qué sistemas de hardware corren. |
 | `IntentAction` | `input/action.rs` | Enum plano de **todas** las acciones discretas rebindeables de todos los dominios: `MoveForward/Back/Left/Right`, `LookUp/Down/Left/Right`, `Jump`, `Sprint`, `Sneak`, `ClimbToggle`, `Mantle`, `Vault`, `Glide`, `Attack`, `Parry`, `Aim`, `Interact`. Input es dueño de este enum — es la única "forma compartida" que expone, sin conocer *por qué* cada dominio la usa. |
 | `HardwareTrigger` | `input/binding.rs` | Entrada física abstracta: `Key(KeyCode)`, `Mouse(MouseButton)`, `GamepadButton(GamepadButton)`, etc. `KeyCode` no se filtra a los sistemas de gameplay. |
 | `InputChord` | `input/binding.rs` | `{ modifiers: [HardwareTrigger; MAX_MODIFIERS], trigger: HardwareTrigger }`. `{}` de modifiers + trigger = tecla/botón solo; `{Period, Space}` + `KeyS` = el combo de 3 teclas que uno de nuestros ejemplos usa para Attack. |
-| `Keybindings` | `input.rs` (Resource) | Tabla rebindeable `(InputChord → [IntentAction; MAX_ACTIONS_PER_CHORD])` de capacidad fija, cargada al arrancar desde un asset (formato abierto, ver Decisiones) con un default por `InputScheme`. Solo Input la escribe. Un chord puede disparar varias acciones semánticas si el diseño lo necesita (`Space` → `Jump` + `Glide`). |
+| `Keybindings` | `input.rs` (Resource) | Pendiente: tabla rebindeable `(InputChord → [IntentAction; MAX_ACTIONS_PER_CHORD])` de capacidad fija. El resolver local actual conserva los defaults de teclado como una tabla interna fija. |
 | `InputSource` | `input/source.rs` | Identifica una fuente local de input (`LocalPlayer`, `LocalDebug`, etc.). Permite que un snapshot de acciones tenga dueño explícito y evita asumir un único actor global. |
 | `InputControlledBy(InputSource)` | `input/source.rs` | Componente en el actor local controlado por una fuente de input. Movement/Combat/NPCs usan este enlace para elegir qué slice de `ActiveActions` leer. |
 | `ActiveActions` | `input.rs` (Resource) | Snapshot resuelto por `InputSource`, almacenado en slots de capacidad fija: bitset de acciones sostenidas + contador/generación por acción disparada. Los Brains lo leen inmutablemente — nunca `ButtonInput<KeyCode>` directamente. |
 | `ActionFrame` | `input/frame.rs` | Snapshot serializable de acciones resueltas para una fuente: `{ frame_seq, sustained_bitset, trigger_generations }`. Input lo produce para red y tests de contrato; no contiene hardware crudo ni `Keybindings`. |
 | `InputConsumeCursor` | `input/cursor.rs` | Componente/cursor por consumidor (`Movement`, `Combat`, `NPCs`, etc.) que guarda la última generación consumida por acción. Consumir un trigger muta el cursor del dueño, no el `ActiveActions` global. |
-| `RebindRequestMessage` / `RebindResultMessage` | `input/messages.rs` | UI pide cambiar un binding; Input valida conflicto/capacidad, muta `Keybindings` y emite resultado aplicado/rechazado. |
-| `ApplyRemoteActionsMessage` | `input/messages.rs` | Pedido `{ source: InputSource, frame: ActionFrame }` emitido por Multiplayer en el host. Input valida fuente y monotonicidad de `frame_seq`, luego escribe su propio `ActiveActions`; Multiplayer no muta recursos de Input. |
+| `RebindRequestMessage` / `RebindResultMessage` | `input/messages.rs` | Pendiente: UI pedirá cambiar un binding; Input validará y será su único writer. |
+| `ApplyRemoteActionsMessage` | `input/messages.rs` | Pendiente: Multiplayer entregará un `ActionFrame` a Input, que validará fuente/secuencia antes de escribir su slot. |
 
 ## Sistemas (comportamiento) — propuesta
 

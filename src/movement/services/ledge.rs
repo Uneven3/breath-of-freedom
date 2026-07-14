@@ -10,7 +10,9 @@ use bevy::prelude::*;
 
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::LedgeFacts;
+use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, body};
+use crate::world::NonClimbable;
 
 const MIN_DIR_SQ: f32 = 0.001;
 /// Ankle → head profiling heights.
@@ -47,17 +49,27 @@ const CONTINUE_CLIMB_ANGLE_MAX_DEG: f32 = 45.0;
 /// One forward profiling hit: world contact point + surface normal.
 #[derive(Clone, Copy)]
 struct Hit {
+    entity: Entity,
     point: Vec3,
     normal: Vec3,
 }
 
 pub fn ledge_service(
     spatial: SpatialQuery,
-    mut q: Query<(Entity, &Transform, &mut LedgeFacts), With<Actor>>,
+    mut q: Query<(Entity, &Transform, &LocomotionState, &mut LedgeFacts), With<Actor>>,
+    non_climbable: Query<(), With<NonClimbable>>,
     mut trace: ResMut<CastTrace>,
 ) {
-    for (entity, transform, mut facts) in &mut q {
-        sense_ledges(&spatial, entity, transform, &mut facts, &mut trace);
+    for (entity, transform, state, mut facts) in &mut q {
+        sense_ledges(
+            &spatial,
+            entity,
+            transform,
+            *state,
+            &mut facts,
+            &non_climbable,
+            &mut trace,
+        );
     }
 }
 
@@ -65,7 +77,9 @@ fn sense_ledges(
     spatial: &SpatialQuery,
     entity: Entity,
     transform: &Transform,
+    state: LocomotionState,
     facts: &mut LedgeFacts,
+    non_climbable: &Query<(), With<NonClimbable>>,
     trace: &mut CastTrace,
 ) {
     let pos = transform.translation;
@@ -107,6 +121,7 @@ fn sense_ledges(
         );
         if let Some(h) = h {
             hits[i] = Some(Hit {
+                entity: h.entity,
                 point: h.point1,
                 normal: h.normal1,
             });
@@ -185,18 +200,19 @@ fn sense_ledges(
     if let Some(waist) = hits[2] {
         facts.wall_point = Some(waist.point);
         let angle = facing.angle_between(-waist.normal).to_degrees();
-        if angle <= CLIMB_WALL_ANGLE_MAX_DEG {
+        let climbable = non_climbable.get(waist.entity).is_err();
+        // Initial attachment must face the wall, but an actor already in Climb
+        // owns a wall-facing yaw in the motor. Do not drop that attachment just
+        // because a curved surface or a lateral move briefly makes the sampled
+        // normal fall outside the entry cone: a waist hit on climbable geometry
+        // is sufficient evidence to continue.
+        if can_continue_climb(state, climbable, angle) {
             facts.climb_normal = Some(waist.normal);
-            if knee_hit && head_hit {
-                facts.can_climb = true;
-            }
-        }
-        // Continuation has a looser gate than initial climbing. Its lateral
-        // rays must follow that same gate: on a sphere the head cast can miss
-        // while the waist still has a valid curved contact.
-        if angle <= CONTINUE_CLIMB_ANGLE_MAX_DEG {
             facts.can_continue_climb = true;
             update_lateral_walls(spatial, &filter, facts, pos, waist.normal, entity, trace);
+        }
+        if climbable && angle <= CLIMB_WALL_ANGLE_MAX_DEG && knee_hit && head_hit {
+            facts.can_climb = true;
         }
     }
 
@@ -204,6 +220,10 @@ fn sense_ledges(
     if let Some(h) = down_hit {
         facts.lip_height = h.point1.y - feet_y;
     }
+}
+
+fn can_continue_climb(state: LocomotionState, climbable: bool, facing_angle: f32) -> bool {
+    climbable && (state == LocomotionState::Climb || facing_angle <= CONTINUE_CLIMB_ANGLE_MAX_DEG)
 }
 
 fn detect_vault(
@@ -277,4 +297,25 @@ fn update_lateral_walls(
     );
     facts.has_wall_left = left_hit.is_some();
     facts.has_wall_right = right_hit.is_some();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_climb_keeps_a_valid_wall_at_any_facing_angle() {
+        assert!(can_continue_climb(LocomotionState::Climb, true, 89.0));
+    }
+
+    #[test]
+    fn inactive_actor_still_uses_the_continuation_cone() {
+        assert!(can_continue_climb(LocomotionState::Walk, true, 45.0));
+        assert!(!can_continue_climb(LocomotionState::Walk, true, 45.1));
+    }
+
+    #[test]
+    fn non_climbable_wall_never_continues() {
+        assert!(!can_continue_climb(LocomotionState::Climb, false, 0.0));
+    }
 }

@@ -1,200 +1,225 @@
-//! Player Brain — the only place hardware input enters the simulation.
-//!
-//! Hardware input lives only in a Brain, which writes the shared `Intents`
-//! (see `docs/architecture/movement.md`). We read Bevy's native
-//! `ButtonInput<KeyCode>` (centralised here, so a dedicated input-mapping crate
-//! buys us little for a single brain) and rotate WASD into camera space.
+//! Movement Brain — translates resolved input actions into per-actor intents.
 
 use bevy::prelude::*;
 
-use super::Player;
+use super::Actor;
 use super::intents::Intents;
 use super::state::LocomotionState;
-use crate::camera::CameraRig;
+use crate::input::InputConsumeCursor;
+use crate::input::action::IntentAction;
+use crate::input::frame::{ActiveActions, ControlOrientation, InputControlledBy};
 
 const WISH_DIR_THRESHOLD: f32 = 0.5;
 
-/// Climb is a toggle (key `1`), not a hold — matches `ClimbToggleComponent`.
-#[derive(Resource, Default)]
-pub struct ClimbToggle(pub bool);
+/// Movement-owned interpretation of the climb toggle for one actor.
+#[derive(Component, Default)]
+pub struct ClimbInputState(pub bool);
 
-/// Key-down edge detection for the climb toggle. Runs in `Update`, not
-/// `FixedUpdate`: `just_pressed` is true for exactly one render frame, but
-/// `FixedUpdate` may run 0 times (press dropped) or 2+ times (toggle flipped
-/// twice = no-op) during that frame depending on the render framerate.
-pub fn toggle_climb_input(keys: Res<ButtonInput<KeyCode>>, mut climb_toggle: ResMut<ClimbToggle>) {
-    if keys.just_pressed(KeyCode::Digit1) {
-        climb_toggle.0 = !climb_toggle.0;
+type BrainQuery<'a> = (
+    &'a InputControlledBy,
+    &'a ControlOrientation,
+    &'a mut Intents,
+    &'a mut ClimbInputState,
+    &'a mut InputConsumeCursor,
+);
+
+/// `MovementSet::ReadIntents`: resolved actions -> `Intents` for each
+/// input-controlled actor. AI actors omit `InputControlledBy` and own their
+/// intents through their own Brain.
+pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<Actor>>) {
+    for (source, orientation, mut intents, mut climb, mut cursor) in &mut q {
+        let Some(frame) = actions.frame(source.0) else {
+            continue;
+        };
+
+        let mut input = Vec2::ZERO;
+        if frame.pressed(IntentAction::MoveRight) {
+            input.x += 1.0;
+        }
+        if frame.pressed(IntentAction::MoveLeft) {
+            input.x -= 1.0;
+        }
+        if frame.pressed(IntentAction::MoveBack) {
+            input.y += 1.0;
+        }
+        if frame.pressed(IntentAction::MoveForward) {
+            input.y -= 1.0;
+        }
+        if input.length_squared() > 1.0 {
+            input = input.normalize();
+        }
+
+        *intents = Intents::default();
+        intents.raw_input = input;
+        intents.input_strength = input.length();
+        intents.wish_dir.x = if input.x > WISH_DIR_THRESHOLD {
+            1
+        } else if input.x < -WISH_DIR_THRESHOLD {
+            -1
+        } else {
+            0
+        };
+        intents.wish_dir.y = if input.y < -WISH_DIR_THRESHOLD {
+            1
+        } else if input.y > WISH_DIR_THRESHOLD {
+            -1
+        } else {
+            0
+        };
+
+        if input != Vec2::ZERO {
+            let yaw_rot = Quat::from_rotation_y(orientation.yaw);
+            let world =
+                (yaw_rot * Vec3::X * input.x - yaw_rot * Vec3::NEG_Z * input.y).normalize_or_zero();
+            intents.move_dir = Vec2::new(world.x, world.z);
+        }
+
+        if cursor.consume(frame, IntentAction::ClimbToggle) {
+            climb.0 = !climb.0;
+        }
+        intents.wants_jump = frame.pressed(IntentAction::Jump);
+        intents.jump_pressed = cursor.consume(frame, IntentAction::Jump);
+        intents.wants_glide = frame.pressed(IntentAction::Glide);
+        intents.wants_sprint = frame.pressed(IntentAction::Sprint);
+        intents.wants_sneak = frame.pressed(IntentAction::Sneak);
+        intents.wants_climb = climb.0;
+        intents.wants_mantle = frame.pressed(IntentAction::Mantle);
+        intents.wants_vault = frame.pressed(IntentAction::Vault);
     }
 }
 
-/// `MovementSet::ReadIntents`: hardware → `Intents` on the player.
-pub fn read_intents(
-    keys: Res<ButtonInput<KeyCode>>,
-    climb_toggle: Res<ClimbToggle>,
-    camera: Single<&CameraRig>,
-    mut intents: Single<&mut Intents, With<Player>>,
-) {
-    // Raw WASD combined into one vector:
-    // x = right−left, y = back−forward (so forward is negative Y).
-    let mut input = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyD) {
-        input.x += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        input.x -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        input.y += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyW) {
-        input.y -= 1.0;
-    }
-    if input.length_squared() > 1.0 {
-        input = input.normalize();
-    }
+type ActorTransition = (With<Actor>, Changed<LocomotionState>);
 
-    let i = &mut **intents;
-    *i = Intents::default();
-    i.raw_input = input;
-    i.input_strength = input.length();
-
-    // Discrete wish_dir (semantic intent), thresholded.
-    i.wish_dir.x = if input.x > WISH_DIR_THRESHOLD {
-        1
-    } else if input.x < -WISH_DIR_THRESHOLD {
-        -1
-    } else {
-        0
-    };
-    i.wish_dir.y = if input.y < -WISH_DIR_THRESHOLD {
-        1 // forward
-    } else if input.y > WISH_DIR_THRESHOLD {
-        -1
-    } else {
-        0
-    };
-
-    // Camera-relative world move direction (XZ).
-    if input != Vec2::ZERO {
-        let yaw_rot = Quat::from_rotation_y(camera.yaw);
-        let mut forward = yaw_rot * Vec3::NEG_Z;
-        let mut right = yaw_rot * Vec3::X;
-        forward.y = 0.0;
-        right.y = 0.0;
-        forward = forward.normalize_or_zero();
-        right = right.normalize_or_zero();
-        // input.y is negative when moving forward.
-        let world = (right * input.x - forward * input.y).normalize_or_zero();
-        i.move_dir = Vec2::new(world.x, world.z);
-    } else {
-        i.move_dir = input;
-    }
-
-    // Action triggers.
-    if keys.pressed(KeyCode::Space) {
-        i.wants_jump = true;
-        i.wants_glide = true;
-    }
-    if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
-        i.wants_sprint = true;
-    }
-    i.wants_climb = climb_toggle.0;
-    if keys.pressed(KeyCode::Digit2) {
-        i.wants_mantle = true;
-    }
-    if keys.pressed(KeyCode::Digit3) {
-        i.wants_vault = true;
-    }
-    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
-        i.wants_sneak = true;
-    }
-}
-
-type PlayerTransition = (With<Player>, Changed<LocomotionState>);
-
-/// Clear the climb toggle after moves that should drop climb intent.
-/// Keyed on `Changed<LocomotionState>` so it fires exactly on a transition.
+/// Clear climb intent after transitions that explicitly release a climb latch.
 pub fn reset_climb_toggle(
-    mut toggle: ResMut<ClimbToggle>,
-    q: Query<(&LocomotionState, &Intents), PlayerTransition>,
+    mut q: Query<(&LocomotionState, &Intents, &mut ClimbInputState), ActorTransition>,
 ) {
-    let Ok((state, intents)) = q.single() else {
-        return;
-    };
-    match *state {
-        LocomotionState::Mantle | LocomotionState::AutoVault | LocomotionState::EdgeLeap => {
-            toggle.0 = false;
-        }
-        LocomotionState::WallJump => {
-            // Keep climb intent only when wall-jumping to re-stick (up/left/right).
-            let sticking = intents.is_climbing_up()
-                || intents.is_climbing_left()
-                || intents.is_climbing_right();
-            if !sticking {
-                toggle.0 = false;
+    for (state, intents, mut climb) in &mut q {
+        match *state {
+            LocomotionState::Mantle | LocomotionState::AutoVault | LocomotionState::EdgeLeap => {
+                climb.0 = false;
             }
+            LocomotionState::WallJump => {
+                let sticking = intents.is_climbing_up()
+                    || intents.is_climbing_left()
+                    || intents.is_climbing_right();
+                if !sticking {
+                    climb.0 = false;
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Covers the toggle-reset rules. `Changed<LocomotionState>` fires on the
-    //! first run after spawn (the freshly added component counts as changed).
     use super::*;
+    use crate::input::frame::{InputSource, LOCAL_INPUT_SOURCE, MAX_INPUT_SOURCES};
     use bevy::ecs::system::RunSystemOnce;
 
-    /// Start with climb toggled ON, enter `state` with the given input, return the
-    /// resulting toggle value.
-    fn toggle_after(state: LocomotionState, intents: Intents) -> bool {
+    fn latch_after(state: LocomotionState, intents: Intents) -> bool {
         let mut world = World::new();
-        world.insert_resource(ClimbToggle(true));
-        world.spawn((Player, state, intents));
-        world
-            .run_system_once(reset_climb_toggle)
-            .expect("reset runs");
-        world.resource::<ClimbToggle>().0
+        let entity = world
+            .spawn((Actor, state, intents, ClimbInputState(true)))
+            .id();
+        world.run_system_once(reset_climb_toggle).unwrap();
+        world.entity(entity).get::<ClimbInputState>().unwrap().0
     }
 
     #[test]
-    fn resets_on_mantle_vault_edgeleap() {
-        assert!(!toggle_after(LocomotionState::Mantle, Intents::default()));
-        assert!(!toggle_after(
-            LocomotionState::AutoVault,
-            Intents::default()
+    fn releases_latch_after_mantle_vault_or_edge_leap() {
+        assert!(!latch_after(LocomotionState::Mantle, Intents::default()));
+        assert!(!latch_after(LocomotionState::AutoVault, Intents::default()));
+        assert!(!latch_after(LocomotionState::EdgeLeap, Intents::default()));
+    }
+
+    #[test]
+    fn lateral_wall_jump_keeps_latch() {
+        assert!(latch_after(
+            LocomotionState::WallJump,
+            Intents {
+                wish_dir: IVec2::new(-1, 0),
+                ..default()
+            },
         ));
-        assert!(!toggle_after(LocomotionState::EdgeLeap, Intents::default()));
     }
 
     #[test]
-    fn wall_jump_away_resets() {
-        // Neutral input = leaping away from the wall → drop climb.
-        assert!(!toggle_after(LocomotionState::WallJump, Intents::default()));
+    fn away_or_downward_wall_jump_releases_latch() {
+        assert!(!latch_after(LocomotionState::WallJump, Intents::default()));
+        assert!(!latch_after(
+            LocomotionState::WallJump,
+            Intents {
+                wish_dir: IVec2::new(0, -1),
+                ..default()
+            },
+        ));
     }
 
     #[test]
-    fn wall_jump_back_resets() {
-        let back = Intents {
-            wish_dir: IVec2::new(0, -1),
+    fn ordinary_jump_keeps_latch() {
+        assert!(latch_after(LocomotionState::Jump, Intents::default()));
+    }
+
+    #[test]
+    fn local_actions_follow_actor_orientation_without_overwriting_ai_intents() {
+        let mut world = World::new();
+        let mut actions = ActiveActions::default();
+        actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::MoveForward, true);
+        world.insert_resource(actions);
+
+        let player = world
+            .spawn((
+                Actor,
+                InputControlledBy(LOCAL_INPUT_SOURCE),
+                ControlOrientation {
+                    yaw: std::f32::consts::FRAC_PI_2,
+                    ..default()
+                },
+                Intents::default(),
+                ClimbInputState::default(),
+                InputConsumeCursor::default(),
+            ))
+            .id();
+        let ai_intents = Intents {
+            wants_sprint: true,
+            move_dir: Vec2::X,
             ..default()
-        }; // is_climbing_down
-        assert!(!toggle_after(LocomotionState::WallJump, back));
+        };
+        let ai = world.spawn((Actor, ai_intents)).id();
+
+        world.run_system_once(read_intents).unwrap();
+
+        let player_intents = world.entity(player).get::<Intents>().unwrap();
+        assert!(player_intents.move_dir.x < -0.99);
+        assert!(player_intents.move_dir.y.abs() < 1e-5);
+        let preserved = world.entity(ai).get::<Intents>().unwrap();
+        assert!(preserved.wants_sprint);
+        assert_eq!(preserved.move_dir, Vec2::X);
     }
 
     #[test]
-    fn wall_jump_lateral_keeps_climb() {
-        let left = Intents {
-            wish_dir: IVec2::new(-1, 0),
-            ..default()
-        }; // is_climbing_left
-        assert!(toggle_after(LocomotionState::WallJump, left));
-    }
+    fn remote_source_actions_are_independent_from_local_source() {
+        let remote = InputSource((MAX_INPUT_SOURCES - 1) as u8);
+        let mut world = World::new();
+        let mut actions = ActiveActions::default();
+        actions.set_pressed(remote, IntentAction::MoveRight, true);
+        world.insert_resource(actions);
 
-    #[test]
-    fn floor_jump_keeps_climb() {
-        // A plain floor jump must never clear climb — player may jump then grab a wall.
-        assert!(toggle_after(LocomotionState::Jump, Intents::default()));
+        let remote_actor = world
+            .spawn((
+                Actor,
+                InputControlledBy(remote),
+                ControlOrientation::default(),
+                Intents::default(),
+                ClimbInputState::default(),
+                InputConsumeCursor::default(),
+            ))
+            .id();
+        world.run_system_once(read_intents).unwrap();
+
+        let intents = world.entity(remote_actor).get::<Intents>().unwrap();
+        assert_eq!(intents.wish_dir, IVec2::X);
     }
 }

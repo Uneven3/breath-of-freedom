@@ -65,13 +65,16 @@ pub fn propose(
 
         let from_climb = *current == LocomotionState::Climb;
         let from_walljump = *current == LocomotionState::WallJump;
-        if !(from_climb || from_walljump) {
+        let from_ladder = *current == LocomotionState::Ladder;
+        if !(from_climb || from_walljump || from_ladder) {
             continue;
         }
 
         if ledge.is_at_mantle_edge && ledge.lip_height >= TALL_ENOUGH_LIP {
             let requesting = intents.wants_mantle;
-            if requesting || (from_walljump && intents.is_climbing_up()) {
+            let jump_at_lip =
+                (from_climb || from_ladder) && (intents.wants_jump || intents.jump_pressed);
+            if requesting || jump_at_lip || (from_walljump && intents.is_climbing_up()) {
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::Mantle,
                     Priority::Forced,
@@ -136,4 +139,156 @@ fn begin_mantle(state: &mut MantleState, pos: Vec3, ledge: &LedgeFacts) -> bool 
         .arc
         .begin(pos, target, v_dur.max(h_dur).max(MIN_DURATION));
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn ladder_mantle_requires_explicit_request() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    wants_mantle: true,
+                    ..default()
+                },
+                LocomotionState::Ladder,
+                LedgeFacts {
+                    is_at_mantle_edge: true,
+                    lip_height: TALL_ENOUGH_LIP,
+                    mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
+                    ..default()
+                },
+                MantleState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        let proposals = world.entity(entity).get::<ProposalBuffer>().unwrap();
+        assert!(
+            proposals
+                .iter()
+                .any(|proposal| proposal.target_state == LocomotionState::Mantle)
+        );
+    }
+
+    #[test]
+    fn climbing_up_a_ladder_does_not_auto_mantle() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    wish_dir: IVec2::Y,
+                    ..default()
+                },
+                LocomotionState::Ladder,
+                LedgeFacts {
+                    is_at_mantle_edge: true,
+                    lip_height: TALL_ENOUGH_LIP,
+                    mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
+                    ..default()
+                },
+                MantleState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .all(|proposal| proposal.target_state != LocomotionState::Mantle)
+        );
+    }
+
+    #[test]
+    fn jump_at_a_climb_lip_proposes_mantle() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    jump_pressed: true,
+                    ..default()
+                },
+                LocomotionState::Climb,
+                LedgeFacts {
+                    is_at_mantle_edge: true,
+                    lip_height: TALL_ENOUGH_LIP,
+                    mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
+                    ..default()
+                },
+                MantleState::default(),
+                crate::movement::motors::wall_jump::WallJumpState::default(),
+                crate::movement::stamina::Stamina::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+        world
+            .run_system_once(crate::movement::motors::wall_jump::propose)
+            .unwrap();
+
+        let proposals = world.entity(entity).get::<ProposalBuffer>().unwrap();
+        assert!(
+            proposals
+                .iter()
+                .any(|proposal| proposal.target_state == LocomotionState::WallJump)
+        );
+        assert_eq!(
+            proposals.arbitrate(LocomotionState::Climb),
+            LocomotionState::Mantle
+        );
+    }
+
+    #[test]
+    fn jump_at_a_ladder_lip_proposes_mantle_over_wall_jump() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    jump_pressed: true,
+                    ..default()
+                },
+                LocomotionState::Ladder,
+                LedgeFacts {
+                    is_at_mantle_edge: true,
+                    lip_height: TALL_ENOUGH_LIP,
+                    mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
+                    ..default()
+                },
+                MantleState::default(),
+                crate::movement::motors::wall_jump::WallJumpState::default(),
+                crate::movement::stamina::Stamina::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+        world
+            .run_system_once(crate::movement::motors::wall_jump::propose)
+            .unwrap();
+
+        assert_eq!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .arbitrate(LocomotionState::Ladder),
+            LocomotionState::Mantle
+        );
+    }
 }

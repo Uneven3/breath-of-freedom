@@ -1,9 +1,7 @@
-//! Stairs service — reports whether the body overlaps a stair trigger region.
-//!
-//! We do a direct AABB overlap test against each `Stairs` marker —
-//! deterministic and free of physics-event plumbing. On overlap we copy the
-//! stair's geometry into `StairsFacts`.
+//! Stairs service — reports whether the body overlaps an authored stair volume.
 
+#[cfg(test)]
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use crate::movement::Actor;
@@ -17,17 +15,66 @@ pub fn stairs_service(
     for (transform, mut facts) in &mut actors {
         let pos = transform.translation;
 
-        *facts = StairsFacts::default();
+        let mut nearest = None;
         for stair in &stairs {
-            if stair.contains(pos) {
-                facts.on_stairs = true;
-                facts.base = stair.base;
-                facts.top = stair.top;
-                facts.step_count = stair.step_count;
-                facts.step_depth = stair.step_depth;
-                facts.step_rise = stair.step_rise;
-                break;
+            if contains(stair, pos) {
+                let distance_sq = pos.distance_squared(stair.trigger_center);
+                if nearest.is_none_or(|(_, best_distance_sq)| distance_sq < best_distance_sq) {
+                    nearest = Some((stair, distance_sq));
+                }
             }
         }
+        *facts = nearest.map_or_else(StairsFacts::default, |(stair, _)| StairsFacts {
+            on_stairs: true,
+            base: stair.base,
+            top: stair.top,
+            step_count: stair.step_count,
+            step_depth: stair.step_depth,
+            step_rise: stair.step_rise,
+        });
+    }
+}
+
+fn contains(stairs: &Stairs, point: Vec3) -> bool {
+    let local = stairs.trigger_rotation.conjugate() * (point - stairs.trigger_center);
+    let d = local.abs();
+    d.x <= stairs.trigger_half_extents.x
+        && d.y <= stairs.trigger_half_extents.y
+        && d.z <= stairs.trigger_half_extents.z
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stair(base_x: f32, center_x: f32) -> Stairs {
+        Stairs {
+            base: Vec3::new(base_x, 0.0, 0.0),
+            top: Vec3::new(base_x + 1.0, 0.25, 0.0),
+            step_count: 1,
+            step_depth: 1.0,
+            step_rise: 0.25,
+            trigger_center: Vec3::new(center_x, 1.0, 0.0),
+            trigger_half_extents: Vec3::splat(1.0),
+            trigger_rotation: Quat::IDENTITY,
+        }
+    }
+
+    #[test]
+    fn overlapping_segments_choose_the_nearest_center() {
+        let mut world = World::new();
+        world.spawn((
+            Actor,
+            Transform::from_xyz(0.4, 1.0, 0.0),
+            StairsFacts::default(),
+        ));
+        world.spawn(stair(-1.0, -0.5));
+        world.spawn(stair(1.0, 0.5));
+
+        world.run_system_once(stairs_service).unwrap();
+
+        let facts = world.query::<&StairsFacts>().single(&world).unwrap();
+        assert!(facts.on_stairs);
+        assert_eq!(facts.base.x, 1.0);
     }
 }

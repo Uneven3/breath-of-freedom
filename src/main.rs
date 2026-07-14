@@ -7,6 +7,7 @@
 
 mod camera;
 mod debug;
+mod input;
 mod movement;
 mod presentation;
 mod proposal;
@@ -26,6 +27,7 @@ fn main() {
         .add_plugins(PhysicsDebugPlugin)
         .add_plugins((
             world::WorldPlugin,
+            input::InputPlugin,
             movement::MovementPlugin,
             camera::CameraPlugin,
             visuals::VisualsPlugin,

@@ -14,6 +14,8 @@
 //! - **F3** — transition + grounded-flip logging (`info!`), with the full
 //!   proposal list of the tick and the decomposed grounded conditions.
 //! - **F4** — compact per-tick trace plus every sensor shape cast (`info!`).
+//! - **F5** — semantic context-fact flip log: emits only when stairs, ladder,
+//!   or ledge booleans change, without the per-tick or per-cast noise.
 
 use avian3d::prelude::*;
 use bevy::color::palettes::css;
@@ -23,7 +25,7 @@ use std::fmt::Write;
 
 use crate::movement::diag::{CastKind, CastTrace};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
-use crate::movement::proposal::{Priority, ProposalBuffer};
+use crate::movement::proposal::ProposalBuffer;
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, MovementSet, Player};
@@ -31,23 +33,13 @@ use crate::world::{Ladder, Stairs};
 
 /// Which debug channels are active. Mirrored into `CastTrace.enabled` and
 /// avian's `PhysicsGizmos` by `handle_toggles`.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct DebugConfig {
     pub show_colliders: bool,
     pub show_casts: bool,
     pub log_transitions: bool,
     pub log_verbose: bool,
-}
-
-impl Default for DebugConfig {
-    fn default() -> Self {
-        Self {
-            show_colliders: false,
-            show_casts: true,
-            log_transitions: true,
-            log_verbose: false,
-        }
-    }
+    pub log_fact_flips: bool,
 }
 
 /// Fixed-tick counter so log lines from the same tick can be correlated.
@@ -57,7 +49,7 @@ pub struct SimTick(pub u64);
 /// Snapshot of an actor's `ProposalBuffer` taken right before `Arbitrate`
 /// clears it, so the transition log can show who competed.
 #[derive(Component, Default)]
-pub struct ProposalTrace(pub Vec<(&'static str, Priority, u32, LocomotionState)>);
+pub struct ProposalTrace(pub ProposalBuffer);
 
 #[derive(Component)]
 struct DebugText;
@@ -91,6 +83,7 @@ impl Plugin for DebugPlugin {
                     .before(MovementSet::Arbitrate),
                 log_transitions.after(MovementSet::Arbitrate),
                 log_verbose_tick.after(MovementSet::TickActiveMotor),
+                log_context_fact_flips.after(MovementSet::TickActiveMotor),
             ),
         );
     }
@@ -136,6 +129,13 @@ fn handle_toggles(
     if keys.just_pressed(KeyCode::F4) {
         config.log_verbose = !config.log_verbose;
         info!("[debug] verbose per-tick trace: {}", config.log_verbose);
+    }
+    if keys.just_pressed(KeyCode::F5) {
+        config.log_fact_flips = !config.log_fact_flips;
+        info!(
+            "[debug] context-fact flip logging: {}",
+            config.log_fact_flips
+        );
     }
     trace.enabled = config.show_casts || config.log_verbose;
 }
@@ -255,14 +255,12 @@ fn capture_proposals(
         return;
     }
     for (entity, buffer, trace) in &mut q {
-        let snapshot: Vec<_> = buffer
-            .iter()
-            .map(|p| (p.source_id, p.category, p.override_weight, p.target_state))
-            .collect();
         match trace {
-            Some(mut t) => t.0 = snapshot,
+            Some(mut t) => t.0 = buffer.clone(),
             None => {
-                commands.entity(entity).insert(ProposalTrace(snapshot));
+                commands
+                    .entity(entity)
+                    .insert(ProposalTrace(buffer.clone()));
             }
         }
     }
@@ -303,7 +301,12 @@ fn log_transitions(
         let props = proposals
             .map(|t| {
                 t.0.iter()
-                    .map(|(src, cat, w, target)| format!("{src}({cat:?},{w})→{target:?}"))
+                    .map(|p| {
+                        format!(
+                            "{}({:?},{})→{:?}",
+                            p.source_id, p.category, p.override_weight, p.target_state
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(" ")
             })
@@ -363,7 +366,7 @@ fn log_verbose_tick(
         let p = transform.translation;
         let facing = transform.rotation * Vec3::NEG_Z;
         info!(
-            "[t{:06}] {who} {:?} pos=({:.2},{:.2},{:.2}) face=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) gnd={}({},{},{:.2}) wall={} stairs={} ladder={} climb={}/{} lip={:.2}",
+            "[t{:06}] {who} {:?} pos=({:.2},{:.2},{:.2}) face=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) gnd={}({},{},{:.2}) slide_wall={} stairs={} ladder={} climb={}/{} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2}",
             tick.0,
             state,
             p.x,
@@ -384,8 +387,97 @@ fn log_verbose_tick(
             ladder.map(|l| l.on_ladder).unwrap_or(false),
             ledge.map(|l| l.can_climb).unwrap_or(false),
             ledge.map(|l| l.can_continue_climb).unwrap_or(false),
+            ledge.map(|l| l.has_wall_left).unwrap_or(false),
+            ledge.map(|l| l.has_wall_right).unwrap_or(false),
+            ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).x,
+            ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).y,
+            ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).z,
             ledge.map(|l| l.lip_height).unwrap_or(0.0),
         );
+    }
+}
+
+/// Semantic context flags are sensor observations. F5 turns them into a
+/// transition stream without dumping all fixed ticks or every shape cast.
+///
+/// `BodyContact.on_wall` is intentionally excluded: it is a per-sweep solver
+/// result, so tangential motion can alternate it while a wall remains nearby.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ContextFlags {
+    stairs: bool,
+    ladder: bool,
+    can_climb: bool,
+    continue_climb: bool,
+    wall_left: bool,
+    wall_right: bool,
+}
+
+#[allow(clippy::type_complexity)]
+fn log_context_fact_flips(
+    config: Res<DebugConfig>,
+    tick: Res<SimTick>,
+    q: Query<
+        (
+            Entity,
+            &StairsFacts,
+            &LadderFacts,
+            &LedgeFacts,
+            Option<&Name>,
+        ),
+        With<Actor>,
+    >,
+    mut previous: Local<HashMap<Entity, ContextFlags>>,
+) {
+    if !config.log_fact_flips {
+        return;
+    }
+
+    for (entity, stairs, ladder, ledge, name) in &q {
+        let current = ContextFlags {
+            stairs: stairs.on_stairs,
+            ladder: ladder.on_ladder,
+            can_climb: ledge.can_climb,
+            continue_climb: ledge.can_continue_climb,
+            wall_left: ledge.has_wall_left,
+            wall_right: ledge.has_wall_right,
+        };
+        let old = previous.insert(entity, current);
+        let who = name.map(Name::as_str).unwrap_or("actor");
+
+        let Some(old) = old else {
+            info!(
+                "[t{:06}] {who} FACTS ∅ → stairs={} ladder={} climb={}/{} side={}/{}",
+                tick.0,
+                current.stairs,
+                current.ladder,
+                current.can_climb,
+                current.continue_climb,
+                current.wall_left,
+                current.wall_right,
+            );
+            continue;
+        };
+        if old == current {
+            continue;
+        }
+
+        let mut changes = String::new();
+        for (label, before, after) in [
+            ("stairs", old.stairs, current.stairs),
+            ("ladder", old.ladder, current.ladder),
+            ("can_climb", old.can_climb, current.can_climb),
+            ("continue", old.continue_climb, current.continue_climb),
+            ("left", old.wall_left, current.wall_left),
+            ("right", old.wall_right, current.wall_right),
+        ] {
+            if before != after {
+                if !changes.is_empty() {
+                    changes.push(' ');
+                }
+                let _ = write!(changes, "{label}={before}→{after}");
+            }
+        }
+        info!("[t{:06}] {who} FACTS {changes}", tick.0);
     }
 }
 
@@ -470,7 +562,7 @@ fn draw_sensor_gizmos(
             && sf.on_stairs
         {
             let mut expected = pos;
-            expected.y = sf.expected_feet_y(pos);
+            expected.y = crate::movement::motors::stairs::expected_feet_y(sf, pos);
             gizmos.sphere(expected, 0.08, css::DODGER_BLUE);
         }
     }
@@ -536,9 +628,9 @@ fn update_debug_text(
          stamina: {:.0}/{:.0}\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
-         wall: {}  stairs: {}  ladder: {}\n\
-         ledge: climb={} cont={} lip={:.2} mantle_edge={} vault={}\n\
-         [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}",
+         slide_wall: {}  stairs: {}  ladder: {}\n\
+         ledge: climb={} cont={} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} mantle_edge={} vault={}\n\
+         [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}",
         state,
         tick.0,
         stamina.current(),
@@ -556,6 +648,11 @@ fn update_debug_text(
         ladder.on_ladder,
         ledge.can_climb,
         ledge.can_continue_climb,
+        ledge.has_wall_left,
+        ledge.has_wall_right,
+        ledge.climb_normal.unwrap_or(Vec3::ZERO).x,
+        ledge.climb_normal.unwrap_or(Vec3::ZERO).y,
+        ledge.climb_normal.unwrap_or(Vec3::ZERO).z,
         ledge.lip_height,
         ledge.is_at_mantle_edge,
         ledge.is_vaultable,
@@ -563,5 +660,6 @@ fn update_debug_text(
         onoff(config.show_casts),
         onoff(config.log_transitions),
         onoff(config.log_verbose),
+        onoff(config.log_fact_flips),
     );
 }

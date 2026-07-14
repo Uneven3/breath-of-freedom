@@ -11,29 +11,19 @@ Movement read-only, nunca escribe hacia la simulación. Vive enteramente en
 
 | Tipo | Dónde | Qué es |
 |---|---|---|
-| `CameraRig` | `camera.rs` | `{ yaw, pitch, current_dip, smoothed_y }` — estado propio de presentación de la cámara orbital. |
-| `MouseCaptured` (Resource) | `camera.rs` | Si el cursor del SO está capturado; gatea `mouse_look`. |
+| `CameraRig` | `camera.rs` | `{ current_dip, smoothed_y }` — estado propio de presentación de la cámara orbital. |
+| `ControlOrientation` | `input/frame.rs` | `{ yaw, pitch }` del actor local, propiedad de Input/control. Camera solo lo lee. |
+| `PointerCaptured` (Resource) | `input/mod.rs` | Input posee la captura del cursor y actualiza la orientación local. |
 
 ## Sistemas (comportamiento)
 
-Cadena objetivo en `Update` (`cursor_control`, `mouse_look`/`keyboard_look`,
-`camera_landing_dip`, `follow_local_actor`):
+Cadena en `Update` (`camera_landing_dip`, `follow_local_actor`), ordenada
+después de `InputSet::UpdateOrientation`:
 
-1. **cursor_control** — ESC libera el cursor (segundo ESC sale de la app),
-   click izquierdo lo recaptura. Solo aplica bajo `InputScheme::KeyboardMouse`
-   (`input.md`) — sin mouse que capturar, no corre bajo `KeyboardOnly`.
-2. **mouse_look** (`run_if(KeyboardMouse)`) — acumula `AccumulatedMouseMotion`
-   en yaw/pitch del rig. **`keyboard_look`** (`run_if(KeyboardOnly)`) — lee
-   `input::ActiveActions` del `InputSource` local para
-   `LookUp/Down/Left/Right` (no `KeyCode` directo, ver `input.md`) y gira
-   yaw/pitch a velocidad angular constante mientras cada acción está activa,
-   mismo clamp de pitch. Ambos son intercambiables según `input::InputScheme`;
-   Camera tampoco sabe qué entrada física dispara cada
-   `LookUp/Down/Left/Right`, solo lee la acción ya resuelta.
-3. **camera_landing_dip** — detecta transición `Fall → Walk/Sprint` en
+1. **camera_landing_dip** — detecta transición `Fall → Walk/Sprint` en
    `LocomotionState` y agrega un dip vertical temporal (lee Movement,
    read-only).
-4. **follow_local_actor** — sigue al actor controlado localmente con Y
+2. **follow_local_actor** — sigue al actor controlado localmente con Y
    suavizado, spring-arm que se acerca si un `ShapeCast` (Avian
    `SpatialQuery`) detecta un choque contra geometría del mundo.
 
@@ -42,6 +32,7 @@ Cadena objetivo en `Update` (`cursor_control`, `mouse_look`/`keyboard_look`,
 | Relación | Categoría | Mecanismo |
 |---|---|---|
 | Camera lee `Transform`/`LocomotionState` del actor local | READ | Query read-only, nunca escribe `Intents` ni estado de Movement |
+| Camera lee `ControlOrientation` de Input | READ | Input/control posee yaw/pitch; Camera no es fuente de simulación |
 | Camera lee geometría del mundo vía Avian `SpatialQuery` | READ | Solo para el spring-arm, no simula física propia |
 
 Camera nunca aparece como emisor de mensajes de simulación — es hoja del

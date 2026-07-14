@@ -28,6 +28,13 @@ snapshot global de input. Qué entrada física dispara cada `IntentAction` es
 una tabla rebindeable que Movement no conoce — el mismo código sirve sin
 cambios para `Gamepad`/`KeyboardOnly`/`KeyboardMouse`.
 
+`Intents::jump_pressed` conserva el borde de Jump para motores que no pueden
+permitirse perder una pulsación entre ticks fijos (`Jump`, `WallJump`,
+`EdgeLeap` y salida de `Ladder`); `wants_jump` sigue representando el hold.
+En un borde válido de `Climb` o `Ladder`, Jump se interpreta como Mantle
+(prioridad mayor que WallJump); fuera de ese contexto, Jump conserva el
+WallJump de retroceso.
+
 ## Estados (`LocomotionState`)
 
 `Walk`, `Sprint`, `Fall`, `Jump`, `AutoVault`, `Climb`, `Mantle`,
@@ -55,7 +62,27 @@ Pipeline en `FixedUpdate` a 60Hz, `SystemSet`s encadenados (`MovementSet`):
 de `Arbitrate` y antes de `TickActiveMotor` (swap de collider, declarativo
 sobre `Changed<LocomotionState>` + cruce del límite Sneak vía `Crouched`),
 para que el motor activo tique con la cápsula correcta en el mismo frame.
-Es forma física derivada; no decide locomoción.
+Es forma física derivada; no decide locomoción. Antes de arbitrar,
+`motors::sneak::update_stand_clearance` prueba la cápsula de pie precalculada.
+Si hay techo, Sneak se mantiene aunque se libere el botón; solo vuelve a crecer
+cuando la cápsula completa cabe.
+
+`Ladder` es un motor de anclaje: `LadderService` publica base, cima, normal y
+una línea authored para el centro del cuerpo. Ladder entra solo mediante el
+toggle de climb, fija el eje horizontal y acepta solo velocidad vertical, sin
+consumir stamina. En el borde superior no aplica un impulso: `Mantle` propone
+la salida solo con su acción manual; Jump propone `WallJump`. World puede
+marcar la pared con
+`NonClimbable`; LedgeService bloquea entonces solo el motor `Climb`, sin
+ocultar esa geometría a Mantle/Vault.
+
+`Stairs` modela un tramo recto uniforme: base, cima, cantidad, huella y
+contrahuella. Su trigger es un oriented box authored; una escalera curva se
+compone de tramos adyacentes de un peldaño. `StairsService` publica el tramo
+que contiene al actor y el motor limita su muestra de snap a la huella del
+tramo, por lo que una huella corta no salta varias contrahuellas. La salida a
+una pendiente pertenece a `GroundService`: el trigger termina en la última
+huella y ambas superficies deben coincidir en altura.
 
 ## Relaciones con otros sistemas
 

@@ -26,7 +26,6 @@ pub mod state;
 #[cfg(test)]
 mod spike;
 
-use brain::ClimbToggle;
 use facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use intents::Intents;
 use proposal::ProposalBuffer;
@@ -69,7 +68,6 @@ impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
         // Pinned to 60 Hz (Bevy defaults to 64 Hz).
         app.insert_resource(Time::<Fixed>::from_hz(60.0));
-        app.init_resource::<ClimbToggle>();
         // Sensor-cast capture for the debug gizmos (no-op until enabled).
         app.init_resource::<diag::CastTrace>();
         app.add_systems(
@@ -93,9 +91,6 @@ impl Plugin for MovementPlugin {
 
         app.add_systems(Startup, spawn_player);
 
-        // Key-edge input runs per render frame (see `toggle_climb_input`).
-        app.add_systems(Update, brain::toggle_climb_input);
-
         app.add_systems(
             FixedUpdate,
             brain::read_intents.in_set(MovementSet::ReadIntents),
@@ -107,6 +102,7 @@ impl Plugin for MovementPlugin {
                 services::ledge::ledge_service,
                 services::stairs::stairs_service,
                 services::ladder::ladder_service,
+                motors::sneak::update_stand_clearance,
             )
                 .in_set(MovementSet::SenseWorld),
         );
@@ -193,6 +189,8 @@ fn spawn_player(mut commands: Commands) {
     commands.spawn((
         Player,
         Actor,
+        crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
+        crate::input::frame::ControlOrientation::default(),
         Name::new("Player"),
         Transform::from_xyz(0.0, 1.5, 0.0),
         RigidBody::Kinematic,
@@ -213,10 +211,17 @@ fn spawn_player(mut commands: Commands) {
         // Per-motor shared phase state (read by both propose and tick systems).
         (
             motors::jump::JumpPhase::default(),
+            brain::ClimbInputState::default(),
+            crate::input::InputConsumeCursor::default(),
             motors::jump::JumpLocal::default(),
             motors::glide::GlideLocal::default(),
             motors::sprint::SprintLock::default(),
             motors::sneak::Crouched::default(),
+            motors::sneak::StandClearance::default(),
+            motors::sneak::StandCollider(Collider::capsule(
+                body::RADIUS,
+                body::STAND_CAPSULE_LENGTH,
+            )),
             motors::mantle::MantleState::default(),
             motors::auto_vault::VaultState::default(),
             motors::wall_jump::WallJumpState::default(),

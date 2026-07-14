@@ -90,7 +90,7 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
 
         apply_locomotion_rotation(&mut transform, intents.move_dir, dt, 15.0);
 
-        let horiz_axis = stairs.slope_axis();
+        let horiz_axis = stair_axis(stairs);
         let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();
         let world_input = Vec3::new(intents.move_dir.x, 0.0, intents.move_dir.y);
         let along = world_input.dot(horiz_axis);
@@ -122,14 +122,14 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         // Per-step Y-snap. Sample point leads (ascent) or trails (descent) the body.
         let slope_input = along;
         let look_ahead = if slope_input > ASCEND_THRESHOLD {
-            horiz_axis * (body::RADIUS + LOOKAHEAD_MARGIN)
+            horiz_axis * (body::RADIUS + LOOKAHEAD_MARGIN).min(stairs.step_depth)
         } else if slope_input < DESCEND_THRESHOLD {
-            horiz_axis * DESCEND_TRAIL
+            horiz_axis * DESCEND_TRAIL.min(stairs.step_depth)
         } else {
             Vec3::ZERO
         };
         let sample_pos = transform.translation + look_ahead;
-        let expected_feet_y = stairs.expected_feet_y(sample_pos);
+        let expected_feet_y = expected_feet_y(stairs, sample_pos);
         let current_feet_y = transform.translation.y - body::HALF_HEIGHT;
         let feet_gap = expected_feet_y - current_feet_y;
         let max_snap = stairs.step_rise + GROUND_TOLERANCE;
@@ -159,4 +159,22 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             &mut contact,
         );
     }
+}
+
+fn stair_axis(stairs: &StairsFacts) -> Vec3 {
+    let d = stairs.top - stairs.base;
+    Vec3::new(d.x, 0.0, d.z).normalize_or_zero()
+}
+
+pub(crate) fn expected_feet_y(stairs: &StairsFacts, world_pos: Vec3) -> f32 {
+    let distance = (world_pos - stairs.base).dot(stair_axis(stairs));
+    if distance <= 0.0 {
+        return stairs.base.y;
+    }
+    let total_run = stairs.step_count as f32 * stairs.step_depth;
+    if distance >= total_run {
+        return stairs.base.y + stairs.step_count as f32 * stairs.step_rise;
+    }
+    let index = (distance / stairs.step_depth).floor() as i32;
+    stairs.base.y + (index + 1) as f32 * stairs.step_rise
 }

@@ -10,13 +10,11 @@ use crate::movement::intents::Intents;
 use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal};
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
+use crate::movement::{Actor, BodyVelocity, body};
 
 const CLIMB_SPEED: f32 = 2.5;
-const SNAP_LERP: f32 = 12.0;
-const TOP_EXIT_BUMP: f32 = 3.0;
-const MOVE_DIR_THRESHOLD_SQ: f32 = 0.01;
-const TOP_EXIT_CLEARANCE: f32 = 0.1;
+const BOTTOM_EXIT_CLEARANCE: f32 = 0.1;
+const TOP_HOLD_CLEARANCE: f32 = 0.25;
 
 pub fn propose(
     mut q: Query<
@@ -24,25 +22,23 @@ pub fn propose(
             &LadderFacts,
             &Intents,
             &LocomotionState,
+            &Transform,
             &mut ProposalBuffer,
         ),
         With<Actor>,
     >,
 ) {
-    for (ladder, intents, current, mut buffer) in &mut q {
+    for (ladder, intents, current, transform, mut buffer) in &mut q {
         if !ladder.on_ladder {
             continue;
         }
-        // Jump releases the latch (and gates re-entry until Space is let go —
-        // otherwise holding a move key would re-latch on the very next frame).
-        if intents.wants_jump {
+        let descending_to_ground = intents.raw_input.y > 0.0
+            && transform.translation.y
+                <= ladder.bottom_y + body::HALF_HEIGHT + BOTTOM_EXIT_CLEARANCE;
+        if intents.wants_jump || intents.jump_pressed || descending_to_ground {
             continue;
         }
-        // Latch on once entered; release only when the player jumps or leaves the area.
-        if *current == LocomotionState::Ladder
-            || intents.move_dir.length_squared() > MOVE_DIR_THRESHOLD_SQ
-            || intents.wants_climb
-        {
+        if *current == LocomotionState::Ladder || intents.wants_climb {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Ladder,
                 Priority::Forced,
@@ -71,19 +67,16 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             continue;
         }
 
-        // Forward press → raw_input.y negative → ascend.
-        let mut v = Vec3::new(0.0, -intents.raw_input.y * CLIMB_SPEED, 0.0);
+        transform.translation.x = ladder.body_anchor_xz.x;
+        transform.translation.z = ladder.body_anchor_xz.y;
+        face_ladder(&mut transform, ladder.outward_normal);
 
-        // Snap X/Z onto the ladder anchor rail.
-        let t = (SNAP_LERP * dt).clamp(0.0, 1.0);
-        transform.translation.x = transform.translation.x.lerp(ladder.anchor_xz.x, t);
-        transform.translation.z = transform.translation.z.lerp(ladder.anchor_xz.y, t);
-
-        // Auto-exit bump at the top while still pressing forward.
-        if transform.translation.y >= ladder.top_y - TOP_EXIT_CLEARANCE && intents.raw_input.y < 0.0
-        {
-            v.y = TOP_EXIT_BUMP;
-        }
+        // A ladder is an attachment constraint: it accepts only vertical input.
+        let min_y = ladder.bottom_y + body::HALF_HEIGHT;
+        let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
+        let target_y = (transform.translation.y - intents.raw_input.y * CLIMB_SPEED * dt)
+            .clamp(min_y, max_y.max(min_y));
+        let v = Vec3::Y * ((target_y - transform.translation.y) / dt.max(f32::EPSILON));
 
         vel.0 = body_move_and_slide(
             &mas,
@@ -94,6 +87,15 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
             time.delta(),
             &mut contact,
         );
+    }
+}
+
+fn face_ladder(transform: &mut Transform, outward_normal: Vec3) {
+    let mut face = -outward_normal;
+    face.y = 0.0;
+    if face.length_squared() > f32::EPSILON {
+        let face = face.normalize();
+        transform.rotation = Quat::from_rotation_y((-face.x).atan2(-face.z));
     }
 }
 
@@ -112,10 +114,12 @@ mod tests {
                 Actor,
                 LadderFacts {
                     on_ladder: true,
+                    outward_normal: Vec3::Z,
                     ..default()
                 },
                 intents,
                 state,
+                Transform::from_xyz(0.0, 1.0, 0.0),
                 ProposalBuffer::default(),
             ))
             .id();
@@ -161,5 +165,30 @@ mod tests {
             LocomotionState::Fall,
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn lateral_input_does_not_attach() {
+        let out = proposals(
+            Intents {
+                move_dir: Vec2::X,
+                ..default()
+            },
+            LocomotionState::Walk,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn climb_toggle_attaches() {
+        let out = proposals(
+            Intents {
+                wants_climb: true,
+                ..default()
+            },
+            LocomotionState::Walk,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].target_state, LocomotionState::Ladder);
     }
 }

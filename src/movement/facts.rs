@@ -71,34 +71,12 @@ pub struct StairsFacts {
     pub step_rise: f32,
 }
 
-impl StairsFacts {
-    /// Unit vector along the stairs in the horizontal plane.
-    pub fn slope_axis(&self) -> Vec3 {
-        let d = self.top - self.base;
-        Vec3::new(d.x, 0.0, d.z).normalize_or_zero()
-    }
-
-    /// Expected feet-Y for a body at `world_pos`, by how far it has progressed along
-    /// the stair axis.
-    pub fn expected_feet_y(&self, world_pos: Vec3) -> f32 {
-        let horiz = self.slope_axis();
-        let d = (world_pos - self.base).dot(horiz);
-        if d <= 0.0 {
-            return self.base.y;
-        }
-        let total_run = self.step_count as f32 * self.step_depth;
-        if d >= total_run {
-            return self.base.y + self.step_count as f32 * self.step_rise;
-        }
-        let idx = (d / self.step_depth).floor() as i32;
-        self.base.y + (idx + 1) as f32 * self.step_rise
-    }
-}
-
 /// Published by `LadderService`.
 #[derive(Component, Debug, Clone, Default)]
 pub struct LadderFacts {
     pub on_ladder: bool,
+    pub bottom_y: f32,
     pub top_y: f32,
-    pub anchor_xz: Vec2,
+    pub body_anchor_xz: Vec2,
+    pub outward_normal: Vec3,
 }

@@ -1,26 +1,16 @@
 //! Orbit follow camera.
 //!
-//! Mouse look drives yaw/pitch; the rig follows the player with smoothed Y, a
-//! landing dip, and a spring-arm that pulls the camera in when it would clip
-//! world geometry. Runs in `Update` (render frame).
-//!
-//! Cursor capture also lives here (presentation, not simulation): ESC frees the
-//! cursor (and quits on a second press) and a click recaptures it. Keeping it
-//! out of the Brain preserves the Brain's only role: producing `Intents` (see
-//! `docs/architecture/movement.md`).
+//! Presentation-only camera: follows the local actor using the control
+//! orientation published by Input, with a landing dip and collision spring arm.
 
 use avian3d::prelude::*;
-use bevy::app::AppExit;
-use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
+use crate::input::InputSet;
+use crate::input::frame::ControlOrientation;
 use crate::movement::Player;
 use crate::movement::state::LocomotionState;
 
-const MOUSE_SENSITIVITY: f32 = 0.003;
-const PITCH_MIN: f32 = -1.2;
-const PITCH_MAX: f32 = 1.2;
 const SPRING_LENGTH: f32 = 6.5;
 const LENS_HEIGHT: f32 = 1.5;
 const LANDING_DIP_INTENSITY: f32 = 0.5;
@@ -30,15 +20,8 @@ const FOLLOW_LERP_Y: f32 = 15.0;
 const SPRING_MARGIN: f32 = 0.2;
 const SPRING_PROBE_RADIUS: f32 = 0.2;
 
-/// Whether the OS cursor is captured (locked + hidden). Gates mouse-look so the
-/// camera stops rotating while the cursor is free.
-#[derive(Resource)]
-pub struct MouseCaptured(pub bool);
-
 #[derive(Component)]
 pub struct CameraRig {
-    pub yaw: f32,
-    pub pitch: f32,
     pub current_dip: f32,
     pub smoothed_y: f32,
 }
@@ -46,8 +29,6 @@ pub struct CameraRig {
 impl Default for CameraRig {
     fn default() -> Self {
         Self {
-            yaw: 0.0,
-            pitch: 0.0,
             current_dip: 0.0,
             smoothed_y: f32::NAN, // initialised to the body on the first follow frame
         }
@@ -58,17 +39,12 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(MouseCaptured(true));
-        app.add_systems(Startup, (spawn_camera, grab_cursor));
+        app.add_systems(Startup, spawn_camera);
         app.add_systems(
             Update,
-            (
-                cursor_control,
-                mouse_look.run_if(|c: Res<MouseCaptured>| c.0),
-                camera_landing_dip,
-                follow_player,
-            )
-                .chain(),
+            (camera_landing_dip, follow_player)
+                .chain()
+                .after(InputSet::UpdateOrientation),
         );
     }
 }
@@ -80,57 +56,6 @@ fn spawn_camera(mut commands: Commands) {
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
     ));
-}
-
-fn grab_cursor(
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mut captured: ResMut<MouseCaptured>,
-) {
-    set_cursor(&mut cursor, &mut captured, true);
-}
-
-/// ESC frees the cursor (second ESC quits); a left click recaptures it.
-fn cursor_control(
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mut captured: ResMut<MouseCaptured>,
-    mut exit: MessageWriter<AppExit>,
-) {
-    if keys.just_pressed(KeyCode::Escape) {
-        if captured.0 {
-            set_cursor(&mut cursor, &mut captured, false);
-        } else {
-            exit.write(AppExit::Success);
-        }
-    } else if !captured.0 && mouse.just_pressed(MouseButton::Left) {
-        set_cursor(&mut cursor, &mut captured, true);
-    }
-}
-
-fn set_cursor(
-    cursor: &mut Query<&mut CursorOptions, With<PrimaryWindow>>,
-    captured: &mut MouseCaptured,
-    grab: bool,
-) {
-    if let Ok(mut options) = cursor.single_mut() {
-        options.grab_mode = if grab {
-            CursorGrabMode::Locked
-        } else {
-            CursorGrabMode::None
-        };
-        options.visible = !grab;
-    }
-    captured.0 = grab;
-}
-
-fn mouse_look(motion: Res<AccumulatedMouseMotion>, mut rig: Single<&mut CameraRig>) {
-    let delta = motion.delta;
-    if delta == Vec2::ZERO {
-        return;
-    }
-    rig.yaw -= delta.x * MOUSE_SENSITIVITY;
-    rig.pitch = (rig.pitch - delta.y * MOUSE_SENSITIVITY).clamp(PITCH_MIN, PITCH_MAX);
 }
 
 /// Add a downward dip when the player lands (Fall → Walk/Sprint).
@@ -158,12 +83,12 @@ type FollowFilter = (With<Player>, Without<CameraRig>);
 
 /// Intentionally scoped to `Player`, not `Actor` — see `camera_landing_dip`.
 fn follow_player(
-    player: Single<(Entity, &Transform), FollowFilter>,
+    player: Single<(Entity, &Transform, &ControlOrientation), FollowFilter>,
     mut cam: Single<(&mut Transform, &mut CameraRig)>,
     spatial: SpatialQuery,
     time: Res<Time>,
 ) {
-    let (player_entity, player_transform) = *player;
+    let (player_entity, player_transform, orientation) = *player;
     let (cam_transform, rig) = &mut *cam;
     let body = player_transform.translation;
     let dt = time.delta_secs();
@@ -178,7 +103,7 @@ fn follow_player(
     }
     let pivot = Vec3::new(body.x, rig.smoothed_y, body.z);
 
-    let rot = Quat::from_rotation_y(rig.yaw) * Quat::from_rotation_x(rig.pitch);
+    let rot = Quat::from_rotation_y(orientation.yaw) * Quat::from_rotation_x(orientation.pitch);
     let dir = rot * Vec3::Z;
 
     // Spring arm: pull the camera in if the boom would clip world geometry.

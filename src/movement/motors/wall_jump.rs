@@ -50,12 +50,13 @@ pub fn propose(
     >,
 ) {
     for (intents, current, stamina, mut state, mut buffer) in &mut q {
+        let jump_requested = intents.wants_jump || intents.jump_pressed;
         if !intents.wants_jump {
             state.needs_release = false;
         }
 
-        if *current == LocomotionState::Climb
-            && intents.wants_jump
+        if (*current == LocomotionState::Climb || *current == LocomotionState::Ladder)
+            && jump_requested
             && !state.needs_release
             && !stamina.is_exhausted()
         {
@@ -164,5 +165,67 @@ pub fn tick(mut q: Query<TickQuery, With<Actor>>, mas: MoveAndSlide, time: Res<T
         if state.timer <= 0.0 {
             state.is_jumping = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn neutral_jump_press_from_climb_proposes_backward_wall_jump() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    jump_pressed: true,
+                    ..default()
+                },
+                LocomotionState::Climb,
+                Stamina::default(),
+                WallJumpState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        let proposals = world.entity(entity).get::<ProposalBuffer>().unwrap();
+        assert!(
+            proposals
+                .iter()
+                .any(|proposal| proposal.target_state == LocomotionState::WallJump)
+        );
+    }
+
+    #[test]
+    fn neutral_jump_press_from_ladder_proposes_backward_wall_jump() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Actor,
+                Intents {
+                    jump_pressed: true,
+                    ..default()
+                },
+                LocomotionState::Ladder,
+                Stamina::default(),
+                WallJumpState::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(entity)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .any(|proposal| proposal.target_state == LocomotionState::WallJump)
+        );
     }
 }

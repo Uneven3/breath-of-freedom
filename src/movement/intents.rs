@@ -19,6 +19,9 @@ pub struct Intents {
     pub input_strength: f32,
 
     pub wants_jump: bool,
+    /// Rising edge of Jump, preserved independently from the held action so
+    /// specialized jumps cannot miss a short press between fixed ticks.
+    pub jump_pressed: bool,
     pub wants_sprint: bool,
     pub wants_sneak: bool,
     pub wants_climb: bool,

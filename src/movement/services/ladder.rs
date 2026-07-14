@@ -19,8 +19,10 @@ pub fn ladder_service(
         for ladder in &ladders {
             if ladder.contains(pos) {
                 facts.on_ladder = true;
+                facts.bottom_y = ladder.bottom.y;
                 facts.top_y = ladder.top.y;
-                facts.anchor_xz = Vec2::new(ladder.bottom.x, ladder.bottom.z);
+                facts.body_anchor_xz = Vec2::new(ladder.body_anchor.x, ladder.body_anchor.z);
+                facts.outward_normal = ladder.outward_normal;
                 break;
             }
         }

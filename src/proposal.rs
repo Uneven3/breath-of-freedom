@@ -46,7 +46,7 @@ pub struct ProposalOverflow {
     pub source_id: &'static str,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct ProposalBuffer<S, const N: usize> {
     slots: [Option<TransitionProposal<S>>; N],
     len: usize,

@@ -32,10 +32,69 @@ const PARAMS: GroundLocomotion = GroundLocomotion {
 #[derive(Component, Default)]
 pub struct Crouched(pub bool);
 
+/// Reusable standing capsule for the overhead-clearance sensor. Keeping it on
+/// the actor avoids constructing collision geometry in `FixedUpdate`.
+#[derive(Component)]
+pub struct StandCollider(pub Collider);
+
+/// Whether the crouched actor has room to restore its standing capsule.
+#[derive(Component, Default)]
+pub struct StandClearance(pub bool);
+
+/// Update the stand-up clearance before proposal arbitration. A crouched actor
+/// keeps Sneak active after the player releases the button until its full-height
+/// capsule fits, so it can never expand into a ceiling.
+pub fn update_stand_clearance(
+    spatial: SpatialQuery,
+    mut q: Query<
+        (
+            Entity,
+            &Transform,
+            &Crouched,
+            &StandCollider,
+            &mut StandClearance,
+        ),
+        With<Actor>,
+    >,
+) {
+    for (entity, transform, crouched, stand_collider, mut clearance) in &mut q {
+        if !crouched.0 {
+            clearance.0 = true;
+            continue;
+        }
+
+        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        let mut blocked = false;
+        spatial.shape_intersections_callback(
+            &stand_collider.0,
+            standing_center(transform.translation),
+            transform.rotation,
+            &filter,
+            |_| {
+                blocked = true;
+                false
+            },
+        );
+        clearance.0 = !blocked;
+    }
+}
+
 /// Propose SNEAK at PLAYER_REQUESTED with weight 1 (beats Walk's weight 0).
-pub fn propose(mut q: Query<(&GroundFacts, &Intents, &mut ProposalBuffer), With<Actor>>) {
-    for (ground, intents, mut buffer) in &mut q {
-        if ground.grounded && intents.wants_sneak {
+pub fn propose(
+    mut q: Query<
+        (
+            &GroundFacts,
+            &Intents,
+            &Crouched,
+            &StandClearance,
+            &mut ProposalBuffer,
+        ),
+        With<Actor>,
+    >,
+) {
+    for (ground, intents, crouched, clearance, mut buffer) in &mut q {
+        let must_remain_crouched = crouched.0 && !clearance.0;
+        if ground.grounded && (intents.wants_sneak || must_remain_crouched) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sneak,
                 Priority::PlayerRequested,
@@ -88,5 +147,23 @@ pub fn sync_sneak_collider(
         };
         *collider = Collider::capsule(body::RADIUS, length);
         transform.translation.y += new_half_height - old_half_height;
+    }
+}
+
+fn standing_center(crouched_center: Vec3) -> Vec3 {
+    crouched_center + Vec3::Y * (body::HALF_HEIGHT - body::CROUCH_HALF_HEIGHT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standing_sensor_keeps_the_actor_feet_anchored() {
+        let crouched_center = Vec3::new(2.0, body::CROUCH_HALF_HEIGHT, -3.0);
+        let standing = standing_center(crouched_center);
+        assert_eq!(standing.x, crouched_center.x);
+        assert_eq!(standing.z, crouched_center.z);
+        assert!((standing.y - body::HALF_HEIGHT).abs() < f32::EPSILON);
     }
 }

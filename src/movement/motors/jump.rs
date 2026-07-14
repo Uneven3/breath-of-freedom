@@ -77,7 +77,7 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, With<Actor>>) {
         s.was_on_floor = on_floor;
 
         // Jump buffer: capture the rising edge of wants_jump, hold the intent briefly.
-        if intents.wants_jump && !s.prev_wants {
+        if intents.jump_pressed || (intents.wants_jump && !s.prev_wants) {
             s.buffer = JUMP_BUFFER_TIME;
         } else if s.buffer > 0.0 {
             s.buffer = (s.buffer - dt).max(0.0);
@@ -85,7 +85,8 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, With<Actor>>) {
         s.prev_wants = intents.wants_jump;
 
         let can_jump = on_floor || s.coyote > 0.0;
-        let wants = (intents.wants_jump || s.buffer > 0.0) && !s.needs_release;
+        let wants =
+            (intents.wants_jump || intents.jump_pressed || s.buffer > 0.0) && !s.needs_release;
 
         if can_jump && wants {
             s.coyote = 0.0;

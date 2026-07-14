@@ -41,11 +41,12 @@ type ProposeQuery<'a> = (
 
 pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
     for (intents, current, stamina, ledge, mut state, mut buffer) in &mut q {
+        let jump_requested = intents.wants_jump || intents.jump_pressed;
         if !intents.wants_jump {
             state.needs_release = false;
         }
 
-        if *current == LocomotionState::Climb && intents.wants_jump && !state.needs_release {
+        if *current == LocomotionState::Climb && jump_requested && !state.needs_release {
             let at_left_edge = intents.is_climbing_left() && !ledge.has_wall_left;
             let at_right_edge = intents.is_climbing_right() && !ledge.has_wall_right;
             if (at_left_edge || at_right_edge) && !stamina.is_exhausted() {

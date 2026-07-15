@@ -10,6 +10,7 @@ use crate::input::InputSet;
 use crate::input::frame::ControlOrientation;
 use crate::movement::Player;
 use crate::movement::state::LocomotionState;
+use crate::visuals::PlayerVisual;
 
 const SPRING_LENGTH: f32 = 6.5;
 const LENS_HEIGHT: f32 = 1.5;
@@ -19,6 +20,8 @@ const FOLLOW_LERP_Y: f32 = 15.0;
 /// Keep the camera this far off a surface it would otherwise clip into.
 const SPRING_MARGIN: f32 = 0.2;
 const SPRING_PROBE_RADIUS: f32 = 0.2;
+/// Fade out the player model if the camera is closer than this to prevent clipping.
+const FIRST_PERSON_THRESHOLD: f32 = 0.8;
 
 #[derive(Component)]
 pub struct CameraRig {
@@ -87,6 +90,7 @@ fn follow_player(
     mut cam: Single<(&mut Transform, &mut CameraRig)>,
     spatial: SpatialQuery,
     time: Res<Time>,
+    mut player_vis: Query<&mut Visibility, With<PlayerVisual>>,
 ) {
     let (player_entity, player_transform, orientation) = *player;
     let (cam_transform, rig) = &mut *cam;
@@ -95,7 +99,17 @@ fn follow_player(
 
     // Recover the landing dip, then smooth the pivot Y (handles stairs/steps).
     rig.current_dip = lerp(rig.current_dip, 0.0, LANDING_DIP_RECOVERY * dt);
-    let target_y = body.y + LENS_HEIGHT - rig.current_dip;
+
+    // Dynamically cap lens height if there is a low ceiling directly above the player center.
+    // This prevents the camera pivot from clipping inside low ceilings or stairs.
+    let mut effective_lens_height = LENS_HEIGHT;
+    let up_dir = Dir3::Y;
+    let filter = SpatialQueryFilter::from_excluded_entities([player_entity]);
+    if let Some(hit) = spatial.cast_ray(body, up_dir, LENS_HEIGHT, true, &filter) {
+        effective_lens_height = (hit.distance - SPRING_MARGIN).max(0.2);
+    }
+
+    let target_y = body.y + effective_lens_height - rig.current_dip;
     if rig.smoothed_y.is_nan() {
         rig.smoothed_y = target_y;
     } else {
@@ -108,22 +122,32 @@ fn follow_player(
 
     // Spring arm: pull the camera in if the boom would clip world geometry.
     let mut length = SPRING_LENGTH;
-    if let Ok(boom_dir) = Dir3::new(dir) {
-        let filter = SpatialQueryFilter::from_excluded_entities([player_entity]);
-        if let Some(hit) = spatial.cast_shape(
+    if let Ok(boom_dir) = Dir3::new(dir)
+        && let Some(hit) = spatial.cast_shape(
             &Collider::sphere(SPRING_PROBE_RADIUS),
             pivot,
             Quat::IDENTITY,
             boom_dir,
             &ShapeCastConfig::from_max_distance(SPRING_LENGTH),
             &filter,
-        ) {
-            length = (hit.distance - SPRING_MARGIN).clamp(0.0, SPRING_LENGTH);
+        )
+    {
+        length = (hit.distance - SPRING_MARGIN).clamp(0.0, SPRING_LENGTH);
+    }
+
+    // Hide the player visual if the camera is zoomed too close to prevent rendering internal faces.
+    if let Ok(mut vis) = player_vis.single_mut() {
+        if length < FIRST_PERSON_THRESHOLD {
+            *vis = Visibility::Hidden;
+        } else {
+            *vis = Visibility::Inherited;
         }
     }
 
     cam_transform.translation = pivot + dir * length;
-    cam_transform.look_at(pivot, Vec3::Y);
+    // Set camera rotation directly to ControlOrientation rot. This is mathematically
+    // identical to look_at(pivot) but avoids NaN / freeze singularities when length == 0.0.
+    cam_transform.rotation = rot;
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

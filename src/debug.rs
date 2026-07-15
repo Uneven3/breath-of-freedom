@@ -678,4 +678,3 @@ fn update_debug_text(
         probe_status,
     );
 }
-

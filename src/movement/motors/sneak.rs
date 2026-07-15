@@ -21,7 +21,15 @@ use crate::movement::motor_common::{
     GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
 };
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
+use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
+
+/// Per-actor sneak stamina-lock latch: set when stamina hits zero, cleared once it
+/// recovers past `SNEAK_RECHARGE_THRESHOLD`.
+#[derive(Component, Default)]
+pub struct SneakLock(pub bool);
+
+const SNEAK_RECHARGE_THRESHOLD: f32 = 20.0;
 
 /// Whether the crouch capsule is currently applied. Lets `sync_crouch_collider`
 /// rebuild the collider only when the desired crouch actually changes, and lets
@@ -82,14 +90,27 @@ type SneakProposalQuery<'a> = (
     &'a Intents,
     &'a Crouched,
     &'a StandClearance,
+    &'a Stamina,
+    &'a mut SneakLock,
     &'a mut ProposalBuffer,
 );
 type SneakProposalFilter = (With<Actor>, With<GroundMovement>);
 
 pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
-    for (ground, intents, crouched, clearance, mut buffer) in &mut q {
+    for (ground, intents, crouched, clearance, stamina, mut sneak_lock, mut buffer) in &mut q {
+        let cur = stamina.current();
+        if cur <= 0.0 {
+            sneak_lock.0 = true;
+        } else if cur >= SNEAK_RECHARGE_THRESHOLD {
+            sneak_lock.0 = false;
+        }
+
         let must_remain_crouched = crouched.0 && !clearance.0;
-        if ground.grounded && (intents.gait == GaitIntent::Sneak || must_remain_crouched) {
+        let can_sneak = !sneak_lock.0 || must_remain_crouched;
+
+        if ground.grounded
+            && ((intents.gait == GaitIntent::Sneak && can_sneak) || must_remain_crouched)
+        {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sneak,
                 Priority::PlayerRequested,
@@ -117,6 +138,14 @@ pub fn tick(
             ground,
             state,
         ) = row;
+
+        let mut sneak_profile = ground_movement.sneak;
+        let is_moving = intents.planar.direction.length_squared() > 0.01;
+        if is_moving {
+            // Drain stamina at half the rate of sprint (sprint stamina_per_sec is negative)
+            sneak_profile.stamina_per_sec = -ground_movement.sprint.stamina_per_sec.abs() * 0.5;
+        }
+
         ground_locomotion_step(
             GroundLocomotionStep {
                 entity,
@@ -132,7 +161,7 @@ pub fn tick(
             LocomotionState::Sneak,
             &mas,
             &time,
-            &ground_movement.sneak,
+            &sneak_profile,
         );
     }
 }
@@ -161,6 +190,7 @@ type CrouchSyncQuery<'a> = (
     &'a LocomotionState,
     &'a Intents,
     &'a StandClearance,
+    &'a SneakLock,
     &'a mut Crouched,
     &'a mut Collider,
     &'a mut Transform,
@@ -168,10 +198,13 @@ type CrouchSyncQuery<'a> = (
 );
 
 pub fn sync_crouch_collider(mut q: Query<CrouchSyncQuery, With<Actor>>) {
-    for (state, intents, clearance, mut crouched, mut collider, mut transform, body) in &mut q {
+    for (state, intents, clearance, sneak_lock, mut crouched, mut collider, mut transform, body) in
+        &mut q
+    {
         let must_remain_crouched = crouched.0 && !clearance.0;
+        let can_sneak = !sneak_lock.0 || must_remain_crouched;
         let want_crouch = is_ground_locomotion(*state)
-            && (intents.gait == GaitIntent::Sneak || must_remain_crouched);
+            && ((intents.gait == GaitIntent::Sneak && can_sneak) || must_remain_crouched);
         if want_crouch == crouched.0 {
             continue;
         }
@@ -231,6 +264,8 @@ mod tests {
                 },
                 Crouched::default(),
                 StandClearance::default(),
+                Stamina::default(),
+                SneakLock::default(),
                 ProposalBuffer::default(),
             ))
             .id();
@@ -247,6 +282,8 @@ mod tests {
                 },
                 Crouched::default(),
                 StandClearance::default(),
+                Stamina::default(),
+                SneakLock::default(),
                 ProposalBuffer::default(),
             ))
             .id();
@@ -267,6 +304,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sneak_stamina_drain_and_lock() {
+        let mut world = World::new();
+        let mut exhausted = Stamina::default();
+        exhausted.drain(100.0);
+
+        let actor = world
+            .spawn((
+                Actor,
+                GroundMovement::PLAYER,
+                GroundFacts {
+                    grounded: true,
+                    ..default()
+                },
+                Intents {
+                    gait: crate::movement::intents::GaitIntent::Sneak,
+                    ..default()
+                },
+                Crouched::default(),
+                StandClearance::default(),
+                exhausted,
+                SneakLock::default(),
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(actor)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_none(),
+            "exhausted stamina must lock out sneak proposal in the open"
+        );
+        assert!(
+            world.entity(actor).get::<SneakLock>().unwrap().0,
+            "SneakLock must latch to true when stamina hits zero"
+        );
+    }
+
+    #[test]
+    fn sneak_stamina_must_remain_crouched_ignores_lock() {
+        let mut world = World::new();
+        let mut exhausted = Stamina::default();
+        exhausted.drain(100.0);
+
+        let actor = world
+            .spawn((
+                Actor,
+                GroundMovement::PLAYER,
+                GroundFacts {
+                    grounded: true,
+                    ..default()
+                },
+                Intents {
+                    gait: crate::movement::intents::GaitIntent::Sneak,
+                    ..default()
+                },
+                Crouched(true),
+                StandClearance(false), // No headroom
+                exhausted,
+                SneakLock(true), // Already locked
+                ProposalBuffer::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(
+            world
+                .entity(actor)
+                .get::<ProposalBuffer>()
+                .unwrap()
+                .iter()
+                .next()
+                .is_some(),
+            "must remain crouched (no headroom) must propose Sneak even with exhausted stamina"
+        );
+    }
+
     fn crouch_actor(
         state: LocomotionState,
         gait: GaitIntent,
@@ -280,6 +401,7 @@ mod tests {
             Intents { gait, ..default() },
             StandClearance(clearance),
             Crouched(crouched),
+            SneakLock::default(),
             if crouched {
                 body.crouched_collider()
             } else {

@@ -87,7 +87,10 @@ pub fn toggle_spawn(
             ProbeCoverage::default(),
         ),
     ));
-    info!("[debug] TraversalProbe spawned at ({:.1}, {:.1}, {:.1}) (F6)", spawn_pos.x, spawn_pos.y, spawn_pos.z);
+    info!(
+        "[debug] TraversalProbe spawned at ({:.1}, {:.1}, {:.1}) (F6)",
+        spawn_pos.x, spawn_pos.y, spawn_pos.z
+    );
 }
 
 type ProbeQuery<'a> = (

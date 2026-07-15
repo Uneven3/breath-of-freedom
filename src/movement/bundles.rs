@@ -19,7 +19,7 @@ use super::motors::{
     glide::GlideLocal,
     jump::{JumpLocal, JumpPhase},
     mantle::MantleState,
-    sneak::{Crouched, StandClearance, StandCollider},
+    sneak::{Crouched, SneakLock, StandClearance, StandCollider},
     sprint::SprintLock,
     wall_jump::WallJumpState,
 };
@@ -80,6 +80,7 @@ impl KinematicActorBundle {
 pub struct GroundMovementBundle {
     pub movement: GroundMovement,
     pub sprint_lock: SprintLock,
+    pub sneak_lock: SneakLock,
     pub crouched: Crouched,
     pub stand_clearance: StandClearance,
     pub stand_collider: StandCollider,
@@ -90,6 +91,7 @@ impl GroundMovementBundle {
         Self {
             movement,
             sprint_lock: SprintLock::default(),
+            sneak_lock: SneakLock::default(),
             crouched: Crouched::default(),
             stand_clearance: StandClearance::default(),
             stand_collider: StandCollider(dimensions.standing_collider()),

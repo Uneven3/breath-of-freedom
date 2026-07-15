@@ -156,7 +156,7 @@ pub fn tick(
         };
         let speed = if sprinting {
             base_speed * profile.sprint_multiplier
-        } else if intents.gait == GaitIntent::Sneak {
+        } else if is_crouched {
             base_speed * profile.sneak_multiplier
         } else {
             base_speed
@@ -176,6 +176,12 @@ pub fn tick(
 
         if sprinting {
             stamina.drain(profile.sprint_stamina_cost_per_sec * dt);
+        } else if is_crouched && has_input {
+            // Sneak drains stamina when moving on stairs (at half of sprint stamina rate)
+            stamina.drain(profile.sprint_stamina_cost_per_sec * 0.5 * dt);
+        } else {
+            // Recover stamina when standing still or walking normally on stairs
+            stamina.recover(movement.walk.stamina_per_sec * dt);
         }
 
         // Per-step Y-snap. Sample point leads (ascent) or trails (descent) the body.

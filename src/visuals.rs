@@ -16,7 +16,7 @@ const INTERPOLATION_SPEED: f32 = 20.0;
 const SNEAK_Y_OFFSET: f32 = -0.4;
 
 #[derive(Component)]
-struct PlayerVisual;
+pub struct PlayerVisual;
 
 #[derive(Component)]
 struct TraversalProbeVisual {
@@ -59,6 +59,7 @@ fn spawn_visual(
         ))),
         MeshMaterial3d(materials.add(Color::srgb(0.3, 0.6, 0.9))),
         Transform::from_xyz(0.0, 1.5, 0.0),
+        Visibility::default(),
     ));
 }
 

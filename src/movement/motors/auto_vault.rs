@@ -6,13 +6,14 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::Actor;
 use crate::movement::abilities::LedgeTraversal;
-use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
+use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
 
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.1;
@@ -57,56 +58,30 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a mut BodyContact,
-    &'a mut VaultState,
-    &'a LedgeFacts,
-    &'a LedgeTraversal,
-    &'a LocomotionState,
-);
-
-pub fn tick(
-    mut q: Query<TickQuery, (With<Actor>, With<LedgeTraversal>)>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(movement) = row.ledge_traversal else {
+        return;
+    };
+    let Some(state) = row.vault_state.as_mut() else {
+        return;
+    };
     let dt = time.delta_secs();
-    for (
-        entity,
-        collider,
-        mut transform,
-        mut vel,
-        mut contact,
-        mut state,
-        ledge,
-        movement,
-        loco_state,
-    ) in &mut q
-    {
-        if *loco_state != LocomotionState::AutoVault {
-            continue;
-        }
 
-        if !state.arc.running && !begin_vault(&mut state, transform.translation, ledge, movement) {
-            continue;
-        }
-
-        transform.translation = state.arc.step(dt, movement.vault.arc_height);
-        vel.0 = Vec3::ZERO;
-        body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            Vec3::ZERO,
-            time.delta(),
-            &mut contact,
-        );
+    if !state.arc.running && !begin_vault(state, row.transform.translation, row.ledge, movement) {
+        return;
     }
+
+    row.transform.translation = state.arc.step(dt, movement.vault.arc_height);
+    row.velocity.0 = Vec3::ZERO;
+    body_move_and_slide(
+        mas,
+        row.entity,
+        row.collider,
+        &mut row.transform,
+        Vec3::ZERO,
+        time.delta(),
+        &mut row.contact,
+    );
 }
 
 fn begin_vault(

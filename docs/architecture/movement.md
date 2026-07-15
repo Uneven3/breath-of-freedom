@@ -22,10 +22,12 @@
 | `GlideMovement` | `abilities.rs` | Capacidad persistente y perfil por actor de Glide. |
 | `GroundSensing` | `sensing.rs` | Perfil físico de GroundService: distancia del probe y umbral de ascenso por actor. Forma parte del núcleo cinemático. |
 | `LedgeSensing` | `sensing.rs` | Perfil físico opcional de LedgeService: muestras de altura, alcances y umbrales de pared, borde y vault por actor. No concede acciones. |
+| `SensingLod` | `lod.rs` | Decisión de LOD de sensing por actor, reescrita cada tick por `assign_sensing_lod`: tier (`Full`/`Reduced`) y si este tick le toca castear. Los servicios de SenseWorld la consultan vía `Option<&SensingLod>` (sin el componente, se sensa siempre). |
+| `SensingLodConfig` | `lod.rs` | `Resource` de tuning del LOD: radio de tasa completa alrededor del jugador e intervalo de ticks para actores lejanos. Valores por defecto documentados en el propio tipo, pensados para ajustarse. |
 | `Stamina` | `stamina.rs` | Pool de esfuerzo. Solo sus propios métodos `drain`/`recover` la mutan. |
 | `BodyContact`, `GroundFacts`, `LedgeFacts`, `StairsFacts`, `LadderFacts` | `facts.rs` | Hechos del mundo que los servicios calculan y los motores leen. |
 | `ClimbInputState` | `brain.rs` | Estado del toggle de escalar por actor/controlador (tecla `1`, no un hold). No es `Resource` global, porque el contrato multi-actor requiere input independiente por actor. |
-| `JumpPhase`, `JumpLocal`, `GlideLocal`, `SprintLock` | `motors/jump.rs`, `motors/glide.rs`, `motors/sprint.rs` | Estado propio de cada motor (timers, latches), por-actor. Eran `Local<T>` de sistema antes de `multi-actor-migration` — promovidos a componente para no compartir estado entre actores. |
+| `JumpPhase`, `JumpLocal`, `GlideLocal`, `SprintLock`, `StairsLocal` | `motors/jump.rs`, `motors/glide.rs`, `motors/sprint.rs`, `motors/stairs.rs` | Estado propio de cada motor (timers, latches, cache de peldaños), por-actor. Eran `Local<T>` de sistema antes de `multi-actor-migration` — promovidos a componente para no compartir estado entre actores. |
 | `MantleState`, `VaultState`, `WallJumpState`, `EdgeLeapState` | `motors/mantle.rs`, `motors/auto_vault.rs`, `motors/wall_jump.rs`, `motors/edge_leap.rs` | Máquina de fase compartida entre `propose` y `tick` de cada motor, por-actor desde su diseño original (`Local` no se puede compartir entre dos sistemas). |
 | `KinematicActorBundle` | `bundles.rs` | Conveniencia de construccion para el contrato físico y de pipeline de un actor cinemático. No es una capacidad ni activa sistemas. |
 | `GroundMovementBundle`, `JumpMovementBundle`, `GlideMovementBundle`, `LedgeTraversalBundle`, `WallJumpMovementBundle` | `bundles.rs` | Conveniencias de construccion: emparejan cada capacidad con el estado runtime privado de sus propios motores. |
@@ -96,24 +98,33 @@ sondea el mundo, mientras que las dimensiones describen el cuerpo.
 Pipeline en `FixedUpdate` a 60Hz, `SystemSet`s encadenados (`MovementSet`):
 
 1. **ReadIntents** — brains de hardware, IA o red escriben `Intents` por actor.
-2. **SenseWorld** — 4 servicios (`ground`, `ledge`, `stairs`, `ladder`) escriben los `*Facts`.
+2. **SenseWorld** — 4 servicios (`ground`, `ledge`, `stairs`, `ladder`) escriben
+   los `*Facts`. Antes de este set corre `lod::assign_sensing_lod`: clasifica
+   cada actor por distancia al jugador local y decide si este tick le toca
+   castear. Los actores lejanos sensan cada `reduced_interval` ticks,
+   escalonados por índice de entidad; sus `*Facts` quedan acotadamente
+   desactualizados (el jugador siempre sensa a tasa completa). Ver
+   `rationale/sensing-lod.md`.
 3. **GatherProposals** — los 13 motores corren su `propose` cada frame, sin
    condición — cada uno decide si empuja un `TransitionProposal` al buffer.
 4. **Arbitrate** — `arbitrate()` (`mod.rs`) elige el ganador por
    `(category, override_weight)` y escribe `LocomotionState`.
-5. **TickActiveMotor** — los motores corren sobre `Query<.., With<Actor>>` y
-   se auto-filtran con un guard interno por entidad
-   (`if *state != LocomotionState::X { continue }`) en vez de un `run_if`
-   global — esto es lo que permite simulación concurrente e independiente de
-   jugadores locales, remotos, enemigos y otros cuerpos controlables. Ver
-   `rationale/multi-actor-dispatch.md`.
+5. **TickActiveMotor** — un único sistema dispatcher
+   (`motors::tick_active_motor`) itera `Query<MotorTick, With<Actor>>` una vez
+   y despacha cada actor con un `match` **exhaustivo** sobre su
+   `LocomotionState` al `tick_body` del motor dueño. El invariante
+   "exactamente un motor mueve cada cuerpo por frame" lo garantiza el
+   compilador (un estado nuevo no compila hasta tener su brazo), no una
+   convención de guards — y sigue permitiendo simulación concurrente e
+   independiente de jugadores locales, remotos, enemigos y otros cuerpos
+   controlables. Ver `rationale/multi-actor-dispatch.md`.
 
 `motors::sneak::sync_crouch_collider` corre en `FixedUpdate`, justo después
 de `Arbitrate` y antes de `TickActiveMotor`, para que el motor activo tique con
 la cápsula correcta en el mismo frame. El crouch es un **modificador ortogonal**
 al estado: la cápsula agachada sigue la intención de crouch (o un stand-up
 bloqueado) durante *cualquier* locomoción de suelo — Sneak plano **o** Stairs —,
-no el estado `Sneak`. Por eso `Stairs` también agacha: `stairs::tick` usa la
+no el estado `Sneak`. Por eso `Stairs` también agacha: `stairs::tick_body` usa la
 media-altura agachada para el snap por peldaño y el `sneak_multiplier` del perfil
 para la velocidad. Es forma física derivada; no decide locomoción. Antes de
 arbitrar, `motors::sneak::update_stand_clearance` prueba la cápsula de pie
@@ -167,7 +178,8 @@ requieren el contrato multi-actor descrito abajo.
 - Nadar/Bucear y Snowboard (GDD §9) se diseñan como motores nuevos de este
   mismo plugin — ver `swim.md`, `snowboard.md` y
   `rationale/traversal-extensions-in-movement.md`.
-- **Contrato multi-actor:** `Query<.., With<Actor>>` + guard interno por
-  entidad — implementado (ticket `multi-actor-migration`), ya no es un
+- **Contrato multi-actor:** `Query<.., With<Actor>>` + dispatch por `match`
+  exhaustivo en `motors::tick_active_motor` — implementado (ticket
+  `multi-actor-migration`, luego endurecido al dispatcher), ya no es un
   prerequisito pendiente de Enemies y Multiplayer. Ver
   `rationale/multi-actor-dispatch.md` y `docs/ARCHITECTURE-MAP.md`.

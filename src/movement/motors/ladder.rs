@@ -5,14 +5,15 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::Actor;
 use crate::movement::abilities::LadderMovement;
 use crate::movement::body::BodyDimensions;
-use crate::movement::facts::{BodyContact, LadderFacts};
+use crate::movement::facts::LadderFacts;
 use crate::movement::intents::{Intents, LadderIntent};
 use crate::movement::motor_common::body_move_and_slide;
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
 
 const BOTTOM_EXIT_CLEARANCE: f32 = 0.1;
 const TOP_HOLD_CLEARANCE: f32 = 0.25;
@@ -48,68 +49,38 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LadderMovement>)>) 
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a mut BodyContact,
-    &'a Intents,
-    &'a LadderFacts,
-    &'a LadderMovement,
-    &'a BodyDimensions,
-    &'a LocomotionState,
-);
-
-pub fn tick(
-    mut q: Query<TickQuery, (With<Actor>, With<LadderMovement>)>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(movement) = row.ladder_movement else {
+        return;
+    };
+    let ladder = row.ladder;
     let dt = time.delta_secs();
-    for (
-        entity,
-        collider,
-        mut transform,
-        mut vel,
-        mut contact,
-        intents,
-        ladder,
-        movement,
-        body,
-        state,
-    ) in &mut q
-    {
-        if *state != LocomotionState::Ladder {
-            continue;
-        }
 
-        transform.translation.x = ladder.body_anchor_xz.x;
-        transform.translation.z = ladder.body_anchor_xz.y;
-        face_ladder(&mut transform, ladder.outward_normal);
+    row.transform.translation.x = ladder.body_anchor_xz.x;
+    row.transform.translation.z = ladder.body_anchor_xz.y;
+    face_ladder(&mut row.transform, ladder.outward_normal);
 
-        // A ladder is an attachment constraint: it accepts only vertical input.
-        let min_y = ladder.bottom_y + body.standing_half_height();
-        let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
-        let vertical_speed = match intents.ladder {
-            LadderIntent::Up => movement.speed,
-            LadderIntent::Down => -movement.speed,
-            LadderIntent::Hold => 0.0,
-        };
-        let target_y =
-            (transform.translation.y + vertical_speed * dt).clamp(min_y, max_y.max(min_y));
-        let v = Vec3::Y * ((target_y - transform.translation.y) / dt.max(f32::EPSILON));
+    // A ladder is an attachment constraint: it accepts only vertical input.
+    let min_y = ladder.bottom_y + row.body.standing_half_height();
+    let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
+    let vertical_speed = match row.intents.ladder {
+        LadderIntent::Up => movement.speed,
+        LadderIntent::Down => -movement.speed,
+        LadderIntent::Hold => 0.0,
+    };
+    let target_y =
+        (row.transform.translation.y + vertical_speed * dt).clamp(min_y, max_y.max(min_y));
+    let v = Vec3::Y * ((target_y - row.transform.translation.y) / dt.max(f32::EPSILON));
 
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
-    }
+    row.velocity.0 = body_move_and_slide(
+        mas,
+        row.entity,
+        row.collider,
+        &mut row.transform,
+        v,
+        time.delta(),
+        &mut row.contact,
+    );
 }
 
 fn face_ladder(transform: &mut Transform, outward_normal: Vec3) {

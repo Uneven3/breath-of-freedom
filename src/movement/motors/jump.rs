@@ -7,13 +7,14 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::Actor;
 use crate::movement::abilities::JumpMovement;
-use crate::movement::facts::{BodyContact, GroundFacts};
+use crate::movement::facts::GroundFacts;
 use crate::movement::intents::Intents;
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
 
 /// Persistent jump bookkeeping, per-actor.
 ///
@@ -96,46 +97,28 @@ pub fn propose(time: Res<Time>, mut q: Query<ProposeQuery, (With<Actor>, With<Ju
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a Intents,
-    &'a mut BodyContact,
-    &'a JumpMovement,
-    &'a LocomotionState,
-);
-
-pub fn tick(
-    mut q: Query<TickQuery, (With<Actor>, With<JumpMovement>)>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(movement) = row.jump_movement else {
+        return;
+    };
     let dt = time.delta_secs();
-    for (entity, collider, mut transform, mut vel, intents, mut contact, movement, state) in &mut q
-    {
-        if *state != LocomotionState::Jump {
-            continue;
-        }
 
-        apply_locomotion_rotation(
-            &mut transform,
-            intents.planar.direction,
-            dt,
-            movement.rotation_speed,
-        );
+    apply_locomotion_rotation(
+        &mut row.transform,
+        row.intents.planar.direction,
+        dt,
+        movement.rotation_speed,
+    );
 
-        let mut v = vel.0;
-        v.y = movement.impulse;
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
-    }
+    let mut v = row.velocity.0;
+    v.y = movement.impulse;
+    row.velocity.0 = body_move_and_slide(
+        mas,
+        row.entity,
+        row.collider,
+        &mut row.transform,
+        v,
+        time.delta(),
+        &mut row.contact,
+    );
 }

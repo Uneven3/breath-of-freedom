@@ -15,6 +15,7 @@ use bevy::prelude::*;
 
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::GroundFacts;
+use crate::movement::lod::SensingLod;
 use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::GroundSensing;
 use crate::movement::state::LocomotionState;
@@ -53,6 +54,7 @@ type ServiceQuery<'a> = (
     &'a GroundSensing,
     &'a mut GroundFacts,
     &'a LocomotionState,
+    Option<&'a SensingLod>,
 );
 
 pub fn ground_service(
@@ -60,7 +62,10 @@ pub fn ground_service(
     spatial: SpatialQuery,
     mut trace: ResMut<CastTrace>,
 ) {
-    for (entity, transform, collider, velocity, sensing, mut facts, state) in &mut q {
+    for (entity, transform, collider, velocity, sensing, mut facts, state, lod) in &mut q {
+        if SensingLod::skips(lod) {
+            continue;
+        }
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
         let hit = spatial.cast_shape(
             collider,

@@ -6,13 +6,14 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::movement::abilities::WallJumpMovement;
-use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
+use crate::movement::facts::LedgeFacts;
 use crate::movement::intents::{ClimbLateralIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, launch_normal};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity, GRAVITY};
+use crate::movement::{Actor, GRAVITY};
 
 #[derive(Component, Default)]
 pub struct EdgeLeapState {
@@ -72,82 +73,50 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a mut BodyContact,
-    &'a mut EdgeLeapState,
-    &'a Intents,
-    &'a mut Stamina,
-    &'a LedgeFacts,
-    &'a GroundFacts,
-    &'a WallJumpMovement,
-    &'a LocomotionState,
-);
-
-pub fn tick(
-    mut q: Query<TickQuery, (With<Actor>, With<WallJumpMovement>)>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(movement) = row.wall_jump_movement else {
+        return;
+    };
+    let Some(state) = row.edge_leap_state.as_mut() else {
+        return;
+    };
     let dt = time.delta_secs();
-    for (
-        entity,
-        collider,
-        mut transform,
-        mut vel,
-        mut contact,
-        mut state,
-        intents,
-        mut stamina,
-        ledge,
-        ground,
-        movement,
-        loco_state,
-    ) in &mut q
-    {
-        if *loco_state != LocomotionState::EdgeLeap {
-            continue;
-        }
 
-        let mut v = vel.0;
+    let mut v = row.velocity.0;
 
-        if state.launch_pending {
-            state.launch_pending = false;
-            let profile = movement.edge_leap;
-            let normal = launch_normal(ledge.climb_normal, &contact, &transform);
-            let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
-            let jump_dir = if intents.climb.lateral == ClimbLateralIntent::Left {
-                -right_dir
-            } else if intents.climb.lateral == ClimbLateralIntent::Right {
-                right_dir
-            } else {
-                normal
-            };
-            v = jump_dir * profile.away_impulse
-                + normal * profile.wall_push_speed
-                + Vec3::Y * profile.vertical_boost;
-            stamina.drain(profile.stamina_cost);
-        }
+    if state.launch_pending {
+        state.launch_pending = false;
+        let profile = movement.edge_leap;
+        let normal = launch_normal(row.ledge.climb_normal, &row.contact, &row.transform);
+        let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
+        let jump_dir = if row.intents.climb.lateral == ClimbLateralIntent::Left {
+            -right_dir
+        } else if row.intents.climb.lateral == ClimbLateralIntent::Right {
+            right_dir
+        } else {
+            normal
+        };
+        v = jump_dir * profile.away_impulse
+            + normal * profile.wall_push_speed
+            + Vec3::Y * profile.vertical_boost;
+        row.stamina.drain(profile.stamina_cost);
+    }
 
-        state.timer -= dt;
-        v.y -= GRAVITY * dt;
+    state.timer -= dt;
+    v.y -= GRAVITY * dt;
 
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
+    row.velocity.0 = body_move_and_slide(
+        mas,
+        row.entity,
+        row.collider,
+        &mut row.transform,
+        v,
+        time.delta(),
+        &mut row.contact,
+    );
 
-        if state.timer <= 0.0 || ground.grounded {
-            state.is_leaping = false;
-        }
+    if state.timer <= 0.0 || row.ground.grounded {
+        state.is_leaping = false;
     }
 }
 

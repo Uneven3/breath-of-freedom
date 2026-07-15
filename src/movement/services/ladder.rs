@@ -6,13 +6,17 @@ use bevy::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::facts::LadderFacts;
+use crate::movement::lod::SensingLod;
 use crate::world::Ladder;
 
 pub fn ladder_service(
-    mut actors: Query<(&Transform, &mut LadderFacts), With<Actor>>,
+    mut actors: Query<(&Transform, &mut LadderFacts, Option<&SensingLod>), With<Actor>>,
     ladders: Query<&Ladder>,
 ) {
-    for (transform, mut facts) in &mut actors {
+    for (transform, mut facts, lod) in &mut actors {
+        if SensingLod::skips(lod) {
+            continue;
+        }
         let pos = transform.translation;
 
         *facts = LadderFacts::default();

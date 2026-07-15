@@ -4,7 +4,7 @@
 
 En el modelo multiplayer host-autoritativo (LAN/Hamachi-style), el host simula todas las entidades y el mundo como única fuente de verdad (SSoT). El cliente envía sus inputs y recibe los estados replicados (transforms, `LocomotionState`, `CombatState`, `TimeOfDay`, `Weather`, etc.).
 
-Sin embargo, dado que `MovementPlugin` y `WorldPlugin` registran sus sistemas en `FixedUpdate` (como `arbitrate`, `walk::tick`, `fall::tick`, `advance_clock`, etc.), en una sesión cliente-servidor el cliente ejecutaría estos sistemas sobre su propio jugador y mundo de forma local de manera predeterminada. Esto causaría:
+Sin embargo, dado que `MovementPlugin` y `WorldPlugin` registran sus sistemas en `FixedUpdate` (como `arbitrate`, `motors::tick_active_motor`, `advance_clock`, etc.), en una sesión cliente-servidor el cliente ejecutaría estos sistemas sobre su propio jugador y mundo de forma local de manera predeterminada. Esto causaría:
 1. **Conflictos de Simulación:** El cliente simularía localmente su posición y física en `FixedUpdate`, mientras que en `Update` el sistema de replicación de red intentaría sobreescribir la posición con los datos enviados por el host. Esto produce fluctuaciones extremas (jitter) y desincronización constante.
 2. **Ciclo de Día/Noche divergente:** El reloj local del cliente avanzaría de forma independiente al del host, desalineando el ciclo día/noche y clima.
 

@@ -160,19 +160,6 @@ pub fn snap_to_ground(
     }
 }
 
-/// The query row shared by every flat-ground motor's `tick`.
-pub type GroundTickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a Intents,
-    &'a mut Stamina,
-    &'a mut BodyContact,
-    &'a GroundFacts,
-    &'a LocomotionState,
-);
-
 /// Redirect a planar (horizontal) velocity along the floor plane, keeping its
 /// magnitude — walking a slope moves at full speed *tangentially* (BotW
 /// style). Sweeping the raw horizontal vector into an incline instead makes

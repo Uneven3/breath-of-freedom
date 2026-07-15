@@ -13,6 +13,7 @@ use super::abilities::{
 use super::body::BodyDimensions;
 use super::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use super::intents::Intents;
+use super::lod::SensingLod;
 use super::motors::{
     auto_vault::VaultState,
     edge_leap::EdgeLeapState,
@@ -21,6 +22,7 @@ use super::motors::{
     mantle::MantleState,
     sneak::{Crouched, SneakLock, StandClearance, StandCollider},
     sprint::SprintLock,
+    stairs::StairsLocal,
     wall_jump::WallJumpState,
 };
 use super::proposal::ProposalBuffer;
@@ -49,6 +51,7 @@ pub struct KinematicActorBundle {
     pub stairs: StairsFacts,
     pub ladder: LadderFacts,
     pub ground_sensing: GroundSensing,
+    pub sensing_lod: SensingLod,
 }
 
 impl KinematicActorBundle {
@@ -70,6 +73,7 @@ impl KinematicActorBundle {
             stairs: StairsFacts::default(),
             ladder: LadderFacts::default(),
             ground_sensing: sensing,
+            sensing_lod: SensingLod::default(),
         }
     }
 }
@@ -84,6 +88,7 @@ pub struct GroundMovementBundle {
     pub crouched: Crouched,
     pub stand_clearance: StandClearance,
     pub stand_collider: StandCollider,
+    pub stairs_local: StairsLocal,
 }
 
 impl GroundMovementBundle {
@@ -95,6 +100,7 @@ impl GroundMovementBundle {
             crouched: Crouched::default(),
             stand_clearance: StandClearance::default(),
             stand_collider: StandCollider(dimensions.standing_collider()),
+            stairs_local: StairsLocal::default(),
         }
     }
 }

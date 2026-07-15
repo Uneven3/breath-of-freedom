@@ -6,13 +6,17 @@ use bevy::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::facts::StairsFacts;
+use crate::movement::lod::SensingLod;
 use crate::world::Stairs;
 
 pub fn stairs_service(
-    mut actors: Query<(&Transform, &mut StairsFacts), With<Actor>>,
+    mut actors: Query<(&Transform, &mut StairsFacts, Option<&SensingLod>), With<Actor>>,
     stairs: Query<&Stairs>,
 ) {
-    for (transform, mut facts) in &mut actors {
+    for (transform, mut facts, lod) in &mut actors {
+        if SensingLod::skips(lod) {
+            continue;
+        }
         let pos = transform.translation;
 
         let mut nearest = None;

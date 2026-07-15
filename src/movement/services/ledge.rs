@@ -12,6 +12,7 @@ use crate::movement::Actor;
 use crate::movement::body::BodyDimensions;
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::LedgeFacts;
+use crate::movement::lod::SensingLod;
 use crate::movement::sensing::LedgeSensing;
 use crate::movement::state::LocomotionState;
 use crate::world::NonClimbable;
@@ -51,6 +52,7 @@ type LedgeServiceQuery<'a> = (
     &'a BodyDimensions,
     &'a LedgeSensing,
     &'a mut LedgeFacts,
+    Option<&'a SensingLod>,
 );
 
 pub fn ledge_service(
@@ -59,7 +61,10 @@ pub fn ledge_service(
     non_climbable: Query<(), With<NonClimbable>>,
     mut trace: ResMut<CastTrace>,
 ) {
-    for (entity, transform, state, body, sensing, mut facts) in &mut q {
+    for (entity, transform, state, body, sensing, mut facts, lod) in &mut q {
+        if SensingLod::skips(lod) {
+            continue;
+        }
         sense_ledges(
             &spatial,
             LedgeActor {

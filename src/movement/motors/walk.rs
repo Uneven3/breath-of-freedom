@@ -1,8 +1,8 @@
 //! Walk motor — flat-ground locomotion.
 //!
-//! Each motor is two systems: `propose` (runs every frame, in
-//! `GatherProposals`) and `tick` (runs only when Walk is the active state, in
-//! `TickActiveMotor`). The tick body is the shared
+//! Each motor is a `propose` system (runs every frame, in `GatherProposals`)
+//! plus a `tick_body` (runs only when Walk is the active state, called by the
+//! `motors::tick_active_motor` dispatcher). The tick body is the shared
 //! `motor_common::ground_locomotion_step`; its tuning comes from the actor's
 //! `GroundMovement` component. See `docs/architecture/movement.md`.
 
@@ -12,9 +12,8 @@ use bevy::prelude::*;
 use crate::movement::Actor;
 use crate::movement::abilities::GroundMovement;
 use crate::movement::facts::GroundFacts;
-use crate::movement::motor_common::{
-    GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
-};
+use crate::movement::motor_common::{GroundLocomotionStep, ground_locomotion_step};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 
@@ -36,41 +35,27 @@ pub fn propose(mut q: Query<WalkProposalQuery, WalkProposalFilter>) {
     }
 }
 
-pub fn tick(
-    mut q: Query<(&GroundMovement, GroundTickQuery), With<Actor>>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
-    for (ground_movement, row) in &mut q {
-        let (
-            entity,
-            collider,
-            mut transform,
-            mut velocity,
-            intents,
-            mut stamina,
-            mut contact,
-            ground,
-            state,
-        ) = row;
-        ground_locomotion_step(
-            GroundLocomotionStep {
-                entity,
-                collider,
-                transform: &mut transform,
-                velocity: &mut velocity,
-                intents,
-                stamina: &mut stamina,
-                contact: &mut contact,
-                ground,
-                state: *state,
-            },
-            LocomotionState::Walk,
-            &mas,
-            &time,
-            &ground_movement.walk,
-        );
-    }
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(ground_movement) = row.ground_movement else {
+        return;
+    };
+    ground_locomotion_step(
+        GroundLocomotionStep {
+            entity: row.entity,
+            collider: row.collider,
+            transform: &mut row.transform,
+            velocity: &mut row.velocity,
+            intents: row.intents,
+            stamina: &mut row.stamina,
+            contact: &mut row.contact,
+            ground: row.ground,
+            state: *row.state,
+        },
+        LocomotionState::Walk,
+        mas,
+        time,
+        &ground_movement.walk,
+    );
 }
 
 #[cfg(test)]

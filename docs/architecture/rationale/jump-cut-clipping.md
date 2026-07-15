@@ -16,7 +16,7 @@ Sin embargo, dado que `Fall` es el estado aéreo por defecto (al que se entra in
 Se introduce el componente `JumpPhase` (`src/movement/motors/jump.rs`, L31-L36) en la entidad del jugador, el cual almacena un flag `is_player_jump: bool`.
 
 1. **Activación:** Se establece en `true` en el motor de salto (`jump::propose`) en el frame exacto en que se inicia un salto voluntario del jugador.
-2. **Uso:** El motor de caída (`fall::tick`) ahora valida que `jump_phase.is_player_jump` sea `true` antes de aplicar el recorte de velocidad:
+2. **Uso:** El motor de caída (`fall::tick_body`) ahora valida que `jump_phase.is_player_jump` sea `true` antes de aplicar el recorte de velocidad:
    ```rust
    if jump_phase.is_player_jump && !intents.wants_jump && v.y > JUMP_CUT_VELOCITY {
        v.y = JUMP_CUT_VELOCITY;

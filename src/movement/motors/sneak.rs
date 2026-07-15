@@ -17,9 +17,9 @@ use crate::movement::abilities::GroundMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::GroundFacts;
 use crate::movement::intents::{GaitIntent, Intents};
-use crate::movement::motor_common::{
-    GroundLocomotionStep, GroundTickQuery, ground_locomotion_step,
-};
+use crate::movement::lod::SensingLod;
+use crate::movement::motor_common::{GroundLocomotionStep, ground_locomotion_step};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -56,13 +56,17 @@ type StandClearanceQuery<'a> = (
     &'a StandCollider,
     &'a BodyDimensions,
     &'a mut StandClearance,
+    Option<&'a SensingLod>,
 );
 
 pub fn update_stand_clearance(
     spatial: SpatialQuery,
     mut q: Query<StandClearanceQuery, With<Actor>>,
 ) {
-    for (entity, transform, crouched, stand_collider, body, mut clearance) in &mut q {
+    for (entity, transform, crouched, stand_collider, body, mut clearance, lod) in &mut q {
+        if SensingLod::skips(lod) {
+            continue;
+        }
         if !crouched.0 {
             clearance.0 = true;
             continue;
@@ -121,49 +125,35 @@ pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
     }
 }
 
-pub fn tick(
-    mut q: Query<(&GroundMovement, GroundTickQuery), With<Actor>>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
-    for (ground_movement, row) in &mut q {
-        let (
-            entity,
-            collider,
-            mut transform,
-            mut velocity,
-            intents,
-            mut stamina,
-            mut contact,
-            ground,
-            state,
-        ) = row;
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(ground_movement) = row.ground_movement else {
+        return;
+    };
 
-        let mut sneak_profile = ground_movement.sneak;
-        let is_moving = intents.planar.direction.length_squared() > 0.01;
-        if is_moving {
-            // Drain stamina at half the rate of sprint (sprint stamina_per_sec is negative)
-            sneak_profile.stamina_per_sec = -ground_movement.sprint.stamina_per_sec.abs() * 0.5;
-        }
-
-        ground_locomotion_step(
-            GroundLocomotionStep {
-                entity,
-                collider,
-                transform: &mut transform,
-                velocity: &mut velocity,
-                intents,
-                stamina: &mut stamina,
-                contact: &mut contact,
-                ground,
-                state: *state,
-            },
-            LocomotionState::Sneak,
-            &mas,
-            &time,
-            &sneak_profile,
-        );
+    let mut sneak_profile = ground_movement.sneak;
+    let is_moving = row.intents.planar.direction.length_squared() > 0.01;
+    if is_moving {
+        // Drain stamina at half the rate of sprint (sprint stamina_per_sec is negative)
+        sneak_profile.stamina_per_sec = -ground_movement.sprint.stamina_per_sec.abs() * 0.5;
     }
+
+    ground_locomotion_step(
+        GroundLocomotionStep {
+            entity: row.entity,
+            collider: row.collider,
+            transform: &mut row.transform,
+            velocity: &mut row.velocity,
+            intents: row.intents,
+            stamina: &mut row.stamina,
+            contact: &mut row.contact,
+            ground: row.ground,
+            state: *row.state,
+        },
+        LocomotionState::Sneak,
+        mas,
+        time,
+        &sneak_profile,
+    );
 }
 
 /// Crouch is a modifier orthogonal to the active state: an actor can be crouched

@@ -6,15 +6,15 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::Actor;
 use crate::movement::abilities::ClimbMovement;
-use crate::movement::body::BodyDimensions;
-use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
+use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
 
 const MIN_DIR_SQ: f32 = 0.001;
 
@@ -55,120 +55,85 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<ClimbMovement>)>) {
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a Intents,
-    &'a mut Stamina,
-    &'a mut BodyContact,
-    &'a LedgeFacts,
-    &'a GroundFacts,
-    &'a ClimbMovement,
-    &'a BodyDimensions,
-    &'a LocomotionState,
-);
-
-pub fn tick(
-    mut q: Query<TickQuery, (With<Actor>, With<ClimbMovement>)>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(movement) = row.climb_movement else {
+        return;
+    };
+    let ledge = row.ledge;
+    let Some(climb_normal) = ledge.climb_normal else {
+        return;
+    };
     let dt = time.delta_secs();
-    for (
-        entity,
-        collider,
-        mut transform,
-        mut vel,
-        intents,
-        mut stamina,
-        mut contact,
-        ledge,
-        ground,
-        movement,
-        body,
-        state,
-    ) in &mut q
-    {
-        if *state != LocomotionState::Climb {
-            continue;
-        }
 
-        let Some(climb_normal) = ledge.climb_normal else {
-            continue;
+    let near_apex =
+        row.ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point.is_some();
+    let touching_wall = ledge.can_continue_climb;
+
+    // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
+    if !near_apex {
+        let face_dir = if touching_wall {
+            Some(-climb_normal)
+        } else {
+            ledge.wall_point.map(|wp| wp - row.transform.translation)
         };
-
-        let near_apex =
-            ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point.is_some();
-        let touching_wall = ledge.can_continue_climb;
-
-        // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
-        if !near_apex {
-            let face_dir = if touching_wall {
-                Some(-climb_normal)
-            } else {
-                ledge.wall_point.map(|wp| wp - transform.translation)
-            };
-            if let Some(mut face_dir) = face_dir {
-                face_dir.y = 0.0;
-                if face_dir.length_squared() > MIN_DIR_SQ {
-                    let fd = face_dir.normalize();
-                    transform.rotation = Quat::from_rotation_y((-fd.x).atan2(-fd.z));
-                }
+        if let Some(mut face_dir) = face_dir {
+            face_dir.y = 0.0;
+            if face_dir.length_squared() > MIN_DIR_SQ {
+                let fd = face_dir.normalize();
+                row.transform.rotation = Quat::from_rotation_y((-fd.x).atan2(-fd.z));
             }
         }
-
-        let mut v = vel.0;
-        v.y = match intents.climb.vertical {
-            ClimbVerticalIntent::Up => movement.speed,
-            ClimbVerticalIntent::Down => -movement.speed,
-            ClimbVerticalIntent::Neutral => 0.0,
-        };
-
-        // Lateral movement, gated by side-wall presence.
-        let lateral_input = match intents.climb.lateral {
-            ClimbLateralIntent::Left if ledge.has_wall_left => -1.0,
-            ClimbLateralIntent::Right if ledge.has_wall_right => 1.0,
-            _ => 0.0,
-        };
-        let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
-        let lateral_vel = right_dir * lateral_input * movement.speed;
-
-        // Wall-stick: pull toward the actual contact point while approaching.
-        // Only when the sensor still sees the wall — with no `wall_point` there
-        // is nothing to stick to (the old `Vec3::ZERO` sentinel silently pulled
-        // toward the world origin here).
-        let mut wall_stick = Vec3::ZERO;
-        if !near_apex
-            && !touching_wall
-            && let Some(wall_point) = ledge.wall_point
-        {
-            let mut to_wall = wall_point - transform.translation;
-            to_wall.y = 0.0;
-            if to_wall.length_squared() > MIN_DIR_SQ {
-                wall_stick = to_wall.normalize() * movement.wall_approach_speed;
-            }
-        }
-        v.x = lateral_vel.x + wall_stick.x;
-        v.z = lateral_vel.z + wall_stick.z;
-
-        // Soft ceiling: cap climb just below the lip so the player can't climb
-        // over — forces a Mantle.
-        clip_below_ledge_lip(&mut transform, &mut v, ledge.lip_height, *body, dt);
-
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
-        );
-
-        stamina.drain(movement.stamina_cost_per_sec * dt);
     }
+
+    let mut v = row.velocity.0;
+    v.y = match row.intents.climb.vertical {
+        ClimbVerticalIntent::Up => movement.speed,
+        ClimbVerticalIntent::Down => -movement.speed,
+        ClimbVerticalIntent::Neutral => 0.0,
+    };
+
+    // Lateral movement, gated by side-wall presence.
+    let lateral_input = match row.intents.climb.lateral {
+        ClimbLateralIntent::Left if ledge.has_wall_left => -1.0,
+        ClimbLateralIntent::Right if ledge.has_wall_right => 1.0,
+        _ => 0.0,
+    };
+    let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
+    let lateral_vel = right_dir * lateral_input * movement.speed;
+
+    // Wall-stick: pull toward the actual contact point while approaching.
+    // Only when the sensor still sees the wall — with no `wall_point` there
+    // is nothing to stick to (the old `Vec3::ZERO` sentinel silently pulled
+    // toward the world origin here).
+    let mut wall_stick = Vec3::ZERO;
+    if !near_apex
+        && !touching_wall
+        && let Some(wall_point) = ledge.wall_point
+    {
+        let mut to_wall = wall_point - row.transform.translation;
+        to_wall.y = 0.0;
+        if to_wall.length_squared() > MIN_DIR_SQ {
+            wall_stick = to_wall.normalize() * movement.wall_approach_speed;
+        }
+    }
+    v.x = lateral_vel.x + wall_stick.x;
+    v.z = lateral_vel.z + wall_stick.z;
+
+    // Soft ceiling: cap climb just below the lip so the player can't climb
+    // over — forces a Mantle.
+    clip_below_ledge_lip(&mut row.transform, &mut v, ledge.lip_height, *row.body, dt);
+
+    row.velocity.0 = body_move_and_slide(
+        mas,
+        row.entity,
+        row.collider,
+        &mut row.transform,
+        v,
+        time.delta(),
+        &mut row.contact,
+    );
+
+    row.stamina.drain(movement.stamina_cost_per_sec * dt);
 }
 
 #[cfg(test)]

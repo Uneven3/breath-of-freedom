@@ -8,13 +8,13 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::movement::abilities::GlideMovement;
-use crate::movement::facts::{BodyContact, GroundFacts, LedgeFacts};
+use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{GlideIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
+use crate::movement::motors::MotorTickItem;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
-use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity, GRAVITY};
+use crate::movement::{Actor, GRAVITY};
 
 #[derive(Component, Default)]
 pub struct GlideLocal {
@@ -80,76 +80,52 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
     }
 }
 
-type TickQuery<'a> = (
-    Entity,
-    &'a Collider,
-    &'a mut Transform,
-    &'a mut BodyVelocity,
-    &'a Intents,
-    &'a mut Stamina,
-    &'a mut BodyContact,
-    &'a GlideMovement,
-    &'a LocomotionState,
-);
-
-pub fn tick(
-    mut q: Query<TickQuery, (With<Actor>, With<GlideMovement>)>,
-    mas: MoveAndSlide,
-    time: Res<Time>,
-) {
+pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
+    let Some(movement) = row.glide_movement else {
+        return;
+    };
     let dt = time.delta_secs();
-    for (
-        entity,
-        collider,
-        mut transform,
-        mut vel,
-        intents,
-        mut stamina,
-        mut contact,
-        movement,
-        state,
-    ) in &mut q
-    {
-        if *state != LocomotionState::Glide {
-            continue;
-        }
 
-        apply_locomotion_rotation(
-            &mut transform,
-            intents.planar.direction,
-            dt,
-            movement.rotation_speed,
+    apply_locomotion_rotation(
+        &mut row.transform,
+        row.intents.planar.direction,
+        dt,
+        movement.rotation_speed,
+    );
+
+    let mut v = row.velocity.0;
+    v.y -= GRAVITY * movement.gravity_multiplier * dt;
+    v.y = v.y.max(-movement.fall_speed);
+
+    let move_dir = Vec3::new(
+        row.intents.planar.direction.x,
+        0.0,
+        row.intents.planar.direction.y,
+    )
+    .normalize_or_zero();
+    if move_dir != Vec3::ZERO {
+        v.x = move_toward(
+            v.x,
+            move_dir.x * movement.max_speed,
+            movement.acceleration * dt,
         );
-
-        let mut v = vel.0;
-        v.y -= GRAVITY * movement.gravity_multiplier * dt;
-        v.y = v.y.max(-movement.fall_speed);
-
-        let move_dir = Vec3::new(intents.planar.direction.x, 0.0, intents.planar.direction.y)
-            .normalize_or_zero();
-        if move_dir != Vec3::ZERO {
-            v.x = move_toward(
-                v.x,
-                move_dir.x * movement.max_speed,
-                movement.acceleration * dt,
-            );
-            v.z = move_toward(
-                v.z,
-                move_dir.z * movement.max_speed,
-                movement.acceleration * dt,
-            );
-        }
-
-        stamina.recover(movement.stamina_recover_per_sec * movement.stamina_recovery_factor * dt);
-
-        vel.0 = body_move_and_slide(
-            &mas,
-            entity,
-            collider,
-            &mut transform,
-            v,
-            time.delta(),
-            &mut contact,
+        v.z = move_toward(
+            v.z,
+            move_dir.z * movement.max_speed,
+            movement.acceleration * dt,
         );
     }
+
+    row.stamina
+        .recover(movement.stamina_recover_per_sec * movement.stamina_recovery_factor * dt);
+
+    row.velocity.0 = body_move_and_slide(
+        mas,
+        row.entity,
+        row.collider,
+        &mut row.transform,
+        v,
+        time.delta(),
+        &mut row.contact,
+    );
 }

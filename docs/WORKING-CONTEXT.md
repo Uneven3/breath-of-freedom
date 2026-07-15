@@ -201,11 +201,13 @@ separate architecture ticket.
   state directly. Bypassing the pipeline for a non-player actor is a bug, not a
   shortcut.
 - Facts/sensors remain separate from motor execution.
-- Only the active motor writes an actor's movement in a tick. Each motor's
-  `tick` self-gates on `LocomotionState`; the flat-ground motors funnel that
-  guard through `motor_common::ground_locomotion_step`. The
-  `arbitration_matrix` tests (`src/movement/proposal.rs`) pin that every state
-  has exactly one owning motor and that no two co-proposing motors tie.
+- Only the active motor writes an actor's movement in a tick. The
+  `motors::tick_active_motor` dispatcher enforces this with an exhaustive
+  `match` on `LocomotionState` (one `tick_body` arm per state, checked by the
+  compiler); the flat-ground motors share
+  `motor_common::ground_locomotion_step`. The `arbitration_matrix` tests
+  (`src/movement/proposal.rs`) pin that every state has exactly one owning
+  motor and that no two co-proposing motors tie.
 - Existing schedule ordering and the transition arbiter remain intact.
 - Do not revert unrelated working-tree changes.
 

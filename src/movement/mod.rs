@@ -1,12 +1,11 @@
 //! Movement plugin — the Broker pipeline.
 //!
 //! Per-frame flow, expressed as ordered system sets in `FixedUpdate` (pinned to
-//! 60 Hz): read intents → sense world → gather proposals → arbitrate → tick
-//! active motor. Every motor's `tick` system runs each frame, but each one
-//! self-gates per entity on `LocomotionState` (`if *state != X { continue }`),
-//! so exactly one motor moves each body — the per-entity contract that lets
-//! multiple `Actor`s run independently. The guard is a convention every motor
-//! must uphold, checked by review, not by the schedule. See
+//! 60 Hz): read intents → assign sensing LOD → sense world → gather proposals →
+//! arbitrate → tick active motor. The tick phase is a single dispatcher system
+//! (`motors::tick_active_motor`) whose exhaustive `match` on `LocomotionState`
+//! guarantees — at compile time — that exactly one motor moves each body, the
+//! per-entity contract that lets multiple `Actor`s run independently. See
 //! `docs/architecture/movement.md` and `rationale/multi-actor-dispatch.md`.
 
 use bevy::prelude::*;
@@ -18,6 +17,7 @@ pub mod bundles;
 pub mod diag;
 pub mod facts;
 pub mod intents;
+pub mod lod;
 pub mod motor_common;
 pub mod motors;
 pub mod probe;
@@ -76,6 +76,14 @@ impl Plugin for MovementPlugin {
         app.add_systems(
             FixedUpdate,
             diag::clear_cast_trace
+                .after(MovementSet::ReadIntents)
+                .before(MovementSet::SenseWorld),
+        );
+        // Sensing LOD: decide, per actor, whether SenseWorld casts this tick.
+        app.init_resource::<lod::SensingLodConfig>();
+        app.add_systems(
+            FixedUpdate,
+            lod::assign_sensing_lod
                 .after(MovementSet::ReadIntents)
                 .before(MovementSet::SenseWorld),
         );
@@ -140,28 +148,12 @@ impl Plugin for MovementPlugin {
                 .before(MovementSet::TickActiveMotor),
         );
 
-        // Tick systems: all 13 register unconditionally now — each self-gates
-        // on its own `LocomotionState` guard (see each motor's `tick`), the
-        // per-entity replacement for the old global `run_if` gate. This is
-        // what lets multiple `Actor` entities run independently.
+        // Tick phase: one dispatcher, one query pass, an exhaustive `match` on
+        // `LocomotionState` — the compiler guarantees every state has exactly
+        // one motor arm, per entity. See `motors::tick_active_motor`.
         app.add_systems(
             FixedUpdate,
-            (
-                motors::walk::tick,
-                motors::fall::tick,
-                motors::sprint::tick,
-                motors::sneak::tick,
-                motors::jump::tick,
-                motors::glide::tick,
-                motors::climb::tick,
-                motors::mantle::tick,
-                motors::auto_vault::tick,
-                motors::wall_jump::tick,
-                motors::edge_leap::tick,
-                motors::stairs::tick,
-                motors::ladder::tick,
-            )
-                .in_set(MovementSet::TickActiveMotor),
+            motors::tick_active_motor.in_set(MovementSet::TickActiveMotor),
         );
 
         // Declarative crouch-capsule swap (orthogonal to the active state, so it
@@ -643,8 +635,8 @@ mod actor_isolation_tests {
         );
     }
 
-    // `tick` correctness under real physics (does a `tick`'s in-body guard
-    // actually stop it from running for the wrong actor?) is NOT covered
+    // `tick_body` correctness under real physics (does the dispatcher-driven
+    // motor actually move the right actor and only that actor?) is NOT covered
     // here. A headless `App` with Avian's real `PhysicsPlugins` was
     // attempted and abandoned: `MoveAndSlide` pulls in several of Avian's
     // internal sub-plugins (collider-tree diagnostics, spatial-query

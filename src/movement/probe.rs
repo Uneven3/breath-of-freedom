@@ -3,11 +3,12 @@
 //! This is intentionally a Movement brain, not an enemy implementation: it
 //! writes only the probe actor's `Intents` and observes the normal pipeline.
 //!
-//! **F6** spawns/despawns the probe on demand near the player's position.
+//! **F6** spawns/despawns the probe on demand at its authored world-space
+//! start (facing the graybox test wall), independent of where the player is —
+//! the scenario must be reproducible run after run.
 
 use bevy::prelude::*;
 
-use super::Player;
 use super::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
     LedgeTraversal, WallJumpMovement,
@@ -27,11 +28,15 @@ const STAGE_TIMEOUT_SECS: f32 = 8.0;
 const COMPLETE_SETTLE_SECS: f32 = 0.2;
 const PROBE_STANDING_CENTER_Y: f32 = 1.125;
 
-/// F6 toggle: spawns or despawns the traversal probe near the player.
+/// Authored scenario start: 7 m in front of the graybox test wall (the
+/// 10×4×1 box at (0, 2, -10) in `world::setup_world`), facing it down -Z —
+/// the direction `ProbeStage::ApproachWall` walks.
+const PROBE_SPAWN_POSITION: Vec3 = Vec3::new(0.0, PROBE_STANDING_CENTER_Y, -3.0);
+
+/// F6 toggle: spawns or despawns the traversal probe at its authored start.
 pub fn toggle_spawn(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
-    player: Option<Single<&Transform, With<Player>>>,
     existing: Query<Entity, With<TraversalProbe>>,
 ) {
     if !keys.just_pressed(KeyCode::F6) {
@@ -45,15 +50,7 @@ pub fn toggle_spawn(
         return;
     }
 
-    // Spawn near the player: 3 m behind their facing direction.
-    let spawn_pos = if let Some(player_tf) = player {
-        let behind = player_tf.rotation * Vec3::Z * 3.0;
-        let mut pos = player_tf.translation + behind;
-        pos.y = PROBE_STANDING_CENTER_Y;
-        pos
-    } else {
-        Vec3::new(0.0, PROBE_STANDING_CENTER_Y, -3.0)
-    };
+    let spawn_pos = PROBE_SPAWN_POSITION;
 
     let dimensions = BodyDimensions {
         radius: 0.45,

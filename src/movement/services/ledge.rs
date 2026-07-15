@@ -15,7 +15,7 @@ use crate::movement::facts::LedgeFacts;
 use crate::movement::lod::SensingLod;
 use crate::movement::sensing::LedgeSensing;
 use crate::movement::state::LocomotionState;
-use crate::world::NonClimbable;
+use crate::world::{GameLayer, NonClimbable};
 
 const MIN_DIR_SQ: f32 = 0.001;
 /// Debug labels for the profiling casts, index-aligned with
@@ -102,7 +102,11 @@ fn sense_ledges(
         Vec3::NEG_Z
     };
 
-    let filter = SpatialQueryFilter::from_excluded_entities([actor.entity]);
+    // Mask to `Default` (world geometry): actors live on `GameLayer::Actor`,
+    // so no capsule — player, probe, future enemies — reads as climbable
+    // wall, mantle lip, or vault obstacle. Bodies still collide physically.
+    let filter =
+        SpatialQueryFilter::from_mask(GameLayer::Default).with_excluded_entities([actor.entity]);
     let sphere = Collider::sphere(sensing.sphere_radius);
     let facing_dir = Dir3::new(facing).unwrap_or(Dir3::NEG_Z);
     let down = Dir3::NEG_Y;

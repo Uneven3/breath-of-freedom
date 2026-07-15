@@ -30,6 +30,7 @@ use super::sensing::GroundSensing;
 use super::stamina::Stamina;
 use super::state::LocomotionState;
 use super::{Actor, BodyVelocity};
+use crate::world::GameLayer;
 
 /// Data every kinematic Movement actor needs, independent of who controls it
 /// or which locomotion capabilities it receives.
@@ -39,6 +40,7 @@ pub struct KinematicActorBundle {
     pub transform: Transform,
     pub rigid_body: RigidBody,
     pub collider: Collider,
+    pub collision_layers: CollisionLayers,
     pub dimensions: BodyDimensions,
     pub velocity: BodyVelocity,
     pub intents: Intents,
@@ -61,6 +63,10 @@ impl KinematicActorBundle {
             transform,
             rigid_body: RigidBody::Kinematic,
             collider: dimensions.standing_collider(),
+            // Member of `Actor`, collides with everything: layers don't change
+            // physical contacts, they let spatial queries (ledge sensing) mask
+            // actors out so no capsule reads as climbable wall.
+            collision_layers: CollisionLayers::new(GameLayer::Actor, LayerMask::ALL),
             dimensions,
             velocity: BodyVelocity::default(),
             intents: Intents::default(),
@@ -197,6 +203,18 @@ mod tests {
 
         assert!(actor.contains::<Actor>());
         assert!(actor.contains::<Collider>());
+        let layers = actor
+            .get::<CollisionLayers>()
+            .expect("actors must declare their physics layer");
+        assert!(
+            layers.memberships.has_all(GameLayer::Actor),
+            "actors must be members of GameLayer::Actor so ledge sensing can mask them out"
+        );
+        assert_eq!(
+            layers.filters,
+            LayerMask::ALL,
+            "layers must not change physical contacts"
+        );
         assert_eq!(actor.get::<BodyDimensions>(), Some(&dimensions));
         assert!(actor.contains::<BodyVelocity>());
         assert!(actor.contains::<Intents>());

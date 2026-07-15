@@ -63,7 +63,10 @@ seleccionan por `Query` y `LocomotionState` permanece exclusivo.
 
 El curso gris puede incluir un `TraversalProbe`: un segundo `Actor` sin
 `Player` ni `InputControlledBy` cuyo brain de integracion escribe solo sus
-propios `Intents` dentro de `ReadIntents`. No es un enemigo ni una excepcion
+propios `Intents` dentro de `ReadIntents`. F6 lo spawnea/despawnea en su
+posición authored de mundo (frente al muro de prueba del graybox), nunca
+relativa al jugador — el escenario debe ser reproducible corrida tras
+corrida. No es un enemigo ni una excepcion
 de Debug; demuestra que un controlador AI puede reutilizar capacidades,
 sensores, propuestas y motores sin que Movement conozca su implementacion.
 El primer escenario es una escalada continua: avanza hasta que los sensores
@@ -86,6 +89,15 @@ Los servicios también seleccionan perfiles explícitos: GroundService requiere
 `LedgeSensing`, que se agrega solo a actores que deben publicar hechos de
 pared/borde. Los perfiles no reemplazan `BodyDimensions`: describen cómo se
 sondea el mundo, mientras que las dimensiones describen el cuerpo.
+
+**Los actores no son geometría escalable.** Todo actor cinemático declara
+membresía en `world::GameLayer::Actor` (vía `KinematicActorBundle`), y los
+casts de LedgeService enmascaran a `GameLayer::Default` (geometría de mundo):
+ninguna cápsula — jugador, probe, enemigos futuros — se lee como pared de
+climb, borde de mantle ni obstáculo de vault. Las capas no cambian los
+contactos físicos (los cuerpos siguen chocando y se puede estar parado sobre
+otro actor: GroundService sí ve actores a propósito); solo eligen qué ve cada
+query espacial.
 
 ## Estados (`LocomotionState`)
 

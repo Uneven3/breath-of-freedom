@@ -12,6 +12,13 @@
 Terreno/colliders estáticos no son datos de simulación por actor — son
 geometría del mundo, cubierta por Avian.
 
+`world::GameLayer` (ya implementado en `src/world.rs`) es el vocabulario de
+capas de física de todo el juego: la geometría estática queda en `Default`
+(capa 0, sin componente) y los actores cinemáticos declaran `Actor`. Las
+capas no alteran contactos físicos; permiten que las queries espaciales
+(p. ej. el ledge sensing de Movement) elijan qué ven vía
+`SpatialQueryFilter::from_mask`.
+
 ## Sistemas (comportamiento) — propuesta
 
 - `advance_clock` — avanza `TimeOfDay` en `FixedUpdate` (determinístico,

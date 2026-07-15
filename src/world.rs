@@ -38,6 +38,21 @@ pub struct Ladder {
 #[derive(Component)]
 pub struct NonClimbable;
 
+/// Game-wide physics layers. Static world geometry spawns without a
+/// `CollisionLayers` component, which leaves it on `Default` (layer 0);
+/// movement actors declare membership in `Actor` (see
+/// `movement::bundles::KinematicActorBundle`). Physical contacts are
+/// unaffected — bodies still collide across layers. What layers buy us is
+/// *selective sensing*: a spatial query opts into what it can see via
+/// `SpatialQueryFilter::from_mask`, e.g. ledge sensing masks to `Default` so
+/// no actor reads another actor's capsule as a climbable wall.
+#[derive(PhysicsLayer, Default, Clone, Copy, Debug)]
+pub enum GameLayer {
+    #[default]
+    Default,
+    Actor,
+}
+
 impl Ladder {
     pub fn contains(&self, p: Vec3) -> bool {
         let d = (p - self.trigger_center).abs();

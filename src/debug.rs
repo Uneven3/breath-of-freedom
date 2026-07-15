@@ -5,6 +5,10 @@
 //! exception is flipping its own capture switches (`CastTrace.enabled`,
 //! avian's `PhysicsGizmos`).
 //!
+//! The HUD header shows fps, smoothed frame time (ms), and the window's
+//! requested `PresentMode` (`AutoVsync` resolves to FIFO/Mailbox inside
+//! wgpu depending on platform support).
+//!
 //! Toggles (Update-schedule key edges):
 //! - **F1** — avian collider wireframes (`PhysicsDebugPlugin`).
 //! - **F2** — sensor gizmos: every shapecast/raycast the services actually
@@ -20,8 +24,10 @@
 
 use avian3d::prelude::*;
 use bevy::color::palettes::css;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use std::fmt::Write;
 
 use crate::movement::diag::{CastKind, CastTrace};
@@ -63,6 +69,8 @@ impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugConfig>();
         app.init_resource::<SimTick>();
+        // FPS / frame-time source for the HUD header line.
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default());
 
         app.add_systems(Startup, (spawn_debug_text, apply_initial_toggles));
 
@@ -630,6 +638,8 @@ fn update_debug_text(
     >,
     tick: Res<SimTick>,
     config: Res<DebugConfig>,
+    diagnostics: Res<DiagnosticsStore>,
+    window: Single<&Window, With<PrimaryWindow>>,
     mut text: Single<&mut Text, With<DebugText>>,
     probe_alive: Query<(), With<TraversalProbe>>,
 ) {
@@ -637,14 +647,24 @@ fn update_debug_text(
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    let frame_ms = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
     text.0 = format!(
-        "state: {:?}   [t{:06}]\n\
+        "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}\n\
+         state: {:?}   [t{:06}]\n\
          stamina: {:.0}/{:.0}\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
          slide_wall: {}  stairs: {}  ladder: {}\n\
          ledge: climb={} cont={} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} mantle_edge={} vault={}\n\
          [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}  [F6] probe:{}",
+        window.present_mode,
         state,
         tick.0,
         stamina.current(),

@@ -71,7 +71,10 @@ sin dependencia nueva — Constitución §17 no aplica). Convención:
 - `bevy_inspector_egui` o herramienta de inspección visual equivalente —
   **no agregar sin aprobación explícita** (Constitución §17); el overlay de
   arriba cubre el caso de uso mínimo sin dependencias nuevas.
-- Métricas de rendimiento (FPS, conteo de entidades): `bevy::diagnostic` ya
-  viene con Bevy sin costo de dependencia nueva — falta decidir si se
-  agrega al mismo overlay o uno separado.
+- Métricas de rendimiento: **implementado en el mismo overlay** — la línea
+  de cabecera del HUD muestra fps y frame time suavizados
+  (`FrameTimeDiagnosticsPlugin`) y el `PresentMode` de la ventana (la
+  técnica de presentación: `AutoVsync` se resuelve a FIFO/Mailbox dentro de
+  wgpu según soporte de plataforma). Conteo de entidades: pendiente si hace
+  falta.
 - Grabación/replay de una sesión para reproducir un bug — no evaluado.

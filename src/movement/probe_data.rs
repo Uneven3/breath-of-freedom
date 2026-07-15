@@ -1,4 +1,4 @@
-//! Data for the focused graybox climbing probe.
+//! Data for the focused graybox traversal probe.
 
 use bevy::prelude::*;
 
@@ -6,13 +6,21 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct TraversalProbe;
 
-/// One phase of the continuous climb scenario.
+/// One phase of the full traversal scenario: climb the wall, mantle its top,
+/// turn around, and glide back down. See `docs/tickets/probe-mantle-glide.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeStage {
     ApproachWall,
     AttachClimb,
     AscendClimb,
+    /// Hold below the lip without an accidental mantle — the original
+    /// checkpoint of `traversal-probe`, preserved as a settle gate.
     HoldAtLip,
+    MantleOntoTop,
+    SettleOnTop,
+    TurnAround,
+    JumpOff,
+    GlideDown,
 }
 
 /// Per-actor script state. The brain owns phase transitions; motors remain
@@ -23,6 +31,9 @@ pub struct ProbeScript {
     pub elapsed: f32,
     pub timeout_reported: bool,
     pub completed: bool,
+    /// `GlideDown` only counts as completed if the pipeline actually reached
+    /// `Glide` on the way down — landing without gliding is a failure.
+    pub glide_observed: bool,
 }
 
 impl Default for ProbeScript {
@@ -32,10 +43,11 @@ impl Default for ProbeScript {
             elapsed: 0.0,
             timeout_reported: false,
             completed: false,
+            glide_observed: false,
         }
     }
 }
 
 /// Bitset of phases that reached their real sensor/state condition.
 #[derive(Component, Default, Debug)]
-pub struct ProbeCoverage(pub u8);
+pub struct ProbeCoverage(pub u16);

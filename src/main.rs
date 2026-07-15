@@ -7,6 +7,7 @@
 
 mod camera;
 mod debug;
+mod enemies;
 mod input;
 mod movement;
 mod player;
@@ -30,6 +31,7 @@ fn main() {
             world::WorldPlugin,
             input::InputPlugin,
             movement::MovementPlugin,
+            enemies::EnemiesPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,
             visuals::VisualsPlugin,

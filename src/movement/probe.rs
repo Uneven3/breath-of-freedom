@@ -1,7 +1,10 @@
-//! Autonomous integration consumer for the focused graybox climb scenario.
+//! Autonomous integration consumer for the graybox traversal scenario:
+//! climb the test wall, mantle its top, turn around, jump off, glide down.
 //!
 //! This is intentionally a Movement brain, not an enemy implementation: it
-//! writes only the probe actor's `Intents` and observes the normal pipeline.
+//! writes only the probe actor's `Intents` and observes the normal pipeline —
+//! every stage advances only when real sensors/arbitration reach its observed
+//! condition (see `docs/tickets/probe-mantle-glide.md`).
 //!
 //! **F6** spawns/despawns the probe on demand at its authored world-space
 //! start (facing the graybox test wall), independent of where the player is —
@@ -19,7 +22,10 @@ use super::bundles::{
     LedgeTraversalBundle, WallJumpMovementBundle,
 };
 use super::facts::LedgeFacts;
-use super::intents::{ClimbIntent, ClimbVerticalIntent, Intents, PlanarMoveIntent};
+use super::intents::{
+    ClimbIntent, ClimbVerticalIntent, GlideIntent, Intents, JumpIntent, PlanarMoveIntent,
+    TraversalActionIntent,
+};
 use super::probe_data::{ProbeCoverage, ProbeScript, ProbeStage, TraversalProbe};
 use super::sensing::{GroundSensing, LedgeSensing};
 use super::state::LocomotionState;
@@ -90,21 +96,31 @@ pub fn toggle_spawn(
     );
 }
 
+/// The body counts as turned around once its forward points this close to
+/// world +Z (the direction back toward spawn).
+const FACING_BACK_MIN_DOT: f32 = 0.9;
+
 type ProbeQuery<'a> = (
     &'a mut Intents,
     &'a LocomotionState,
     &'a LedgeFacts,
+    &'a Transform,
     &'a mut ProbeScript,
     &'a mut ProbeCoverage,
 );
 
 /// `MovementSet::ReadIntents`: scripted AI -> Intents for the probe only.
 pub fn drive_intents(time: Res<Time>, mut q: Query<ProbeQuery, With<TraversalProbe>>) {
-    for (mut intents, state, ledge, mut script, mut coverage) in &mut q {
+    for (mut intents, state, ledge, transform, mut script, mut coverage) in &mut q {
         script.elapsed += time.delta_secs();
-        *intents = stage_intents(script.stage);
+        if script.stage == ProbeStage::GlideDown && *state == LocomotionState::Glide {
+            script.glide_observed = true;
+        }
+        *intents = stage_intents(script.stage, *state);
 
-        if let Some(next_stage) = next_stage(script.stage, *state, ledge) {
+        let settled = script.elapsed >= COMPLETE_SETTLE_SECS;
+        let facing_back = (transform.rotation * Vec3::NEG_Z).z > FACING_BACK_MIN_DOT;
+        if let Some(next_stage) = next_stage(script.stage, *state, ledge, facing_back, settled) {
             coverage.0 |= stage_bit(script.stage);
             info!(
                 "TraversalProbe completed {:?}; advancing to {:?}",
@@ -113,14 +129,16 @@ pub fn drive_intents(time: Res<Time>, mut q: Query<ProbeQuery, With<TraversalPro
             script.stage = next_stage;
             script.elapsed = 0.0;
             script.timeout_reported = false;
-        } else if script.stage == ProbeStage::HoldAtLip
+        } else if script.stage == ProbeStage::GlideDown
             && !script.completed
-            && script.elapsed >= COMPLETE_SETTLE_SECS
-            && *state == LocomotionState::Climb
+            && script.glide_observed
+            && *state == LocomotionState::Walk
         {
-            coverage.0 |= stage_bit(ProbeStage::HoldAtLip);
+            coverage.0 |= stage_bit(ProbeStage::GlideDown);
             script.completed = true;
-            info!("TraversalProbe climb scenario completed without mantle");
+            info!(
+                "TraversalProbe full traversal scenario completed (climb→mantle→turn→jump→glide)"
+            );
         } else if script.elapsed >= STAGE_TIMEOUT_SECS && !script.timeout_reported {
             script.timeout_reported = true;
             warn!(
@@ -131,7 +149,7 @@ pub fn drive_intents(time: Res<Time>, mut q: Query<ProbeQuery, With<TraversalPro
     }
 }
 
-fn stage_intents(stage: ProbeStage) -> Intents {
+fn stage_intents(stage: ProbeStage, state: LocomotionState) -> Intents {
     match stage {
         // Link-style forward input is negative Y in the camera-relative input
         // contract and maps to world -Z at the probe's spawn rotation.
@@ -151,6 +169,40 @@ fn stage_intents(stage: ProbeStage) -> Intents {
             },
             ..default()
         },
+        // Keep the climb attachment alive while the mantle request arbitrates.
+        ProbeStage::MantleOntoTop => Intents {
+            climb: ClimbIntent {
+                requested: true,
+                ..default()
+            },
+            traversal: TraversalActionIntent::Mantle,
+            ..default()
+        },
+        ProbeStage::SettleOnTop => Intents::default(),
+        // Positive Y maps to world +Z: back toward the spawn side. The motors
+        // rotate the body toward its move direction; the script only observes.
+        ProbeStage::TurnAround => moving(Vec2::Y),
+        ProbeStage::JumpOff => Intents {
+            planar: PlanarMoveIntent {
+                direction: Vec2::Y,
+                strength: 1.0,
+            },
+            jump: JumpIntent {
+                held: true,
+                pressed: true,
+            },
+            ..default()
+        },
+        // Request glide only once airborne in Fall/Glide: `glide::propose`
+        // needs the fresh-press edge to land *in* Fall — asking during Jump
+        // would spend the edge one state too early.
+        ProbeStage::GlideDown => {
+            let mut intents = moving(Vec2::Y);
+            if matches!(state, LocomotionState::Fall | LocomotionState::Glide) {
+                intents.glide = GlideIntent::Requested;
+            }
+            intents
+        }
     }
 }
 
@@ -164,19 +216,38 @@ fn moving(direction: Vec2) -> Intents {
     }
 }
 
-fn next_stage(stage: ProbeStage, state: LocomotionState, ledge: &LedgeFacts) -> Option<ProbeStage> {
+fn next_stage(
+    stage: ProbeStage,
+    state: LocomotionState,
+    ledge: &LedgeFacts,
+    facing_back: bool,
+    settled: bool,
+) -> Option<ProbeStage> {
     match stage {
         ProbeStage::ApproachWall if ledge.can_climb => Some(ProbeStage::AttachClimb),
         ProbeStage::AttachClimb if state == LocomotionState::Climb => Some(ProbeStage::AscendClimb),
         ProbeStage::AscendClimb if state == LocomotionState::Climb && ledge.is_at_mantle_edge => {
             Some(ProbeStage::HoldAtLip)
         }
+        // The settle preserves the original checkpoint: holding below the lip
+        // must not mantle by itself.
+        ProbeStage::HoldAtLip if settled && state == LocomotionState::Climb => {
+            Some(ProbeStage::MantleOntoTop)
+        }
+        ProbeStage::MantleOntoTop if state == LocomotionState::Mantle => {
+            Some(ProbeStage::SettleOnTop)
+        }
+        ProbeStage::SettleOnTop if state == LocomotionState::Walk => Some(ProbeStage::TurnAround),
+        ProbeStage::TurnAround if state == LocomotionState::Walk && facing_back => {
+            Some(ProbeStage::JumpOff)
+        }
+        ProbeStage::JumpOff if state == LocomotionState::Fall => Some(ProbeStage::GlideDown),
         _ => None,
     }
 }
 
-fn stage_bit(stage: ProbeStage) -> u8 {
-    1 << (stage as u8)
+fn stage_bit(stage: ProbeStage) -> u16 {
+    1 << (stage as u16)
 }
 
 #[cfg(test)]
@@ -200,6 +271,7 @@ mod tests {
                 Intents::default(),
                 LocomotionState::Fall,
                 LedgeFacts::default(),
+                Transform::default(),
                 ProbeScript::default(),
                 ProbeCoverage::default(),
             ))
@@ -222,11 +294,20 @@ mod tests {
         );
     }
 
+    /// `next_stage` with no turn/settle context (the early climb stages).
+    fn advance(
+        stage: ProbeStage,
+        state: LocomotionState,
+        ledge: &LedgeFacts,
+    ) -> Option<ProbeStage> {
+        next_stage(stage, state, ledge, false, false)
+    }
+
     #[test]
     fn climb_scenario_requires_the_observed_wall_and_climb_state() {
         let facts = LedgeFacts::default();
         assert_eq!(
-            next_stage(ProbeStage::ApproachWall, LocomotionState::Walk, &facts),
+            advance(ProbeStage::ApproachWall, LocomotionState::Walk, &facts),
             None
         );
 
@@ -235,7 +316,7 @@ mod tests {
             ..default()
         };
         assert_eq!(
-            next_stage(
+            advance(
                 ProbeStage::ApproachWall,
                 LocomotionState::Walk,
                 &climbable_wall
@@ -243,7 +324,7 @@ mod tests {
             Some(ProbeStage::AttachClimb)
         );
         assert_eq!(
-            next_stage(
+            advance(
                 ProbeStage::AttachClimb,
                 LocomotionState::Walk,
                 &climbable_wall
@@ -251,7 +332,7 @@ mod tests {
             None
         );
         assert_eq!(
-            next_stage(
+            advance(
                 ProbeStage::AttachClimb,
                 LocomotionState::Climb,
                 &climbable_wall
@@ -262,15 +343,151 @@ mod tests {
 
     #[test]
     fn climb_ascent_never_requests_jump_or_mantle() {
-        let intents = stage_intents(ProbeStage::AscendClimb);
+        let intents = stage_intents(ProbeStage::AscendClimb, LocomotionState::Climb);
 
         assert!(intents.climb.requested);
         assert_eq!(intents.climb.vertical, ClimbVerticalIntent::Up);
         assert!(!intents.jump.held);
         assert!(!intents.jump.pressed);
+        assert_eq!(intents.traversal, TraversalActionIntent::None);
+    }
+
+    #[test]
+    fn hold_at_lip_only_mantles_after_the_settle() {
+        let ledge = LedgeFacts::default();
         assert_eq!(
-            intents.traversal,
-            crate::movement::intents::TraversalActionIntent::None
+            next_stage(
+                ProbeStage::HoldAtLip,
+                LocomotionState::Climb,
+                &ledge,
+                false,
+                false
+            ),
+            None,
+            "before the settle the probe must keep holding (no accidental mantle)"
         );
+        assert_eq!(
+            next_stage(
+                ProbeStage::HoldAtLip,
+                LocomotionState::Climb,
+                &ledge,
+                false,
+                true
+            ),
+            Some(ProbeStage::MantleOntoTop)
+        );
+    }
+
+    #[test]
+    fn turn_around_advances_only_when_grounded_and_facing_back() {
+        let ledge = LedgeFacts::default();
+        assert_eq!(
+            next_stage(
+                ProbeStage::TurnAround,
+                LocomotionState::Walk,
+                &ledge,
+                false,
+                true
+            ),
+            None,
+            "still mid-turn"
+        );
+        assert_eq!(
+            next_stage(
+                ProbeStage::TurnAround,
+                LocomotionState::Fall,
+                &ledge,
+                true,
+                true
+            ),
+            None,
+            "walked off the edge mid-turn: no advance, timeout will report it"
+        );
+        assert_eq!(
+            next_stage(
+                ProbeStage::TurnAround,
+                LocomotionState::Walk,
+                &ledge,
+                true,
+                false
+            ),
+            Some(ProbeStage::JumpOff)
+        );
+    }
+
+    #[test]
+    fn jump_off_advances_once_airborne() {
+        let ledge = LedgeFacts::default();
+        assert_eq!(
+            next_stage(
+                ProbeStage::JumpOff,
+                LocomotionState::Jump,
+                &ledge,
+                true,
+                true
+            ),
+            None,
+            "the jump impulse frame is not yet the fall"
+        );
+        assert_eq!(
+            next_stage(
+                ProbeStage::JumpOff,
+                LocomotionState::Fall,
+                &ledge,
+                true,
+                true
+            ),
+            Some(ProbeStage::GlideDown)
+        );
+    }
+
+    #[test]
+    fn glide_is_requested_only_while_airborne() {
+        assert_eq!(
+            stage_intents(ProbeStage::GlideDown, LocomotionState::Jump).glide,
+            GlideIntent::Inactive,
+            "requesting during Jump would spend the fresh-press edge too early"
+        );
+        assert_eq!(
+            stage_intents(ProbeStage::GlideDown, LocomotionState::Fall).glide,
+            GlideIntent::Requested
+        );
+        assert_eq!(
+            stage_intents(ProbeStage::GlideDown, LocomotionState::Glide).glide,
+            GlideIntent::Requested,
+            "keep holding the request while gliding"
+        );
+    }
+
+    #[test]
+    fn mantle_stage_requests_mantle_while_keeping_the_climb() {
+        let intents = stage_intents(ProbeStage::MantleOntoTop, LocomotionState::Climb);
+        assert!(intents.climb.requested);
+        assert_eq!(intents.traversal, TraversalActionIntent::Mantle);
+        assert!(
+            !intents.jump.held,
+            "the mantle is an explicit request, not a jump"
+        );
+    }
+
+    #[test]
+    fn stage_bits_are_distinct() {
+        let stages = [
+            ProbeStage::ApproachWall,
+            ProbeStage::AttachClimb,
+            ProbeStage::AscendClimb,
+            ProbeStage::HoldAtLip,
+            ProbeStage::MantleOntoTop,
+            ProbeStage::SettleOnTop,
+            ProbeStage::TurnAround,
+            ProbeStage::JumpOff,
+            ProbeStage::GlideDown,
+        ];
+        let mut seen: u16 = 0;
+        for stage in stages {
+            let bit = stage_bit(stage);
+            assert_eq!(seen & bit, 0, "duplicate coverage bit for {stage:?}");
+            seen |= bit;
+        }
     }
 }

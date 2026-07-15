@@ -188,9 +188,11 @@ git diff --check
 
 ## Next Step After Confirmation
 
-Implement and play-test `traversal-probe`. After user acceptance, close its
-ticket and use its results to decide whether a production Enemy brain needs a
-separate architecture ticket.
+`traversal-probe` was accepted; its results fed the first Enemies slice
+(ticket `bokobo-brain`, implemented): a graybox bokobo (F7) with the
+Perceive → Decide → Act pipeline writing only `Intents`. Current focus:
+play-test the bokobo's feel (patrol/chase/search), then grow the brain
+(pathfinding, `TimeOfDay`, hearing) or start Combat per the phase gate.
 
 ## Invariants To Preserve
 

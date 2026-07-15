@@ -69,11 +69,15 @@ relativa al jugador — el escenario debe ser reproducible corrida tras
 corrida. No es un enemigo ni una excepcion
 de Debug; demuestra que un controlador AI puede reutilizar capacidades,
 sensores, propuestas y motores sin que Movement conozca su implementacion.
-El primer escenario es una escalada continua: avanza hasta que los sensores
-publican una pared escalable, solicita `Climb`, asciende y se sostiene bajo el
-borde sin emitir `Jump` ni `Mantle`. Una maniobra solo se considera cubierta
-si sensores y arbitraje normales alcanzan su condicion observada; el brain no
-reescribe la posicion ni la velocidad para pasar una estacion.
+El escenario es la vuelta completa de travesía (ticket `probe-mantle-glide`):
+avanza hasta que los sensores publican una pared escalable, solicita `Climb`,
+asciende, **se sostiene bajo el borde sin mantle accidental** (el checkpoint
+original, preservado como settle), hace `Mantle` al tope, se asienta, gira
+180° (los motores rotan el cuerpo; el script solo observa la rotación),
+salta, y baja en `Glide` hasta aterrizar — el aterrizaje solo cuenta si
+`Glide` fue observado. Una maniobra solo se considera cubierta si sensores y
+arbitraje normales alcanzan su condicion observada; el brain no reescribe la
+posicion ni la velocidad para pasar una estacion.
 
 Los bundles de `bundles.rs` son un limite de construccion, no de ejecucion:
 `KinematicActorBundle` instala el contrato común de simulación (incluido el
@@ -104,6 +108,11 @@ query espacial.
 `Walk`, `Sprint`, `Fall`, `Jump`, `AutoVault`, `Climb`, `Mantle`,
 `Stairs`, `Ladder`, `Glide`, `Sneak`, `WallJump`, `EdgeLeap`. Default: `Fall`.
 (No hay `Idle`: quieto en el suelo es `Walk` con input cero.)
+
+El enum garantiza la exclusividad mutua; los estados **ortogonales**
+(`Crouched`, latches de stamina) viven en componentes aparte. Cuándo usar
+enum vs componente-presencia está fijado en
+[`rationale/per-entity-state-idioms.md`](rationale/per-entity-state-idioms.md).
 
 ## Sistemas (comportamiento)
 

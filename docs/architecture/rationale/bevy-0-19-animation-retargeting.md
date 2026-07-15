@@ -61,3 +61,18 @@ Gatillar `transitions.play(...)` incondicionalmente cada frame del bucle `Update
 Para evitar esto, se implementó una condición de guarda:
 - Solo se llama a `transitions.play(...)` si la animación objetivo **no** está activa: `!player.is_playing_animation(target_node)`.
 - Si ya está activa, simplemente modulamos dinámicamente la velocidad de la caminata con `player.animation_mut(target_node).unwrap().set_speed(multiplier)`.
+
+## 3. Lecciones Aprendidas y Estándares de Assets (Best Practices)
+
+Hacer esta prueba con assets de diferentes fuentes nos enseñó principios importantes sobre el flujo de assets en Bevy 0.19:
+
+### A. Empaquetado Óptimo de Assets
+*   **Problema de archivos separados:** Cargar el modelo 3D por un lado (`Knight.glb`) y las animaciones por otro (`Rig_Medium_MovementBasic.glb`) nos obligó a realizar un enlace manual a bajo nivel de los huesos en código de Rust.
+*   **Mejor Práctica (Recomendado):** Para evitar la sobrecarga de programar enlazadores manuales de huesos, los personajes deben exportarse desde Blender (o software DCC) con **todas sus animaciones embebidas directamente en el mismo archivo `.glb`** (ej. un solo `Knight.glb` con múltiples tracks). De esta forma, el cargador de GLTF de Bevy autogenera todos los componentes `AnimatedBy` y `AnimationTargetId` sin intervención de código.
+
+### B. Serialización del Grafo de Animación (`.animgraph.ron`)
+*   Aunque construir el grafo programáticamente (`AnimationGraph::new()`) funciona bien para inicializaciones dinámicas o prototipado, para proyectos en producción se recomienda **serializar el grafo en archivos `.animgraph.ron`**. Esto desacopla las configuraciones de mezcla, máscaras de huesos y transiciones de la lógica del código compilado en Rust.
+
+### C. La Jerarquía de Bevy 0.19 (`ChildOf`)
+*   Se aprendió que en Bevy 0.19 la jerarquía de entidades ya no utiliza el componente `Parent`. Ha sido reemplazado por la relación/componente **`ChildOf`**, y la entidad padre debe obtenerse mediante el método `.parent()` sobre el componente `ChildOf` en lugar de `.get()`.
+

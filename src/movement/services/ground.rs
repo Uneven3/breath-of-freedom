@@ -17,6 +17,7 @@ use crate::movement::diag::CastTrace;
 use crate::movement::facts::GroundFacts;
 use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::GroundSensing;
+use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
 
 /// Suppress grounding only while *genuinely launching off* the floor (m/s).
@@ -51,6 +52,7 @@ type ServiceQuery<'a> = (
     &'a BodyVelocity,
     &'a GroundSensing,
     &'a mut GroundFacts,
+    &'a LocomotionState,
 );
 
 pub fn ground_service(
@@ -58,7 +60,7 @@ pub fn ground_service(
     spatial: SpatialQuery,
     mut trace: ResMut<CastTrace>,
 ) {
-    for (entity, transform, collider, velocity, sensing, mut facts) in &mut q {
+    for (entity, transform, collider, velocity, sensing, mut facts, state) in &mut q {
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
         let hit = spatial.cast_shape(
             collider,
@@ -99,6 +101,14 @@ pub fn ground_service(
         } else {
             0.0
         };
+
+        // Stairs motor handles Y-snap between treads; the downward probe can
+        // miss the gap between steps, flickering grounded=false while the body
+        // is actually supported.  Force grounded when the stairs motor is
+        // active (reads previous frame’s state, which is correct).
+        if *state == LocomotionState::Stairs && !facts.grounded {
+            facts.grounded = true;
+        }
     }
 }
 

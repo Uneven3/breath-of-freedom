@@ -29,6 +29,7 @@ pub struct StairsLocomotion {
     pub ascend_speed: f32,
     pub descend_speed: f32,
     pub sprint_multiplier: f32,
+    pub sneak_multiplier: f32,
     pub sprint_stamina_cost_per_sec: f32,
     pub lateral_factor: f32,
     pub acceleration: f32,
@@ -63,6 +64,8 @@ impl GroundMovement {
             ascend_speed: 3.5,
             descend_speed: 4.5,
             sprint_multiplier: 1.7,
+            // Half speed while crouched, matching Sneak's 2.5/5.0 flat-ground ratio.
+            sneak_multiplier: 0.5,
             sprint_stamina_cost_per_sec: 10.0,
             lateral_factor: 0.6,
             acceleration: 80.0,

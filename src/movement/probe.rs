@@ -2,9 +2,12 @@
 //!
 //! This is intentionally a Movement brain, not an enemy implementation: it
 //! writes only the probe actor's `Intents` and observes the normal pipeline.
+//!
+//! **F6** spawns/despawns the probe on demand near the player's position.
 
 use bevy::prelude::*;
 
+use super::Player;
 use super::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
     LedgeTraversal, WallJumpMovement,
@@ -24,7 +27,34 @@ const STAGE_TIMEOUT_SECS: f32 = 8.0;
 const COMPLETE_SETTLE_SECS: f32 = 0.2;
 const PROBE_STANDING_CENTER_Y: f32 = 1.125;
 
-pub fn spawn(mut commands: Commands) {
+/// F6 toggle: spawns or despawns the traversal probe near the player.
+pub fn toggle_spawn(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    player: Option<Single<&Transform, With<Player>>>,
+    existing: Query<Entity, With<TraversalProbe>>,
+) {
+    if !keys.just_pressed(KeyCode::F6) {
+        return;
+    }
+
+    // If a probe already exists, despawn it (toggle off).
+    if let Ok(entity) = existing.single() {
+        commands.entity(entity).despawn();
+        info!("[debug] TraversalProbe despawned (F6)");
+        return;
+    }
+
+    // Spawn near the player: 3 m behind their facing direction.
+    let spawn_pos = if let Some(player_tf) = player {
+        let behind = player_tf.rotation * Vec3::Z * 3.0;
+        let mut pos = player_tf.translation + behind;
+        pos.y = PROBE_STANDING_CENTER_Y;
+        pos
+    } else {
+        Vec3::new(0.0, PROBE_STANDING_CENTER_Y, -3.0)
+    };
+
     let dimensions = BodyDimensions {
         radius: 0.45,
         standing_capsule_length: 1.35,
@@ -38,10 +68,8 @@ pub fn spawn(mut commands: Commands) {
     commands.spawn((
         TraversalProbe,
         Name::new("TraversalProbe"),
-        // Faces the climbable graybox wall at z = -10. The scenario performs
-        // every later displacement through the ordinary motor pipeline.
         KinematicActorBundle::new(
-            Transform::from_xyz(0.0, PROBE_STANDING_CENTER_Y, -3.0),
+            Transform::from_translation(spawn_pos),
             dimensions,
             GroundSensing::PLAYER,
         ),
@@ -59,6 +87,7 @@ pub fn spawn(mut commands: Commands) {
             ProbeCoverage::default(),
         ),
     ));
+    info!("[debug] TraversalProbe spawned at ({:.1}, {:.1}, {:.1}) (F6)", spawn_pos.x, spawn_pos.y, spawn_pos.z);
 }
 
 type ProbeQuery<'a> = (

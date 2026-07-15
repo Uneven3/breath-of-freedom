@@ -34,3 +34,51 @@ impl Default for LocomotionState {
         LocomotionState::Fall
     }
 }
+
+impl LocomotionState {
+    /// Every variant, for exhaustive audits (see the `arbitration_matrix` tests
+    /// in `proposal.rs`). The compile-time guard below fails to build if a
+    /// variant is added without being listed here, so those audits can trust it.
+    pub const ALL: [LocomotionState; 13] = [
+        LocomotionState::Walk,
+        LocomotionState::Sprint,
+        LocomotionState::Fall,
+        LocomotionState::Jump,
+        LocomotionState::AutoVault,
+        LocomotionState::Climb,
+        LocomotionState::Mantle,
+        LocomotionState::Stairs,
+        LocomotionState::Ladder,
+        LocomotionState::Glide,
+        LocomotionState::Sneak,
+        LocomotionState::WallJump,
+        LocomotionState::EdgeLeap,
+    ];
+}
+
+const _: () = {
+    // A new variant fails this exhaustive match to compile until it is added to
+    // `LocomotionState::ALL` above.
+    fn assert_all_is_exhaustive(state: LocomotionState) {
+        match state {
+            LocomotionState::Walk
+            | LocomotionState::Sprint
+            | LocomotionState::Fall
+            | LocomotionState::Jump
+            | LocomotionState::AutoVault
+            | LocomotionState::Climb
+            | LocomotionState::Mantle
+            | LocomotionState::Stairs
+            | LocomotionState::Ladder
+            | LocomotionState::Glide
+            | LocomotionState::Sneak
+            | LocomotionState::WallJump
+            | LocomotionState::EdgeLeap => {}
+        }
+    }
+    let _ = assert_all_is_exhaustive;
+    // Anchor `ALL` in every build (its consumers are the `arbitration_matrix`
+    // tests): a mismatch between it and the exhaustive match above cannot slip
+    // through as dead code.
+    let _ = LocomotionState::ALL.len();
+};

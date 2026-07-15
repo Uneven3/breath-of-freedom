@@ -92,7 +92,7 @@ impl Plugin for MovementPlugin {
                 .chain(),
         );
 
-        app.add_systems(Startup, probe::spawn);
+        app.add_systems(Update, probe::toggle_spawn);
 
         app.add_systems(
             FixedUpdate,
@@ -164,12 +164,13 @@ impl Plugin for MovementPlugin {
                 .in_set(MovementSet::TickActiveMotor),
         );
 
-        // Declarative collider swap for sneak. Runs in FixedUpdate right after
-        // the SSoT write so the newly active motor ticks with the correct
-        // capsule this same frame (physics never sees a stale collider).
+        // Declarative crouch-capsule swap (orthogonal to the active state, so it
+        // works in Sneak and on Stairs). Runs in FixedUpdate right after the SSoT
+        // write so the active motor ticks with the correct capsule this same frame
+        // (physics never sees a stale collider).
         app.add_systems(
             FixedUpdate,
-            motors::sneak::sync_sneak_collider
+            motors::sneak::sync_crouch_collider
                 .after(MovementSet::Arbitrate)
                 .before(MovementSet::TickActiveMotor),
         );

@@ -12,11 +12,17 @@ la cápsula de pie hasta que quepa: Sneak sigue proponiendo
 en ese caso (arreglado junto con la tabla `proposal::weight`).
 
 Queda un agujero: **Jump**. Con el actor agachado bajo un techo bajo,
-`jump::propose` gana el arbitraje (`Forced` > `PlayerRequested`), el estado
-sale de Sneak, y `sync_sneak_collider` restaura la cápsula de pie **dentro
-del techo** — exactamente lo que `StandClearance` existe para impedir. El
-resultado observable es overlap/jitter contra el techo al pulsar salto
-agachado.
+`jump::propose` gana el arbitraje (`Forced` > `PlayerRequested`) y el estado
+sale a `Jump`. Como `Jump` no es locomoción de suelo,
+`sync_crouch_collider` restaura la cápsula de pie **dentro del techo** —
+exactamente lo que `StandClearance` existe para impedir. El resultado
+observable es overlap/jitter contra el techo al pulsar salto agachado.
+
+Nota: tras el refactor de `sneak-on-stairs`, el crouch es un modificador
+ortogonal manejado por `sync_crouch_collider` (ya no `sync_sneak_collider`), con
+`want_crouch = is_ground_locomotion(state) && (gait==Sneak || must_remain_crouched)`.
+El agujero de Jump ahora es puntual: el `is_ground_locomotion(state)` deja caer el
+crouch en cuanto el estado es `Jump`, ignorando `must_remain_crouched`.
 
 ## Opciones (decidir con playtest, no de antemano)
 
@@ -25,10 +31,13 @@ agachado.
    Ground — un actor con `JumpMovement` sin `GroundMovement` no tiene
    `StandClearance`, así que la query necesitaría `Option<&…>` o el ticket
    define que Jump-bajo-techo requiere ambas capacidades.
-2. `sync_sneak_collider` no restaura la cápsula de pie mientras no haya
-   clearance (mantiene el collider agachado aunque el estado ya no sea
-   Sneak). Desacopla estado lógico de forma física — revisar contra
-   Constitución §6/§7 antes de elegirla.
+2. **(Ahora la más simple)** `sync_crouch_collider` respeta
+   `must_remain_crouched` aunque el estado no sea de suelo: p. ej.
+   `want_crouch = must_remain_crouched || (is_ground_locomotion(state) && gait==Sneak)`.
+   `update_stand_clearance` ya prueba la cápsula estando el actor agachado sin
+   importar `grounded`, así que el crouch se sostendría en el aire bajo el techo
+   hasta que haya clearance. No introduce segundo SSoT: `Crouched` sigue siendo
+   forma física derivada por un único sistema (revisar §6/§7 igual).
 
 ## Lectura obligatoria, en este orden
 

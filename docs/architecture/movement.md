@@ -9,7 +9,7 @@
 | `Intents` | `intents.rs` | Snapshot semantico del frame: `PlanarMoveIntent`, `GaitIntent`, `JumpIntent`, `ClimbIntent`, `LadderIntent`, `TraversalActionIntent` y `GlideIntent`. Solo el Brain/controlador del actor lo escribe. |
 | `LocomotionState` | `state.rs` | Enum SSoT del modo activo. Solo `arbitrate` lo escribe. |
 | `ProposalBuffer` | `proposal.rs` | Type alias sobre el núcleo genérico compartido de capacidad fija `proposal::ProposalBuffer<LocomotionState, N>` (`src/proposal.rs`), drenado por `arbitrate(current)`. Ver `rationale/proposal-arbitration-core.md`. |
-| `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. Los pesos de desempate de los 13 motores viven juntos en `proposal.rs` (`mod weight`), con su orden total fijado por `const` asserts — dos motores que pueden co-proponer en la misma categoría nunca empatan. |
+| `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. Los pesos de desempate de los 13 motores viven juntos en `proposal.rs` (`mod weight`), con su orden total fijado por `const` asserts — dos motores que pueden co-proponer en la misma categoría nunca empatan. El módulo de tests `arbitration_matrix` escribe la matriz completa (motor → estado → emisiones `(Priority, weight)`) como dato y verifica en el build que cada `LocomotionState` tenga exactamente un motor dueño y que ningún par co-proponente empate, con una lista explícita de excepciones mutuamente excluyentes (glide/stairs/ladder). |
 | `BodyVelocity` | `mod.rs` | Velocidad del cuerpo cinemático (análogo a `CharacterBody3D.velocity`). Solo el motor activo la escribe. |
 | `BodyDimensions` | `body.rs` | Perfil físico persistente de la cápsula del actor: radio y longitudes de pie/agachado. Los servicios y motores usan sus alturas semánticas; `Collider` sigue siendo la forma física de Avian. |
 | `GroundMovement` | `abilities.rs` | Capacidad persistente y perfiles de tuning de Walk, Sprint, Sneak y Stairs por actor. Esos motores solo consideran actores que llevan este componente. |
@@ -108,14 +108,17 @@ Pipeline en `FixedUpdate` a 60Hz, `SystemSet`s encadenados (`MovementSet`):
    jugadores locales, remotos, enemigos y otros cuerpos controlables. Ver
    `rationale/multi-actor-dispatch.md`.
 
-`motors::sneak::sync_sneak_collider` corre en `FixedUpdate`, justo después
-de `Arbitrate` y antes de `TickActiveMotor` (swap de collider, declarativo
-sobre `Changed<LocomotionState>` + cruce del límite Sneak vía `Crouched`),
-para que el motor activo tique con la cápsula correcta en el mismo frame.
-Es forma física derivada; no decide locomoción. Antes de arbitrar,
-`motors::sneak::update_stand_clearance` prueba la cápsula de pie precalculada.
-Si hay techo, Sneak se mantiene aunque se libere el botón; solo vuelve a crecer
-cuando la cápsula completa cabe.
+`motors::sneak::sync_crouch_collider` corre en `FixedUpdate`, justo después
+de `Arbitrate` y antes de `TickActiveMotor`, para que el motor activo tique con
+la cápsula correcta en el mismo frame. El crouch es un **modificador ortogonal**
+al estado: la cápsula agachada sigue la intención de crouch (o un stand-up
+bloqueado) durante *cualquier* locomoción de suelo — Sneak plano **o** Stairs —,
+no el estado `Sneak`. Por eso `Stairs` también agacha: `stairs::tick` usa la
+media-altura agachada para el snap por peldaño y el `sneak_multiplier` del perfil
+para la velocidad. Es forma física derivada; no decide locomoción. Antes de
+arbitrar, `motors::sneak::update_stand_clearance` prueba la cápsula de pie
+precalculada. Si hay techo, el actor se mantiene agachado aunque se libere el
+botón; solo vuelve a crecer cuando la cápsula completa cabe.
 
 `Ladder` es un motor de anclaje: `LadderService` publica base, cima, normal y
 una línea authored para el centro del cuerpo. Ladder entra solo mediante el

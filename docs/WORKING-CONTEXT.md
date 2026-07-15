@@ -12,6 +12,30 @@ records in `docs/tickets/`.
 - Keep tickets as the source of truth for ownership and scope; keep this file
   focused on the cross-session technical handoff.
 
+## Project Roadmap / Phase Gate
+
+The build advances in phases, and the gate between them is explicit:
+
+1. **Phase 1 — Movement (current).** Get locomotion as good as it can be:
+   no observable movement bugs on the graybox course, and every gameplay
+   `Intent` completable through the ordinary pipeline. The proof that movement
+   is "done" is behavioral, not just green tests: a non-player actor (the
+   bokobo / `TraversalProbe`) must be able to drive *all* the same intents a
+   player can and reach every locomotion state correctly.
+2. **Gate → Combat.** Only once (a) no movement bug is outstanding and (b) the
+   bokobo AI completes the full intent set correctly do we start Phase 2
+   (Combat, `docs/architecture/combat.md`). The shared arbitration core
+   (`src/proposal.rs`) is a bet that Combat reuses this shape — expect Combat to
+   *validate or reshape* it, not to inherit it unchanged.
+
+**Load-bearing principle for this whole plan:** AI and networked actors move
+**only** by writing `Intents`. They never hardcode values into or bypass the
+physics/motor pipeline — no direct writes to `Transform`, `BodyVelocity`,
+`LocomotionState`, facts, or motor-private state. This is what makes "the AI
+uses the same movement the player does" true rather than aspirational, and it
+is why the arbiter/motor split exists (see the Invariants section and
+`docs/architecture/rationale/multi-actor-dispatch.md`).
+
 ## Current Objective
 
 Validate the completed ECS locomotion composition with a second, AI-controlled
@@ -172,9 +196,16 @@ separate architecture ticket.
 
 - `LocomotionState` remains exclusive per actor.
 - `Intents` remains the control boundary shared by player, AI, and future
-  networking.
+  networking. AI/remote actors write **only** `Intents`; they never write
+  `Transform`, `BodyVelocity`, `LocomotionState`, facts, or motor-private
+  state directly. Bypassing the pipeline for a non-player actor is a bug, not a
+  shortcut.
 - Facts/sensors remain separate from motor execution.
-- Only the active motor writes an actor's movement in a tick.
+- Only the active motor writes an actor's movement in a tick. Each motor's
+  `tick` self-gates on `LocomotionState`; the flat-ground motors funnel that
+  guard through `motor_common::ground_locomotion_step`. The
+  `arbitration_matrix` tests (`src/movement/proposal.rs`) pin that every state
+  has exactly one owning motor and that no two co-proposing motors tie.
 - Existing schedule ordering and the transition arbiter remain intact.
 - Do not revert unrelated working-tree changes.
 

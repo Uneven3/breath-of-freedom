@@ -16,6 +16,7 @@
 //! - **F4** — compact per-tick trace plus every sensor shape cast (`info!`).
 //! - **F5** — semantic context-fact flip log: emits only when stairs, ladder,
 //!   or ledge booleans change, without the per-tick or per-cast noise.
+//! - **F6** — spawn/despawn the TraversalProbe dummy AI near the player.
 
 use avian3d::prelude::*;
 use bevy::color::palettes::css;
@@ -25,6 +26,7 @@ use std::fmt::Write;
 
 use crate::movement::diag::{CastKind, CastTrace};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
+use crate::movement::probe_data::TraversalProbe;
 use crate::movement::proposal::ProposalBuffer;
 use crate::movement::sensing::GroundSensing;
 use crate::movement::stamina::Stamina;
@@ -629,10 +631,12 @@ fn update_debug_text(
     tick: Res<SimTick>,
     config: Res<DebugConfig>,
     mut text: Single<&mut Text, With<DebugText>>,
+    probe_alive: Query<(), With<TraversalProbe>>,
 ) {
     let (state, stamina, vel, ground, contact, stairs, ladder, ledge) = *player;
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
+    let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
     text.0 = format!(
         "state: {:?}   [t{:06}]\n\
          stamina: {:.0}/{:.0}\n\
@@ -640,7 +644,7 @@ fn update_debug_text(
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
          slide_wall: {}  stairs: {}  ladder: {}\n\
          ledge: climb={} cont={} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} mantle_edge={} vault={}\n\
-         [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}",
+         [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}  [F6] probe:{}",
         state,
         tick.0,
         stamina.current(),
@@ -671,5 +675,7 @@ fn update_debug_text(
         onoff(config.log_transitions),
         onoff(config.log_verbose),
         onoff(config.log_fact_flips),
+        probe_status,
     );
 }
+

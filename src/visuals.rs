@@ -37,6 +37,7 @@ impl Plugin for VisualsPlugin {
             Update,
             (
                 spawn_probe_visual,
+                despawn_orphaned_probe_visual,
                 interpolate_visual,
                 interpolate_probe_visual,
             ),
@@ -98,6 +99,19 @@ fn spawn_probe_visual(
             MeshMaterial3d(materials.add(Color::srgb(0.85, 0.3, 0.25))),
             *transform,
         ));
+    }
+}
+
+/// Despawn orphaned probe visuals when their actor entity is gone.
+fn despawn_orphaned_probe_visual(
+    mut commands: Commands,
+    visuals: Query<(Entity, &TraversalProbeVisual)>,
+    actors: Query<(), With<TraversalProbe>>,
+) {
+    for (vis_entity, probe_vis) in &visuals {
+        if actors.get(probe_vis.actor).is_err() {
+            commands.entity(vis_entity).despawn();
+        }
     }
 }
 

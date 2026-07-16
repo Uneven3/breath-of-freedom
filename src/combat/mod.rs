@@ -58,13 +58,18 @@ impl Plugin for CombatPlugin {
                     motors::idle::propose,
                     motors::attack::propose,
                     motors::aim::propose,
+                    // Bow release reads the *previous* tick's CombatState
+                    // (before arbitration overwrites it): if the player
+                    // releases aim on the same tick they press attack,
+                    // arbitrate would set Idle before the shoot system ran.
+                    motors::aim::shoot_drawn_arrow,
                 )
                     .in_set(CombatSet::GatherProposals),
                 arbitrate.in_set(CombatSet::Arbitrate),
                 (
+                    motors::aim::tick_draw_strength,
                     motors::tick_active_motor,
                     motors::attack::sweep_active_swings,
-                    motors::aim::shoot_drawn_arrow,
                 )
                     .chain()
                     .in_set(CombatSet::TickActiveMotor),

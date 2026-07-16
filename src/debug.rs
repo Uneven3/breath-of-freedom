@@ -30,6 +30,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::fmt::Write;
 
+use crate::combat::motors::aim::DrawStrength;
 use crate::combat::state::CombatState;
 use crate::movement::diag::{CastKind, CastTrace};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
@@ -635,6 +636,7 @@ fn update_debug_text(
             &StairsFacts,
             &LadderFacts,
             &LedgeFacts,
+            &DrawStrength,
         ),
         With<Player>,
     >,
@@ -645,7 +647,7 @@ fn update_debug_text(
     mut text: Single<&mut Text, With<DebugText>>,
     probe_alive: Query<(), With<TraversalProbe>>,
 ) {
-    let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge) = *player;
+    let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge, draw) = *player;
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
@@ -659,7 +661,7 @@ fn update_debug_text(
         .unwrap_or(0.0);
     text.0 = format!(
         "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}\n\
-         state: {:?}  combat: {combat:?}   [t{:06}]\n\
+         state: {:?}  combat: {combat:?}  draw: {:.0}%   [t{:06}]\n\
          stamina: {:.0}/{:.0}\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
@@ -668,6 +670,7 @@ fn update_debug_text(
          [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}  [F6] probe:{}",
         window.present_mode,
         state,
+        draw.factor * 100.0,
         tick.0,
         stamina.current(),
         stamina.max(),

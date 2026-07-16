@@ -43,6 +43,12 @@ const PLAYER_HIT_TRAUMA: f32 = 0.55;
 const SCREEN_FLASH_ALPHA: f32 = 0.3;
 const SCREEN_FLASH_FADE_PER_SEC: f32 = 2.2;
 
+/// Bow juice: camera trauma on release, scaled by draw charge.
+const BOW_FIRE_TRAUMA_MIN: f32 = 0.08;
+const BOW_FIRE_TRAUMA_MAX: f32 = 0.25;
+/// Charged shot hitstop: brief freeze on a max-charge release.
+const BOW_FULL_CHARGE_HITSTOP: f32 = 0.06;
+
 pub struct JuicePlugin;
 
 impl Plugin for JuicePlugin {
@@ -64,6 +70,8 @@ impl Plugin for JuicePlugin {
                 fade_screen_flash,
                 hitstop_on_crit,
                 tick_hitstop,
+                bow_fire_feedback,
+                animate_crosshair_charge,
             ),
         );
     }
@@ -420,6 +428,57 @@ fn tick_hitstop(
         virtual_time.set_relative_speed(if hitstop.0 > 0.0 { 0.0 } else { 1.0 });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Bow juice: camera kick on release, crosshair contraction while charging
+// ---------------------------------------------------------------------------
+
+fn bow_fire_feedback(
+    player: Query<&crate::combat::motors::aim::DrawStrength, With<Player>>,
+    mut shake: ResMut<CameraShake>,
+    mut hitstop: ResMut<Hitstop>,
+    mut prev_factor: Local<f32>,
+) {
+    let Ok(draw) = player.single() else {
+        return;
+    };
+    if draw.just_fired {
+        // Trauma proportional to how charged the shot was.
+        let trauma = BOW_FIRE_TRAUMA_MIN
+            + (BOW_FIRE_TRAUMA_MAX - BOW_FIRE_TRAUMA_MIN) * *prev_factor;
+        shake.add_trauma(trauma);
+        if *prev_factor > 0.95 {
+            hitstop.0 = BOW_FULL_CHARGE_HITSTOP;
+        }
+    }
+    *prev_factor = draw.factor;
+}
+
+#[allow(clippy::type_complexity)]
+fn animate_crosshair_charge(
+    player: Single<&crate::combat::motors::aim::DrawStrength, With<Player>>,
+    rig: Single<&crate::camera::CameraRig>,
+    mut ring: Single<&mut Node, With<crate::camera::CrosshairRing>>,
+) {
+    let draw = *player;
+    let rig = *rig;
+    let node = &mut **ring;
+    if rig.aim_blend < 0.5 {
+        return;
+    }
+    // Circle starts at 64px spread when uncharged, shrinks to 12px when fully charged.
+    // If not actively charging/draw factor is 0.0, it stays at 64px.
+    let size = 64.0 - 52.0 * draw.factor;
+    let half = size / 2.0;
+    node.width = Val::Px(size);
+    node.height = Val::Px(size);
+    node.margin = UiRect {
+        left: Val::Px(-half),
+        top: Val::Px(-half),
+        ..default()
+    };
+}
+
 
 #[cfg(test)]
 mod tests {

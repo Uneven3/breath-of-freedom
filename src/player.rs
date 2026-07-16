@@ -67,6 +67,7 @@ fn spawn_player(mut commands: Commands) {
             crate::combat::motors::attack::ComboLocal::default(),
             crate::combat::motors::attack::ActiveSwing::default(),
             crate::combat::brain::CombatInputCursor::default(),
+            crate::combat::motors::aim::DrawStrength::default(),
         ),
     ));
 }

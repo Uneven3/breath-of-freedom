@@ -16,8 +16,8 @@ const SPRING_LENGTH: f32 = 6.5;
 const LENS_HEIGHT: f32 = 1.5;
 /// Aim mode (bow drawn): tighter boom, over-the-shoulder offset, and how fast
 /// the camera blends in/out of it.
-const AIM_SPRING_LENGTH: f32 = 2.2;
-const AIM_SHOULDER_OFFSET: f32 = 0.55;
+const AIM_SPRING_LENGTH: f32 = 3.6;
+const AIM_SHOULDER_OFFSET: f32 = 0.72;
 const AIM_BLEND_PER_SEC: f32 = 10.0;
 const LANDING_DIP_INTENSITY: f32 = 0.5;
 const LANDING_DIP_RECOVERY: f32 = 8.0;
@@ -88,29 +88,65 @@ impl Plugin for CameraPlugin {
 
 /// Center-screen dot, visible only while the aim camera is blended in.
 #[derive(Component)]
-struct Crosshair;
+pub struct Crosshair;
+
+#[derive(Component)]
+pub struct CrosshairRing;
 
 fn spawn_crosshair(mut commands: Commands) {
-    commands.spawn((
-        Crosshair,
-        Name::new("Crosshair"),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(50.0),
-            top: Val::Percent(50.0),
-            width: Val::Px(6.0),
-            height: Val::Px(6.0),
-            margin: UiRect {
-                left: Val::Px(-3.0),
-                top: Val::Px(-3.0),
+    commands
+        .spawn((
+            Crosshair,
+            Name::new("Crosshair"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(50.0),
+                top: Val::Percent(50.0),
+                width: Val::Px(0.0),
+                height: Val::Px(0.0),
                 ..default()
             },
-            border_radius: BorderRadius::MAX,
-            ..default()
-        },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
-        Visibility::Hidden,
-    ));
+            Visibility::Hidden,
+        ))
+        .with_children(|parent| {
+            // Center dot (4px solid white)
+            parent.spawn((
+                Name::new("CrosshairDot"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(4.0),
+                    height: Val::Px(4.0),
+                    margin: UiRect {
+                        left: Val::Px(-2.0),
+                        top: Val::Px(-2.0),
+                        ..default()
+                    },
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.95)),
+            ));
+
+            // Outer accuracy ring (shrinks on draw/charge)
+            parent.spawn((
+                CrosshairRing,
+                Name::new("CrosshairRing"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(64.0),
+                    height: Val::Px(64.0),
+                    margin: UiRect {
+                        left: Val::Px(-32.0),
+                        top: Val::Px(-32.0),
+                        ..default()
+                    },
+                    border_radius: BorderRadius::MAX,
+                    border: UiRect::all(Val::Px(1.5)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.75)),
+            ));
+        });
 }
 
 fn toggle_crosshair(
@@ -157,6 +193,7 @@ fn camera_landing_dip(
 type FollowFilter = (With<Player>, Without<CameraRig>);
 
 /// Intentionally scoped to `Player`, not `Actor` — see `camera_landing_dip`.
+#[allow(clippy::type_complexity)]
 fn follow_player(
     player: Single<
         (
@@ -164,18 +201,27 @@ fn follow_player(
             &Transform,
             &ControlOrientation,
             Option<&crate::combat::state::CombatState>,
+            Option<&crate::combat::motors::aim::DrawStrength>,
         ),
         FollowFilter,
     >,
-    mut cam: Single<(&mut Transform, &mut CameraRig)>,
+    mut cam: Single<(&mut Transform, &mut CameraRig, &mut Projection)>,
     spatial: SpatialQuery,
     time: Res<Time>,
     mut player_vis: Query<&mut Visibility, With<PlayerVisual>>,
 ) {
-    let (player_entity, player_transform, orientation, combat_state) = *player;
-    let (cam_transform, rig) = &mut *cam;
+    let (player_entity, player_transform, orientation, combat_state, draw_strength) = *player;
+    let (cam_transform, rig, proj) = &mut *cam;
     let body = player_transform.translation;
     let dt = time.delta_secs();
+
+    // Adjust perspective camera field-of-view dynamically to simulate focus and weight.
+    if let Projection::Perspective(ref mut persp) = **proj {
+        let default_fov = std::f32::consts::FRAC_PI_4; // ~45 deg half fov (90 deg full)
+        let draw_factor = draw_strength.map_or(0.0, |d| d.factor);
+        let target_fov = default_fov - (0.12 * rig.aim_blend) - (0.16 * draw_factor);
+        persp.fov = target_fov;
+    }
 
     // Recover the landing dip, then smooth the pivot Y (handles stairs/steps).
     rig.current_dip = lerp(rig.current_dip, 0.0, LANDING_DIP_RECOVERY * dt);

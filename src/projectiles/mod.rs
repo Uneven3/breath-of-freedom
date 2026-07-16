@@ -29,6 +29,11 @@ const ARROW_KNOCKBACK: f32 = 2.5;
 const FLIGHT_TTL_SECS: f32 = 8.0;
 const STUCK_TTL_SECS: f32 = 4.0;
 
+/// Trail particles left behind flying arrows.
+const TRAIL_TTL_SECS: f32 = 0.28;
+const TRAIL_EMIT_INTERVAL: f32 = 0.016;
+const TRAIL_PARTICLE_SIZE: f32 = 0.04;
+
 /// Ask Projectiles to launch an arrow. Owned by this plugin; Combat emits it.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct SpawnProjectileMessage {
@@ -46,6 +51,12 @@ pub struct Arrow {
     /// Remaining flight time; sticking swaps it for the stuck countdown.
     remaining: f32,
     stuck: bool,
+    trail_timer: f32,
+}
+
+#[derive(Component)]
+struct TrailParticle {
+    remaining: f32,
 }
 
 pub struct ProjectilesPlugin;
@@ -54,6 +65,7 @@ impl Plugin for ProjectilesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SpawnProjectileMessage>();
         app.add_systems(FixedUpdate, (spawn_arrows, fly_arrows).chain());
+        app.add_systems(Update, tick_trail_particles);
     }
 }
 
@@ -71,6 +83,7 @@ fn spawn_arrows(
                 damage: spawn.damage,
                 remaining: FLIGHT_TTL_SECS,
                 stuck: false,
+                trail_timer: 0.0,
             },
             Name::new("Arrow"),
             Mesh3d(meshes.add(Cuboid::new(0.05, 0.05, 0.55))),
@@ -89,7 +102,6 @@ fn spawn_arrows(
 /// ray sees everything except the shooter — world geometry stops arrows,
 /// actor-layer colliders take the hit.
 type ArrowQuery<'a> = (Entity, &'a mut Arrow, &'a mut Transform);
-type TargetQuery<'a> = (Option<&'a Awareness>, Option<&'a Name>);
 
 /// The three consequence channels a landed arrow feeds — same trio as melee.
 #[derive(SystemParam)]
@@ -99,14 +111,26 @@ pub struct HitOutcomes<'w> {
     impulses: MessageWriter<'w, BodyImpulseMessage>,
 }
 
+#[derive(SystemParam)]
+pub(crate) struct TrailAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct BallisticWorld<'w, 's> {
+    spatial: SpatialQuery<'w, 's>,
+    layers: Query<'w, 's, &'static CollisionLayers>,
+    targets: Query<'w, 's, (Option<&'static Awareness>, Option<&'static Name>)>,
+}
+
 pub fn fly_arrows(
     mut commands: Commands,
     time: Res<Time>,
-    spatial: SpatialQuery,
     mut arrows: Query<ArrowQuery>,
-    layers: Query<&CollisionLayers>,
-    targets: Query<TargetQuery>,
     mut outcomes: HitOutcomes,
+    mut trail: TrailAssets,
+    world: BallisticWorld,
 ) {
     let dt = time.delta_secs();
     for (entity, mut arrow, mut transform) in &mut arrows {
@@ -119,13 +143,13 @@ pub fn fly_arrows(
             continue;
         }
 
-        arrow.velocity.y -= GRAVITY * dt;
+        arrow.velocity.y -= GRAVITY * 0.22 * dt;
         let step = arrow.velocity * dt;
         let Ok(direction) = Dir3::new(step) else {
             continue;
         };
         let filter = SpatialQueryFilter::from_excluded_entities([arrow.shooter, entity]);
-        match spatial.cast_ray(
+        match world.spatial.cast_ray(
             transform.translation,
             direction,
             step.length(),
@@ -134,11 +158,11 @@ pub fn fly_arrows(
         ) {
             Some(hit) => {
                 let hit_point = transform.translation + *direction * hit.distance;
-                let struck_actor = layers
+                let struck_actor = world.layers
                     .get(hit.entity)
                     .is_ok_and(|l| l.memberships.has_all(GameLayer::Actor));
                 if struck_actor {
-                    resolve_arrow_hit(&arrow, hit.entity, hit_point, &targets, &mut outcomes);
+                    resolve_arrow_hit(&arrow, hit.entity, hit_point, &world.targets, &mut outcomes);
                     commands.entity(entity).despawn();
                 } else {
                     // World geometry: stick where it landed and fade out.
@@ -151,6 +175,26 @@ pub fn fly_arrows(
                 transform.translation += step;
                 transform.look_to(direction, Vec3::Y);
             }
+        }
+
+        // Emit trail particles behind the arrow at a fixed interval.
+        arrow.trail_timer += dt;
+        if arrow.trail_timer >= TRAIL_EMIT_INTERVAL {
+            arrow.trail_timer -= TRAIL_EMIT_INTERVAL;
+            let trail_mesh = trail.meshes.add(Sphere::new(TRAIL_PARTICLE_SIZE));
+            let trail_mat = trail.materials.add(StandardMaterial {
+                base_color: Color::srgba(1.0, 0.95, 0.7, 0.8),
+                unlit: true,
+                ..default()
+            });
+            commands.spawn((
+                TrailParticle {
+                    remaining: TRAIL_TTL_SECS,
+                },
+                Mesh3d(trail_mesh),
+                MeshMaterial3d(trail_mat),
+                Transform::from_translation(transform.translation),
+            ));
         }
     }
 }
@@ -169,7 +213,7 @@ fn resolve_arrow_hit(
     arrow: &Arrow,
     target: Entity,
     hit_point: Vec3,
-    targets: &Query<TargetQuery>,
+    targets: &Query<(Option<&Awareness>, Option<&Name>)>,
     outcomes: &mut HitOutcomes,
 ) {
     let (awareness, name) = targets.get(target).unwrap_or((None, None));
@@ -200,6 +244,23 @@ fn resolve_arrow_hit(
         enemy: target,
         threat_position: hit_point - arrow.velocity.normalize_or_zero() * 6.0,
     });
+}
+
+fn tick_trail_particles(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut particles: Query<(Entity, &mut TrailParticle, &mut Transform)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut particle, mut transform) in &mut particles {
+        particle.remaining -= dt;
+        if particle.remaining <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let t = (particle.remaining / TRAIL_TTL_SECS).max(0.01);
+        transform.scale = Vec3::splat(t);
+    }
 }
 
 #[cfg(test)]

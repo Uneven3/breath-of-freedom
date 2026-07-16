@@ -12,13 +12,20 @@ use crate::movement::Player;
 use crate::movement::state::LocomotionState;
 use crate::visuals::PlayerVisual;
 
+use crate::combat::motors::aim::{AIM_MUZZLE_HEIGHT, AIM_SHOULDER_OFFSET};
+
 const SPRING_LENGTH: f32 = 6.5;
-const LENS_HEIGHT: f32 = 1.5;
-/// Aim mode (bow drawn): tighter boom, over-the-shoulder offset, and how fast
-/// the camera blends in/out of it.
+/// The orbit pivot height doubles as the arrow muzzle height — Combat owns
+/// the constant (§20: the projectile origin is simulation) and equality is
+/// what puts the arrow exactly on the crosshair ray.
+const LENS_HEIGHT: f32 = AIM_MUZZLE_HEIGHT;
+/// Aim mode (bow drawn): tighter boom, shoulder offset shared with Combat
+/// (see `LENS_HEIGHT`), and how fast the camera blends in/out of it.
 const AIM_SPRING_LENGTH: f32 = 3.6;
-const AIM_SHOULDER_OFFSET: f32 = 0.72;
 const AIM_BLEND_PER_SEC: f32 = 10.0;
+/// FOV eases toward its aim/draw target so firing (draw factor snapping to
+/// zero) doesn't pop the lens.
+const FOV_LERP_PER_SEC: f32 = 12.0;
 const LANDING_DIP_INTENSITY: f32 = 0.5;
 const LANDING_DIP_RECOVERY: f32 = 8.0;
 const FOLLOW_LERP_Y: f32 = 15.0;
@@ -220,7 +227,7 @@ fn follow_player(
         let default_fov = std::f32::consts::FRAC_PI_4; // ~45 deg half fov (90 deg full)
         let draw_factor = draw_strength.map_or(0.0, |d| d.factor);
         let target_fov = default_fov - (0.12 * rig.aim_blend) - (0.16 * draw_factor);
-        persp.fov = target_fov;
+        persp.fov = lerp(persp.fov, target_fov, FOV_LERP_PER_SEC * dt);
     }
 
     // Recover the landing dip, then smooth the pivot Y (handles stairs/steps).

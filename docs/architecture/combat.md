@@ -216,15 +216,18 @@ Combate no se toca en ningún caso.
    buffer + ventanas de encadenado, sweep de hitbox, VFX de swing, daño como
    cue de log, `DirectThreatMessage` al bokobo. **Primer checkpoint de
    feeling**: pegarle al bokobo, que se agroe, y que el combo "pese" bien.
-3. **`health-core`** — el sistema Health (`health.md`): componente `Health`,
-   `DamageRequestMessage` → `DamageAppliedMessage`/`DeathMessage`. El bokobo
-   y el jugador tienen HP; la espada hace daño real; muerte graybox =
-   despawn + cue. (Sistema propio, no parte de Combate — `health.md` ya
-   define la frontera.)
-4. **`enemies-combat`** — el bokobo ataca: `EnemyBrain` escribe
-   `CombatIntents` en `engage_distance`, estrena `EnemyAiState::Combat`
-   (`enemies.md`) y un `WeaponProfile` simple de bokobo. Requisito para que
-   la defensa tenga contra qué existir.
+3. **`health-core`** ✅ (2026-07-16, pendiente checkpoint jugado) — el
+   sistema Health (`health.md`): `Health`, `DamageRequestMessage` →
+   `DamageAppliedMessage`/`DeathMessage`. Espada y flechas hacen daño real
+   (los cues de log placeholder murieron); bokobo/targets mueren →
+   despawn; player muere → respawn. Ver ticket `health-core`.
+4. **`enemies-combat`** ✅ (2026-07-16, pendiente checkpoint jugado,
+   ampliado por pedido del usuario: espada **y arco**) — `EnemyBrain`
+   escribe `CombatIntents` (y el arquero su `ControlOrientation`), estrena
+   `EnemyAiState::Combat` (`enemies.md`), `WeaponProfile::BOKOBO_CLUB`, y
+   un bokobo arquero que carga y suelta con el mismo motor `aim` del
+   jugador. Ver ticket `enemies-combat`. La defensa ya tiene contra qué
+   existir.
 5. **`combat-defense`** — escudo: `Guarding` (mitiga/bloquea) y `Parrying`
    (ventana temporizada); `Staggered` entrante desde
    `DamageAppliedMessage`.
@@ -254,6 +257,12 @@ Combate no se toca en ningún caso.
   feeling de la fase 2 lo pida.
 - Criterio de selección de lock-on (Camera↔Enemies, ya listado en
   COUPLING-MAP) — se decide en la fase 7.
+- Aggro por daño sin visión: `DirectThreatMessage` deja al enemigo
+  `ALERTED`, pero `next_ai_state` exige `visible && alerted` para `Alert` —
+  un bokobo flechado por la espalda va a `Search` y **camina** a investigar
+  en vez de perseguir. ¿Es el feeling correcto o un golpe directo debería
+  habilitar la persecución hacia `last_seen` aunque no haya visión? Se
+  decide jugando en `enemies-combat`.
 - Daño a `NonClimbable`/mundo (¿cortar pasto?): fuera de alcance hasta que
   World tenga objetos rompibles.
 

@@ -7,8 +7,10 @@
 //! non-alerted target, per `docs/architecture/combat.md` § Relaciones) and
 //! feeds the same feedback channels as melee (`HitImpactMessage`,
 //! `DirectThreatMessage`, knockback); on world geometry it sticks and fades.
-//! Spawn messages are consumed on the following fixed tick (~16 ms) — same
-//! accepted latency as the constraint channel.
+//! Spawn messages are consumed the same tick they are emitted (this plugin's
+//! fixed systems are pinned after `CombatSet::EmitConstraints`); the arrow
+//! entity flies from the next tick, when its spawn command has applied — a
+//! stable 1-tick latency, same accepted criterion as the constraint channel.
 
 use avian3d::prelude::*;
 use bevy::ecs::system::SystemParam;
@@ -59,21 +61,72 @@ struct TrailParticle {
     remaining: f32,
 }
 
+/// Shared arrow/trail render assets, created once at startup: spawns in
+/// `FixedUpdate` clone handles instead of allocating assets (Constitución
+/// §18), and the shared material keeps the renderer batching particles.
+#[derive(Resource)]
+pub(crate) struct ArrowAssets {
+    arrow_mesh: Handle<Mesh>,
+    arrow_material: Handle<StandardMaterial>,
+    trail_mesh: Handle<Mesh>,
+    trail_material: Handle<StandardMaterial>,
+}
+
+/// Ordering handle for the ballistic step within `FixedUpdate`. Health
+/// applies damage after it (arrows are the latest same-tick damage emitter).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProjectilesSet {
+    Simulate,
+}
+
 pub struct ProjectilesPlugin;
 
 impl Plugin for ProjectilesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SpawnProjectileMessage>();
-        app.add_systems(FixedUpdate, (spawn_arrows, fly_arrows).chain());
+        app.add_systems(Startup, init_arrow_assets);
+        // Pinned after Combat so the spawn message is read the same tick it
+        // is written — unordered, the scheduler could put these before the
+        // writer and the latency would flip between 0 and 1 ticks per run.
+        app.configure_sets(
+            FixedUpdate,
+            ProjectilesSet::Simulate.after(crate::combat::CombatSet::EmitConstraints),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (spawn_arrows, fly_arrows)
+                .chain()
+                .in_set(ProjectilesSet::Simulate),
+        );
         app.add_systems(Update, tick_trail_particles);
     }
+}
+
+fn init_arrow_assets(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    commands.insert_resource(ArrowAssets {
+        arrow_mesh: meshes.add(Cuboid::new(0.05, 0.05, 0.55)),
+        arrow_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.9, 0.85, 0.7),
+            unlit: true,
+            ..default()
+        }),
+        trail_mesh: meshes.add(Sphere::new(TRAIL_PARTICLE_SIZE)),
+        trail_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.95, 0.7, 0.8),
+            unlit: true,
+            ..default()
+        }),
+    });
 }
 
 fn spawn_arrows(
     mut commands: Commands,
     mut spawns: MessageReader<SpawnProjectileMessage>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Res<ArrowAssets>,
 ) {
     for spawn in spawns.read() {
         commands.spawn((
@@ -86,12 +139,8 @@ fn spawn_arrows(
                 trail_timer: 0.0,
             },
             Name::new("Arrow"),
-            Mesh3d(meshes.add(Cuboid::new(0.05, 0.05, 0.55))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.9, 0.85, 0.7),
-                unlit: true,
-                ..default()
-            })),
+            Mesh3d(assets.arrow_mesh.clone()),
+            MeshMaterial3d(assets.arrow_material.clone()),
             Transform::from_translation(spawn.origin)
                 .looking_to(Dir3::new(spawn.velocity).unwrap_or(Dir3::NEG_Z), Vec3::Y),
         ));
@@ -103,18 +152,13 @@ fn spawn_arrows(
 /// actor-layer colliders take the hit.
 type ArrowQuery<'a> = (Entity, &'a mut Arrow, &'a mut Transform);
 
-/// The three consequence channels a landed arrow feeds — same trio as melee.
+/// The consequence channels a landed arrow feeds — same set as melee.
 #[derive(SystemParam)]
 pub struct HitOutcomes<'w> {
+    damage: MessageWriter<'w, crate::health::DamageRequestMessage>,
     impacts: MessageWriter<'w, HitImpactMessage>,
     threats: MessageWriter<'w, DirectThreatMessage>,
     impulses: MessageWriter<'w, BodyImpulseMessage>,
-}
-
-#[derive(SystemParam)]
-pub(crate) struct TrailAssets<'w> {
-    meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
 }
 
 #[derive(SystemParam)]
@@ -129,7 +173,7 @@ pub fn fly_arrows(
     time: Res<Time>,
     mut arrows: Query<ArrowQuery>,
     mut outcomes: HitOutcomes,
-    mut trail: TrailAssets,
+    assets: Res<ArrowAssets>,
     world: BallisticWorld,
 ) {
     let dt = time.delta_secs();
@@ -158,7 +202,8 @@ pub fn fly_arrows(
         ) {
             Some(hit) => {
                 let hit_point = transform.translation + *direction * hit.distance;
-                let struck_actor = world.layers
+                let struck_actor = world
+                    .layers
                     .get(hit.entity)
                     .is_ok_and(|l| l.memberships.has_all(GameLayer::Actor));
                 if struck_actor {
@@ -181,18 +226,12 @@ pub fn fly_arrows(
         arrow.trail_timer += dt;
         if arrow.trail_timer >= TRAIL_EMIT_INTERVAL {
             arrow.trail_timer -= TRAIL_EMIT_INTERVAL;
-            let trail_mesh = trail.meshes.add(Sphere::new(TRAIL_PARTICLE_SIZE));
-            let trail_mat = trail.materials.add(StandardMaterial {
-                base_color: Color::srgba(1.0, 0.95, 0.7, 0.8),
-                unlit: true,
-                ..default()
-            });
             commands.spawn((
                 TrailParticle {
                     remaining: TRAIL_TTL_SECS,
                 },
-                Mesh3d(trail_mesh),
-                MeshMaterial3d(trail_mat),
+                Mesh3d(assets.trail_mesh.clone()),
+                MeshMaterial3d(assets.trail_material.clone()),
                 Transform::from_translation(transform.translation),
             ));
         }
@@ -222,11 +261,15 @@ fn resolve_arrow_hit(
     let target_alerted = awareness.is_none_or(Awareness::is_alerted);
     let (damage, critical) = arrow_damage(arrow.damage, target_alerted);
 
-    let label = name.map(Name::as_str).unwrap_or("target");
-    let crit_tag = if critical { " (STEALTH SHOT)" } else { "" };
-    // Placeholder for health::DamageRequestMessage (ticket `health-core`).
-    info!("[combat] cue: arrow hit {label} for {damage:.0}{crit_tag}");
+    if critical {
+        let label = name.map(Name::as_str).unwrap_or("target");
+        info!("[combat] STEALTH SHOT on {label}");
+    }
 
+    outcomes.damage.write(crate::health::DamageRequestMessage {
+        target,
+        amount: damage,
+    });
     outcomes.impacts.write(HitImpactMessage {
         target,
         position: hit_point,

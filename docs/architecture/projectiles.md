@@ -3,7 +3,9 @@
 **Carpeta objetivo:** `src/projectiles/`
 
 **Estado:** implementado (ticket `combat-bow`, 2026-07-15) para flechas del
-arco; daño real espera `health-core` (hoy: cue de log).
+arco; daño real vía `health::DamageRequestMessage` desde `health-core`
+(2026-07-16). Lo disparan el jugador y el bokobo arquero por el mismo
+camino (`enemies-combat`).
 
 Cuerpos físicos simples (flechas) con un único comportamiento — volar hasta
 impactar — no actores multi-estado. No usan el patrón Broker de
@@ -14,7 +16,7 @@ Movement/Combat/Mounts. Ver `rationale/when-not-broker-pattern.md`.
 | Tipo | Dónde | Qué es |
 |---|---|---|
 | `Arrow` | `projectiles/mod.rs` | `{ velocity, shooter, damage, remaining, stuck }`. Dueño exclusivo de su propio vuelo. (El nombre genérico `Projectile` llegará si aparece un segundo tipo.) |
-| `SpawnProjectileMessage` | `projectiles/mod.rs` | `{ shooter, origin, velocity, damage }` (velocity ya compuesta — el emisor decide dirección×rapidez). Combate lo emite al soltar la flecha; Projectiles construye la entidad — Combate nunca hace `commands.spawn` de una flecha. Consumido al tick siguiente (~16 ms, latencia aceptada, mismo criterio que constraints). |
+| `SpawnProjectileMessage` | `projectiles/mod.rs` | `{ shooter, origin, velocity, damage }` (velocity ya compuesta — el emisor decide dirección×rapidez). Combate lo emite al soltar la flecha; Projectiles construye la entidad — Combate nunca hace `commands.spawn` de una flecha. Consumido el mismo tick (`spawn_arrows` corre tras `CombatSet::EmitConstraints`, orden pinneado — `combat-bow-fixes`); la flecha vuela desde el tick siguiente (los `Commands` aplican al cerrar el schedule): 1 tick de latencia, estable. |
 
 ## Sistemas (comportamiento) — implementado
 

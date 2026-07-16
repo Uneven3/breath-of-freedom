@@ -314,14 +314,15 @@ type HitAttackerQuery<'a> = (
 );
 type HitTargetQuery<'a> = (&'a Transform, Option<&'a Awareness>, Option<&'a Name>);
 
-/// Turns swept candidates into consequences: damage cue (placeholder for
-/// `health::DamageRequestMessage` until `health-core` lands), instant aggro
-/// on the struck enemy, knockback, and the public impact for presentation.
+/// Turns swept candidates into consequences: real damage
+/// (`health::DamageRequestMessage`), instant aggro on the struck enemy,
+/// knockback, and the public impact for presentation.
 pub fn resolve_melee_hits(
     mut messages: MessageReader<MeleeHitMessage>,
     attackers: Query<HitAttackerQuery, With<Actor>>,
     // Target side matches the sweep: layer-gated, not marker-gated.
     targets: Query<HitTargetQuery>,
+    mut damage_requests: MessageWriter<crate::health::DamageRequestMessage>,
     mut threats: MessageWriter<DirectThreatMessage>,
     mut impulses: MessageWriter<crate::movement::constraints::BodyImpulseMessage>,
     mut impacts: MessageWriter<HitImpactMessage>,
@@ -347,11 +348,16 @@ pub fn resolve_melee_hits(
             sneaking,
         );
 
-        let attacker_label = attacker_name.map(Name::as_str).unwrap_or("attacker");
-        let target_label = target_name.map(Name::as_str).unwrap_or("target");
-        let sneak_tag = if critical { " (SNEAKSTRIKE)" } else { "" };
-        // Placeholder for health::DamageRequestMessage (ticket `health-core`).
-        info!("[combat] cue: {attacker_label} hit {target_label} for {damage:.0}{sneak_tag}");
+        if critical {
+            let attacker_label = attacker_name.map(Name::as_str).unwrap_or("attacker");
+            let target_label = target_name.map(Name::as_str).unwrap_or("target");
+            info!("[combat] SNEAKSTRIKE: {attacker_label} on {target_label}");
+        }
+
+        damage_requests.write(crate::health::DamageRequestMessage {
+            target: hit.target,
+            amount: damage,
+        });
 
         // Knockback: shove the target away from the attacker (planar; the
         // target's own motor reabsorbs it).

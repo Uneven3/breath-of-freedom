@@ -25,6 +25,11 @@ pub struct EnemyBrainProfile {
     pub patrol_pause_secs: f32,
     /// Give up searching after this long without reacquiring sight (s).
     pub search_timeout_secs: f32,
+    /// A visible, alerted target inside this radius flips `Alert` →
+    /// `Combat` (melee: just past sword reach; archer: shooting range).
+    pub attack_range: f32,
+    /// Minimum delay between attack starts (melee swings / bow draws).
+    pub attack_cadence_secs: f32,
 }
 
 impl EnemyBrainProfile {
@@ -34,6 +39,20 @@ impl EnemyBrainProfile {
         patrol_radius: 6.0,
         patrol_pause_secs: 1.5,
         search_timeout_secs: 6.0,
+        attack_range: 1.9,
+        attack_cadence_secs: 1.2,
+    };
+
+    /// Keeps its distance and shoots: the engage ring is where it stands,
+    /// the attack range is where it starts drawing.
+    pub const BOKOBO_ARCHER: Self = Self {
+        engage_distance: 9.0,
+        arrive_radius: 0.6,
+        patrol_radius: 6.0,
+        patrol_pause_secs: 1.5,
+        search_timeout_secs: 6.0,
+        attack_range: 13.0,
+        attack_cadence_secs: 0.8,
     };
 }
 
@@ -51,22 +70,28 @@ pub struct BrainLocal {
 /// the result; tests pin it directly.
 ///
 /// `engaged` = target in sight **and** `Awareness` full ("full threat");
-/// `suspicious` = the meter crossed `Awareness::SUSPICIOUS`, worth
-/// investigating even before full detection.
+/// `in_attack_range` = that engaged target is inside `attack_range`
+/// (irrelevant when not engaged); `suspicious` = the meter crossed
+/// `Awareness::SUSPICIOUS`, worth investigating even before full detection.
 pub(crate) fn next_ai_state(
     current: EnemyAiState,
     engaged: bool,
+    in_attack_range: bool,
     suspicious: bool,
     reached_last_seen: bool,
     search_expired: bool,
 ) -> EnemyAiState {
     if engaged {
-        return EnemyAiState::Alert;
+        return if in_attack_range {
+            EnemyAiState::Combat
+        } else {
+            EnemyAiState::Alert
+        };
     }
     match current {
         EnemyAiState::Patrol if suspicious => EnemyAiState::Search,
         EnemyAiState::Patrol => EnemyAiState::Patrol,
-        EnemyAiState::Alert => EnemyAiState::Search,
+        EnemyAiState::Alert | EnemyAiState::Combat => EnemyAiState::Search,
         EnemyAiState::Search if search_expired || (reached_last_seen && !suspicious) => {
             EnemyAiState::Patrol
         }
@@ -101,9 +126,17 @@ pub fn decide(time: Res<Time>, mut q: Query<DecideQuery, With<Enemy>>) {
         }
         let search_expired = local.search_elapsed >= profile.search_timeout_secs;
 
+        // While in sight, `last_seen` is the target's current position.
+        let in_attack_range = visible
+            && aggro.last_seen.is_some_and(|seen| {
+                planar_distance_sq(transform.translation, seen)
+                    <= profile.attack_range * profile.attack_range
+            });
+
         let next = next_ai_state(
             *state,
             engaged,
+            in_attack_range,
             awareness.is_suspicious(),
             reached_last_seen,
             search_expired,
@@ -142,6 +175,12 @@ pub fn act(time: Res<Time>, mut q: Query<ActQuery, With<Enemy>>) {
             }),
             EnemyAiState::Search => aggro.last_seen.map_or_else(Intents::default, |seen| {
                 walk_toward(pos, seen, profile.arrive_radius, GaitIntent::Walk)
+            }),
+            // Fighting: keep pressing toward the target at a walk — the
+            // approach is what keeps the melee facing it (motors rotate
+            // toward planar intent); the archer's aim is ControlOrientation.
+            EnemyAiState::Combat => aggro.last_seen.map_or_else(Intents::default, |seen| {
+                walk_toward(pos, seen, profile.engage_distance, GaitIntent::Walk)
             }),
         };
     }
@@ -216,7 +255,7 @@ fn walk_toward(pos: Vec3, target: Vec3, stop_radius: f32, gait: GaitIntent) -> I
     }
 }
 
-fn planar_distance_sq(a: Vec3, b: Vec3) -> f32 {
+pub(crate) fn planar_distance_sq(a: Vec3, b: Vec3) -> f32 {
     Vec2::new(a.x, a.z).distance_squared(Vec2::new(b.x, b.z))
 }
 
@@ -232,27 +271,54 @@ mod tests {
             EnemyAiState::Patrol,
             EnemyAiState::Alert,
             EnemyAiState::Search,
+            EnemyAiState::Combat,
         ] {
             assert_eq!(
-                next_ai_state(current, true, true, false, false),
+                next_ai_state(current, true, false, true, false, false),
                 EnemyAiState::Alert
             );
         }
         assert_eq!(
-            next_ai_state(EnemyAiState::Alert, false, true, false, false),
+            next_ai_state(EnemyAiState::Alert, false, false, true, false, false),
             EnemyAiState::Search
+        );
+    }
+
+    #[test]
+    fn combat_needs_sight_and_range_and_degrades_like_alert() {
+        for current in [
+            EnemyAiState::Patrol,
+            EnemyAiState::Alert,
+            EnemyAiState::Search,
+            EnemyAiState::Combat,
+        ] {
+            assert_eq!(
+                next_ai_state(current, true, true, true, false, false),
+                EnemyAiState::Combat,
+                "engaged and in range always fights"
+            );
+        }
+        assert_eq!(
+            next_ai_state(EnemyAiState::Combat, true, false, true, false, false),
+            EnemyAiState::Alert,
+            "target stepped out of range while visible: chase again"
+        );
+        assert_eq!(
+            next_ai_state(EnemyAiState::Combat, false, false, true, false, false),
+            EnemyAiState::Search,
+            "losing sight mid-fight degrades to search, like Alert"
         );
     }
 
     #[test]
     fn suspicion_triggers_investigation_not_alert() {
         assert_eq!(
-            next_ai_state(EnemyAiState::Patrol, false, true, false, false),
+            next_ai_state(EnemyAiState::Patrol, false, false, true, false, false),
             EnemyAiState::Search,
             "a suspicious enemy investigates"
         );
         assert_eq!(
-            next_ai_state(EnemyAiState::Patrol, false, false, false, false),
+            next_ai_state(EnemyAiState::Patrol, false, false, false, false, false),
             EnemyAiState::Patrol,
             "below the suspicion threshold nothing happens"
         );
@@ -261,22 +327,22 @@ mod tests {
     #[test]
     fn search_gives_up_on_calm_arrival_or_timeout() {
         assert_eq!(
-            next_ai_state(EnemyAiState::Search, false, false, true, false),
+            next_ai_state(EnemyAiState::Search, false, false, false, true, false),
             EnemyAiState::Patrol,
             "arrived and no longer suspicious: give up"
         );
         assert_eq!(
-            next_ai_state(EnemyAiState::Search, false, true, true, false),
+            next_ai_state(EnemyAiState::Search, false, false, true, true, false),
             EnemyAiState::Search,
             "arrived but still suspicious: keep looking around"
         );
         assert_eq!(
-            next_ai_state(EnemyAiState::Search, false, true, false, true),
+            next_ai_state(EnemyAiState::Search, false, false, true, false, true),
             EnemyAiState::Patrol,
             "timeout beats lingering suspicion"
         );
         assert_eq!(
-            next_ai_state(EnemyAiState::Search, false, false, false, false),
+            next_ai_state(EnemyAiState::Search, false, false, false, false, false),
             EnemyAiState::Search
         );
     }

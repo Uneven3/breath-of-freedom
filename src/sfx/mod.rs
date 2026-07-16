@@ -68,7 +68,9 @@ fn modulate_continuous_sfx(
                 "[audio] initial baseline for entity {:?}: speed = {:.2}, stamina = {:.2}",
                 entity, current_speed, current_stamina
             );
-            commands.entity(entity).insert(ContinuousSfxTracker {
+            // try_insert: the actor can be despawned by another Update
+            // system's buffer this same frame (F7 toggle, death reactions).
+            commands.entity(entity).try_insert(ContinuousSfxTracker {
                 last_speed: current_speed,
                 last_stamina: current_stamina,
             });

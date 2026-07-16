@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 
-use crate::movement::Player;
+use crate::health::{DeathMessage, Health, HealthSet};
 use crate::movement::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
     LedgeTraversal, WallJumpMovement,
@@ -20,12 +20,20 @@ use crate::movement::bundles::{
     LedgeTraversalBundle, WallJumpMovementBundle,
 };
 use crate::movement::sensing::{GroundSensing, LedgeSensing};
+use crate::movement::{BodyVelocity, Player};
+
+/// Authored spawn point; death teleports back here (graybox respawn).
+const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 1.5, 0.0);
+const PLAYER_HP: f32 = 100.0;
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_player);
+        // Death consequences belong to the actor's owner (health.md): the
+        // graybox player respawns at the authored spawn with full health.
+        app.add_systems(FixedUpdate, respawn_on_death.after(HealthSet::Apply));
     }
 }
 
@@ -40,7 +48,7 @@ fn spawn_player(mut commands: Commands) {
         crate::input::frame::ControlOrientation::default(),
         Name::new("Player"),
         KinematicActorBundle::new(
-            Transform::from_xyz(0.0, 1.5, 0.0),
+            Transform::from_translation(PLAYER_SPAWN),
             body_dimensions,
             GroundSensing::PLAYER,
         ),
@@ -60,6 +68,7 @@ fn spawn_player(mut commands: Commands) {
         // Combat contract: graybox sword until Equipment (Inventory) owns
         // what's wielded.
         (
+            Health::new(PLAYER_HP),
             crate::combat::intent::CombatIntents::default(),
             crate::combat::state::CombatState::default(),
             crate::combat::proposal::CombatProposalBuffer::default(),
@@ -70,4 +79,24 @@ fn spawn_player(mut commands: Commands) {
             crate::combat::motors::aim::DrawStrength::default(),
         ),
     ));
+}
+
+type RespawnQuery<'a> = (&'a mut Transform, &'a mut BodyVelocity, &'a mut Health);
+
+/// Graybox death rule: teleport to the authored spawn, kill momentum, heal
+/// to full. The same discrete placement as the initial spawn — a game rule
+/// owned by the Player's owner, not a control-pipeline bypass.
+fn respawn_on_death(
+    mut deaths: MessageReader<DeathMessage>,
+    mut player: Query<RespawnQuery, With<Player>>,
+) {
+    for death in deaths.read() {
+        let Ok((mut transform, mut velocity, mut health)) = player.get_mut(death.entity) else {
+            continue;
+        };
+        transform.translation = PLAYER_SPAWN;
+        velocity.0 = Vec3::ZERO;
+        health.heal_full();
+        info!("[player] died — respawning at the authored spawn");
+    }
 }

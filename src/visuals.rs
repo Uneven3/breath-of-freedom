@@ -110,97 +110,99 @@ fn spawn_visual(
 
             // Spawn the Bow Visual Root
             // Positioned slightly right, chest level, pointing forward (-Z)
-            parent.spawn((
-                BowVisualRoot,
-                Name::new("BowVisualRoot"),
-                Visibility::Hidden,
-                Transform::from_xyz(0.35, 0.15, -0.55)
-                    .with_rotation(Quat::from_rotation_y(0.12) * Quat::from_rotation_z(-0.18)),
-            ))
-            .with_children(|bow_parent| {
-                let wood_material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.4, 0.25, 0.15), // Brown wood
-                    perceptual_roughness: 0.8,
-                    ..default()
-                });
-                let string_material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.9, 0.9, 0.95), // Off-white string
-                    unlit: true,
-                    ..default()
-                });
-                let steel_material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.7, 0.7, 0.75), // Steel arrow head
-                    perceptual_roughness: 0.1,
-                    ..default()
-                });
-                let fletch_material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.85, 0.15, 0.15), // Red fletching
-                    ..default()
-                });
-
-                // Bow limbs
-                // Handle (center vertical part)
-                bow_parent.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.04, 0.2, 0.04))),
-                    MeshMaterial3d(wood_material.clone()),
-                    Transform::from_xyz(0.0, 0.0, 0.0),
-                    Visibility::default(),
-                ));
-                // Upper limb (angled forward)
-                bow_parent.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.03, 0.45, 0.03))),
-                    MeshMaterial3d(wood_material.clone()),
-                    Transform::from_xyz(0.0, 0.28, -0.06)
-                        .with_rotation(Quat::from_rotation_x(-0.35)),
-                    Visibility::default(),
-                ));
-                // Lower limb (angled forward)
-                bow_parent.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.03, 0.45, 0.03))),
-                    MeshMaterial3d(wood_material.clone()),
-                    Transform::from_xyz(0.0, -0.28, -0.06)
-                        .with_rotation(Quat::from_rotation_x(0.35)),
-                    Visibility::default(),
-                ));
-                // Bowstring (from top tip to bottom tip)
-                bow_parent.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.006, 0.95, 0.006))),
-                    MeshMaterial3d(string_material),
-                    Transform::from_xyz(0.0, 0.0, 0.1),
-                    Visibility::default(),
-                ));
-
-                // Arrow
-                bow_parent.spawn((
-                    BowArrowVisual,
-                    Name::new("BowArrowVisual"),
-                    Visibility::default(),
-                    Transform::from_xyz(0.0, 0.0, 0.1), // initially pulled back/resting on string
+            parent
+                .spawn((
+                    BowVisualRoot,
+                    Name::new("BowVisualRoot"),
+                    Visibility::Hidden,
+                    Transform::from_xyz(0.35, 0.15, -0.55)
+                        .with_rotation(Quat::from_rotation_y(0.12) * Quat::from_rotation_z(-0.18)),
                 ))
-                .with_children(|arrow_parent| {
-                    // Shaft (brown)
-                    arrow_parent.spawn((
-                        Mesh3d(meshes.add(Cuboid::new(0.015, 0.015, 0.65))),
-                        MeshMaterial3d(wood_material),
-                        Transform::from_xyz(0.0, 0.0, -0.3), // aligned forward (-Z)
+                .with_children(|bow_parent| {
+                    let wood_material = materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.4, 0.25, 0.15), // Brown wood
+                        perceptual_roughness: 0.8,
+                        ..default()
+                    });
+                    let string_material = materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.9, 0.9, 0.95), // Off-white string
+                        unlit: true,
+                        ..default()
+                    });
+                    let steel_material = materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.7, 0.7, 0.75), // Steel arrow head
+                        perceptual_roughness: 0.1,
+                        ..default()
+                    });
+                    let fletch_material = materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.85, 0.15, 0.15), // Red fletching
+                        ..default()
+                    });
+
+                    // Bow limbs
+                    // Handle (center vertical part)
+                    bow_parent.spawn((
+                        Mesh3d(meshes.add(Cuboid::new(0.04, 0.2, 0.04))),
+                        MeshMaterial3d(wood_material.clone()),
+                        Transform::from_xyz(0.0, 0.0, 0.0),
                         Visibility::default(),
                     ));
-                    // Arrowhead (silver/steel)
-                    arrow_parent.spawn((
-                        Mesh3d(meshes.add(Cuboid::new(0.035, 0.035, 0.07))),
-                        MeshMaterial3d(steel_material),
-                        Transform::from_xyz(0.0, 0.0, -0.65), // tip of the shaft
+                    // Upper limb (angled forward)
+                    bow_parent.spawn((
+                        Mesh3d(meshes.add(Cuboid::new(0.03, 0.45, 0.03))),
+                        MeshMaterial3d(wood_material.clone()),
+                        Transform::from_xyz(0.0, 0.28, -0.06)
+                            .with_rotation(Quat::from_rotation_x(-0.35)),
                         Visibility::default(),
                     ));
-                    // Fletching (red)
-                    arrow_parent.spawn((
-                        Mesh3d(meshes.add(Cuboid::new(0.01, 0.05, 0.08))),
-                        MeshMaterial3d(fletch_material),
-                        Transform::from_xyz(0.0, 0.0, -0.05), // near the back
+                    // Lower limb (angled forward)
+                    bow_parent.spawn((
+                        Mesh3d(meshes.add(Cuboid::new(0.03, 0.45, 0.03))),
+                        MeshMaterial3d(wood_material.clone()),
+                        Transform::from_xyz(0.0, -0.28, -0.06)
+                            .with_rotation(Quat::from_rotation_x(0.35)),
                         Visibility::default(),
                     ));
+                    // Bowstring (from top tip to bottom tip)
+                    bow_parent.spawn((
+                        Mesh3d(meshes.add(Cuboid::new(0.006, 0.95, 0.006))),
+                        MeshMaterial3d(string_material),
+                        Transform::from_xyz(0.0, 0.0, 0.1),
+                        Visibility::default(),
+                    ));
+
+                    // Arrow
+                    bow_parent
+                        .spawn((
+                            BowArrowVisual,
+                            Name::new("BowArrowVisual"),
+                            Visibility::default(),
+                            Transform::from_xyz(0.0, 0.0, 0.1), // initially pulled back/resting on string
+                        ))
+                        .with_children(|arrow_parent| {
+                            // Shaft (brown)
+                            arrow_parent.spawn((
+                                Mesh3d(meshes.add(Cuboid::new(0.015, 0.015, 0.65))),
+                                MeshMaterial3d(wood_material),
+                                Transform::from_xyz(0.0, 0.0, -0.3), // aligned forward (-Z)
+                                Visibility::default(),
+                            ));
+                            // Arrowhead (silver/steel)
+                            arrow_parent.spawn((
+                                Mesh3d(meshes.add(Cuboid::new(0.035, 0.035, 0.07))),
+                                MeshMaterial3d(steel_material),
+                                Transform::from_xyz(0.0, 0.0, -0.65), // tip of the shaft
+                                Visibility::default(),
+                            ));
+                            // Fletching (red)
+                            arrow_parent.spawn((
+                                Mesh3d(meshes.add(Cuboid::new(0.01, 0.05, 0.08))),
+                                MeshMaterial3d(fletch_material),
+                                Transform::from_xyz(0.0, 0.0, -0.05), // near the back
+                                Visibility::default(),
+                            ));
+                        });
                 });
-            });
         });
 }
 
@@ -638,7 +640,10 @@ fn animate_player(
 fn animate_bow_visual(
     player: Single<(&CombatState, &crate::combat::motors::aim::DrawStrength), With<Player>>,
     mut bow_root: Query<(&mut Visibility, &Children), With<BowVisualRoot>>,
-    mut arrow: Query<(&mut Visibility, &mut Transform), (With<BowArrowVisual>, Without<BowVisualRoot>)>,
+    mut arrow: Query<
+        (&mut Visibility, &mut Transform),
+        (With<BowArrowVisual>, Without<BowVisualRoot>),
+    >,
 ) {
     let (state, draw) = *player;
     let aiming = matches!(state, CombatState::Aiming);

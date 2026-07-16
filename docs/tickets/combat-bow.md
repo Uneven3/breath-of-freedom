@@ -26,6 +26,14 @@ pendientes.
   `SpawnProjectileMessage` con dirección de `ControlOrientation` (exactamente
   donde mira la cámara de apuntado).
 
+> **Nota (2026-07-16):** `52475eb` reemplazó el disparo por edge con un
+> modelo de carga — mantener attack tensa (`DrawStrength`, drena stamina),
+> soltar dispara con velocidad/daño/precisión escalados por la carga — sin
+> actualizar este ticket ni `WORKING-CONTEXT.md`. Las correcciones de la
+> revisión posterior (feedback de disparo, tap-fire, origen del proyectil
+> sin leer la cámara, orden de Projectiles, assets cacheados) viven en
+> `combat-bow-fixes.md`.
+
 **Projectiles (`src/projectiles/`):** lo propuesto en `projectiles.md`,
 ahora real: `SpawnProjectileMessage { shooter, origin, velocity, damage }`
 (dueño el receptor; consumido al tick siguiente, ~16 ms, latencia aceptada),

@@ -62,11 +62,39 @@ impl Ladder {
     }
 }
 
+/// A destructible archery/melee practice target (owner: World — its death
+/// reaction lives here, per `health.md`).
+#[derive(Component)]
+pub struct PracticeTarget;
+
+const PRACTICE_TARGET_HP: f32 = 30.0;
+
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_world);
+        app.add_systems(
+            FixedUpdate,
+            despawn_dead_targets.after(crate::health::HealthSet::Apply),
+        );
+    }
+}
+
+fn despawn_dead_targets(
+    mut commands: Commands,
+    mut deaths: MessageReader<crate::health::DeathMessage>,
+    targets: Query<Option<&Name>, With<PracticeTarget>>,
+) {
+    for death in deaths.read() {
+        let Ok(name) = targets.get(death.entity) else {
+            continue;
+        };
+        info!(
+            "[world] {} destroyed",
+            name.map(Name::as_str).unwrap_or("practice target")
+        );
+        commands.entity(death.entity).despawn();
     }
 }
 
@@ -169,6 +197,8 @@ fn spawn_practice_target(
     let target = commands
         .spawn((
             Name::new(name.to_string()),
+            PracticeTarget,
+            crate::health::Health::new(PRACTICE_TARGET_HP),
             Mesh3d(meshes.add(Cuboid::new(
                 PRACTICE_TARGET_DIMS.x,
                 PRACTICE_TARGET_DIMS.y,

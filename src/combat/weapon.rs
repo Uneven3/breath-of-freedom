@@ -79,6 +79,27 @@ impl WeaponProfile {
         ],
     };
 
+    /// Graybox bokobo club: one heavy, telegraphed swing — the long windup
+    /// is the player's dodge/parry window. First-pass values, tuned at the
+    /// `enemies-combat` checkpoint.
+    pub const BOKOBO_CLUB: Self = Self {
+        base_damage: 8.0,
+        combo: [
+            Some(AttackStep {
+                windup_secs: 0.35,
+                active_secs: 0.15,
+                recovery_secs: 0.60,
+                chain_window_secs: 0.0,
+                damage_mult: 1.0,
+                reach: 1.9,
+                arc_deg: 110.0,
+            }),
+            None,
+            None,
+            None,
+        ],
+    };
+
     pub fn step(&self, index: usize) -> Option<&AttackStep> {
         self.combo.get(index).and_then(Option::as_ref)
     }

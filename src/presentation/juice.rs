@@ -113,7 +113,10 @@ fn flash_on_hit(
                     let Some(mut material) = materials.get_mut(&material_handle.0) else {
                         continue;
                     };
-                    commands.entity(visual).insert(HitFlash {
+                    // try_insert: a killing blow races the orphan-visual
+                    // despawn in this same schedule — losing that race must
+                    // drop the flash, not panic.
+                    commands.entity(visual).try_insert(HitFlash {
                         remaining: HIT_FLASH_SECS,
                         original: material.base_color,
                     });
@@ -138,7 +141,8 @@ fn expire_hit_flash(
         if let Some(mut material) = materials.get_mut(&material_handle.0) {
             material.base_color = flash.original;
         }
-        commands.entity(visual).remove::<HitFlash>();
+        // try_remove: same despawn race as the insert in `flash_on_hit`.
+        commands.entity(visual).try_remove::<HitFlash>();
     }
 }
 
@@ -434,24 +438,26 @@ fn tick_hitstop(
 // ---------------------------------------------------------------------------
 
 fn bow_fire_feedback(
-    player: Query<&crate::combat::motors::aim::DrawStrength, With<Player>>,
+    mut fired: MessageReader<crate::combat::motors::aim::BowFiredMessage>,
+    player: Query<Entity, With<Player>>,
     mut shake: ResMut<CameraShake>,
     mut hitstop: ResMut<Hitstop>,
-    mut prev_factor: Local<f32>,
 ) {
-    let Ok(draw) = player.single() else {
+    let Ok(player) = player.single() else {
         return;
     };
-    if draw.just_fired {
+    for shot in fired.read() {
+        if shot.shooter != player {
+            continue;
+        }
         // Trauma proportional to how charged the shot was.
-        let trauma = BOW_FIRE_TRAUMA_MIN
-            + (BOW_FIRE_TRAUMA_MAX - BOW_FIRE_TRAUMA_MIN) * *prev_factor;
+        let trauma =
+            BOW_FIRE_TRAUMA_MIN + (BOW_FIRE_TRAUMA_MAX - BOW_FIRE_TRAUMA_MIN) * shot.charge;
         shake.add_trauma(trauma);
-        if *prev_factor > 0.95 {
+        if shot.charge > 0.95 {
             hitstop.0 = BOW_FULL_CHARGE_HITSTOP;
         }
     }
-    *prev_factor = draw.factor;
 }
 
 #[allow(clippy::type_complexity)]
@@ -478,7 +484,6 @@ fn animate_crosshair_charge(
         ..default()
     };
 }
-
 
 #[cfg(test)]
 mod tests {

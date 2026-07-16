@@ -36,6 +36,7 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<motors::attack::MeleeHitMessage>();
         app.add_message::<motors::attack::HitImpactMessage>();
+        app.add_message::<motors::aim::BowFiredMessage>();
 
         app.configure_sets(
             FixedUpdate,

@@ -3,12 +3,12 @@
 //! `propose` keeps `Aiming` alive while `wants_aim` holds (release = silence
 //! → `Idle`); charging accumulates `DrawStrength` while attack is held during
 //! `Aiming`, and releasing attack fires an arrow whose speed and damage scale
-//! with the charge. The arrow spawns from the camera position so it visually
-//! leaves the crosshair, not the player's body.
+//! with the charge. The arrow spawns from the shoulder pivot the crosshair
+//! ray passes through — pure simulation data (§20), no camera read; the
+//! camera imports the same constants so the alignment holds by construction.
 
 use bevy::prelude::*;
 
-use crate::camera::CameraRig;
 use crate::combat::intent::CombatIntents;
 use crate::combat::proposal::{CombatProposalBuffer, Priority, TransitionProposal, weight};
 use crate::combat::state::CombatState;
@@ -26,9 +26,13 @@ const ARROW_DAMAGE_MIN: f32 = 6.0;
 const ARROW_DAMAGE_MAX: f32 = 18.0;
 /// Seconds to reach full charge.
 const DRAW_TIME_SECS: f32 = 1.4;
-/// Body-relative muzzle for non-aim shots (AI actors without a camera).
-const ARROW_MUZZLE_UP: f32 = 0.4;
-const ARROW_MUZZLE_FORWARD: f32 = 0.6;
+/// Aim shoulder pivot, owned by Combat (the projectile origin is simulation —
+/// §20). `camera.rs` imports both so the crosshair ray passes exactly through
+/// the muzzle: pivot height over the body center, and the rightward offset.
+pub const AIM_MUZZLE_HEIGHT: f32 = 1.5;
+pub const AIM_SHOULDER_OFFSET: f32 = 0.72;
+/// Forward nudge so the arrow doesn't spawn intersecting the body capsule.
+const ARROW_MUZZLE_FORWARD: f32 = 0.3;
 /// Stamina drain rate per second when pulling/holding the bowstring.
 const DRAW_STAMINA_DRAIN_PER_SEC: f32 = 14.0;
 /// Delay (seconds) after firing before you can draw or shoot again.
@@ -42,11 +46,19 @@ pub struct DrawStrength {
     pub factor: f32,
     /// Whether the player is actively holding the attack button to charge.
     pub charging: bool,
-    /// Set true for the single tick the arrow is released — lets presentation
-    /// systems react (camera shake, muzzle flash).
-    pub just_fired: bool,
     /// Delay after firing before you can notch and pull another arrow.
     pub cooldown: f32,
+}
+
+/// Published the tick an arrow leaves the string. Presentation consumes it
+/// (camera kick, hitstop at full charge) — same ownership pattern as
+/// `HitImpactMessage`: Combat owns the type, consumers read it without
+/// Combat knowing they exist.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct BowFiredMessage {
+    pub shooter: Entity,
+    /// Draw charge at release, `0.0..=1.0`.
+    pub charge: f32,
 }
 
 type ProposeQuery<'a> = (
@@ -87,8 +99,6 @@ type DrawQuery<'a> = (
 pub fn tick_draw_strength(time: Res<Time>, mut q: Query<DrawQuery, With<Actor>>) {
     let dt = time.delta_secs();
     for (intents, state, mut draw, mut stamina) in &mut q {
-        draw.just_fired = false;
-        
         // Cooldown ticks down at all times
         if draw.cooldown > 0.0 {
             draw.cooldown = (draw.cooldown - dt).max(0.0);
@@ -107,7 +117,7 @@ pub fn tick_draw_strength(time: Res<Time>, mut q: Query<DrawQuery, With<Actor>>)
         if intents.attack.held && can_charge {
             draw.charging = true;
             draw.factor = (draw.factor + dt / DRAW_TIME_SECS).min(1.0);
-            
+
             if let Some(ref mut s) = stamina {
                 s.drain(DRAW_STAMINA_DRAIN_PER_SEC * dt);
             }
@@ -128,11 +138,11 @@ type ShootQuery<'a> = (
 );
 
 /// While `Aiming`, releasing the attack button (held last tick but not this
-/// tick = `!pressed` with charge > 0) fires the arrow.
+/// tick, with charge > 0) fires the arrow.
 pub fn shoot_drawn_arrow(
     mut q: Query<ShootQuery, With<Actor>>,
-    cam: Option<Single<(&Transform, &CameraRig)>>,
     mut spawns: MessageWriter<SpawnProjectileMessage>,
+    mut fired: MessageWriter<BowFiredMessage>,
     time: Res<Time>,
 ) {
     for (shooter, transform, orientation, intents, state, mut draw, stamina) in &mut q {
@@ -147,11 +157,15 @@ pub fn shoot_drawn_arrow(
 
         // Fire triggers:
         // 1. Released attack button while we had some charge accumulated.
-        // 2. Stamina ran out while drawing, forcing release.
-        let stamina_exhausted = draw.charging && stamina.is_some_and(|s| s.is_exhausted());
+        // 2. Press and release inside one fixed tick: the edge arrives with
+        //    the button already up and no charge — fire at minimum charge
+        //    instead of losing the shot.
+        // 3. Stamina ran out while drawing, forcing release.
         let released = !intents.attack.held && draw.factor > 0.0;
+        let tap = intents.attack.pressed && !intents.attack.held;
+        let stamina_exhausted = draw.charging && stamina.is_some_and(|s| s.is_exhausted());
 
-        let fire = released || stamina_exhausted;
+        let fire = released || tap || stamina_exhausted;
         if !fire {
             continue;
         }
@@ -185,20 +199,10 @@ pub fn shoot_drawn_arrow(
             direction
         };
 
-        // In aim mode with a camera present, spawn from the camera position
-        // so the arrow visually leaves the crosshair. For AI actors (no
-        // camera), fall back to the body-relative muzzle.
-        let origin = match &cam {
-            Some(cam_single) => {
-                let (cam_tf, rig) = **cam_single;
-                if rig.aim_blend > 0.5 {
-                    cam_tf.translation + perturbed_direction * 0.3
-                  } else {
-                      body_muzzle(transform, perturbed_direction)
-                  }
-            }
-            None => body_muzzle(transform, perturbed_direction),
-        };
+        // The crosshair ray passes through the shoulder pivot the camera
+        // orbits (same constants, owned here): spawning there keeps the
+        // arrow on the aim line for every actor, camera or not.
+        let origin = aim_muzzle(transform, orientation, perturbed_direction);
 
         spawns.write(SpawnProjectileMessage {
             shooter,
@@ -206,8 +210,11 @@ pub fn shoot_drawn_arrow(
             velocity: perturbed_direction * speed,
             damage,
         });
+        fired.write(BowFiredMessage {
+            shooter,
+            charge: factor,
+        });
 
-        draw.just_fired = true;
         draw.factor = 0.0;
         draw.charging = false;
         draw.cooldown = RELOAD_COOLDOWN_SECS;
@@ -219,8 +226,12 @@ fn next_random(seed: &mut u32) -> f32 {
     (*seed as f32) / (u32::MAX as f32)
 }
 
-fn body_muzzle(transform: &Transform, direction: Vec3) -> Vec3 {
-    transform.translation + Vec3::Y * ARROW_MUZZLE_UP + direction * ARROW_MUZZLE_FORWARD
+fn aim_muzzle(transform: &Transform, orientation: &ControlOrientation, direction: Vec3) -> Vec3 {
+    let shoulder = Quat::from_rotation_y(orientation.yaw) * Vec3::X * AIM_SHOULDER_OFFSET;
+    transform.translation
+        + Vec3::Y * AIM_MUZZLE_HEIGHT
+        + shoulder
+        + direction * ARROW_MUZZLE_FORWARD
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

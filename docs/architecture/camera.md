@@ -52,7 +52,12 @@ filtrar por "actor controlado localmente" — ver
 - **Modo apuntado — primera pasada implementada** (ticket `combat-bow`,
   2026-07-15): Camera lee `CombatState::Aiming` del player (READ Combate →
   Camera, ahora real) y hace blend (`CameraRig.aim_blend`) a boom corto +
-  offset sobre el hombro derecho + mira central (UI). Sigue abierto: ¿corte
+  offset sobre el hombro derecho + mira central (UI). La geometría del
+  pivot del hombro (`AIM_MUZZLE_HEIGHT`/`AIM_SHOULDER_OFFSET`) es dueña de
+  Combat (`combat/motors/aim.rs`, la usa para el origen del proyectil —
+  §20) y Camera la **importa**: el rayo de la mira pasa por ese pivot, así
+  la flecha sale sobre la línea de la mira sin que la simulación lea la
+  cámara (`combat-bow-fixes`, 2026-07-16). Sigue abierto: ¿corte
   a primera persona en vez de over-shoulder? ¿tiempo ralentizado al tensar?
   (`Time::relative_speed` es recurso global compartido — el hitstop de
   `presentation::juice` ya lo usa puntualmente; un slow-mo sostenido

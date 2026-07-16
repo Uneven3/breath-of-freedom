@@ -9,6 +9,7 @@ mod camera;
 mod combat;
 mod debug;
 mod enemies;
+mod health;
 mod input;
 mod movement;
 mod player;
@@ -35,6 +36,7 @@ fn main() {
             movement::MovementPlugin,
             combat::CombatPlugin,
             projectiles::ProjectilesPlugin,
+            health::HealthPlugin,
             enemies::EnemiesPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,

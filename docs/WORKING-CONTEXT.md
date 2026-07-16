@@ -223,15 +223,52 @@ unaware targets, sticks into world geometry); three practice targets on
 `GameLayer::Actor` east of the course — melee target queries are now
 layer-gated, not marker-gated.
 
-**KNOWN BUG (play-tested 2026-07-15, FIX FIRST):** aiming works (Q/right
-mouse: aim camera + crosshair engage) but **the arrow never fires** on
-attack (F / left click) while `Aiming`. Suspects to check, in order:
-`aim::shoot_drawn_arrow` (does `intents.attack.pressed` actually arrive
-while Aiming, or is the edge consumed/ordered away?), the melee-vs-aim
-arbitration the same tick, and whether `SpawnProjectileMessage` is emitted
-but `projectiles::spawn_arrows` never reads it (message registration/
-double-buffer timing). **Next:** fix arrow firing → `health-core` →
-`enemies-combat` → `combat-defense` → `camera-lock-on`.
+**Bow status (code review 2026-07-16):** the 2026-07-15 KNOWN BUG note
+("arrow never fires") described the `1eebe9a` code (fire on the `pressed`
+edge); `52475eb` rewrote the model — holding attack charges
+(`tick_draw_strength`), releasing fires (`shoot_drawn_arrow`) — and the
+tick-by-tick trace of the current pipeline says release-fire works. Needs a
+played confirmation. The review did find real bugs at HEAD, fixed under
+`docs/tickets/combat-bow-fixes.md`: `just_fired` was reset the same tick it
+was set (fire feedback dead — replaced by `BowFiredMessage`), a fast tap
+between fixed ticks lost the shot (now fires at minimum charge), the arrow
+origin read `CameraRig` from simulation (§20 violation — now derived from
+`ControlOrientation` + shoulder constants owned by `aim.rs`, which the
+camera imports), Projectiles had nondeterministic 0-or-1-tick spawn latency
+(pinned after `CombatSet::EmitConstraints`), and arrow/trail spawns
+allocated fresh mesh/material assets in `FixedUpdate` (§18 — now a Startup
+`ArrowAssets` resource).
+
+**`health-core` + `enemies-combat` (implemented 2026-07-16, awaiting the
+played checkpoint):** `src/health/` applies `DamageRequestMessage` (emitted
+by melee `resolve_melee_hits` and arrow `resolve_arrow_hit` — the log-cue
+placeholders are gone) → `DeathMessage` in `HealthSet::Apply` after
+`ProjectilesSet::Simulate` (`DamageAppliedMessage` is deferred to its first
+consumer — `combat-defense`'s Staggered — no message before a reader). Death reactions live
+with each actor's owner: Player respawns (`player.rs`), enemies despawn
+(`enemies/mod.rs`), practice targets despawn (`world.rs`, now
+`PracticeTarget` + `Health`). F7 spawns a graybox pair — melee bokobo
+(`WeaponProfile::BOKOBO_CLUB`, single telegraphed swing on a cadence) and
+archer bokobo (`DrawStrength` + own `ControlOrientation`, holds distance,
+charges to 0.65 and releases through the ordinary `aim` motor). New
+`EnemyAiState::Combat` + `enemies/combat.rs` (`act_melee`/`act_archer`)
+write only `CombatIntents`/`ControlOrientation` — no combat state, buffer,
+transform, or velocity writes. HP: player 100 (HUD line in `debug.rs`),
+melee 30, archer 20, targets 30. See both tickets for detail.
+
+**Checkpoint finding (2026-07-16, fixed):** killing the bokobo crashed —
+`juice::flash_on_hit`'s `insert(HitFlash)` raced the orphan-visual despawn
+in the same `Update` schedule. Presentation systems that touch entities
+another system may despawn the same frame now use tolerant commands
+(`try_insert`/`try_remove` in `juice.rs`, `try_insert` in `sfx`); rule
+recorded in the `health-core` ticket. Play-testing continues from there.
+
+**Next:** play-validate the combat checkpoints (melee combo, bow,
+health/death, enemy melee + archer — tune damages/cadences there; includes
+deciding whether a damage-aggroed enemy without sight should chase instead
+of walking to investigate, see `combat.md` § Decisiones abiertas) →
+`combat-defense` (shield/parry/`Staggered` from `DamageAppliedMessage`) →
+`camera-lock-on`.
 
 ## Invariants To Preserve
 

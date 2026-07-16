@@ -2,10 +2,14 @@
 
 **Carpeta objetivo:** `src/enemies/`
 
-**Estado:** primer slice implementado (ticket `bokobo-brain`): un enemigo de
-graybox ("bokobo", spawn/despawn con **F7**) que patrulla, persigue al verte
-y busca donde te vio por última vez — moviéndose exclusivamente por
-`Intents`. Combate, salud, facciones y aggro-por-daño siguen siendo
+**Estado:** brain + sentidos + combate implementados (tickets
+`bokobo-brain`, `enemy-awareness`, `enemy-hearing-damage-aggro`,
+`enemies-combat`): **F7** spawnea/despawnea la pareja de graybox — un
+bokobo **melee** (garrote `WeaponProfile::BOKOBO_CLUB`) y un bokobo
+**arquero** (`DrawStrength` + `ControlOrientation`, mantiene distancia y
+dispara cargando y soltando) — que patrullan, perciben, persiguen y pelean
+escribiendo exclusivamente `Intents`/`CombatIntents`. Salud vía
+`health-core` (mueren → despawn). Facciones y pathfinding siguen siendo
 propuesta.
 
 ## Datos (Components/Messages/Resources)
@@ -14,7 +18,8 @@ propuesta.
 |---|---|---|---|
 | `Enemy` | `enemies/mod.rs` | Marker, análogo a `Player` — junto con `Actor` (ver `rationale/multi-actor-dispatch.md`) identifica un cuerpo controlado por IA. | ✅ |
 | `Home` | `enemies/mod.rs` | Punto de mundo alrededor del cual patrulla y al que vuelve. | ✅ |
-| `EnemyAiState` | `enemies/state.rs` | SSoT propio de la decisión de IA: `Patrol`, `Alert`, `Search` (enum-componente, ver `rationale/per-entity-state-idioms.md`; solo `brain::decide` lo escribe). No es `LocomotionState` ni `CombatState` — es upstream de ambos. `Combat` y `Flee` entran cuando existan Combat/Health. | ✅ parcial |
+| `EnemyAiState` | `enemies/state.rs` | SSoT propio de la decisión de IA: `Patrol`, `Alert`, `Search`, `Combat` (enum-componente, ver `rationale/per-entity-state-idioms.md`; solo `brain::decide` lo escribe). No es `LocomotionState` ni `CombatState` — es upstream de ambos. `Combat` = target visible, alertado y a `attack_range`: parar de perseguir y pelear. `Flee` entra cuando el brain lea su propio `Health` (GDD §7). | ✅ parcial |
+| `EnemyCombatLocal` | `enemies/combat.rs` | Bookkeeping de cadencia de ataque por enemigo (componente, nunca `Local` — contrato multi-actor). | ✅ |
 | `Perception` | `enemies/perception.rs` | Tuning de sentidos por enemigo: visión (`sight_range`, `fov_deg`, `detection_secs`, `close_range_boost`, `sneak_visibility`), oído (`hearing_range`, `wall_muffle`) y decay del medidor. Preset `Perception::BOKOBO` (patrón `GroundMovement::PLAYER`). Modelo completo en `rationale/enemy-senses.md`. | ✅ |
 | `DirectThreatMessage` | `enemies/perception.rs` | Amenaza inequívoca dirigida a un enemigo (recibir daño): salta el medidor a `ALERTED` y marca `last_seen`. Propiedad de Enemies; lo emitirán Health/Combat (patrón mensaje-del-receptor, como `health::DamageRequestMessage`). | ✅ mecanismo (emisores pendientes) |
 | `Awareness` | `enemies/perception.rs` | **El medidor de alerta** (`0.0..=1.0`), escrito solo por `perceive`. Umbrales semánticos: `SUSPICIOUS` (investiga) y `ALERTED` (full threat). Es el contrato que Combate leerá para las reglas de sigilo: enemigo no alertado → flechas y ataques sigilosos con bonus de daño; alertado → sin sneakstrike. | ✅ |
@@ -60,8 +65,19 @@ Pipeline análogo al de un jugador, tres sistemas encadenados dentro de
    completo por tick, como todo brain): `Patrol` deambula por waypoints
    pseudo-aleatorios determinísticos (secuencia de ángulo áureo por entidad —
    orgánico pero reproducible y testeable) alrededor de `Home` con pausas;
-   `Alert` sprinta hacia el target y frena en `engage_distance` (ahí lo
-   tomará Combate); `Search` camina hasta `last_seen`.
+   `Alert` sprinta hacia el target y frena en `engage_distance`; `Search`
+   camina hasta `last_seen`; `Combat` camina (Walk) hacia el target frenando
+   en `engage_distance` — el acercamiento mantiene el facing del melee.
+4. **`combat::act_melee` / `combat::act_archer`** ✅ (ticket
+   `enemies-combat`) — traducen `EnemyAiState::Combat` a `CombatIntents`,
+   corriendo tras `brain::act` en el mismo chain. Melee: un press de attack
+   cada `attack_cadence_secs` a rango (swings sueltos, sin encadenar).
+   Arquero: escribe su `ControlOrientation` hacia el pecho del target
+   (`yaw_pitch_toward`, inversa pura de `aim::aim_direction`),
+   `wants_aim`, y sostiene `attack.held` hasta `DrawStrength.factor ≥ 0.65`
+   — al soltar, el motor `aim` dispara solo. El brain lee `DrawStrength`
+   read-only; nunca emite `SpawnProjectileMessage` ni escribe estado de
+   Combate.
 
 El brain nunca escribe `Transform`, `BodyVelocity` ni `LocomotionState`, y
 no hay pathfinding todavía: el bokobo va en línea recta y puede quedar
@@ -72,7 +88,7 @@ empujando un obstáculo (aceptable para el checkpoint de graybox).
 | Relación | Categoría | Mecanismo | Estado |
 |---|---|---|---|
 | Enemies escribe `Intents` de Movement | SHARED-CONTRACT | Mismo tipo de dato, Brain distinto — cero cambios en Movement | ✅ |
-| Enemies escribe `CombatIntents` de Combate | SHARED-CONTRACT | Igual que arriba | propuesta (Combat no existe) |
+| Enemies escribe `CombatIntents` de Combate (y el arquero su `ControlOrientation`) | SHARED-CONTRACT | Igual que arriba — los motores de Combat no distinguen quién escribió el intent | ✅ (`enemies-combat`) |
 | Combate lee `enemies::Awareness` del objetivo para las reglas de sigilo | READ (contrato fijado) | Query read-only sobre `Awareness::is_alerted()`: no alertado → bonus de flechas/sneakstrike; alertado → full threat, sin sneakstrike. Ver `combat.md` § Relaciones. | contrato ✅, Combat no existe |
 | Enemies usa `world::GameLayer` para línea de visión | READ | `SpatialQueryFilter::from_mask(Default)` | ✅ |
 | Enemies lee `World::TimeOfDay` | READ | Query read-only | propuesta |
@@ -83,7 +99,9 @@ empujando un obstáculo (aceptable para el checkpoint de graybox).
 
 ## Decisiones abiertas
 
-- Diseño de `EnemyAiState::{Combat, Flee}` cuando existan Combat/Health.
+- ~~Diseño de `EnemyAiState::Combat`~~ — implementado (`enemies-combat`).
+  `Flee` sigue abierto: entra cuando el brain lea su propio `Health`
+  (GDD §7; `health-core` ya lo hace posible).
 - Reacciones grupales por `Faction`.
 - Pathfinding/navegación (hoy: línea recta).
 - Integrar la percepción con `SensingLod` cuando haya campamentos (hoy es

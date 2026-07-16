@@ -6,9 +6,9 @@
 //! only `brain::decide` writes it (see
 //! `rationale/per-entity-state-idioms.md`).
 //!
-//! `Combat` and `Flee` (see `docs/architecture/enemies.md`) join this enum
-//! when the Combat and Health systems exist — adding a variant is a compile
-//! error until `brain::act` handles it, same contract as `LocomotionState`.
+//! `Flee` (see `docs/architecture/enemies.md`) joins this enum when the
+//! brain reads its own `Health` — adding a variant is a compile error until
+//! `brain::act` handles it, same contract as `LocomotionState`.
 
 use bevy::prelude::*;
 
@@ -21,4 +21,7 @@ pub enum EnemyAiState {
     Alert,
     /// Target lost: head to its last known position, then give up.
     Search,
+    /// Target visible, alerted, and inside `attack_range`: stop chasing and
+    /// fight (`enemies/combat.rs` turns this into `CombatIntents`).
+    Combat,
 }

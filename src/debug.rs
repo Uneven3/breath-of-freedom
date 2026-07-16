@@ -637,6 +637,7 @@ fn update_debug_text(
             &LadderFacts,
             &LedgeFacts,
             &DrawStrength,
+            &crate::health::Health,
         ),
         With<Player>,
     >,
@@ -647,7 +648,7 @@ fn update_debug_text(
     mut text: Single<&mut Text, With<DebugText>>,
     probe_alive: Query<(), With<TraversalProbe>>,
 ) {
-    let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge, draw) = *player;
+    let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge, draw, hp) = *player;
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
@@ -662,7 +663,7 @@ fn update_debug_text(
     text.0 = format!(
         "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}\n\
          state: {:?}  combat: {combat:?}  draw: {:.0}%   [t{:06}]\n\
-         stamina: {:.0}/{:.0}\n\
+         hp: {:.0}/{:.0}  stamina: {:.0}/{:.0}\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
          slide_wall: {}  stairs: {}  ladder: {}\n\
@@ -672,6 +673,8 @@ fn update_debug_text(
         state,
         draw.factor * 100.0,
         tick.0,
+        hp.current(),
+        hp.max(),
         stamina.current(),
         stamina.max(),
         vel.0.x,

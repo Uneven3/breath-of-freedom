@@ -188,11 +188,34 @@ git diff --check
 
 ## Next Step After Confirmation
 
-`traversal-probe` was accepted; its results fed the first Enemies slice
-(ticket `bokobo-brain`, implemented): a graybox bokobo (F7) with the
-Perceive → Decide → Act pipeline writing only `Intents`. Current focus:
-play-test the bokobo's feel (patrol/chase/search), then grow the brain
-(pathfinding, `TimeOfDay`, hearing) or start Combat per the phase gate.
+**Phase gate passed (2026-07-15):** movement validated (probe F6 completes
+climb→mantle→turn→jump→glide) and the bokobo (F7) drives all intents with a
+full senses model (vision/hearing/damage-aggro `Awareness`). Current focus:
+**Combat MVP** — design in `docs/architecture/combat.md` (BotW feel,
+per-weapon combo chains as data, phases in `CombatState`, step in
+`ComboLocal`; see `rationale/combat-combo-chains.md`). Scope decided by the
+user (2026-07-15): one sword, shield (guard/parry), bow with normal arrows,
+camera lock-on, HP (Health system), swing VFX placeholder. **No flurry
+rush / time dilation.**
+
+**Implemented (2026-07-15, awaiting the played feeling checkpoint):**
+`combat-scaffolding` + `combat-melee-combo` — full CombatSet pipeline after
+Movement's, graybox 3-step sword (left click), hitbox sweep masked to
+`GameLayer::Actor`, damage as log cue (until `health-core`),
+`DirectThreatMessage` aggros the struck bokobo, swing-arc VFX, `combat:`
+line in the HUD, `ForbidSprint` constraint consumed by `sprint::propose`
+(message owned by `movement/constraints.rs`). See both tickets for the
+handoff detail.
+
+**Game feel layer (`combat-game-feel`, implemented 2026-07-15):**
+`presentation/juice.rs` consumes `combat::HitImpactMessage` — hit flash,
+procedural white burst, floating damage text (gold on crits), knockback via
+`movement::BodyImpulseMessage`, jump/land jelly on every actor visual
+(`visuals::VisualOf`), 90 ms hitstop on criticals via
+`Time<Virtual>::relative_speed(0)`, and player-received feedback (screen
+flash + `camera::CameraShake` trauma) wired but dormant until enemies attack.
+**Next tickets:** `health-core` → `enemies-combat` → `combat-defense` →
+`combat-bow` → `camera-lock-on`.
 
 ## Invariants To Preserve
 

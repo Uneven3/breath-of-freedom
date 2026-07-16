@@ -30,6 +30,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::fmt::Write;
 
+use crate::combat::state::CombatState;
 use crate::movement::diag::{CastKind, CastTrace};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use crate::movement::probe_data::TraversalProbe;
@@ -626,6 +627,7 @@ fn update_debug_text(
     player: Single<
         (
             &LocomotionState,
+            &CombatState,
             &Stamina,
             &BodyVelocity,
             &GroundFacts,
@@ -643,7 +645,7 @@ fn update_debug_text(
     mut text: Single<&mut Text, With<DebugText>>,
     probe_alive: Query<(), With<TraversalProbe>>,
 ) {
-    let (state, stamina, vel, ground, contact, stairs, ladder, ledge) = *player;
+    let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge) = *player;
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
@@ -657,7 +659,7 @@ fn update_debug_text(
         .unwrap_or(0.0);
     text.0 = format!(
         "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}\n\
-         state: {:?}   [t{:06}]\n\
+         state: {:?}  combat: {combat:?}   [t{:06}]\n\
          stamina: {:.0}/{:.0}\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\

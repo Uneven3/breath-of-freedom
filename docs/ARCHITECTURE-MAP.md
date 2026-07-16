@@ -50,7 +50,8 @@ explícitamente — el objetivo es que este inventario nunca oculte un hueco.
 
 | De | A | Categoría | Detalle |
 |---|---|---|---|
-| Combate | Movement | `READ` + `MESSAGE` | Lee `LocomotionState` (bonus sigilo); pide restricciones/interrupciones locomotoras vía `LocomotionConstraintMessage`; Movement decide el estado físico válido |
+| Combate | Movement | `READ` + `MESSAGE` | Lee `LocomotionState` (sneakstrike exige atacante en Sneak); pide restricciones/interrupciones locomotoras vía `LocomotionConstraintMessage`; Movement decide el estado físico válido |
+| Combate | Enemies | `READ` + `MESSAGE` | Lee `enemies::Awareness` del objetivo (reglas de sigilo: no alertado → bonus); emite `enemies::DirectThreatMessage` al conectar un golpe (aggro instantáneo). Contrato fijado en `enemy-awareness`/`enemy-hearing-damage-aggro` |
 | Enemies | Movement, Combate | `SHARED-CONTRACT` | Mismo `Intents`/`CombatIntents`, Brain de IA en vez de hardware |
 | Enemies | World | `READ` | Lee `TimeOfDay` para spawn/comportamiento |
 | Enemies | *(fundacional)* | `BLOCKING-PREREQUISITE` | **Resuelto** — Movement ya opera sobre `Query<Actor>` (ticket `multi-actor-migration`); Enemies puede empezar (`rationale/multi-actor-dispatch.md`) |

@@ -55,6 +55,10 @@ mecanismo — READ o MESSAGE — sin decidir.)
   núcleo de arbitración `proposal::ProposalBuffer<S, N>`
   (`rationale/proposal-arbitration-core.md`). Un cambio a esa forma rompe
   a los tres a la vez aunque Combat y Mounts nunca se mencionen entre sí.
+- **Combat→Enemies (sigilo/aggro):** Combate lee `enemies::Awareness` del
+  objetivo (bonus contra no-alertados) y emite `enemies::DirectThreatMessage`
+  al conectar — el mensaje es propiedad del receptor (Enemies), así que el
+  contrato quedó fijado antes de que Combat exista.
 - **Movement↔Enemies, Combat↔Enemies:** mismo `Intents`/`CombatIntents`,
   más el prerequisito bloqueante del contrato multi-actor
   (`rationale/multi-actor-dispatch.md`) — Enemies no se puede empezar en

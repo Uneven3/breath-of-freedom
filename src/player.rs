@@ -57,5 +57,16 @@ fn spawn_player(mut commands: Commands) {
             ClimbInputState::default(),
             crate::input::InputConsumeCursor::default(),
         ),
+        // Combat contract: graybox sword until Equipment (Inventory) owns
+        // what's wielded.
+        (
+            crate::combat::intent::CombatIntents::default(),
+            crate::combat::state::CombatState::default(),
+            crate::combat::proposal::CombatProposalBuffer::default(),
+            crate::combat::weapon::WeaponProfile::GRAYBOX_SWORD,
+            crate::combat::motors::attack::ComboLocal::default(),
+            crate::combat::motors::attack::ActiveSwing::default(),
+            crate::combat::brain::CombatInputCursor::default(),
+        ),
     ));
 }

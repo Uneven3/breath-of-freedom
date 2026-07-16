@@ -14,6 +14,7 @@ pub mod abilities;
 pub mod body;
 pub mod brain;
 pub mod bundles;
+pub mod constraints;
 pub mod diag;
 pub mod facts;
 pub mod intents;
@@ -86,6 +87,19 @@ impl Plugin for MovementPlugin {
             lod::assign_sensing_lod
                 .after(MovementSet::ReadIntents)
                 .before(MovementSet::SenseWorld),
+        );
+        // Constraints and impulses requested by other systems (Combat),
+        // applied right before motors propose/tick.
+        app.add_message::<constraints::LocomotionConstraintMessage>();
+        app.add_message::<constraints::BodyImpulseMessage>();
+        app.add_systems(
+            FixedUpdate,
+            (
+                constraints::apply_locomotion_constraints,
+                constraints::apply_body_impulses,
+            )
+                .after(MovementSet::SenseWorld)
+                .before(MovementSet::GatherProposals),
         );
 
         app.configure_sets(

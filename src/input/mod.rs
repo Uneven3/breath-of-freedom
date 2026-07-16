@@ -44,9 +44,21 @@ impl Plugin for InputPlugin {
     }
 }
 
-fn resolve_local_actions(keys: Res<ButtonInput<KeyCode>>, mut actions: ResMut<ActiveActions>) {
+fn resolve_local_actions(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    captured: Res<PointerCaptured>,
+    mut actions: ResMut<ActiveActions>,
+) {
     for (action, key) in LOCAL_HELD_BINDINGS {
         actions.set_pressed(LOCAL_INPUT_SOURCE, action, keys.pressed(key));
+    }
+    // Attack on left mouse, only while the pointer is captured — the same
+    // click that re-captures the cursor must not also swing.
+    let attack_held = captured.0 && mouse.pressed(MouseButton::Left);
+    actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::Attack, attack_held);
+    if captured.0 && mouse.just_pressed(MouseButton::Left) {
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Attack);
     }
     actions.set_pressed(
         LOCAL_INPUT_SOURCE,

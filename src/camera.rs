@@ -29,6 +29,25 @@ pub struct CameraRig {
     pub smoothed_y: f32,
 }
 
+/// Trauma-based screen shake: writers add trauma (0..=1), the offset applied
+/// is `trauma²` (small hits barely register, big ones slam), decaying on
+/// *real* time so it works through hitstop. Written by
+/// `presentation::juice::player_hit_feedback`.
+#[derive(Resource, Default)]
+pub struct CameraShake {
+    trauma: f32,
+}
+
+impl CameraShake {
+    pub fn add_trauma(&mut self, amount: f32) {
+        self.trauma = (self.trauma + amount).min(1.0);
+    }
+}
+
+const SHAKE_DECAY_PER_SEC: f32 = 2.2;
+const SHAKE_MAX_OFFSET: f32 = 0.25;
+const SHAKE_MAX_ROLL: f32 = 0.03;
+
 impl Default for CameraRig {
     fn default() -> Self {
         Self {
@@ -42,10 +61,11 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<CameraShake>();
         app.add_systems(Startup, spawn_camera);
         app.add_systems(
             Update,
-            (camera_landing_dip, follow_player)
+            (camera_landing_dip, follow_player, apply_camera_shake)
                 .chain()
                 .after(InputSet::UpdateOrientation),
         );
@@ -148,6 +168,30 @@ fn follow_player(
     // Set camera rotation directly to ControlOrientation rot. This is mathematically
     // identical to look_at(pivot) but avoids NaN / freeze singularities when length == 0.0.
     cam_transform.rotation = rot;
+}
+
+/// Runs after `follow_player` (which fully rewrites the camera transform each
+/// frame, so the shake offset never accumulates): jitter position and roll by
+/// `trauma²` using cheap incommensurate sines as noise.
+fn apply_camera_shake(
+    real: Res<Time<Real>>,
+    mut shake: ResMut<CameraShake>,
+    mut cam: Single<&mut Transform, With<CameraRig>>,
+) {
+    if shake.trauma <= 0.0 {
+        return;
+    }
+    shake.trauma = (shake.trauma - SHAKE_DECAY_PER_SEC * real.delta_secs()).max(0.0);
+    let strength = shake.trauma * shake.trauma;
+    if strength <= f32::EPSILON {
+        return;
+    }
+    let t = real.elapsed_secs();
+    let offset = Vec3::new((t * 61.7).sin(), (t * 73.3).sin(), (t * 53.9).sin())
+        * (SHAKE_MAX_OFFSET * strength);
+    let roll = (t * 97.1).sin() * SHAKE_MAX_ROLL * strength;
+    cam.translation += offset;
+    cam.rotation *= Quat::from_rotation_z(roll);
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

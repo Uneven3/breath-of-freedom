@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::abilities::GroundMovement;
+use crate::movement::constraints::LocomotionConstraintFacts;
 use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
 use crate::movement::intents::{GaitIntent, Intents};
 use crate::movement::motor_common::{GroundLocomotionStep, ground_locomotion_step};
@@ -39,6 +40,7 @@ type ProposeQuery<'a> = (
     &'a Stamina,
     &'a Crouched,
     &'a StandClearance,
+    Option<&'a LocomotionConstraintFacts>,
     &'a mut SprintLock,
     &'a mut ProposalBuffer,
 );
@@ -52,6 +54,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
         stamina,
         crouched,
         clearance,
+        constraints,
         mut stamina_locked,
         mut buffer,
     ) in &mut q
@@ -63,6 +66,11 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
             stamina_locked.0 = false;
         }
 
+        // Abstain while committed to a combat action (see
+        // `constraints::LocomotionConstraintMessage`).
+        if constraints.is_some_and(|c| c.forbid_sprint) {
+            continue;
+        }
         // Abstain so StairsMotor / ClimbMotor / SneakMotor can take over.
         if stairs.on_stairs {
             continue;
@@ -171,6 +179,30 @@ mod tests {
 
         assert!(proposes_sprint(&world, capable));
         assert!(!proposes_sprint(&world, incapable));
+    }
+
+    #[test]
+    fn sprint_abstains_under_a_forbid_constraint() {
+        let mut world = World::new();
+        let committed = world
+            .spawn((
+                sprint_actor(false, true),
+                LocomotionConstraintFacts {
+                    forbid_sprint: true,
+                },
+            ))
+            .id();
+        let free = world
+            .spawn((
+                sprint_actor(false, true),
+                LocomotionConstraintFacts::default(),
+            ))
+            .id();
+
+        world.run_system_once(propose).unwrap();
+
+        assert!(!proposes_sprint(&world, committed));
+        assert!(proposes_sprint(&world, free));
     }
 
     #[test]

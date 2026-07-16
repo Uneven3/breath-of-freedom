@@ -11,6 +11,7 @@ use super::abilities::{
     GlideMovement, GroundMovement, JumpMovement, LedgeTraversal, WallJumpMovement,
 };
 use super::body::BodyDimensions;
+use super::constraints::LocomotionConstraintFacts;
 use super::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use super::intents::Intents;
 use super::lod::SensingLod;
@@ -54,6 +55,7 @@ pub struct KinematicActorBundle {
     pub ladder: LadderFacts,
     pub ground_sensing: GroundSensing,
     pub sensing_lod: SensingLod,
+    pub constraint_facts: LocomotionConstraintFacts,
 }
 
 impl KinematicActorBundle {
@@ -80,6 +82,7 @@ impl KinematicActorBundle {
             ladder: LadderFacts::default(),
             ground_sensing: sensing,
             sensing_lod: SensingLod::default(),
+            constraint_facts: LocomotionConstraintFacts::default(),
         }
     }
 }

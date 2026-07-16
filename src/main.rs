@@ -6,6 +6,7 @@
 //! `docs/architecture/movement.md`).
 
 mod camera;
+mod combat;
 mod debug;
 mod enemies;
 mod input;
@@ -31,6 +32,7 @@ fn main() {
             world::WorldPlugin,
             input::InputPlugin,
             movement::MovementPlugin,
+            combat::CombatPlugin,
             enemies::EnemiesPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,

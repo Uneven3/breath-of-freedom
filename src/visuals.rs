@@ -9,6 +9,9 @@ use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use std::time::Duration;
 
+use crate::combat::motors::attack::ComboLocal;
+use crate::combat::state::CombatState;
+use crate::combat::weapon::WeaponProfile;
 use crate::enemies::Enemy;
 use crate::enemies::perception::Awareness;
 use crate::movement::BodyVelocity;
@@ -22,6 +25,12 @@ const SNEAK_Y_OFFSET: f32 = -0.4;
 
 #[derive(Component)]
 pub struct PlayerVisual;
+
+/// Uniform link from any visual root back to its simulation actor, so
+/// cross-cutting presentation effects (jelly, hit flash — see
+/// `presentation::juice`) treat player/probe/enemy visuals alike.
+#[derive(Component, Clone, Copy)]
+pub struct VisualOf(pub Entity);
 
 #[derive(Component)]
 struct TraversalProbeVisual {
@@ -46,6 +55,7 @@ impl Plugin for VisualsPlugin {
         app.add_systems(
             Update,
             (
+                link_player_visual,
                 spawn_probe_visual,
                 despawn_orphaned_probe_visual,
                 spawn_enemy_visual,
@@ -54,6 +64,8 @@ impl Plugin for VisualsPlugin {
                 interpolate_probe_visual,
                 interpolate_enemy_visual,
                 tint_enemy_visual,
+                spawn_swing_vfx,
+                fade_swing_vfx,
                 compile_animation_graph,
                 init_player_animation_graph,
                 animate_player,
@@ -88,6 +100,20 @@ fn spawn_visual(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 type BodyFilter = (With<Player>, Without<PlayerVisual>);
 
+type UnlinkedPlayerVisual = (With<PlayerVisual>, Without<VisualOf>);
+
+/// The player visual is spawned in `Startup` before the player body's spawn
+/// command applies; link them lazily once both exist.
+fn link_player_visual(
+    mut commands: Commands,
+    visual: Option<Single<Entity, UnlinkedPlayerVisual>>,
+    player: Option<Single<Entity, With<Player>>>,
+) {
+    if let (Some(visual), Some(player)) = (visual, player) {
+        commands.entity(*visual).insert(VisualOf(*player));
+    }
+}
+
 fn interpolate_visual(
     player: Single<(&Transform, &LocomotionState), BodyFilter>,
     mut visual: Single<&mut Transform, With<PlayerVisual>>,
@@ -118,6 +144,7 @@ fn spawn_probe_visual(
     for (actor, transform, body) in &probes {
         commands.spawn((
             TraversalProbeVisual { actor },
+            VisualOf(actor),
             Name::new("TraversalProbeVisual"),
             Mesh3d(meshes.add(Capsule3d::new(body.radius, body.standing_capsule_length))),
             MeshMaterial3d(materials.add(Color::srgb(0.85, 0.3, 0.25))),
@@ -153,6 +180,7 @@ fn spawn_enemy_visual(
     for (actor, transform, body) in &enemies {
         commands.spawn((
             EnemyVisual { actor },
+            VisualOf(actor),
             Name::new("EnemyVisual"),
             Mesh3d(meshes.add(Capsule3d::new(body.radius, body.standing_capsule_length))),
             // Per-enemy material instance: `tint_enemy_visual` mutates it.
@@ -164,9 +192,14 @@ fn spawn_enemy_visual(
 
 /// Tint each enemy capsule by its `Awareness` tier so playtesting reads the
 /// meter without UI. Read-only over simulation state, like every visual.
+/// Skips visuals mid hit-flash — the flash owns the material until it expires
+/// (`presentation::juice`).
 fn tint_enemy_visual(
     enemies: Query<&Awareness, With<Enemy>>,
-    visuals: Query<(&EnemyVisual, &MeshMaterial3d<StandardMaterial>)>,
+    visuals: Query<
+        (&EnemyVisual, &MeshMaterial3d<StandardMaterial>),
+        Without<crate::presentation::juice::HitFlash>,
+    >,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (enemy_vis, material_handle) in &visuals {
@@ -241,6 +274,72 @@ fn interpolate_probe_visual(
         visual.translation.z = body.translation.z;
         visual.translation.y += (body.translation.y + offset - visual.translation.y) * t;
         visual.rotation = visual.rotation.slerp(body.rotation, t);
+    }
+}
+
+/// Swing VFX placeholder while combat has no animations: a translucent arc
+/// sector flashes in front of the attacker during `Active`. Read-only over
+/// simulation state (like the enemy tint); replaced by real animation later
+/// without touching Combat.
+const SWING_VFX_SECS: f32 = 0.16;
+
+#[derive(Component)]
+struct SwingVfx {
+    remaining: f32,
+}
+
+type SwingSourceQuery<'a> = (
+    &'a Transform,
+    &'a WeaponProfile,
+    &'a ComboLocal,
+    &'a CombatState,
+);
+
+fn spawn_swing_vfx(
+    mut commands: Commands,
+    attackers: Query<SwingSourceQuery, Changed<CombatState>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (transform, weapon, combo, state) in &attackers {
+        if *state != CombatState::Active {
+            continue;
+        }
+        let Some(step) = weapon.step(combo.step) else {
+            continue;
+        };
+        // `CircularSector` is an XY-plane fan opening along +Y: tilt it flat
+        // (+Y → -Z) so it opens along the attacker's forward.
+        let lie_flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+        commands.spawn((
+            SwingVfx {
+                remaining: SWING_VFX_SECS,
+            },
+            Name::new("SwingVfx"),
+            Mesh3d(meshes.add(CircularSector::from_degrees(step.reach, step.arc_deg))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgba(0.95, 0.95, 0.7, 0.45),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                cull_mode: None,
+                ..default()
+            })),
+            Transform::from_translation(transform.translation + Vec3::Y * 0.35)
+                .with_rotation(transform.rotation * lie_flat),
+        ));
+    }
+}
+
+fn fade_swing_vfx(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut swings: Query<(Entity, &mut SwingVfx)>,
+) {
+    for (entity, mut swing) in &mut swings {
+        swing.remaining -= time.delta_secs();
+        if swing.remaining <= 0.0 {
+            commands.entity(entity).despawn();
+        }
     }
 }
 

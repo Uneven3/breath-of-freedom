@@ -8,6 +8,7 @@
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
 
+pub mod aim;
 pub mod attack;
 pub mod idle;
 
@@ -36,6 +37,9 @@ pub fn tick_active_motor(mut q: Query<CombatMotorTick, With<Actor>>, time: Res<T
             // needs read-only access to *other* actors' transforms, which
             // this mutable row query cannot alias).
             CombatState::Active => {}
+            // The bow release lives in `aim::shoot_drawn_arrow` (same
+            // aliasing reason: it reads the shooter's orientation and emits).
+            CombatState::Aiming => {}
         }
     }
 }

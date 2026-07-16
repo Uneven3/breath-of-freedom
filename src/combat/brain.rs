@@ -34,6 +34,7 @@ pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<A
                 pressed: cursor.0.consume(frame, IntentAction::Attack),
                 held: frame.pressed(IntentAction::Attack),
             },
+            wants_aim: frame.pressed(IntentAction::Aim),
         };
     }
 }

@@ -53,13 +53,18 @@ fn resolve_local_actions(
     for (action, key) in LOCAL_HELD_BINDINGS {
         actions.set_pressed(LOCAL_INPUT_SOURCE, action, keys.pressed(key));
     }
-    // Attack on left mouse, only while the pointer is captured — the same
-    // click that re-captures the cursor must not also swing.
-    let attack_held = captured.0 && mouse.pressed(MouseButton::Left);
+    // Attack on left mouse or F / aim on right mouse or Q (keyboard alternates
+    // for pads without buttons). Mouse is gated on the pointer being captured
+    // — the same click that re-captures the cursor must not also act; keys
+    // need no gate.
+    let attack_held =
+        (captured.0 && mouse.pressed(MouseButton::Left)) || keys.pressed(KeyCode::KeyF);
     actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::Attack, attack_held);
-    if captured.0 && mouse.just_pressed(MouseButton::Left) {
+    if (captured.0 && mouse.just_pressed(MouseButton::Left)) || keys.just_pressed(KeyCode::KeyF) {
         actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Attack);
     }
+    let aim_held = (captured.0 && mouse.pressed(MouseButton::Right)) || keys.pressed(KeyCode::KeyQ);
+    actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::Aim, aim_held);
     actions.set_pressed(
         LOCAL_INPUT_SOURCE,
         IntentAction::Sprint,

@@ -49,13 +49,14 @@ filtrar por "actor controlado localmente" — ver
 
 ## Decisiones abiertas
 
-- **Modo apuntado (GDD §8, §11):** cámara en primera persona + tiempo
-  ralentizado al tensar el arco. Disparador: Combate entra en
-  `CombatState::Aiming` (`combat.md`) — Camera necesita leerlo (READ nuevo,
-  Combate → Camera) para decidir el corte a primera persona; el ralentizado
-  de tiempo (`Time::relative_speed`) es un recurso global compartido, no
-  exclusivo de Camera; requiere contrato propio si otro sistema también lo
-  necesita.
+- **Modo apuntado — primera pasada implementada** (ticket `combat-bow`,
+  2026-07-15): Camera lee `CombatState::Aiming` del player (READ Combate →
+  Camera, ahora real) y hace blend (`CameraRig.aim_blend`) a boom corto +
+  offset sobre el hombro derecho + mira central (UI). Sigue abierto: ¿corte
+  a primera persona en vez de over-shoulder? ¿tiempo ralentizado al tensar?
+  (`Time::relative_speed` es recurso global compartido — el hitstop de
+  `presentation::juice` ya lo usa puntualmente; un slow-mo sostenido
+  requiere contrato propio.)
 - **Lock-on (GDD §11):** selección de objetivo enemigo, cámara orbita
   centrada en él. Requiere leer posiciones de `Enemies` (READ) y decidir
   criterio de selección (más cercano, en el cono de visión, etc.) — sin

@@ -2,24 +2,27 @@
 
 **Carpeta objetivo:** `src/projectiles/`
 
+**Estado:** implementado (ticket `combat-bow`, 2026-07-15) para flechas del
+arco; daño real espera `health-core` (hoy: cue de log).
+
 Cuerpos físicos simples (flechas) con un único comportamiento — volar hasta
 impactar — no actores multi-estado. No usan el patrón Broker de
 Movement/Combat/Mounts. Ver `rationale/when-not-broker-pattern.md`.
 
-## Datos (Components/Messages/Resources) — propuesta
+## Datos (Components/Messages/Resources)
 
 | Tipo | Dónde | Qué es |
 |---|---|---|
-| `Projectile` | `projectiles/mod.rs` | Marker + `{ velocity: Vec3, damage: f32, source: Entity }`. Dueño exclusivo de su propio vuelo. |
-| `SpawnProjectileMessage` | `projectiles/messages.rs` | `{ origin, direction, speed, damage, source }`. Combate lo emite al soltar la flecha; Projectiles decide cómo construir la entidad — Combate nunca hace `commands.spawn` de una flecha directamente. |
+| `Arrow` | `projectiles/mod.rs` | `{ velocity, shooter, damage, remaining, stuck }`. Dueño exclusivo de su propio vuelo. (El nombre genérico `Projectile` llegará si aparece un segundo tipo.) |
+| `SpawnProjectileMessage` | `projectiles/mod.rs` | `{ shooter, origin, velocity, damage }` (velocity ya compuesta — el emisor decide dirección×rapidez). Combate lo emite al soltar la flecha; Projectiles construye la entidad — Combate nunca hace `commands.spawn` de una flecha. Consumido al tick siguiente (~16 ms, latencia aceptada, mismo criterio que constraints). |
 
-## Sistemas (comportamiento) — propuesta
+## Sistemas (comportamiento) — implementado
 
 Todo en `FixedUpdate` (simulación, determinístico para replicación):
 
 1. **Spawn** — `MessageReader<SpawnProjectileMessage>` crea la entidad `Projectile`. Para prevenir problemas de "tunneling" (flechas que atraviesan muros delgados debido a su alta velocidad), la entidad se configura sin un `RigidBody::Dynamic` ordinario, o bien se le activa la detección continua de colisiones (CCD) de Avian.
 2. **Integrate** — En `FixedUpdate`, se realiza una integración de posición (vuelo en línea recta o parábola balística simple).
-3. **CollideAndDamage** — Para máxima precisión a alta velocidad, se prefiere un barrido espacial (`SpatialQuery::cast_ray` o `cast_shape`) a lo largo del vector de movimiento de ese frame. Si se detecta un impacto, se calcula la posición exacta del choque, se emite `health::DamageRequestMessage` al `target` (si corresponde), y se destruye el proyectil. Si transcurren N segundos sin colisión, se despawnea por tiempo límite.
+3. **CollideAndDamage** — barrido `cast_ray` a lo largo del paso del tick (sin tunneling), excluyendo al tirador. Impacto contra colliders en `GameLayer::Actor`: daño con bonus ×4 contra objetivo no alertado (lee `enemies::Awareness`; la flecha no exige Sneak — contrato en `combat.md`), emite `combat::HitImpactMessage` (feedback), `enemies::DirectThreatMessage` (aggro con posición aproximada del tirador) y `movement::BodyImpulseMessage` (knockback ligero); `health::DamageRequestMessage` cuando exista Health (hoy: cue de log). Contra mundo: la flecha se clava y se desvanece (decisión tomada: persiste 4 s). TTL de vuelo 8 s.
 
 ## Relaciones con otros sistemas
 
@@ -31,9 +34,8 @@ Todo en `FixedUpdate` (simulación, determinístico para replicación):
 
 ## Decisiones abiertas
 
-- Flecha clavada (persiste visualmente tras impactar terreno) vs. despawn
-  inmediato — es una decisión de presentación, no bloquea la arquitectura.
-- Gravedad/arco de vuelo de la flecha vs. línea recta — mecánica de combate,
-  no arquitectura.
+- ~~Flecha clavada vs. despawn~~ — decidido: se clava 4 s y desaparece.
+- ~~Gravedad vs. línea recta~~ — decidido: parábola (gravedad compartida de
+  Movement).
 - Otros proyectiles futuros (lanza arrojadiza, bomba) — mismo sistema o uno
   nuevo, evaluar cuando existan.

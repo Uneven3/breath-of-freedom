@@ -13,6 +13,7 @@ mod input;
 mod movement;
 mod player;
 mod presentation;
+mod projectiles;
 mod proposal;
 mod sfx;
 mod visuals;
@@ -33,6 +34,7 @@ fn main() {
             input::InputPlugin,
             movement::MovementPlugin,
             combat::CombatPlugin,
+            projectiles::ProjectilesPlugin,
             enemies::EnemiesPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,

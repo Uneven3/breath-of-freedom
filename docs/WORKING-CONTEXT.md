@@ -214,8 +214,24 @@ procedural white burst, floating damage text (gold on crits), knockback via
 (`visuals::VisualOf`), 90 ms hitstop on criticals via
 `Time<Virtual>::relative_speed(0)`, and player-received feedback (screen
 flash + `camera::CameraShake` trauma) wired but dormant until enemies attack.
-**Next tickets:** `health-core` → `enemies-combat` → `combat-defense` →
-`combat-bow` → `camera-lock-on`.
+
+**Bow (`combat-bow`, implemented 2026-07-15, pulled forward):** right mouse
+draws (`CombatState::Aiming`, over-shoulder aim camera + crosshair), left
+click releases an arrow along `ControlOrientation`; `src/projectiles/`
+simulates parabolic flight with per-tick ray sweeps (×4 stealth bonus on
+unaware targets, sticks into world geometry); three practice targets on
+`GameLayer::Actor` east of the course — melee target queries are now
+layer-gated, not marker-gated.
+
+**KNOWN BUG (play-tested 2026-07-15, FIX FIRST):** aiming works (Q/right
+mouse: aim camera + crosshair engage) but **the arrow never fires** on
+attack (F / left click) while `Aiming`. Suspects to check, in order:
+`aim::shoot_drawn_arrow` (does `intents.attack.pressed` actually arrive
+while Aiming, or is the edge consumed/ordered away?), the melee-vs-aim
+arbitration the same tick, and whether `SpawnProjectileMessage` is emitted
+but `projectiles::spawn_arrows` never reads it (message registration/
+double-buffer timing). **Next:** fix arrow firing → `health-core` →
+`enemies-combat` → `combat-defense` → `camera-lock-on`.
 
 ## Invariants To Preserve
 

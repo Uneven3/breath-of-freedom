@@ -140,6 +140,56 @@ fn horizontal_rotation(axis: Vec3) -> Quat {
     Quat::from_rotation_y(-yaw)
 }
 
+const PRACTICE_TARGET_DIMS: Vec3 = Vec3::new(0.15, 1.1, 1.1);
+
+/// A practice target: static geometry that lives on `GameLayer::Actor`, so
+/// sword sweeps and arrows hit it while movement sensors (masked to
+/// `Default`) stay blind to it — not climbable, not a mantle lip. Carries
+/// `VisualOf` on itself so it flashes and shows damage numbers like any
+/// struck actor.
+fn spawn_practice_target(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    name: &str,
+    center: Vec3,
+) {
+    // Supporting post: ordinary world geometry (Default layer).
+    let post_height = (center.y - PRACTICE_TARGET_DIMS.y * 0.5).max(0.1);
+    spawn_box(
+        commands,
+        meshes,
+        materials,
+        &format!("{name}Post"),
+        Vec3::new(center.x, post_height * 0.5, center.z),
+        Vec3::new(0.12, post_height, 0.12),
+        Color::srgb(0.35, 0.3, 0.25),
+    );
+
+    let target = commands
+        .spawn((
+            Name::new(name.to_string()),
+            Mesh3d(meshes.add(Cuboid::new(
+                PRACTICE_TARGET_DIMS.x,
+                PRACTICE_TARGET_DIMS.y,
+                PRACTICE_TARGET_DIMS.z,
+            ))),
+            MeshMaterial3d(materials.add(Color::srgb(0.85, 0.25, 0.2))),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(
+                PRACTICE_TARGET_DIMS.x,
+                PRACTICE_TARGET_DIMS.y,
+                PRACTICE_TARGET_DIMS.z,
+            ),
+            CollisionLayers::new(GameLayer::Actor, LayerMask::ALL),
+        ))
+        .id();
+    commands
+        .entity(target)
+        .insert(crate::visuals::VisualOf(target));
+}
+
 fn spawn_stair_segment(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -260,6 +310,29 @@ fn setup_world(
         let wall = spawn_box(&mut commands, m, mat, name, position, dimensions, prop_c);
         commands.entity(wall).insert(NonClimbable);
     }
+
+    // --- Archery practice targets, east of the course, facing spawn ---
+    spawn_practice_target(
+        &mut commands,
+        m,
+        mat,
+        "PracticeTargetNear",
+        Vec3::new(14.0, 1.6, -2.0),
+    );
+    spawn_practice_target(
+        &mut commands,
+        m,
+        mat,
+        "PracticeTargetHigh",
+        Vec3::new(17.0, 2.4, 3.0),
+    );
+    spawn_practice_target(
+        &mut commands,
+        m,
+        mat,
+        "PracticeTargetFar",
+        Vec3::new(24.0, 1.4, 10.0),
+    );
 
     // --- Wall 10×4×1 at (0,2,-10) ---
     spawn_box(

@@ -104,7 +104,13 @@ type ProposeQuery<'a> = (
 /// recoveries propose nothing — `Idle` (Default) wins by silence.
 pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
     for (intents, state, weapon, mut local, mut buffer) in &mut q {
-        if intents.attack.pressed && state.commits_the_body() {
+        // Buffer only inside the melee phases: an attack press while Aiming
+        // is the bow release (`aim::shoot_drawn_arrow`), not a queued swing.
+        let in_melee_phase = matches!(
+            *state,
+            CombatState::Windup | CombatState::Active | CombatState::Recovery
+        );
+        if intents.attack.pressed && in_melee_phase {
             local.buffered = true;
         }
 
@@ -171,6 +177,8 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
                 }
                 // Recovery over: silence → Idle wins.
             }
+            // The bow release is the aim motor's job, not a melee phase.
+            CombatState::Aiming => {}
         }
     }
 }
@@ -209,7 +217,10 @@ type SweepAttackerQuery<'a> = (
 pub fn sweep_active_swings(
     spatial: SpatialQuery,
     mut attackers: Query<SweepAttackerQuery, With<Actor>>,
-    targets: Query<&Transform, With<Actor>>,
+    // No `With<Actor>` on the target side: anything on `GameLayer::Actor`
+    // (actors, practice targets) is hittable — the collision layer is the
+    // filter of record.
+    targets: Query<&Transform>,
     mut hits: MessageWriter<MeleeHitMessage>,
 ) {
     for (attacker, transform, state, weapon, local, mut swing) in &mut attackers {
@@ -309,7 +320,8 @@ type HitTargetQuery<'a> = (&'a Transform, Option<&'a Awareness>, Option<&'a Name
 pub fn resolve_melee_hits(
     mut messages: MessageReader<MeleeHitMessage>,
     attackers: Query<HitAttackerQuery, With<Actor>>,
-    targets: Query<HitTargetQuery, With<Actor>>,
+    // Target side matches the sweep: layer-gated, not marker-gated.
+    targets: Query<HitTargetQuery>,
     mut threats: MessageWriter<DirectThreatMessage>,
     mut impulses: MessageWriter<crate::movement::constraints::BodyImpulseMessage>,
     mut impacts: MessageWriter<HitImpactMessage>,
@@ -382,6 +394,7 @@ mod tests {
                     pressed,
                     held: pressed,
                 },
+                ..default()
             },
             state,
             WeaponProfile::GRAYBOX_SWORD,

@@ -60,11 +60,11 @@ const más) pero fuera del MVP.
 
 ## Estados (`CombatState`)
 
-Implementados: `Idle`, `Windup`, `Active` (hitbox vivo), `Recovery`.
-Por fase: `Charging` (attack sostenido, drena stamina —
-`combat-weapon-classes`), `Guarding`/`Parrying`/`Staggered`
-(`combat-defense`), `Aiming` (`combat-bow`). El enum crece con cada fase —
-agregar un variant no compila hasta escribir su brazo del dispatcher.
+Implementados: `Idle`, `Windup`, `Active` (hitbox vivo), `Recovery`,
+`Aiming` (arco tensado — motor `aim`, ticket `combat-bow`). Por fase:
+`Charging` (attack sostenido, drena stamina — `combat-weapon-classes`),
+`Guarding`/`Parrying`/`Staggered` (`combat-defense`). El enum crece con cada
+fase — agregar un variant no compila hasta escribir su brazo del dispatcher.
 
 Nota clave del modelo: **el número de paso del combo NO vive en el enum** —
 `Windup/Active/Recovery` se repiten para cada paso y `ComboLocal.step` dice
@@ -228,9 +228,13 @@ Combate no se toca en ningún caso.
 5. **`combat-defense`** — escudo: `Guarding` (mitiga/bloquea) y `Parrying`
    (ventana temporizada); `Staggered` entrante desde
    `DamageAppliedMessage`.
-6. **`combat-bow`** — `Aiming` + flechas normales con Projectiles
-   (`projectiles.md`): `SpawnProjectileMessage`, vuelo simulado, daño al
-   impactar con bonus sobre no-alertados.
+6. **`combat-bow`** ✅ (adelantado, pendiente checkpoint jugado) — `Aiming`
+   (mouse derecho) + motor `aim` (soltar = silencio → Idle; click = flecha
+   por `SpawnProjectileMessage` en la dirección de `ControlOrientation`),
+   Projectiles con vuelo parabólico y bonus ×4 sobre no-alertados, cámara
+   over-shoulder con mira, y 3 targets de práctica en capa `Actor` en el
+   graybox (las queries de target del melee pasaron a ser layer-gated, no
+   marker-gated). Ver ticket `combat-bow`.
 7. **`camera-lock-on`** — el lock-on vive en Camera (`camera.md`), no en
    Combate: selección del objetivo (criterio en COUPLING-MAP, abierto →
    se decide ahí), órbita fijada al objetivo, y strafe: con lock activo el

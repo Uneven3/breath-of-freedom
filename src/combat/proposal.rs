@@ -17,17 +17,21 @@ pub use crate::proposal::Priority;
 pub mod weight {
     /// The always-on fallback (analog of Movement's WALK/FALL).
     pub const IDLE: u32 = 0;
+    /// Drawing/holding the bow — loses to a melee start from Idle (attack
+    /// press + aim held the same tick swings; the drawn bow shoots instead).
+    pub const AIM: u32 = 1;
     /// Holding the current attack phase while its timer runs.
-    pub const ATTACK_HOLD: u32 = 1;
+    pub const ATTACK_HOLD: u32 = 2;
     /// Advancing to the next phase of the same strike (timer elapsed).
-    pub const ATTACK_ADVANCE: u32 = 2;
+    pub const ATTACK_ADVANCE: u32 = 3;
     /// Chaining into the next combo step (buffered press inside the window)
     /// — must beat the hold of `Recovery`.
-    pub const ATTACK_CHAIN: u32 = 3;
+    pub const ATTACK_CHAIN: u32 = 4;
 }
 
 const _: () = {
-    assert!(weight::ATTACK_HOLD > weight::IDLE);
+    assert!(weight::AIM > weight::IDLE);
+    assert!(weight::ATTACK_HOLD > weight::AIM);
     assert!(weight::ATTACK_ADVANCE > weight::ATTACK_HOLD);
     assert!(weight::ATTACK_CHAIN > weight::ATTACK_ADVANCE);
 };

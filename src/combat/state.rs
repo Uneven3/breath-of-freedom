@@ -24,23 +24,29 @@ pub enum CombatState {
     Active,
     /// Follow-through: vulnerable; the chain window for the next step.
     Recovery,
+    /// Bow drawn: attack releases an arrow along the control orientation.
+    Aiming,
 }
 
 impl CombatState {
     /// Every variant, for exhaustive audits. The compile-time guard below
     /// fails the build if a variant is added without being listed here.
-    pub const ALL: [CombatState; 4] = [
+    pub const ALL: [CombatState; 5] = [
         CombatState::Idle,
         CombatState::Windup,
         CombatState::Active,
         CombatState::Recovery,
+        CombatState::Aiming,
     ];
 
     /// Committed to an action: Movement must not sprint through it.
     pub fn commits_the_body(self) -> bool {
         match self {
             CombatState::Idle => false,
-            CombatState::Windup | CombatState::Active | CombatState::Recovery => true,
+            CombatState::Windup
+            | CombatState::Active
+            | CombatState::Recovery
+            | CombatState::Aiming => true,
         }
     }
 }
@@ -51,7 +57,8 @@ const _: () = {
             CombatState::Idle
             | CombatState::Windup
             | CombatState::Active
-            | CombatState::Recovery => {}
+            | CombatState::Recovery
+            | CombatState::Aiming => {}
         }
     }
     let _ = assert_all_is_exhaustive;

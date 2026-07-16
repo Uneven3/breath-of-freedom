@@ -54,11 +54,17 @@ impl Plugin for CombatPlugin {
             FixedUpdate,
             (
                 brain::read_intents.in_set(CombatSet::ReadIntents),
-                (motors::idle::propose, motors::attack::propose).in_set(CombatSet::GatherProposals),
+                (
+                    motors::idle::propose,
+                    motors::attack::propose,
+                    motors::aim::propose,
+                )
+                    .in_set(CombatSet::GatherProposals),
                 arbitrate.in_set(CombatSet::Arbitrate),
                 (
                     motors::tick_active_motor,
                     motors::attack::sweep_active_swings,
+                    motors::aim::shoot_drawn_arrow,
                 )
                     .chain()
                     .in_set(CombatSet::TickActiveMotor),

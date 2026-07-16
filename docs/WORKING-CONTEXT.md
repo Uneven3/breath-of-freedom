@@ -263,12 +263,14 @@ another system may despawn the same frame now use tolerant commands
 (`try_insert`/`try_remove` in `juice.rs`, `try_insert` in `sfx`); rule
 recorded in the `health-core` ticket. Play-testing continues from there.
 
-**Next:** play-validate the combat checkpoints (melee combo, bow,
-health/death, enemy melee + archer — tune damages/cadences there; includes
-deciding whether a damage-aggroed enemy without sight should chase instead
-of walking to investigate, see `combat.md` § Decisiones abiertas) →
-`combat-defense` (shield/parry/`Staggered` from `DamageAppliedMessage`) →
-`camera-lock-on`.
+**Next (user-decided 2026-07-16): `mounts-core`** — graybox terrestrial
+mount (spec ready for a fresh agent in `docs/tickets/mounts-core.md`; read
+`mounts.md` + `rationale/mounts-intent-redirect.md` first). After that:
+play-validate the combat checkpoints (melee combo, bow, health/death,
+enemy melee + archer — tune damages/cadences; decide the
+damage-aggro-without-sight question, `combat.md` § Decisiones abiertas) →
+`combat-defense` (shield/parry/`Staggered`, introduces
+`DamageAppliedMessage`) → `camera-lock-on`.
 
 ## Invariants To Preserve
 

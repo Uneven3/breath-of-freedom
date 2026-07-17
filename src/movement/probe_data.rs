@@ -7,7 +7,7 @@ use bevy::prelude::*;
 pub struct TraversalProbe;
 
 /// One phase of the full traversal scenario: climb the wall, mantle its top,
-/// turn around, and glide back down. See `docs/tickets/probe-mantle-glide.md`.
+/// turn around, and glide back down. Historial: `docs/tickets/LOG.md` (probe-mantle-glide).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeStage {
     ApproachWall,

@@ -1,294 +1,71 @@
 # Working Context
 
-This file preserves the active implementation intent across agent sessions and
-context compaction. It complements, but does not replace, the scoped work
-records in `docs/tickets/`.
+Este archivo preserva la intención de implementación activa entre sesiones de
+agentes. Complementa (no reemplaza) los tickets de `docs/tickets/` y la
+arquitectura de `docs/architecture/`. El historial de checkpoints antiguos
+vive en git — este archivo describe solo el presente.
 
-## Update Protocol
+## Protocolo
 
-- Read this file before continuing the current refactor.
-- Update it after each accepted design decision, implementation checkpoint, or
-  user playtest result.
-- Keep tickets as the source of truth for ownership and scope; keep this file
-  focused on the cross-session technical handoff.
+- Léelo antes de continuar el trabajo activo; actualízalo tras cada decisión
+  de diseño aceptada, checkpoint de implementación o playtest del usuario.
+- Manténlo compacto: lo cerrado se borra de aquí (queda en git y en
+  `docs/tickets/LOG.md`), no se acumula.
 
-## Project Roadmap / Phase Gate
+## Norte del proyecto
 
-The build advances in phases, and the gate between them is explicit:
+Un juego lo más parecido posible a Zelda Breath of the Wild. Roadmap de
+contenido declarado por el usuario (2026-07-17): agrandar el mundo, más
+modelos, cortar árboles, animales, más personajes, monturas, enemigos.
 
-1. **Phase 1 — Movement (current).** Get locomotion as good as it can be:
-   no observable movement bugs on the graybox course, and every gameplay
-   `Intent` completable through the ordinary pipeline. The proof that movement
-   is "done" is behavioral, not just green tests: a non-player actor (the
-   bokobo / `TraversalProbe`) must be able to drive *all* the same intents a
-   player can and reach every locomotion state correctly.
-2. **Gate → Combat.** Only once (a) no movement bug is outstanding and (b) the
-   bokobo AI completes the full intent set correctly do we start Phase 2
-   (Combat, `docs/architecture/combat.md`). The shared arbitration core
-   (`src/proposal.rs`) is a bet that Combat reuses this shape — expect Combat to
-   *validate or reshape* it, not to inherit it unchanged.
+**Principio estructural:** IA y actores remotos se mueven **solo** escribiendo
+`Intents` — nunca `Transform`, `BodyVelocity`, `LocomotionState`, facts ni
+estado privado de motores. Ver `rationale/multi-actor-dispatch.md`.
 
-**Load-bearing principle for this whole plan:** AI and networked actors move
-**only** by writing `Intents`. They never hardcode values into or bypass the
-physics/motor pipeline — no direct writes to `Transform`, `BodyVelocity`,
-`LocomotionState`, facts, or motor-private state. This is what makes "the AI
-uses the same movement the player does" true rather than aspirational, and it
-is why the arbiter/motor split exists (see the Invariants section and
-`docs/architecture/rationale/multi-actor-dispatch.md`).
+## Estado actual (2026-07-17)
 
-## Current Objective
+Fases Movement y Combat MVP validadas jugando. Implementado y commiteado:
+locomoción por capacidades multi-actor, enemigos (percepción gradual,
+melee + arquero), health/muerte, mounts (horse como `Actor`, lifecycle,
+carga, inmunidad de dueño), espada con combos, arco de dos fases estándar
+(pivote de mira a altura de ojos, socket del arco, fallbacks a la línea de
+mira), modelo del player `Prototype.glb` con 18 clips y navegador de
+animaciones de debug (F7, `[`/`]`).
 
-Cerrar el refactor montado implementado con su checkpoint jugado. El horse ya
-es un `Actor` compuesto por capacidades Movement granulares, lifecycle
-uno-a-uno, owner persistente, combate montado snapshotteado y carga espacial.
-La validación pendiente es de integración/feeling: F8, E, safe dismount,
-sprint/salto/stairs, carga, espada/arco, inmunidad, daño enemigo y muerte.
+Auditoría adversarial de arquitectura (2026-07-17, `docs/audits/`): 4
+hallazgos, 4 corregidos el mismo día — input de orientación movido a
+`PreUpdate` (era 1 frame tarde para `FixedUpdate`), patrón cross-schedule de
+capacidad eliminado (`CapacityPending` ya no existe; los link-requests
+aplican el mismo tick), percepción generalizada a `Perceivable` (marcador),
+ventana de 1 tick del veto `ForbidSprint` fijada con test de regresión.
 
-## Architecture Decisions
+## Trabajo activo
 
-- An actor is an entity with data components such as `Health`, `Stamina`,
-  `Intents`, capability/configuration components, and exactly one active
-  `LocomotionState`.
-- Persistent capabilities describe what an actor may do. Active locomotion
-  state describes what it is doing now. Do not use an active state as an
-  ability flag.
-- Systems are always scheduled. A component does not activate a system;
-  `Query` filters select the entities for which that system runs.
-- Keep the current pipeline: input/control writes `Intents`, sensing writes
-  facts, motors propose transitions, the arbiter selects one state, and the
-  active motor writes movement.
-- Do not replace the central arbiter or make locomotion states concurrent in
-  this refactor. That would change the behavioral model rather than merely
-  composing actor capabilities.
-- Bevy assets are shared data in `Assets<T>` resources; entities normally hold
-  handles and presentation components rather than owning asset collections.
-- La taxonomia de capacidades y su orden de migracion vive en
-  `docs/architecture/rationale/movement-capability-composition.md`. Esa
-  rationale es la fuente de verdad para decidir si un motor comparte una
-  capacidad o necesita una propia; no usar la cercania entre estados como
-  criterio.
+**Separar capas de abstracción** (pedido del usuario, 2026-07-17): primer
+paso — dividir `visuals.rs` (monolito de presentación) en submódulos y
+extraer el layout del mundo de `world.rs` a datos, como fundación para
+"agrandar el mundo". Deudas anotadas con dirección clara:
 
-## Current Checkpoint
+- Mundo-como-datos: el contenido de `world.rs` (cajas, escaleras, props) debe
+  ser datos/escenas, no código Rust, antes de crecer el mapa.
+- Animación generalizada: `animate_player` es específico del player; al
+  llegar el segundo modelo riggeado (horse/enemigo), el mapeo estado→clip
+  debe volverse por-arquetipo.
+- Facciones: `Perceivable` es un bit; se reemplaza por facción cuando el
+  gameplay necesite hostilidad entre no-jugadores.
+- Ítems/inventario: no existe; llega con "cortar árboles" (la madera debe ir
+  a alguna parte). El patrón de objeto destructible ya existe
+  (`PracticeTarget` + `Health` + reacción de muerte del dueño).
 
-The user accepted the Ground, traversal, air/stairs, airborne-profile,
-body-dimensions, and composition-bundles migration batches in `cargo run`.
-sensor-profiles migration batches in `cargo run`. No movement migration ticket
-is active.
+## Invariantes a preservar
 
-All locomotion tuning and capsule geometry are now per actor. Construction
-ergonomics is implemented: `KinematicActorBundle` owns the shared Movement
-contract and capability bundles own each motor family's runtime components,
-while systems remain driven by individual component queries. The next cut
-should be selected from a fresh architecture review; the capability,
-construction, body, and sensor-profile foundations are complete.
-
-### Foundational Movement Checkpoint (complete)
-
-`docs/tickets/traversal-probe.md` added a visible, AI-controlled
-`TraversalProbe` to the graybox course. Its controller writes
-only its own `Intents` in `MovementSet::ReadIntents`; it never writes
-`LocomotionState`, facts, motor-private state, `Transform`, or body velocity.
-Its accepted checkpoint is a continuous climb scenario: approach the climbable
-wall, request `Climb` after the observed wall fact, then ascend and hold below
-the lip without requesting `Jump` or `Mantle`. It passes only after the
-ordinary sensor/proposal/arbiter pipeline reaches those observed conditions.
-
-The probe is deliberately not an Enemy or a Debug command. It is an
-integration consumer of Movement's existing multi-actor contract, and its
-name avoids third-party game IP.
-
-### Implemented
-
-- `src/movement/abilities.rs` define `GroundDriveProfile` y capacidades
-  independientes `GroundMovement`, `SprintMovement`, `SneakMovement` y
-  `StairsMovement`, con presets Player/Horse sobre el mismo kernel.
-- `BodyDimensions` owns capsule radius plus standing/crouched cylinder
-  lengths. Ledge, Stairs, Ladder, Climb/WallJump lip clipping, Sneak, debug
-  gizmos, and Player presentation use its derived heights or colliders rather
-  than global dimensions.
-- `JumpMovement`, `GlideMovement`, `ClimbMovement`, `LadderMovement`,
-  `LedgeTraversal`, and `WallJumpMovement` are implemented with their Player
-  values preserved exactly.
-- Every migrated motor filters its proposal and tick query by the exact
-  component that owns its tuning; Stairs, Sprint and Sneak are opt-in.
-- `KinematicActorBundle` constructs the actor's physical/pipeline contract;
-  capability bundles construct each permission with only its runtime state.
-  `Stamina` and optional facts no longer belong to the core. Bundles remain
-  construction helpers, not runtime capability gates.
-- `GroundSensing` and `LedgeSensing` are the active physical sensor-profile
-  migration: Ground belongs to the kinematic core, while Ledge remains an
-  optional producer of facts independent from gameplay abilities.
-- The player currently receives all existing locomotion profiles. The
-  actor-isolation tests cover absence-of-capability proposal contracts.
-
-### Changed Files
-
-- `src/movement/abilities.rs` (new)
-- `src/movement/bundles.rs` (new)
-- `src/movement/mod.rs`
-- `src/movement/motor_common.rs`
-- `src/movement/motors/walk.rs`
-- `src/movement/motors/sprint.rs`, `src/movement/motors/sneak.rs`, and
-  `src/movement/motors/stairs.rs`
-- `src/movement/motors/jump.rs`, `src/movement/motors/glide.rs`,
-  `src/movement/motors/climb.rs`, `src/movement/motors/ladder.rs`,
-  `src/movement/motors/mantle.rs`, `src/movement/motors/auto_vault.rs`,
-  `src/movement/motors/wall_jump.rs`, and `src/movement/motors/edge_leap.rs`
-- `src/movement/body.rs`, `src/movement/services/ledge.rs`, and
-  `src/debug.rs`
-- `docs/architecture/movement.md`
-- `docs/tickets/movement-ground-ability.md`
-- `docs/tickets/movement-ground-modes.md`
-
-### Validation Already Run
-
-Before this handoff, the implementation passed:
-
-```text
-cargo fmt
-cargo test                 # 73 passed
-cargo clippy --all-targets -- -D warnings
-git diff --check
-```
-
-## Accepted Checkpoints
-
-- Walk: flat ground, ramp, and stairs were accepted before the Sprint/Sneak
-  slice.
-- Ground modes: Walk, Sprint stamina drain/lock/recovery, Sneak ceiling
-  clearance, ramp, and stairs were accepted by the user after the current
-  slice.
-- Traversal: Climb, Ladder, Mantle, AutoVault, WallJump, and EdgeLeap were
-  accepted together after the user-requested mechanical migration batch.
-- Air and stairs: Jump, Glide, and the Stairs profile of `GroundMovement` were
-  accepted together.
-- Airborne profile: Fall, released short jump, ledge exit, and leaving Glide
-  were accepted after `AirborneMovement` replaced global Fall tuning.
-- Body dimensions: all existing traversal remained stable after capsule
-  geometry became persistent actor data.
-- Composition bundles: the full map remained stable after Player construction
-  moved into core and capability bundles.
-- Sensor profiles: the full map remained stable after Ground/Ledge cast
-  parameters moved from globals into per-actor physical data.
-
-## Next Step After Confirmation
-
-**Phase gate passed (2026-07-15):** movement validated (probe F6 completes
-climb→mantle→turn→jump→glide) and the bokobo (F7) drives all intents with a
-full senses model (vision/hearing/damage-aggro `Awareness`). Current focus:
-**Combat MVP** — design in `docs/architecture/combat.md` (BotW feel,
-per-weapon combo chains as data, phases in `CombatState`, step in
-`ComboLocal`; see `rationale/combat-combo-chains.md`). Scope decided by the
-user (2026-07-15): one sword, shield (guard/parry), bow with normal arrows,
-camera lock-on, HP (Health system), swing VFX placeholder. **No flurry
-rush / time dilation.**
-
-**Implemented (2026-07-15, awaiting the played feeling checkpoint):**
-`combat-scaffolding` + `combat-melee-combo` — full CombatSet pipeline after
-Movement's, graybox 3-step sword (left click), hitbox sweep masked to
-`GameLayer::Actor`, damage as log cue (until `health-core`),
-`DirectThreatMessage` aggros the struck bokobo, swing-arc VFX, `combat:`
-line in the HUD, `ForbidSprint` constraint consumed by `sprint::propose`
-(message owned by `movement/constraints.rs`). See both tickets for the
-handoff detail.
-
-**Game feel layer (`combat-game-feel`, implemented 2026-07-15):**
-`presentation/juice.rs` consumes `combat::HitImpactMessage` — hit flash,
-procedural white burst, floating damage text (gold on crits), knockback via
-`movement::BodyImpulseMessage`, jump/land jelly on every actor visual
-(`visuals::VisualOf`), 90 ms hitstop on criticals via
-`Time<Virtual>::relative_speed(0)`, and player-received feedback (screen
-flash + `camera::CameraShake` trauma) wired but dormant until enemies attack.
-
-**Bow (`combat-bow`, implemented 2026-07-15, pulled forward):** right mouse
-draws (`CombatState::Aiming`, over-shoulder aim camera + crosshair), left
-click releases an arrow along `ControlOrientation`; `src/projectiles/`
-simulates parabolic flight with per-tick ray sweeps (×4 stealth bonus on
-unaware targets, sticks into world geometry); three practice targets on
-`GameLayer::Actor` east of the course — melee target queries are now
-layer-gated, not marker-gated.
-
-**Bow status (code review 2026-07-16):** the 2026-07-15 KNOWN BUG note
-("arrow never fires") described the `1eebe9a` code (fire on the `pressed`
-edge); `52475eb` rewrote the model — holding attack charges
-(`tick_draw_strength`), releasing fires (`shoot_drawn_arrow`) — and the
-tick-by-tick trace of the current pipeline says release-fire works. Needs a
-played confirmation. The review did find real bugs at HEAD, fixed under
-`docs/tickets/combat-bow-fixes.md`: `just_fired` was reset the same tick it
-was set (fire feedback dead — replaced by `BowFiredMessage`), a fast tap
-between fixed ticks lost the shot (now fires at minimum charge), the arrow
-origin read `CameraRig` from simulation (§20 violation — now derived from
-`ControlOrientation` + shoulder constants owned by `aim.rs`, which the
-camera imports), Projectiles had nondeterministic 0-or-1-tick spawn latency
-(pinned after `CombatSet::EmitConstraints`), and arrow/trail spawns
-allocated fresh mesh/material assets in `FixedUpdate` (§18 — now a Startup
-`ArrowAssets` resource).
-
-**`health-core` + `enemies-combat` (implemented 2026-07-16, awaiting the
-played checkpoint):** `src/health/` applies `DamageRequestMessage` (emitted
-by melee `resolve_melee_hits` and arrow `resolve_arrow_hit` — the log-cue
-placeholders are gone) → `DeathMessage` in `HealthSet::Apply` after
-`ProjectilesSet::Simulate`. `DamageAppliedMessage` no existe: se diseñará solo
-cuando haya un consumidor real. Death reactions live
-with each actor's owner: Player respawns (`player.rs`), enemies despawn
-(`enemies/mod.rs`), practice targets despawn (`world.rs`, now
-`PracticeTarget` + `Health`). F7 spawns a graybox pair — melee bokobo
-(`WeaponProfile::BOKOBO_CLUB`, single telegraphed swing on a cadence) and
-archer bokobo (`DrawStrength` + own `ControlOrientation`, holds distance,
-charges to 0.65 and releases through the ordinary `aim` motor). New
-`EnemyAiState::Combat` + `enemies/combat.rs` (`act_melee`/`act_archer`)
-write only `CombatIntents`/`ControlOrientation` — no combat state, buffer,
-transform, or velocity writes. HP: player 100 (HUD line in `debug.rs`),
-melee 30, archer 20, targets 30. See both tickets for detail.
-
-**Checkpoint finding (2026-07-16, fixed):** killing the bokobo crashed —
-`juice::flash_on_hit`'s `insert(HitFlash)` raced the orphan-visual despawn
-in the same `Update` schedule. Presentation systems that touch entities
-another system may despawn the same frame now use tolerant commands
-(`try_insert`/`try_remove` in `juice.rs`, `try_insert` in `sfx`); rule
-recorded in the `health-core` ticket. Play-testing continues from there.
-
-**Refactor montado implementado (2026-07-16; checkpoint final pendiente):**
-el horse comparte el pipeline `Actor` con perfiles Ground/Sprint/Stairs y sin
-Sneak/capacidades humanoides. Movement posee attachment, suspensión, redirect
-persistente y cuerpos; Mounts posee relación uno-a-uno, owner, safe dismount,
-F8, muerte y carga. Combat selecciona perfiles mounted sin mutar el arma base
-y snapshottea espada/arco al empezar cada acción. La inmunidad
-`HostileInteractionImmunity(owner)` cubre HP, impulso, threat y feedback;
-Health conserva la validación final. Charge usa sweep espacial con histéresis
-y ledger reservado fuera de `FixedUpdate`. Los mensajes tienen ordering
-explícito: lifecycle → Movement → Combat → Projectiles → Charge → Health →
-death cleanup. Fuente de entrega:
-`docs/implement-feature/movement-capabilities-and-mount-lifecycle-plan.md`.
-Después de aceptar el checkpoint:
-play-validate the combat checkpoints (melee combo, bow, health/death,
-enemy melee + archer — tune damages/cadences; decide the
-damage-aggro-without-sight question, `combat.md` § Decisiones abiertas) →
-`combat-defense` (shield/parry/`Staggered`; cualquier resultado de daño se
-diseña con su primer consumidor real) → `camera-lock-on`.
-
-## Invariants To Preserve
-
-- `LocomotionState` remains exclusive per actor.
-- `Intents` remains the control boundary shared by player, AI, and future
-  networking. AI/remote actors write **only** `Intents`; they never write
-  `Transform`, `BodyVelocity`, `LocomotionState`, facts, or motor-private
-  state directly. Bypassing the pipeline for a non-player actor is a bug, not a
-  shortcut.
-- Facts/sensors remain separate from motor execution.
-- Only the active motor writes an actor's movement in a tick. Production
-  registers capability-exact `tick_body` systems in a total chain; each gates
-  on its owned `LocomotionState`, and a real-plugin physics test pins that an
-  actor with several capabilities receives only its active tick. Flat-ground motors share
-  `motor_common::ground_locomotion_step`. The `arbitration_matrix` tests
-  (`src/movement/proposal.rs`) pin that every state has exactly one owning
-  motor and that no two co-proposing motors tie.
-- Existing schedule ordering and the transition arbiter remain intact.
-- Do not revert unrelated working-tree changes.
-
-## Repository State
-
-- Stable traversal work was previously committed as `f5b8700`
-  (`feat: stabilize traversal locomotion`) and pushed by the user.
-- The accepted locomotion-capability migration slices are intentionally
-  uncommitted and should be committed together only when the user requests it.
+- `LocomotionState` exclusivo por actor; solo el motor activo escribe
+  movimiento en un tick (tests `arbitration_matrix` y de aislamiento lo
+  fijan).
+- `Intents` es la frontera de control de player, IA y red.
+- Facts/sensores separados de la ejecución de motores.
+- Todo lo que la simulación de `FixedUpdate` lee del hardware se resuelve en
+  `PreUpdate` (nunca `Update` — corre después de `FixedUpdate` en el frame).
+- Presentación solo lee simulación; entidades que otro sistema puede
+  despawnear el mismo frame usan comandos tolerantes (`try_insert`).
+- El ordering de schedules y el árbitro de transiciones quedan intactos.

@@ -4,7 +4,7 @@
 //! This is intentionally a Movement brain, not an enemy implementation: it
 //! writes only the probe actor's `Intents` and observes the normal pipeline —
 //! every stage advances only when real sensors/arbitration reach its observed
-//! condition (see `docs/tickets/probe-mantle-glide.md`).
+//! condition (historial: `docs/tickets/LOG.md`, probe-mantle-glide).
 //!
 //! **F6** spawns/despawns the probe on demand at its authored world-space
 //! start (facing the graybox test wall), independent of where the player is —

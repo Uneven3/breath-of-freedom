@@ -1,6 +1,6 @@
 //! Perception — what an enemy notices, and how aware it is of it.
 //!
-//! `perceive` evaluates every `Player` actor against the enemy's sight cone
+//! `perceive` evaluates every `Perceivable` actor against the enemy's sight cone
 //! and a line-of-sight ray (masked to `GameLayer::Default`, so only world
 //! geometry occludes — actor capsules are invisible to it by layer). Sight is
 //! not binary: it fills the per-enemy [`Awareness`] meter over time — faster
@@ -14,8 +14,15 @@ use bevy::prelude::*;
 
 use super::Enemy;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity, Player};
+use crate::movement::{Actor, BodyVelocity};
 use crate::world::GameLayer;
+
+/// Marks an actor enemies can notice. Owned by Perception so spawners opt
+/// in explicitly (player today; horse, animals, allies as the game grows)
+/// instead of `Player` doubling as a perception proxy — a faction component
+/// can replace this marker when hostility needs more than one bit.
+#[derive(Component)]
+pub struct Perceivable;
 
 /// Sight tuning, per enemy. Presets follow the `GroundMovement::PLAYER`
 /// pattern.
@@ -185,7 +192,7 @@ pub fn perceive(
     time: Res<Time>,
     spatial: SpatialQuery,
     mut enemies: Query<EnemyQuery, With<Enemy>>,
-    targets: Query<TargetQuery, (With<Player>, With<Actor>)>,
+    targets: Query<TargetQuery, (With<Perceivable>, With<Actor>)>,
 ) {
     let dt = time.delta_secs();
     for (enemy_entity, enemy_tf, perception, mut aggro, mut awareness) in &mut enemies {

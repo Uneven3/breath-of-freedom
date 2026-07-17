@@ -21,15 +21,6 @@ const CHARGE_KNOCKBACK: f32 = 9.0;
 enum RecordHit {
     New,
     Duplicate,
-    CapacityPending,
-}
-
-fn prepare_ledger(ledger: &mut ChargeHitLedger, pair_capacity: usize) {
-    if ledger.hits.capacity() < pair_capacity {
-        ledger
-            .hits
-            .reserve(pair_capacity.saturating_sub(ledger.hits.len()));
-    }
 }
 
 fn record_hit(
@@ -42,9 +33,6 @@ fn record_hit(
     if ledger.hits.contains(&key) {
         return RecordHit::Duplicate;
     }
-    if ledger.hits.len() == ledger.hits.capacity() {
-        return RecordHit::CapacityPending;
-    }
     ledger.hits.insert(key);
     RecordHit::New
 }
@@ -55,7 +43,9 @@ fn clear_generation(ledger: &mut ChargeHitLedger, horse: Entity, generation: u64
     });
 }
 
-pub fn prepare_hit_ledger(
+/// Drop ledger entries whose horse or enemy despawned, so the set doesn't
+/// accumulate dead keys. Runs in `FixedUpdate` right before the sweep.
+pub fn prune_hit_ledger(
     mut ledger: ResMut<ChargeHitLedger>,
     horses: Query<(), With<Horse>>,
     enemies: Query<(), With<Enemy>>,
@@ -63,10 +53,6 @@ pub fn prepare_hit_ledger(
     ledger
         .hits
         .retain(|(horse, _, enemy)| horses.get(*horse).is_ok() && enemies.get(*enemy).is_ok());
-    prepare_ledger(
-        &mut ledger,
-        horses.iter().count().saturating_mul(enemies.iter().count()),
-    );
 }
 
 type HorseQuery<'a> = (
@@ -126,7 +112,6 @@ pub fn detect_charge_hits(
         let generation = charge.generation;
         let knockback_direction = planar_velocity.normalize_or_zero();
 
-        let mut capacity_pending = false;
         let mut resolve_candidate = |candidate: Entity| {
             let Ok((target_transform, immunity)) = world.enemies.get(candidate) else {
                 return true;
@@ -143,7 +128,7 @@ pub fn detect_charge_hits(
             {
                 return true;
             }
-            if emit_charge_outcomes(
+            emit_charge_outcomes(
                 horse,
                 generation,
                 candidate,
@@ -151,11 +136,7 @@ pub fn detect_charge_hits(
                 knockback_direction,
                 &mut ledger,
                 &mut outcomes,
-            ) == RecordHit::CapacityPending
-            {
-                capacity_pending = true;
-                return false;
-            }
+            );
             true
         };
 
@@ -178,13 +159,7 @@ pub fn detect_charge_hits(
                 resolve_candidate,
             );
         }
-        commit_sweep_position(&mut charge, transform.translation, capacity_pending);
-    }
-}
-
-fn commit_sweep_position(charge: &mut HorseCharge, current: Vec3, capacity_pending: bool) {
-    if !capacity_pending {
-        charge.previous_position = current;
+        charge.previous_position = transform.translation;
     }
 }
 
@@ -208,13 +183,8 @@ fn emit_charge_outcomes(
     ledger: &mut ChargeHitLedger,
     outcomes: &mut ChargeOutcomes,
 ) -> RecordHit {
-    match record_hit(ledger, horse, generation, target) {
-        RecordHit::Duplicate => return RecordHit::Duplicate,
-        RecordHit::CapacityPending => {
-            warn!("charge ledger capacity pending for horse {horse:?}; Update will reserve it");
-            return RecordHit::CapacityPending;
-        }
-        RecordHit::New => {}
+    if record_hit(ledger, horse, generation, target) == RecordHit::Duplicate {
+        return RecordHit::Duplicate;
     }
     outcomes.damage.write(DamageRequestMessage {
         target,
@@ -278,7 +248,6 @@ mod tests {
         mut ledger: ResMut<ChargeHitLedger>,
         mut outcomes: ChargeOutcomes,
     ) {
-        prepare_ledger(&mut ledger, 1);
         for _ in 0..2 {
             emit_charge_outcomes(
                 *horse,
@@ -343,14 +312,8 @@ mod tests {
         // Populate Avian's collider tree from the current simulation world,
         // then run charge detection against that real spatial-query backend.
         app.update();
-        app.world_mut().run_system_once(prepare_hit_ledger).unwrap();
-        let ledger_capacity = app.world().resource::<ChargeHitLedger>().hits.capacity();
+        app.world_mut().run_system_once(prune_hit_ledger).unwrap();
         app.world_mut().run_system_once(detect_charge_hits).unwrap();
-        assert_eq!(
-            app.world().resource::<ChargeHitLedger>().hits.capacity(),
-            ledger_capacity,
-            "the real Fixed charge path must not grow its owned workspace"
-        );
 
         let damage = app.world().resource::<Messages<DamageRequestMessage>>();
         let mut damage_cursor = damage.get_cursor();
@@ -421,15 +384,13 @@ mod tests {
     }
 
     #[test]
-    fn ledger_handles_more_than_sixteen_targets_and_two_horses_without_growth() {
+    fn ledger_handles_more_than_sixteen_targets_and_two_horses() {
         let mut world = World::new();
         let horses = [world.spawn_empty().id(), world.spawn_empty().id()];
         let enemies = (0..20)
             .map(|_| world.spawn_empty().id())
             .collect::<Vec<_>>();
         let mut ledger = ChargeHitLedger::default();
-        prepare_ledger(&mut ledger, horses.len() * enemies.len());
-        let capacity = ledger.hits.capacity();
 
         for horse in horses {
             for enemy in &enemies {
@@ -442,36 +403,10 @@ mod tests {
         }
 
         assert_eq!(ledger.hits.len(), 40);
-        assert_eq!(
-            ledger.hits.capacity(),
-            capacity,
-            "Fixed inserts must not grow"
-        );
         clear_generation(&mut ledger, horses[0], 1);
         for enemy in enemies {
             assert_eq!(record_hit(&mut ledger, horses[0], 2, enemy), RecordHit::New);
         }
-    }
-
-    #[test]
-    fn capacity_pending_defers_the_sweep_without_losing_the_candidate() {
-        let mut world = World::new();
-        let horse = world.spawn_empty().id();
-        let enemy = world.spawn_empty().id();
-        let mut ledger = ChargeHitLedger::default();
-        let mut charge = HorseCharge::new(Vec3::ZERO);
-
-        assert_eq!(
-            record_hit(&mut ledger, horse, 1, enemy),
-            RecordHit::CapacityPending
-        );
-        commit_sweep_position(&mut charge, Vec3::X * 30.0, true);
-        assert_eq!(charge.previous_position, Vec3::ZERO);
-
-        prepare_ledger(&mut ledger, 1);
-        assert_eq!(record_hit(&mut ledger, horse, 1, enemy), RecordHit::New);
-        commit_sweep_position(&mut charge, Vec3::X * 30.0, false);
-        assert_eq!(charge.previous_position, Vec3::X * 30.0);
     }
 
     #[test]

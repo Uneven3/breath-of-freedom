@@ -102,7 +102,6 @@ impl Plugin for MovementPlugin {
         app.add_message::<link::ActorLinkRequestMessage>();
         app.add_message::<link::ActorLinkResultMessage>();
         app.init_resource::<link::ActorLinkWorkspace>();
-        app.add_systems(Update, attachment_systems::prepare_actor_link_workspace);
         app.add_systems(
             FixedUpdate,
             (
@@ -140,7 +139,6 @@ impl Plugin for MovementPlugin {
             FixedUpdate,
             (
                 attachment_systems::apply_actor_link_requests,
-                attachment_systems::retry_capacity_pending,
                 attachment_systems::recover_orphaned_attachments,
                 attachment_systems::recover_pending_safe_poses,
             )

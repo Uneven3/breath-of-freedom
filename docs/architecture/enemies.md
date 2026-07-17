@@ -39,7 +39,10 @@ Pipeline análogo al de un jugador, tres sistemas encadenados dentro de
 `movement::brain::read_intents`):
 
 1. **`perception::perceive`** ✅ — escribe `AggroTarget` y `Awareness`
-   evaluando cada `Player` actor contra cono de visión (distancia + FOV
+   evaluando cada actor `Perceivable` (marcador propiedad de Perception; hoy
+   solo el player lo porta — horse/animales/aliados optarán al crecer, y una
+   facción lo reemplazará si la hostilidad necesita más de un bit) contra
+   cono de visión (distancia + FOV
    planar) y línea de visión: un ray enmascarado a
    `world::GameLayer::Default`, así solo la geometría del mundo ocluye (las
    cápsulas de actores son invisibles al ray por capa). La detección es

@@ -16,24 +16,6 @@ type ActorLinks<'a> = (
     Option<&'a ControlRedirect>,
 );
 
-pub fn prepare_actor_link_workspace(
-    mut workspace: ResMut<ActorLinkWorkspace>,
-    actors: Query<(), With<Actor>>,
-) {
-    let actor_count = actors.iter().count();
-    workspace.controllers.clear();
-    workspace.controlled.clear();
-    workspace.attached.clear();
-    workspace.carriers.clear();
-    workspace.processed.clear();
-    workspace.controllers.reserve(actor_count);
-    workspace.controlled.reserve(actor_count);
-    workspace.attached.reserve(actor_count);
-    workspace.carriers.reserve(actor_count);
-    workspace.processed.reserve(actor_count);
-    workspace.prepared_for = actor_count;
-}
-
 pub fn apply_actor_link_requests(
     mut commands: Commands,
     mut requests: MessageReader<ActorLinkRequestMessage>,
@@ -45,21 +27,20 @@ pub fn apply_actor_link_requests(
     if requests.is_empty() {
         return;
     }
-    if actors.iter().count() > workspace.prepared_for {
-        for request in requests.read().copied() {
-            results.write(ActorLinkResultMessage {
-                request,
-                status: ActorLinkStatus::Rejected(ActorLinkRejection::CapacityPending),
-            });
-        }
-        return;
-    }
 
+    // Size and clear the workspace here, same tick as its use — reserve is a
+    // no-op once steady, and the current actor count is exact by definition.
+    let actor_count = actors.iter().count();
     workspace.controllers.clear();
     workspace.controlled.clear();
     workspace.attached.clear();
     workspace.carriers.clear();
     workspace.processed.clear();
+    workspace.controllers.reserve(actor_count);
+    workspace.controlled.reserve(actor_count);
+    workspace.attached.reserve(actor_count);
+    workspace.carriers.reserve(actor_count);
+    workspace.processed.reserve(actor_count);
     for (entity, attachment, redirect) in &actors {
         if let Some(attachment) = attachment {
             workspace.attached.insert(entity);
@@ -201,17 +182,6 @@ pub fn apply_actor_link_requests(
             }
         };
         results.write(ActorLinkResultMessage { request, status });
-    }
-}
-
-pub fn retry_capacity_pending(
-    mut results: MessageReader<ActorLinkResultMessage>,
-    mut requests: MessageWriter<ActorLinkRequestMessage>,
-) {
-    for result in results.read() {
-        if result.status == ActorLinkStatus::Rejected(ActorLinkRejection::CapacityPending) {
-            requests.write(result.request);
-        }
     }
 }
 
@@ -379,7 +349,6 @@ mod tests {
         app.add_message::<ActorLinkRequestMessage>();
         app.add_message::<ActorLinkResultMessage>();
         app.init_resource::<ActorLinkWorkspace>();
-        app.add_systems(Update, prepare_actor_link_workspace);
         app.configure_sets(
             FixedUpdate,
             (
@@ -396,9 +365,7 @@ mod tests {
         );
         app.add_systems(
             FixedUpdate,
-            (apply_actor_link_requests, retry_capacity_pending)
-                .chain()
-                .in_set(MovementSet::ApplyExternal),
+            apply_actor_link_requests.in_set(MovementSet::ApplyExternal),
         );
         app.add_systems(
             FixedUpdate,
@@ -606,11 +573,20 @@ mod tests {
     }
 
     #[test]
-    fn fixed_link_path_keeps_all_prepared_workspace_capacities() {
+    fn fixed_link_path_keeps_workspace_capacities_once_steady() {
         let mut app = app();
         let controller = spawn_actor(&mut app, Transform::default(), Intents::default());
         let controlled = spawn_actor(&mut app, Transform::default(), Intents::default());
-        prepare(&mut app);
+
+        // First request sizes the workspace inside the fixed path itself.
+        app.world_mut()
+            .write_message(ActorLinkRequestMessage::Attach {
+                controller,
+                controlled,
+                local_pose: Transform::IDENTITY,
+                mask: ControlMask::MOUNT,
+            });
+        app.world_mut().run_schedule(FixedUpdate);
         let before = {
             let workspace = app.world().resource::<ActorLinkWorkspace>();
             (
@@ -621,14 +597,17 @@ mod tests {
                 workspace.processed.capacity(),
             )
         };
+
+        // Steady state: further requests must not reallocate.
         app.world_mut()
-            .write_message(ActorLinkRequestMessage::Attach {
+            .write_message(ActorLinkRequestMessage::Detach {
                 controller,
                 controlled,
-                local_pose: Transform::IDENTITY,
-                mask: ControlMask::MOUNT,
+                world_pose: Transform::from_xyz(2.0, 1.0, 0.0),
+                inherited_velocity: Vec3::X,
+                safety: DetachSafety::Validated,
+                force: false,
             });
-
         app.world_mut().run_schedule(FixedUpdate);
 
         let workspace = app.world().resource::<ActorLinkWorkspace>();
@@ -644,8 +623,11 @@ mod tests {
         );
     }
 
+    /// Regression guard for the removed cross-schedule "prepare" pattern:
+    /// attach, detach and neutralize must all apply on the very tick their
+    /// request arrives, with no preparation run in between.
     #[test]
-    fn capacity_pending_retries_attach_detach_and_neutralize_losslessly() {
+    fn link_requests_apply_the_same_tick_they_arrive() {
         let mut app = app();
         let controller = spawn_actor(&mut app, Transform::default(), Intents::default());
         let controlled = spawn_actor(&mut app, Transform::default(), Intents::default());
@@ -658,9 +640,6 @@ mod tests {
                 mask: ControlMask::MOUNT,
             });
         app.world_mut().run_schedule(FixedUpdate);
-        assert!(!app.world().entity(controller).contains::<ControlRedirect>());
-        prepare(&mut app);
-        app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(
             app.world()
                 .entity(controller)
@@ -671,9 +650,6 @@ mod tests {
         );
 
         app.world_mut()
-            .resource_mut::<ActorLinkWorkspace>()
-            .prepared_for = 0;
-        app.world_mut()
             .write_message(ActorLinkRequestMessage::Detach {
                 controller,
                 controlled,
@@ -683,9 +659,6 @@ mod tests {
                 force: false,
             });
         app.world_mut().run_schedule(FixedUpdate);
-        assert!(app.world().entity(controller).contains::<ControlRedirect>());
-        prepare(&mut app);
-        app.world_mut().run_schedule(FixedUpdate);
         assert!(!app.world().entity(controller).contains::<ControlRedirect>());
 
         app.world_mut().entity_mut(controlled).insert(Intents {
@@ -693,19 +666,7 @@ mod tests {
             ..default()
         });
         app.world_mut()
-            .resource_mut::<ActorLinkWorkspace>()
-            .prepared_for = 0;
-        app.world_mut()
             .write_message(ActorLinkRequestMessage::Neutralize { actor: controlled });
-        app.world_mut().run_schedule(FixedUpdate);
-        assert!(
-            app.world()
-                .entity(controlled)
-                .get::<Intents>()
-                .unwrap()
-                .wants_sprint
-        );
-        prepare(&mut app);
         app.world_mut().run_schedule(FixedUpdate);
         assert!(
             !app.world()

@@ -6,7 +6,6 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::input::InputSet;
 use crate::input::frame::ControlOrientation;
 use crate::movement::Player;
 use crate::movement::state::LocomotionState;
@@ -79,6 +78,8 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraShake>();
         app.add_systems(Startup, (spawn_camera, spawn_crosshair));
+        // Orientation resolves in PreUpdate (see InputPlugin), so Update-time
+        // camera systems always read the current frame's orientation.
         app.add_systems(
             Update,
             (
@@ -87,8 +88,7 @@ impl Plugin for CameraPlugin {
                 apply_camera_shake,
                 toggle_crosshair,
             )
-                .chain()
-                .after(InputSet::UpdateOrientation),
+                .chain(),
         );
     }
 }

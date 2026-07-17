@@ -53,8 +53,9 @@ Mounts Request/Lifecycle
 
 `MovementSet::ApplyExternal` emite el ack; `MountsSet::Confirm` actualiza la
 relación y publica el contexto, y `MountsSet::PostMove` recién entonces puede
-despawnear un horse liberado. Un rechazo `CapacityPending` reencola el request
-exacto y se reintenta después de la preparación de capacidad en `Update`.
+despawnear un horse liberado. El workspace del link se dimensiona dentro del
+propio tick fijo (mismo sistema que lo consume), así que un request nunca se
+rechaza por capacidad.
 
 La muerte emite el desmontaje al lifecycle siguiente: el horse permanece
 `PendingHorseDespawn` y nunca desaparece antes de liberar al rider.
@@ -73,10 +74,9 @@ selecciona solo `Enemy`; un raycast que ignora actores descarta candidatos
 ocultos por geometría. Cada `(horse, generation, enemy)` emite una sola vez
 `DamageRequestMessage`, `BodyImpulseMessage` y `HitImpactMessage`.
 
-El ledger no tiene límite fijo: `Update` reserva capacidad según horses ×
-enemies vivos; `FixedUpdate` no hace crecer el heap. Si entidades aparecen
-después de la preparación, el hit se difiere, la posición previa no avanza y
-el mismo tramo se reintenta después de que `Update` amplíe capacidad.
+El ledger no tiene límite fijo: el set crece amortizado dentro de
+`FixedUpdate` y `prune_hit_ledger` (mismo tick, antes del sweep) elimina las
+entradas cuyos horse/enemy despawnearon.
 
 Los tests con el backend espacial real de Avian cubren tunneling entre
 endpoints a alta velocidad, pared oclusora y separación vertical, además de

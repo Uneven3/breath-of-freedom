@@ -45,6 +45,7 @@ fn spawn_player(mut commands: Commands) {
     let body_dimensions = BodyDimensions::PLAYER;
     commands.spawn((
         Player,
+        crate::enemies::perception::Perceivable,
         crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
         crate::input::frame::ControlOrientation::default(),
         Name::new("Player"),

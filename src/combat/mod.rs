@@ -118,6 +118,74 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
+    /// Regression guard for the accepted 1-tick veto window (see the comment
+    /// on `emit_constraints`): Combat runs after Movement inside a fixed
+    /// tick, so the tick that commits the body still allows sprint; the veto
+    /// must land on the *next* tick — never later, and a reordering that
+    /// silently widens or removes the window must fail here.
+    #[test]
+    fn forbid_sprint_veto_lands_exactly_one_tick_after_commitment() {
+        use crate::movement::MovementSet;
+        use crate::movement::constraints::{
+            LocomotionConstraintFacts, LocomotionConstraintMessage, apply_locomotion_constraints,
+        };
+
+        let mut app = App::new();
+        app.add_message::<LocomotionConstraintMessage>();
+        // Production ordering: Movement's sets first, Combat's chained after.
+        app.configure_sets(
+            FixedUpdate,
+            (
+                MovementSet::SenseWorld,
+                MovementSet::GatherProposals,
+                MovementSet::TickActiveMotor,
+            )
+                .chain(),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            CombatSet::EmitConstraints.after(MovementSet::TickActiveMotor),
+        );
+        app.add_systems(
+            FixedUpdate,
+            apply_locomotion_constraints
+                .after(MovementSet::SenseWorld)
+                .before(MovementSet::GatherProposals),
+        );
+        app.add_systems(
+            FixedUpdate,
+            emit_constraints.in_set(CombatSet::EmitConstraints),
+        );
+
+        let actor = app
+            .world_mut()
+            .spawn((
+                Actor,
+                CombatState::Windup,
+                LocomotionConstraintFacts::default(),
+            ))
+            .id();
+
+        // Tick 1: the actor is already committed, but Combat emits at the end
+        // of the tick — motors this tick still saw sprint as allowed.
+        app.world_mut().run_schedule(FixedUpdate);
+        let facts = |app: &App| {
+            app.world()
+                .entity(actor)
+                .get::<LocomotionConstraintFacts>()
+                .unwrap()
+                .forbid_sprint
+        };
+        assert!(
+            !facts(&app),
+            "the commitment tick itself must not yet see the veto (1-tick window)"
+        );
+
+        // Tick 2: Movement consumes the message first thing — veto active.
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(facts(&app), "the veto must land exactly one tick later");
+    }
+
     #[test]
     fn arbitrate_defaults_to_idle_by_silence() {
         let mut world = World::new();

@@ -3,9 +3,12 @@
 **Carpeta:** `src/input/`
 **Estado:** snapshot local implementado; rebinding/gamepad/red pendientes.
 
-Input muestrea hardware una vez por render frame (`PreUpdate`) y publica
-acciones resueltas por `InputSource`. Los Brains leen `ActiveActions`; ningún
-Brain de Movement, Combat o Mounts conoce teclas concretas.
+Input muestrea hardware una vez por render frame en `PreUpdate` — acciones
+**y** orientación de mouse, encadenadas tras `bevy::input::InputSystems` —
+porque `FixedUpdate` corre antes que `Update` en cada frame: cualquier
+escritor en `Update` llegaría un frame tarde a la simulación. Los Brains leen
+`ActiveActions`; ningún Brain de Movement, Combat o Mounts conoce teclas
+concretas.
 
 ## Datos
 

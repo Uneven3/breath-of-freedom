@@ -8,7 +8,7 @@ Mounts emite `ActorLinkRequestMessage::Attach` al montar y
 `ActorLinkRequestMessage::Detach` al desmontar. Movement instala o retira
 atómicamente `KinematicAttachment`, `ControlRedirect`, collider y gate, y
 responde con `ActorLinkResultMessage`; Mounts solo confirma su relación desde
-un ack aceptado. `Rejected(CapacityPending)` reencola el request exacto.
+un ack aceptado, y los requests se aplican el mismo tick en que llegan.
 Después de `MovementSet::ReadIntents`,
 `MovementSet::ControlRedirect` copia planar, sprint y salto normalizados al
 actor controlado, descarta acciones incompatibles y deja los intents del

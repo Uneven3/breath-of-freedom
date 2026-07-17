@@ -208,8 +208,9 @@ ControlRedirect -> SenseWorld -> GatherProposals -> Arbitrate ->
 TickActiveMotor -> SyncAttachments`; ver
 `rationale/mounts-intent-redirect.md`.
 
-`Rejected(CapacityPending)` reencola el request exacto en orden de lectura para
-el tick posterior a `prepare_actor_link_workspace`. Un detach no validado o un
+El workspace se limpia y dimensiona al inicio de `apply_actor_link_requests`
+(mismo tick fijo), así que los requests se aplican el tick en que llegan sin
+rechazos por capacidad. Un detach no validado o un
 carrier perdido quita el link pero conserva `ColliderDisabled`, retira
 `LocomotionEnabled` e instala `PendingSafeRecovery`; el recovery prueba un
 número fijo de candidatos por tick y solo restaura al hallar uno sin overlap.

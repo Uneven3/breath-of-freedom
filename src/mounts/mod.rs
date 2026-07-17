@@ -32,7 +32,6 @@ impl Plugin for MountsPlugin {
         app.init_resource::<charge_data::ChargeHitLedger>();
         app.init_resource::<charge_data::ChargeShape>();
         app.add_systems(Update, debug::capture_toggle_request);
-        app.add_systems(Update, charge::prepare_hit_ledger);
         app.configure_sets(
             FixedUpdate,
             (MountsSet::Request, MountsSet::Lifecycle)
@@ -91,7 +90,9 @@ impl Plugin for MountsPlugin {
         );
         app.add_systems(
             FixedUpdate,
-            charge::detect_charge_hits.in_set(MountsSet::Charge),
+            (charge::prune_hit_ledger, charge::detect_charge_hits)
+                .chain()
+                .in_set(MountsSet::Charge),
         );
     }
 }

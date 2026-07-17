@@ -34,12 +34,23 @@ impl Plugin for InputPlugin {
         app.init_resource::<ActiveActions>();
         app.insert_resource(PointerCaptured(true));
         app.add_systems(Startup, grab_cursor);
-        app.add_systems(PreUpdate, resolve_local_actions);
+        // Everything the fixed-step simulation reads (actions AND orientation)
+        // must resolve in PreUpdate: Bevy runs FixedUpdate *before* Update in
+        // each frame, so an Update-schedule writer is always one frame stale
+        // for FixedUpdate consumers (movement direction, bow aim).
         app.add_systems(
-            Update,
-            (cursor_control, update_local_orientation)
+            PreUpdate,
+            (
+                resolve_local_actions,
+                cursor_control,
+                update_local_orientation,
+            )
                 .chain()
-                .in_set(InputSet::UpdateOrientation),
+                .in_set(InputSet::UpdateOrientation)
+                // Bevy refreshes ButtonInput/AccumulatedMouseMotion in
+                // PreUpdate too — order after them or we read last frame's
+                // hardware state nondeterministically.
+                .after(bevy::input::InputSystems),
         );
     }
 }

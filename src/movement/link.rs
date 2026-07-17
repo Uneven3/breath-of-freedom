@@ -32,7 +32,6 @@ pub enum DetachSafety {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorLinkRejection {
-    CapacityPending,
     MissingController,
     MissingControlled,
     SelfLink,
@@ -56,7 +55,6 @@ pub struct ActorLinkResultMessage {
 
 #[derive(Resource, Default)]
 pub struct ActorLinkWorkspace {
-    pub(crate) prepared_for: usize,
     pub(crate) controllers: EntityHashSet,
     pub(crate) controlled: EntityHashSet,
     pub(crate) attached: EntityHashSet,

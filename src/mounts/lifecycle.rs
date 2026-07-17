@@ -530,7 +530,6 @@ mod tests {
         app.add_message::<ActorLinkRequestMessage>();
         app.add_message::<ActorLinkResultMessage>();
         app.init_resource::<ActorLinkWorkspace>();
-        app.add_systems(Update, attachment_systems::prepare_actor_link_workspace);
         app.add_message::<SetMountedCombatMessage>();
         app.add_message::<DeathMessage>();
         app.configure_sets(
@@ -561,7 +560,6 @@ mod tests {
             FixedUpdate,
             (
                 attachment_systems::apply_actor_link_requests,
-                attachment_systems::retry_capacity_pending,
                 attachment_systems::recover_orphaned_attachments,
             )
                 .chain()
@@ -782,55 +780,6 @@ mod tests {
             app.world().entity(rider).get::<BodyVelocity>().unwrap().0,
             Vec3::new(5.0, 0.0, -1.0)
         );
-    }
-
-    #[test]
-    fn capacity_pending_f8_dismount_retries_after_update_and_despawns_horse() {
-        let mut app = app();
-        let rider = spawn_rider(&mut app);
-        let horse = spawn_horse(&mut app);
-        mount(&mut app, rider, horse);
-        app.world_mut()
-            .resource_mut::<ActorLinkWorkspace>()
-            .prepared_for = 0;
-        app.world_mut()
-            .write_message(MountDebugRequest::ToggleHorse);
-
-        app.world_mut().run_schedule(FixedUpdate);
-
-        assert!(app.world().entity(horse).contains::<PendingHorseDespawn>());
-        assert!(app.world().entity(rider).contains::<MountedOn>());
-
-        app.update();
-        app.world_mut().run_schedule(FixedUpdate);
-
-        assert!(app.world().get_entity(horse).is_err());
-        assert_safely_detached(&app, rider);
-    }
-
-    #[test]
-    fn capacity_pending_death_dismount_retries_after_update_and_despawns_horse() {
-        let mut app = app();
-        let rider = spawn_rider(&mut app);
-        let horse = spawn_horse(&mut app);
-        mount(&mut app, rider, horse);
-        app.world_mut()
-            .resource_mut::<ActorLinkWorkspace>()
-            .prepared_for = 0;
-        app.world_mut()
-            .write_message(DeathMessage { entity: horse });
-
-        app.world_mut().run_schedule(FixedUpdate);
-        app.world_mut().run_schedule(FixedUpdate);
-
-        assert!(app.world().entity(horse).contains::<PendingHorseDespawn>());
-        assert!(app.world().entity(rider).contains::<MountedOn>());
-
-        app.update();
-        app.world_mut().run_schedule(FixedUpdate);
-
-        assert!(app.world().get_entity(horse).is_err());
-        assert_safely_detached(&app, rider);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! up close, slower against a sneaking target — and the meter decays when
 //! sight is lost. The brain reads the meter's thresholds; Combat will read
 //! them too (stealth bonus against a non-alerted enemy — see
-//! `docs/architecture/combat.md` § Relaciones).
+//! `docs/ARCHITECTURE.md`).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -136,7 +136,7 @@ const NOISE_SPEED_THRESHOLD: f32 = 0.5;
 
 /// How loud a target's locomotion is, `0.0..=1.0` relative to a sprint.
 /// Derived read-only from Movement state — Movement does not know it emits
-/// noise (see `rationale/enemy-senses.md`).
+/// noise (see `docs/ARCHITECTURE.md`).
 pub(crate) fn locomotion_loudness(state: Option<LocomotionState>, planar_speed: f32) -> f32 {
     if planar_speed < NOISE_SPEED_THRESHOLD {
         return 0.0;

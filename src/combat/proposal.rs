@@ -1,7 +1,7 @@
 //! Combat's instantiation of the shared proposal/arbitration core.
 //!
 //! First real second consumer of `crate::proposal` — the bet made in
-//! `rationale/proposal-arbitration-core.md`. Same rules as Movement: weights
+//! `docs/ARCHITECTURE.md`. Same rules as Movement: weights
 //! of co-proposing motors live together here, ties are design bugs.
 
 use crate::combat::state::CombatState;

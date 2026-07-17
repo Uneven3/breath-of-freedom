@@ -6,7 +6,7 @@
 //! systems whose exact queries keep optional data out of the actor core; each
 //! system gates on its owned `LocomotionState`, so exactly one moves each body.
 //! This is the per-entity contract that lets multiple `Actor`s run independently. See
-//! `docs/architecture/movement.md` and `rationale/multi-actor-dispatch.md`.
+//! `docs/ARCHITECTURE.md`.
 
 use bevy::prelude::*;
 
@@ -316,7 +316,7 @@ mod control_tests {
 
 /// `Arbitrate`: pick the winning proposal, write the SSoT `LocomotionState`, then
 /// clear the buffer for next frame. This is the *only* writer of
-/// `LocomotionState` (see `docs/architecture/movement.md`).
+/// `LocomotionState` (see `docs/ARCHITECTURE.md`).
 type ArbitrationQuery<'a> = (&'a mut LocomotionState, &'a mut ProposalBuffer);
 
 fn arbitrate(mut q: Query<ArbitrationQuery, attachment::LocomotionActorFilter>) {

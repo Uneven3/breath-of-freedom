@@ -3,7 +3,7 @@
 //! Architecture: Brain → Intents → Broker → Motors / Services → Body,
 //! expressed as ordered `FixedUpdate` system sets, with Avian3d providing the
 //! kinematic `move_and_slide` and spatial queries (see
-//! `docs/architecture/movement.md`).
+//! `docs/ARCHITECTURE.md`).
 
 mod camera;
 mod combat;

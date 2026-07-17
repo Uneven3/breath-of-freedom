@@ -4,7 +4,7 @@
 //! receiver owns the contract); the arrow then belongs to this plugin: a
 //! kinematic point swept with a ray each fixed tick under gravity. On hitting
 //! an actor-layer collider it resolves damage (stealth bonus against a
-//! non-alerted target, per `docs/architecture/combat.md` § Relaciones) and
+//! non-alerted target, per `docs/ARCHITECTURE.md`) and
 //! feeds the same feedback channels as melee (`HitImpactMessage`,
 //! `DirectThreatMessage`, knockback); on world geometry it sticks and fades.
 //! Spawn messages are consumed the same tick they are emitted (this plugin's
@@ -23,7 +23,7 @@ use crate::movement::constraints::BodyImpulseMessage;
 use crate::world::GameLayer;
 
 /// Bonus multiplier for an arrow into a target that has not noticed you.
-/// The arrow needs no `Sneak` from the shooter — contract in `combat.md`.
+/// The arrow needs no `Sneak` from the shooter — contract in `docs/ARCHITECTURE.md`.
 const ARROW_STEALTH_MULT: f32 = 4.0;
 /// Knockback carried by an arrow (much lighter than melee).
 const ARROW_KNOCKBACK: f32 = 2.5;

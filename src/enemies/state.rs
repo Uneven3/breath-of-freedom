@@ -4,9 +4,9 @@
 //! decides *what the enemy wants*, Movement decides *how the body does it*.
 //! An enum component, not markers — the states are mutually exclusive, and
 //! only `brain::decide` writes it (see
-//! `rationale/per-entity-state-idioms.md`).
+//! `docs/ARCHITECTURE.md`).
 //!
-//! `Flee` (see `docs/architecture/enemies.md`) joins this enum when the
+//! `Flee` (see `docs/ARCHITECTURE.md`) joins this enum when the
 //! brain reads its own `Health` — adding a variant is a compile error until
 //! `brain::act` handles it, same contract as `LocomotionState`.
 

@@ -73,7 +73,7 @@ impl Ladder {
 }
 
 /// A destructible archery/melee practice target (owner: World — its death
-/// reaction lives here, per `health.md`).
+/// reaction lives here, per `docs/ARCHITECTURE.md`).
 #[derive(Component)]
 pub struct PracticeTarget;
 

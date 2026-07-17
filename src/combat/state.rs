@@ -4,7 +4,7 @@
 //! phases as an enum, one writer (`combat::arbitrate`). The combo *step*
 //! deliberately does NOT live here — `Windup/Active/Recovery` repeat per
 //! step and `ComboLocal.step` says which one (see
-//! `rationale/combat-combo-chains.md`).
+//! `docs/ARCHITECTURE.md`).
 //!
 //! Guarding, Parrying and Staggered remain future work. Adding any variant is
 //! a compile error until the dispatcher handles it.

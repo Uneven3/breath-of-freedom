@@ -3,7 +3,7 @@
 //! Every motor uses these (`apply_locomotion_rotation`, `move_toward`) plus the
 //! `move_and_slide` call every motor makes. The slide is Avian's `MoveAndSlide`
 //! system param; we wrap it so each motor calls one function — the only place
-//! the body is moved (see `docs/architecture/movement.md`).
+//! the body is moved (see `docs/ARCHITECTURE.md`).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;

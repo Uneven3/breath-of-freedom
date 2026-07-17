@@ -4,7 +4,7 @@
 //! tick dispatcher), own types (`CombatIntents`/`CombatState`), shared
 //! arbitration core (`crate::proposal`). Scheduled after
 //! `MovementSet::TickActiveMotor` so hit sweeps read post-move transforms of
-//! the same tick. See `docs/architecture/combat.md`.
+//! the same tick. See `docs/ARCHITECTURE.md`.
 
 use bevy::prelude::*;
 
@@ -101,7 +101,7 @@ fn arbitrate(mut q: Query<(&mut CombatState, &mut CombatProposalBuffer), With<Ac
 
 /// `EmitConstraints`: committed combat states forbid sprinting. Movement
 /// consumes the message in its own frame (1 tick later, accepted — see
-/// `docs/architecture/combat.md` § Timing).
+/// `docs/ARCHITECTURE.md`).
 fn emit_constraints(
     q: Query<(Entity, &CombatState), With<Actor>>,
     mut writer: MessageWriter<LocomotionConstraintMessage>,

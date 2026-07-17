@@ -4,7 +4,7 @@
 (Rust), open-source (GNU GPL), que busca el *feeling* de Breath of the Wild
 sin nada de la IP de Zelda (mundo, historia, razas y assets propios).
 
-Ver `docs/gdd.md` para la visión completa del juego.
+Ver `docs/NORTE.md` para la visión completa del juego.
 
 ## Stack
 
@@ -17,10 +17,12 @@ Este proyecto se desarrolla con **múltiples agentes/herramientas de IA en
 paralelo** (Claude, Codex, Antigravity, DeepSeek, …), muchas veces en
 worktrees separados y sesiones sin memoria compartida entre sí. Por eso:
 
-- Las reglas de código (arquitectura, ECS idiomático, qué está permitido)
-  viven en `docs/CONSTITUTION.md`.
-- El protocolo de coordinación entre agentes (tickets, quién está trabajando
-  en qué) vive en `docs/tickets/`.
+- La documentación es exactamente **tres archivos** con presupuesto duro
+  (≤1000 líneas totales — el código documenta lo que se hizo):
+  `docs/ARCHITECTURE.md` (leyes §1-§20 + arquitectura y rationale, ≤200),
+  `docs/NORTE.md` (visión y roadmap, ≤200) y `docs/AHORA.md` (el trabajo
+  presente, ≤500). No se crean otros archivos de documentación; lo cerrado
+  se borra de AHORA.md (queda en git).
 - Ningún acuerdo de esta conversación es válido si no quedó escrito en un
   archivo del repo — la coordinación no depende de memoria de sesión.
 

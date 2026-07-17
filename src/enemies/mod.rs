@@ -7,7 +7,7 @@
 //! `Intents`/`CombatIntents` (plus, for the archer, its own
 //! `ControlOrientation`). Never `Transform`, `BodyVelocity`,
 //! `LocomotionState`, or `CombatState` — the Broker pipelines own those.
-//! See `docs/architecture/enemies.md` and the `bokobo-brain` /
+//! See `docs/ARCHITECTURE.md` and the `bokobo-brain` /
 //! `enemies-combat` tickets.
 
 use bevy::prelude::*;
@@ -76,7 +76,7 @@ impl Plugin for EnemiesPlugin {
                 .chain()
                 .in_set(MovementSet::ReadIntents),
         );
-        // Death consequences belong to the actor's owner (health.md): a dead
+        // Death consequences belong to the actor's owner (`docs/ARCHITECTURE.md`): a dead
         // enemy despawns; visuals cleans up the orphaned capsule itself.
         app.add_systems(FixedUpdate, despawn_dead.after(HealthSet::Apply));
     }

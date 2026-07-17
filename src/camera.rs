@@ -181,7 +181,7 @@ fn spawn_camera(mut commands: Commands) {
 /// Intentionally scoped to `Player`, not `Actor`: the camera always follows
 /// the one local human-controlled entity, which stays singular even once
 /// other `Actor`-tagged entities (NPCs, remote players) exist — see
-/// `docs/architecture/rationale/multi-actor-dispatch.md`.
+/// `docs/ARCHITECTURE.md`.
 fn camera_landing_dip(
     player: Single<&LocomotionState, With<Player>>,
     mut rig: Single<&mut CameraRig>,

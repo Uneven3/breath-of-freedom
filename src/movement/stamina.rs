@@ -1,7 +1,7 @@
 //! Stamina pool (max 100, starts full).
 //!
 //! Only stamina's own mutators (`drain`/`recover`, called by motors) change it
-//! (see `docs/architecture/movement.md`).
+//! (see `docs/ARCHITECTURE.md`).
 
 use bevy::prelude::*;
 

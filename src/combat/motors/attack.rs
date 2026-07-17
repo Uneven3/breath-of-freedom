@@ -1,5 +1,5 @@
 //! Attack motor — owner of the `Windup/Active/Recovery` phases and the combo
-//! chain (see `rationale/combat-combo-chains.md`).
+//! chain (see `docs/ARCHITECTURE.md`).
 //!
 //! `propose` decides transitions from `ComboLocal`'s clock; the dispatcher's
 //! `tick_phase_clock` advances that clock; `sweep_active_swings` runs the
@@ -307,7 +307,7 @@ pub(crate) fn within_swing_arc(
 }
 
 /// Damage math, pure: stealth rules read the *target's* awareness
-/// (`docs/architecture/combat.md` § Relaciones). A target without an
+/// (`docs/ARCHITECTURE.md`). A target without an
 /// `Awareness` component (another player) counts as alerted — no bonus.
 pub(crate) fn final_damage(
     base: f32,

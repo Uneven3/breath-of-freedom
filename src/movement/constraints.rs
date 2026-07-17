@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use super::Actor;
 
 /// A semantic restriction on an actor's locomotion. Combat emits these from
-/// its committed states (see `docs/architecture/combat.md` § EmitConstraints);
+/// its committed states (see `docs/ARCHITECTURE.md`);
 /// consumed one tick later, in Movement's frame (~16 ms, accepted).
 #[derive(Message, Debug, Clone, Copy)]
 pub enum LocomotionConstraintMessage {

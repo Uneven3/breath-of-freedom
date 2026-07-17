@@ -1,8 +1,8 @@
-//! Health — the shared hit-point pool (see `docs/architecture/health.md`).
+//! Health — the shared hit-point pool (see `docs/ARCHITECTURE.md`).
 //!
 //! One system: `apply_damage` turns `DamageRequestMessage`s into pool
 //! mutations and (once per death) `DeathMessage`s. No Broker: a pool has no
-//! exclusive states to arbitrate (`rationale/when-not-broker-pattern.md`).
+//! exclusive states to arbitrate (`docs/ARCHITECTURE.md`).
 //! Death consequences live with each actor's owner (Player respawns,
 //! enemies/targets despawn).
 

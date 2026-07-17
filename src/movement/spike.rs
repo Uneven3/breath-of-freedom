@@ -3,7 +3,7 @@
 //! This module is `#[cfg(test)]`-only — it compiles for `cargo test` and never
 //! ships. It began as a throwaway spike and is now kept as a **minimal, runnable
 //! teaching example** of the per-entity ECS pattern (a newcomer-friendly walkthrough
-//! lives in `docs/bevy-ecs-primer.md`). It answers one question cheaply, before
+//! lives in `docs/ARCHITECTURE.md`). It answers one question cheaply, before
 //! migrating all ~26 production systems: **does per-entity `Query` dispatch + an
 //! in-body state guard + per-entity component state run two actors independently?**
 //! (Answer: yes — see the three tests below. Run with `cargo test spike`.)

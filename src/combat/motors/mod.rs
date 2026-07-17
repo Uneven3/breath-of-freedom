@@ -3,7 +3,7 @@
 //! Same contract as `movement::motors`: `propose` always runs; the tick phase
 //! is a single dispatcher whose exhaustive `match` on `CombatState` is the
 //! compiler-checked "exactly one motor owns each state" invariant, from day
-//! one (the lesson already paid for in `rationale/multi-actor-dispatch.md`).
+//! one (the lesson already paid for in `docs/ARCHITECTURE.md`).
 
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;

@@ -4,7 +4,7 @@
 //! plugin assembles the locally-controlled player out of the kinematic actor
 //! contract, its movement capability bundles, and the local input binding —
 //! the same pieces an AI or network controller composes differently (see
-//! `docs/architecture/movement.md` § bundles).
+//! `docs/ARCHITECTURE.md`).
 
 use bevy::prelude::*;
 
@@ -32,7 +32,7 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_player);
-        // Death consequences belong to the actor's owner (health.md): the
+        // Death consequences belong to the actor's owner (`docs/ARCHITECTURE.md`): the
         // graybox player respawns at the authored spawn with full health.
         app.add_systems(FixedUpdate, respawn_on_death.after(HealthSet::Apply));
     }

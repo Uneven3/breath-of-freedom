@@ -2,7 +2,7 @@
 //!
 //! Every fact has exactly one owner (Constitution §6/§7); mutually-exclusive
 //! states are an enum, never a boolean soup. Only the `Arbitrate` system
-//! writes this component (see `docs/architecture/movement.md`).
+//! writes this component (see `docs/ARCHITECTURE.md`).
 //!
 //! Why a plain component enum rather than Bevy's global `States`? Bevy `States`
 //! is a single global resource — perfect for app screens, wrong for per-entity

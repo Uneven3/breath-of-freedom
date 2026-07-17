@@ -2,7 +2,7 @@
 //!
 //! A weapon's combo chain is an array of [`AttackStep`]s — adding a weapon is
 //! adding a preset const, zero new code (see
-//! `rationale/combat-combo-chains.md`). In graybox the profile lives directly
+//! `docs/ARCHITECTURE.md`). In graybox the profile lives directly
 //! on the actor; when Equipment (Inventory) exists, equipping inserts/removes
 //! this component — the component IS the "is armed" boolean.
 

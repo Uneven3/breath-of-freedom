@@ -4,7 +4,7 @@
 //! plus a `tick_body` (runs only when Walk is the active state, called by the
 //! capability-specific tick system). The tick body is the shared
 //! `motor_common::ground_locomotion_step`; its tuning comes from the actor's
-//! `GroundMovement` component. See `docs/architecture/movement.md`.
+//! `GroundMovement` component. See `docs/ARCHITECTURE.md`.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;

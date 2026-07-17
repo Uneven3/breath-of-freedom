@@ -21,6 +21,9 @@
 //! - **F5** — semantic context-fact flip log: emits only when stairs, ladder,
 //!   or ledge booleans change, without the per-tick or per-cast noise.
 //! - **F6** — spawn/despawn the TraversalProbe dummy AI near the player.
+//! - **F7** — animation clip browser: plays any clip from the player GLB on
+//!   the player rig, bypassing the locomotion state machine; **[** / **]**
+//!   cycle through the clips (name shown in the HUD).
 
 use avian3d::prelude::*;
 use bevy::color::palettes::css;
@@ -40,6 +43,7 @@ use crate::movement::sensing::GroundSensing;
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, MovementSet, Player};
+use crate::visuals::{AnimationDebug, PlayerAnimations};
 use crate::world::{Ladder, Stairs};
 
 /// Which debug channels are active. Mirrored into `CastTrace.enabled` and
@@ -124,6 +128,8 @@ fn handle_toggles(
     mut config: ResMut<DebugConfig>,
     mut trace: ResMut<CastTrace>,
     mut store: ResMut<GizmoConfigStore>,
+    mut anim_debug: ResMut<AnimationDebug>,
+    anims: Option<Res<PlayerAnimations>>,
 ) {
     if keys.just_pressed(KeyCode::F1) {
         config.show_colliders = !config.show_colliders;
@@ -149,6 +155,30 @@ fn handle_toggles(
             "[debug] context-fact flip logging: {}",
             config.log_fact_flips
         );
+    }
+    if keys.just_pressed(KeyCode::F7) {
+        anim_debug.enabled = !anim_debug.enabled;
+        info!("[debug] animation browser: {}", anim_debug.enabled);
+    }
+    if anim_debug.enabled
+        && let Some(anims) = &anims
+        && !anims.clips.is_empty()
+    {
+        let len = anims.clips.len();
+        if keys.just_pressed(KeyCode::BracketRight) {
+            anim_debug.index = (anim_debug.index + 1) % len;
+        }
+        if keys.just_pressed(KeyCode::BracketLeft) {
+            anim_debug.index = (anim_debug.index + len - 1) % len;
+        }
+        if keys.just_pressed(KeyCode::BracketRight) || keys.just_pressed(KeyCode::BracketLeft) {
+            info!(
+                "[debug] animation clip {}/{}: {}",
+                anim_debug.index + 1,
+                len,
+                anims.clips[anim_debug.index].0
+            );
+        }
     }
     trace.enabled = config.show_casts || config.log_verbose;
 }
@@ -623,7 +653,7 @@ fn spawn_debug_text(mut commands: Commands) {
     ));
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_debug_text(
     player: Single<
         (
@@ -647,11 +677,25 @@ fn update_debug_text(
     window: Single<&Window, With<PrimaryWindow>>,
     mut text: Single<&mut Text, With<DebugText>>,
     probe_alive: Query<(), With<TraversalProbe>>,
+    anim_debug: Res<AnimationDebug>,
+    anims: Option<Res<PlayerAnimations>>,
 ) {
     let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge, draw, hp) = *player;
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
+    let anim_status = match (&anims, anim_debug.enabled) {
+        (Some(anims), true) if !anims.clips.is_empty() => {
+            let index = anim_debug.index % anims.clips.len();
+            format!(
+                "{}/{} {}  ([/] cycle)",
+                index + 1,
+                anims.clips.len(),
+                anims.clips[index].0
+            )
+        }
+        _ => "off".to_string(),
+    };
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -668,7 +712,8 @@ fn update_debug_text(
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
          slide_wall: {}  stairs: {}  ladder: {}\n\
          ledge: climb={} cont={} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} mantle_edge={} vault={}\n\
-         [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}  [F6] probe:{}",
+         [F1] colliders:{}  [F2] casts:{}  [F3] log:{}  [F4] trace:{}  [F5] flips:{}  [F6] probe:{}\n\
+         [F7] anim: {}",
         window.present_mode,
         state,
         draw.factor * 100.0,
@@ -704,5 +749,6 @@ fn update_debug_text(
         onoff(config.log_verbose),
         onoff(config.log_fact_flips),
         probe_status,
+        anim_status,
     );
 }

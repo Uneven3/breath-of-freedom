@@ -23,6 +23,11 @@ use crate::movement::state::LocomotionState;
 const INTERPOLATION_SPEED: f32 = 20.0;
 const SNEAK_Y_OFFSET: f32 = -0.4;
 
+/// Authored height of the Prototype.glb rig in meters (feet to head, taken
+/// from the mesh's POSITION bounds). The visual is scaled so this matches the
+/// player capsule's full height.
+const PLAYER_MODEL_HEIGHT: f32 = 1.83;
+
 #[derive(Component)]
 pub struct PlayerVisual;
 
@@ -62,6 +67,7 @@ pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<AnimationDebug>();
         app.add_systems(Startup, (spawn_visual, start_loading_animations));
         app.add_systems(
             Update,
@@ -103,27 +109,30 @@ fn spawn_visual(
             Visibility::default(),
         ))
         .with_children(|parent| {
-            // Load the Knight GLB scene
-            let knight_scene =
-                asset_server.load("KayKit_Adventurers_2.0_FREE/Characters/gltf/Knight.glb#Scene0");
+            // Load the player prototype GLB scene (rig + animations in one file)
+            let player_scene = asset_server.load("Prototype.glb#Scene0");
 
-            // KayKit models are modeled with their pivot/origin at their feet.
-            // Offset down by the half-height so feet touch the ground, and rotate 180 deg
-            // around Y so the model faces forward (-Z in Bevy) instead of backward (+Z).
+            // The model is authored with its pivot/origin at its feet.
+            // Offset down by the half-height so feet touch the ground, rotate 180 deg
+            // around Y so the model faces forward (-Z in Bevy) instead of backward (+Z),
+            // and scale it so the rig's height matches the capsule's full height.
+            let model_scale =
+                2.0 * BodyDimensions::PLAYER.standing_half_height() / PLAYER_MODEL_HEIGHT;
             parent.spawn((
-                WorldAssetRoot(knight_scene),
+                WorldAssetRoot(player_scene),
                 Transform::from_xyz(0.0, -BodyDimensions::PLAYER.standing_half_height(), 0.0)
-                    .with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+                    .with_rotation(Quat::from_rotation_y(std::f32::consts::PI))
+                    .with_scale(Vec3::splat(model_scale)),
             ));
 
-            // Spawn the Bow Visual Root
-            // Positioned slightly right, chest level, pointing forward (-Z)
+            // Spawn the Bow Visual Root at Combat's bow socket (the arrow
+            // spawn point), so the arrow visibly leaves the bow.
             parent
                 .spawn((
                     BowVisualRoot,
                     Name::new("BowVisualRoot"),
                     Visibility::Hidden,
-                    Transform::from_xyz(0.35, 0.15, -0.55)
+                    Transform::from_translation(crate::combat::motors::aim::BOW_SOCKET_LOCAL)
                         .with_rotation(Quat::from_rotation_y(0.12) * Quat::from_rotation_z(-0.18)),
                 ))
                 .with_children(|bow_parent| {
@@ -511,22 +520,25 @@ pub struct PlayerAnimations {
     pub idle: petgraph::graph::NodeIndex,
     pub walk: petgraph::graph::NodeIndex,
     pub run: petgraph::graph::NodeIndex,
+    /// Every clip in the player GLB, sorted by name, for the debug browser.
+    pub clips: Vec<(String, petgraph::graph::NodeIndex)>,
     pub graph: Handle<AnimationGraph>,
 }
 
-#[derive(Resource)]
-struct AnimationLoader {
-    general: Handle<Gltf>,
-    movement: Handle<Gltf>,
+/// Debug clip browser: while enabled, `animate_player` plays the selected
+/// clip from `PlayerAnimations::clips` instead of following the locomotion
+/// state machine. Toggled with F7, cycled with [ and ] (see `debug.rs`).
+#[derive(Resource, Default)]
+pub struct AnimationDebug {
+    pub enabled: bool,
+    pub index: usize,
 }
 
+#[derive(Resource)]
+struct AnimationLoader(Handle<Gltf>);
+
 fn start_loading_animations(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let general = asset_server
-        .load("KayKit_Adventurers_2.0_FREE/Animations/gltf/Rig_Medium/Rig_Medium_General.glb");
-    let movement = asset_server.load(
-        "KayKit_Adventurers_2.0_FREE/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb",
-    );
-    commands.insert_resource(AnimationLoader { general, movement });
+    commands.insert_resource(AnimationLoader(asset_server.load("Prototype.glb")));
 }
 
 fn compile_animation_graph(
@@ -538,114 +550,94 @@ fn compile_animation_graph(
     let Some(loader) = loader else {
         return;
     };
-    if let (Some(general_gltf_asset), Some(movement_gltf_asset)) =
-        (gltfs.get(&loader.general), gltfs.get(&loader.movement))
-    {
-        let idle_clip = general_gltf_asset.named_animations["Idle_A"].clone();
-        let walk_clip = movement_gltf_asset.named_animations["Walking_A"].clone();
-        let run_clip = movement_gltf_asset.named_animations["Running_A"].clone();
+    let Some(gltf) = gltfs.get(&loader.0) else {
+        return;
+    };
 
-        let mut graph = AnimationGraph::new();
-        // Register clips as nodes in the graph
-        let idle = graph.add_clip(idle_clip, 1.0, graph.root);
-        let walk = graph.add_clip(walk_clip, 1.0, graph.root);
-        let run = graph.add_clip(run_clip, 1.0, graph.root);
+    // Register every clip in the GLB so the debug browser can play any of
+    // them; the locomotion state machine only drives idle/walk/run.
+    let mut graph = AnimationGraph::new();
+    let mut clips: Vec<(String, petgraph::graph::NodeIndex)> = gltf
+        .named_animations
+        .iter()
+        .map(|(name, clip)| {
+            (
+                name.to_string(),
+                graph.add_clip(clip.clone(), 1.0, graph.root),
+            )
+        })
+        .collect();
+    clips.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let graph_handle = graphs.add(graph);
-
-        commands.insert_resource(PlayerAnimations {
-            idle,
-            walk,
-            run,
-            graph: graph_handle,
-        });
-
-        // Clean up the loader resource
+    let find = |wanted: &str| {
+        clips
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .map(|&(_, node)| node)
+    };
+    let (Some(idle), Some(walk), Some(run)) =
+        (find("Idle_Loop"), find("Walk_Loop"), find("Sprint_Loop"))
+    else {
+        error!(
+            "[visuals] player GLB is missing Idle_Loop/Walk_Loop/Sprint_Loop; \
+             animation disabled. Available clips: {:?}",
+            clips.iter().map(|(name, _)| name).collect::<Vec<_>>()
+        );
         commands.remove_resource::<AnimationLoader>();
-        info!("[visuals] Programmatically compiled Player AnimationGraph successfully!");
-    }
+        return;
+    };
+
+    let graph_handle = graphs.add(graph);
+    info!(
+        "[visuals] compiled player AnimationGraph with {} clips: {:?}",
+        clips.len(),
+        clips.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+
+    commands.insert_resource(PlayerAnimations {
+        idle,
+        walk,
+        run,
+        clips,
+        graph: graph_handle,
+    });
+
+    // Clean up the loader resource
+    commands.remove_resource::<AnimationLoader>();
 }
 
-fn link_descendants(
-    commands: &mut Commands,
-    entity: Entity,
-    path: Vec<Name>,
-    children_query: &Query<&Children>,
-    names_query: &Query<&Name>,
-    player_entity: Entity,
-) {
-    let mut new_path = path;
-    if let Ok(name) = names_query.get(entity) {
-        new_path.push(name.clone());
-
-        let target_id = bevy::animation::AnimationTargetId::from_names(new_path.iter());
-
-        commands
-            .entity(entity)
-            .insert((bevy::animation::AnimatedBy(player_entity), target_id));
-    }
-
-    if let Ok(children) = children_query.get(entity) {
-        for child in children.iter() {
-            link_descendants(
-                commands,
-                child,
-                new_path.clone(),
-                children_query,
-                names_query,
-                player_entity,
-            );
-        }
-    }
-}
-
+/// The player GLB carries its animations, so the gltf loader already inserted
+/// an `AnimationPlayer` on the rig root and `AnimationTargetId`/`AnimatedBy`
+/// on every animated bone; only the graph handle and transitions remain to be
+/// attached here.
 fn init_player_animation_graph(
     mut commands: Commands,
-    scene_query: Query<(Entity, &Name), Without<AnimationGraphHandle>>,
+    rigs: Query<Entity, (With<AnimationPlayer>, Without<AnimationGraphHandle>)>,
     parent_query: Query<&ChildOf>,
     visual_query: Query<(), With<PlayerVisual>>,
-    children_query: Query<&Children>,
-    names_query: Query<&Name>,
     animations: Option<Res<PlayerAnimations>>,
 ) {
     let Some(anims) = animations else {
         return;
     };
-    for (entity, name) in &scene_query {
-        if name.as_str() == "Scene" {
-            // Traverse up the tree to verify this "Scene" entity is under PlayerVisual
-            let mut is_player_descendant = false;
-            let mut current = entity;
-            while let Ok(parent_relation) = parent_query.get(current) {
-                let parent = parent_relation.parent();
-                if visual_query.get(parent).is_ok() {
-                    is_player_descendant = true;
-                    break;
-                }
-                current = parent;
+    for entity in &rigs {
+        // Traverse up the tree to verify this rig is under PlayerVisual
+        let mut is_player_descendant = false;
+        let mut current = entity;
+        while let Ok(parent_relation) = parent_query.get(current) {
+            let parent = parent_relation.parent();
+            if visual_query.get(parent).is_ok() {
+                is_player_descendant = true;
+                break;
             }
+            current = parent;
+        }
 
-            if is_player_descendant {
-                commands.entity(entity).insert((
-                    AnimationPlayer::default(),
-                    AnimationGraphHandle(anims.graph.clone()),
-                    AnimationTransitions::new(),
-                ));
-
-                // Recursively insert AnimatedBy and AnimationTargetId components on all descendant nodes
-                if let Ok(children) = children_query.get(entity) {
-                    for child in children.iter() {
-                        link_descendants(
-                            &mut commands,
-                            child,
-                            vec![],
-                            &children_query,
-                            &names_query,
-                            entity,
-                        );
-                    }
-                }
-            }
+        if is_player_descendant {
+            commands.entity(entity).insert((
+                AnimationGraphHandle(anims.graph.clone()),
+                AnimationTransitions::new(),
+            ));
         }
     }
 }
@@ -654,6 +646,7 @@ fn animate_player(
     player_query: Query<(&LocomotionState, &BodyVelocity), With<Player>>,
     mut animated_query: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
     anims: Option<Res<PlayerAnimations>>,
+    debug: Res<AnimationDebug>,
 ) {
     let Some(anims) = anims else {
         return;
@@ -663,21 +656,27 @@ fn animate_player(
     };
 
     for (mut player, mut transitions) in &mut animated_query {
-        let target_node = match *state {
-            LocomotionState::Sprint => anims.run,
-            LocomotionState::Walk | LocomotionState::Sneak | LocomotionState::Stairs => {
-                let speed = velocity.0.xz().length();
-                if speed > 0.1 { anims.walk } else { anims.idle }
-            }
-            _ => anims.idle,
-        };
+        let (target_node, speed_multiplier) = if debug.enabled && !anims.clips.is_empty() {
+            // Debug browser override: play the selected clip at normal speed.
+            (anims.clips[debug.index % anims.clips.len()].1, 1.0)
+        } else {
+            let target_node = match *state {
+                LocomotionState::Sprint => anims.run,
+                LocomotionState::Walk | LocomotionState::Sneak | LocomotionState::Stairs => {
+                    let speed = velocity.0.xz().length();
+                    if speed > 0.1 { anims.walk } else { anims.idle }
+                }
+                _ => anims.idle,
+            };
 
-        // Adjust animation playback speed dynamically based on active state
-        let speed_multiplier = match *state {
-            LocomotionState::Sneak => 0.5, // Slow crawl/sneak
-            LocomotionState::Walk | LocomotionState::Stairs => 1.0, // Normal walking speed
-            LocomotionState::Sprint => 1.25, // Faster running animation
-            _ => 1.0,
+            // Adjust animation playback speed dynamically based on active state
+            let speed_multiplier = match *state {
+                LocomotionState::Sneak => 0.5, // Slow crawl/sneak
+                LocomotionState::Walk | LocomotionState::Stairs => 1.0, // Normal walking speed
+                LocomotionState::Sprint => 1.25, // Faster running animation
+                _ => 1.0,
+            };
+            (target_node, speed_multiplier)
         };
 
         if !player.is_playing_animation(target_node) {

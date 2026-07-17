@@ -18,9 +18,12 @@ y para el redirect de Monturas (`mounts-intent-redirect.md`).
 - No sabe qué es sigilo, ni qué multiplica el daño — ese cálculo ya pasó en
   Combate (o en quien emita el mensaje) antes de que el monto le llegue.
   (codex)
-- Si aplicó daño, emite `DamageAppliedMessage`. Los sistemas que reaccionan a
-  daño recibido escuchan ese resultado, no el pedido crudo, para no reaccionar
-  a daño descartado por target inválido. (codex)
+- No emite `DamageAppliedMessage` sin un consumidor real. Si una reacción
+  futura necesita distinguir aplicado/rechazado, ese contrato aterriza junto
+  a su primer lector. (codex)
+- Una `HostileInteractionImmunity` por fuente nombra la política completa;
+  productores hostiles la consultan antes de feedback/threat/impulso y Health
+  repite la validación final de HP. (codex)
 - No decide qué pasa cuando `current` llega a 0 — emite `DeathMessage` y se
   desentiende. Loot, respawn o despawn son decisiones de quien posee la
   semántica del actor (Enemies para un enemigo, un sistema de flujo de

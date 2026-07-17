@@ -19,9 +19,14 @@ pub mod state;
 
 use crate::health::{DeathMessage, Health, HealthSet};
 use crate::movement::MovementSet;
-use crate::movement::abilities::{AirborneMovement, GroundMovement};
+use crate::movement::abilities::{
+    AirborneMovement, GroundMovement, SprintMovement, StairsMovement,
+};
 use crate::movement::body::BodyDimensions;
-use crate::movement::bundles::{GroundMovementBundle, KinematicActorBundle};
+use crate::movement::bundles::{
+    GroundMovementBundle, KinematicActorBundle, SprintMovementBundle, StairsMovementBundle,
+    StaminaBundle,
+};
 use crate::movement::sensing::GroundSensing;
 
 /// Marker for an AI-controlled actor, analogous to `Player`.
@@ -133,8 +138,9 @@ fn spawn_bokobo(
     loadout: impl Bundle,
 ) {
     let mut ground = GroundMovement::PLAYER;
-    ground.walk.max_speed = 2.5;
-    ground.sprint.max_speed = 6.5;
+    ground.drive.max_forward_speed = 2.5;
+    let mut sprint = SprintMovement::PLAYER;
+    sprint.drive.max_forward_speed = 6.5;
 
     commands.spawn((
         Enemy,
@@ -146,7 +152,10 @@ fn spawn_bokobo(
             GroundSensing::PLAYER,
         ),
         (
-            GroundMovementBundle::new(ground, BOKOBO_DIMENSIONS),
+            GroundMovementBundle::new(ground),
+            SprintMovementBundle::new(sprint),
+            StairsMovementBundle::new(StairsMovement::PLAYER),
+            StaminaBundle::default(),
             AirborneMovement::PLAYER,
         ),
         perception::Perception::BOKOBO,

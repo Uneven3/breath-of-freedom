@@ -14,12 +14,13 @@ use bevy::prelude::*;
 
 use super::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
-    LedgeTraversal, WallJumpMovement,
+    LedgeTraversal, SneakMovement, SprintMovement, StairsMovement, WallJumpMovement,
 };
 use super::body::BodyDimensions;
 use super::bundles::{
     GlideMovementBundle, GroundMovementBundle, JumpMovementBundle, KinematicActorBundle,
-    LedgeTraversalBundle, WallJumpMovementBundle,
+    LadderMovementBundle, LedgeTraversalBundle, SneakMovementBundle, SprintMovementBundle,
+    StairsMovementBundle, StaminaBundle, WallJumpMovementBundle,
 };
 use super::facts::LedgeFacts;
 use super::intents::{
@@ -64,9 +65,11 @@ pub fn toggle_spawn(
         crouched_capsule_length: 0.85,
     };
     let mut ground = GroundMovement::PLAYER;
-    ground.walk.max_speed = 4.0;
-    ground.sprint.max_speed = 7.5;
-    ground.sneak.max_speed = 2.0;
+    ground.drive.max_forward_speed = 4.0;
+    let mut sprint = SprintMovement::PLAYER;
+    sprint.drive.max_forward_speed = 7.5;
+    let mut sneak = SneakMovement::PLAYER;
+    sneak.drive.max_forward_speed = 2.0;
 
     commands.spawn((
         TraversalProbe,
@@ -77,12 +80,16 @@ pub fn toggle_spawn(
             GroundSensing::PLAYER,
         ),
         (
-            GroundMovementBundle::new(ground, dimensions),
+            GroundMovementBundle::new(ground),
+            SprintMovementBundle::new(sprint),
+            SneakMovementBundle::new(sneak, dimensions),
+            StairsMovementBundle::new(StairsMovement::PLAYER),
+            StaminaBundle::default(),
             AirborneMovement::PLAYER,
             JumpMovementBundle::new(JumpMovement::PLAYER),
             GlideMovementBundle::new(GlideMovement::PLAYER),
             ClimbMovement::PLAYER,
-            LadderMovement::PLAYER,
+            LadderMovementBundle::new(LadderMovement::PLAYER),
             LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
             WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
             LedgeSensing::PLAYER,
@@ -261,7 +268,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<Time>();
         let player_intents = Intents {
-            gait: crate::movement::intents::GaitIntent::Sprint,
+            wants_sprint: true,
             ..default()
         };
         let player = world.spawn((Actor, Player, player_intents)).id();
@@ -279,10 +286,7 @@ mod tests {
 
         world.run_system_once(drive_intents).unwrap();
 
-        assert_eq!(
-            world.entity(player).get::<Intents>().unwrap().gait,
-            crate::movement::intents::GaitIntent::Sprint
-        );
+        assert!(world.entity(player).get::<Intents>().unwrap().wants_sprint);
         assert_eq!(
             world
                 .entity(probe)

@@ -5,13 +5,12 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::Actor;
 use crate::movement::abilities::LadderMovement;
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::LadderFacts;
 use crate::movement::intents::{Intents, LadderIntent};
 use crate::movement::motor_common::body_move_and_slide;
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 
@@ -27,7 +26,12 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LadderMovement>)>) {
+type ProposeFilter = (
+    crate::movement::attachment::LocomotionActorFilter,
+    With<LadderMovement>,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     for (ladder, intents, current, transform, body, mut buffer) in &mut q {
         if !ladder.on_ladder {
             continue;
@@ -49,38 +53,45 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LadderMovement>)>) 
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(movement) = row.ladder_movement else {
-        return;
-    };
-    let ladder = row.ladder;
-    let dt = time.delta_secs();
+type TickQuery<'a> = (MotorCore, &'a LadderMovement, &'a LadderFacts);
 
-    row.transform.translation.x = ladder.body_anchor_xz.x;
-    row.transform.translation.z = ladder.body_anchor_xz.y;
-    face_ladder(&mut row.transform, ladder.outward_normal);
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, ladder) in &mut actors {
+        if *row.state != LocomotionState::Ladder {
+            continue;
+        }
+        let dt = time.delta_secs();
 
-    // A ladder is an attachment constraint: it accepts only vertical input.
-    let min_y = ladder.bottom_y + row.body.standing_half_height();
-    let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
-    let vertical_speed = match row.intents.ladder {
-        LadderIntent::Up => movement.speed,
-        LadderIntent::Down => -movement.speed,
-        LadderIntent::Hold => 0.0,
-    };
-    let target_y =
-        (row.transform.translation.y + vertical_speed * dt).clamp(min_y, max_y.max(min_y));
-    let v = Vec3::Y * ((target_y - row.transform.translation.y) / dt.max(f32::EPSILON));
+        row.transform.translation.x = ladder.body_anchor_xz.x;
+        row.transform.translation.z = ladder.body_anchor_xz.y;
+        face_ladder(&mut row.transform, ladder.outward_normal);
 
-    row.velocity.0 = body_move_and_slide(
-        mas,
-        row.entity,
-        row.collider,
-        &mut row.transform,
-        v,
-        time.delta(),
-        &mut row.contact,
-    );
+        // A ladder is an attachment constraint: it accepts only vertical input.
+        let min_y = ladder.bottom_y + row.body.standing_half_height();
+        let max_y = ladder.top_y - TOP_HOLD_CLEARANCE;
+        let vertical_speed = match row.intents.ladder {
+            LadderIntent::Up => movement.speed,
+            LadderIntent::Down => -movement.speed,
+            LadderIntent::Hold => 0.0,
+        };
+        let target_y =
+            (row.transform.translation.y + vertical_speed * dt).clamp(min_y, max_y.max(min_y));
+        let v = Vec3::Y * ((target_y - row.transform.translation.y) / dt.max(f32::EPSILON));
+
+        row.velocity.0 = body_move_and_slide(
+            &mas,
+            row.entity,
+            row.collider,
+            &mut row.transform,
+            v,
+            time.delta(),
+            &mut row.contact,
+        );
+    }
 }
 
 fn face_ladder(transform: &mut Transform, outward_normal: Vec3) {
@@ -105,6 +116,7 @@ mod tests {
         let e = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 LadderMovement::PLAYER,
                 BodyDimensions::PLAYER,
                 LadderFacts {
@@ -208,6 +220,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 BodyDimensions::PLAYER,
                 LadderFacts {
                     on_ladder: true,
@@ -245,6 +258,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 LadderMovement::PLAYER,
                 LadderFacts {
                     on_ladder: true,

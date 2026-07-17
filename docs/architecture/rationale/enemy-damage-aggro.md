@@ -1,5 +1,8 @@
 # Rationale: Reacción a Daño de Enemigos y Aggro Inmediato (antigravity)
 
+**Estado:** superseded por `enemies::DirectThreatMessage`; se conserva la
+motivación histórica. No existe `DamageAppliedMessage` en el código actual.
+
 ## El problema
 
 En el diseño original de `enemies.md`, se planteaba que el sistema de percepción (`Perceive`) actualizaba los objetivos de agresión leyendo transforms y líneas de visión (ray-casting de campo de visión). 
@@ -12,13 +15,14 @@ Sin embargo, esto genera un problema de jugabilidad y realismo físico:
 
 ## La decisión
 
-Se añade la lectura de mensajes de daño al sistema de percepción de los enemigos:
+La implementación vigente usa un mensaje propiedad del receptor:
 
 1. **Percepción Integrada por Mensajería:**
-   El sistema `Perceive` de `Enemies` no solo actualiza la visión y el oído de forma continua (READ), sino que además escucha activamente el canal de mensajes `DamageAppliedMessage`.
+   Combat emite `enemies::DirectThreatMessage` al conectar una interacción no
+   bloqueada; Enemies consume su propio contrato además de visión/oído.
 
 2. **Gatillado de Reacción por Impacto:**
-   Cuando se recibe un `DamageAppliedMessage` donde `target` coincide con la entidad del enemigo:
+   Cuando se recibe `DirectThreatMessage` para el enemigo:
    * Se identifica al agresor (`source`).
    * Se actualiza la percepción de inmediato (`AggroTarget = Some(source)`), anulando la necesidad de que esté dentro de su cono de visión inicial.
    * Se fuerza la transición del estado de IA a `EnemyAiState::Combat` para iniciar la confrontación.

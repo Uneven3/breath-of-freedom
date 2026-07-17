@@ -2,30 +2,42 @@
 
 use bevy::prelude::*;
 
-/// Tuning shared by locomotion modes that move on the ground plane.
+/// Data-driven ground-body response shared by all terrestrial capabilities.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GroundLocomotion {
-    pub max_speed: f32,
-    pub acceleration: f32,
-    pub friction: f32,
-    pub rotation_speed: f32,
-    /// Stamina change per second: positive recovers, negative drains.
+pub struct GroundDriveProfile {
+    pub max_forward_speed: f32,
+    pub max_reverse_speed: f32,
+    pub forward_acceleration: f32,
+    pub reverse_acceleration: f32,
+    pub coast_deceleration: f32,
+    pub brake_deceleration: f32,
+    pub velocity_alignment_rate: f32,
+    pub turn_rate_at_zero_speed: f32,
+    pub turn_rate_at_max_speed: f32,
+    pub turning_speed_loss: f32,
     pub stamina_per_sec: f32,
 }
 
-/// Enables ground locomotion and configures its Walk, Sprint, and Sneak
-/// profiles for one actor.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct GroundMovement {
-    pub walk: GroundLocomotion,
-    pub sprint: GroundLocomotion,
-    pub sneak: GroundLocomotion,
-    pub stairs: StairsLocomotion,
+    pub drive: GroundDriveProfile,
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct SprintMovement {
+    pub drive: GroundDriveProfile,
+    pub recharge_threshold: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct SneakMovement {
+    pub drive: GroundDriveProfile,
+    pub sprinting_stamina_factor: f32,
 }
 
 /// Tuning for traversal along authored stair geometry.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct StairsLocomotion {
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct StairsMovement {
     pub ascend_speed: f32,
     pub descend_speed: f32,
     pub sprint_multiplier: f32,
@@ -39,39 +51,114 @@ pub struct StairsLocomotion {
 
 impl GroundMovement {
     pub const PLAYER: Self = Self {
-        walk: GroundLocomotion {
-            max_speed: 5.0,
-            acceleration: 20.0,
-            friction: 25.0,
-            rotation_speed: 15.0,
+        drive: GroundDriveProfile {
+            max_forward_speed: 5.0,
+            max_reverse_speed: 5.0,
+            forward_acceleration: 20.0,
+            reverse_acceleration: 20.0,
+            coast_deceleration: 25.0,
+            brake_deceleration: 25.0,
+            velocity_alignment_rate: 30.0,
+            turn_rate_at_zero_speed: 15.0,
+            turn_rate_at_max_speed: 15.0,
+            turning_speed_loss: 0.0,
             stamina_per_sec: 15.0,
         },
-        sprint: GroundLocomotion {
-            max_speed: 10.0,
-            acceleration: 25.0,
-            friction: 35.0,
-            rotation_speed: 15.0,
+    };
+
+    pub const HORSE: Self = Self {
+        drive: GroundDriveProfile {
+            max_forward_speed: 9.0,
+            max_reverse_speed: 3.5,
+            forward_acceleration: 10.0,
+            reverse_acceleration: 7.0,
+            coast_deceleration: 5.0,
+            brake_deceleration: 14.0,
+            velocity_alignment_rate: 4.0,
+            turn_rate_at_zero_speed: 8.0,
+            turn_rate_at_max_speed: 2.5,
+            turning_speed_loss: 0.35,
+            stamina_per_sec: 15.0,
+        },
+    };
+}
+
+impl SprintMovement {
+    pub const PLAYER: Self = Self {
+        drive: GroundDriveProfile {
+            max_forward_speed: 10.0,
+            max_reverse_speed: 10.0,
+            forward_acceleration: 25.0,
+            reverse_acceleration: 25.0,
+            coast_deceleration: 35.0,
+            brake_deceleration: 35.0,
+            velocity_alignment_rate: 30.0,
+            turn_rate_at_zero_speed: 15.0,
+            turn_rate_at_max_speed: 15.0,
+            turning_speed_loss: 0.0,
             stamina_per_sec: -10.0,
         },
-        sneak: GroundLocomotion {
-            max_speed: 2.5,
-            acceleration: 15.0,
-            friction: 20.0,
-            rotation_speed: 10.0,
+        recharge_threshold: 20.0,
+    };
+    pub const HORSE: Self = Self {
+        drive: GroundDriveProfile {
+            max_forward_speed: 13.0,
+            max_reverse_speed: 3.5,
+            forward_acceleration: 8.0,
+            reverse_acceleration: 6.0,
+            coast_deceleration: 4.0,
+            brake_deceleration: 12.0,
+            velocity_alignment_rate: 3.0,
+            turn_rate_at_zero_speed: 7.0,
+            turn_rate_at_max_speed: 1.8,
+            turning_speed_loss: 0.45,
+            stamina_per_sec: -10.0,
+        },
+        recharge_threshold: 20.0,
+    };
+}
+
+impl SneakMovement {
+    pub const PLAYER: Self = Self {
+        drive: GroundDriveProfile {
+            max_forward_speed: 2.5,
+            max_reverse_speed: 2.5,
+            forward_acceleration: 15.0,
+            reverse_acceleration: 15.0,
+            coast_deceleration: 20.0,
+            brake_deceleration: 20.0,
+            velocity_alignment_rate: 30.0,
+            turn_rate_at_zero_speed: 10.0,
+            turn_rate_at_max_speed: 10.0,
+            turning_speed_loss: 0.0,
             stamina_per_sec: 5.0,
         },
-        stairs: StairsLocomotion {
-            ascend_speed: 3.5,
-            descend_speed: 4.5,
-            sprint_multiplier: 1.7,
-            // Half speed while crouched, matching Sneak's 2.5/5.0 flat-ground ratio.
-            sneak_multiplier: 0.5,
-            sprint_stamina_cost_per_sec: 10.0,
-            lateral_factor: 0.6,
-            acceleration: 80.0,
-            friction: 60.0,
-            rotation_speed: 15.0,
-        },
+        sprinting_stamina_factor: 0.5,
+    };
+}
+
+impl StairsMovement {
+    pub const PLAYER: Self = Self {
+        ascend_speed: 3.5,
+        descend_speed: 4.5,
+        sprint_multiplier: 1.7,
+        sneak_multiplier: 0.5,
+        sprint_stamina_cost_per_sec: 10.0,
+        lateral_factor: 0.6,
+        acceleration: 80.0,
+        friction: 60.0,
+        rotation_speed: 15.0,
+    };
+    pub const HORSE: Self = Self {
+        ascend_speed: 4.5,
+        descend_speed: 5.0,
+        sprint_multiplier: 1.4,
+        sneak_multiplier: 1.0,
+        sprint_stamina_cost_per_sec: 10.0,
+        lateral_factor: 0.35,
+        acceleration: 35.0,
+        friction: 28.0,
+        rotation_speed: 6.0,
     };
 }
 
@@ -103,6 +190,17 @@ impl AirborneMovement {
         stamina_recover_per_sec: 15.0,
         stamina_recovery_factor: 0.25,
     };
+
+    pub const HORSE: Self = Self {
+        max_speed: 13.0,
+        acceleration: 8.0,
+        rise_gravity_multiplier: 1.3,
+        fall_gravity_multiplier: 2.5,
+        jump_cut_velocity: 2.0,
+        rotation_speed: 12.0,
+        stamina_recover_per_sec: 15.0,
+        stamina_recovery_factor: 0.25,
+    };
 }
 
 /// Enables a basic jump and configures its impulse, grace windows, and turn speed.
@@ -114,12 +212,23 @@ pub struct JumpMovement {
     pub rotation_speed: f32,
 }
 
+/// Optional fixed stamina charge paid when a jump is accepted.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct JumpStaminaCost(pub f32);
+
 impl JumpMovement {
     pub const PLAYER: Self = Self {
         impulse: 5.5,
         coyote_time: 0.12,
         buffer_time: 0.12,
         rotation_speed: 15.0,
+    };
+
+    pub const HORSE: Self = Self {
+        impulse: 6.5,
+        coyote_time: 0.12,
+        buffer_time: 0.12,
+        rotation_speed: 12.0,
     };
 }
 

@@ -6,10 +6,8 @@
 //! step and `ComboLocal.step` says which one (see
 //! `rationale/combat-combo-chains.md`).
 //!
-//! `Charging`, `Guarding`, `Parrying`, `Aiming`, `Staggered` (see
-//! `docs/architecture/combat.md` § Estados) join this enum with their phases
-//! (`combat-defense`, `combat-bow`) — adding a variant is a compile error
-//! until the dispatcher handles it.
+//! Guarding, Parrying and Staggered remain future work. Adding any variant is
+//! a compile error until the dispatcher handles it.
 
 use bevy::prelude::*;
 

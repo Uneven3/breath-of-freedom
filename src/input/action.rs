@@ -1,4 +1,4 @@
-pub const ACTION_COUNT: usize = 17;
+pub const ACTION_COUNT: usize = 18;
 
 /// Domain-neutral actions resolved from hardware before gameplay reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +21,7 @@ pub enum IntentAction {
     Glide,
     Attack,
     Aim,
+    Interact,
 }
 
 impl IntentAction {

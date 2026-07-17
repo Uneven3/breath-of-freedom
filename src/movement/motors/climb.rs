@@ -6,12 +6,11 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::Actor;
 use crate::movement::abilities::ClimbMovement;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -27,7 +26,12 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<ClimbMovement>)>) {
+type ProposeFilter = (
+    crate::movement::attachment::LocomotionActorFilter,
+    With<ClimbMovement>,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     for (ground, ledge, stamina, intents, current, mut buffer) in &mut q {
         if stamina.is_exhausted() || !intents.climb.requested {
             continue;
@@ -55,85 +59,99 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<ClimbMovement>)>) {
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(movement) = row.climb_movement else {
-        return;
-    };
-    let ledge = row.ledge;
-    let Some(climb_normal) = ledge.climb_normal else {
-        return;
-    };
-    let dt = time.delta_secs();
+type TickQuery<'a> = (
+    MotorCore,
+    &'a ClimbMovement,
+    &'a LedgeFacts,
+    Option<&'a mut Stamina>,
+);
 
-    let near_apex =
-        row.ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point.is_some();
-    let touching_wall = ledge.can_continue_climb;
-
-    // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
-    if !near_apex {
-        let face_dir = if touching_wall {
-            Some(-climb_normal)
-        } else {
-            ledge.wall_point.map(|wp| wp - row.transform.translation)
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, ledge, mut stamina) in &mut actors {
+        if *row.state != LocomotionState::Climb {
+            continue;
+        }
+        let Some(climb_normal) = ledge.climb_normal else {
+            continue;
         };
-        if let Some(mut face_dir) = face_dir {
-            face_dir.y = 0.0;
-            if face_dir.length_squared() > MIN_DIR_SQ {
-                let fd = face_dir.normalize();
-                row.transform.rotation = Quat::from_rotation_y((-fd.x).atan2(-fd.z));
+        let dt = time.delta_secs();
+
+        let near_apex =
+            row.ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point.is_some();
+        let touching_wall = ledge.can_continue_climb;
+
+        // Face the wall (horizontal only; curved surfaces would otherwise tilt the body).
+        if !near_apex {
+            let face_dir = if touching_wall {
+                Some(-climb_normal)
+            } else {
+                ledge.wall_point.map(|wp| wp - row.transform.translation)
+            };
+            if let Some(mut face_dir) = face_dir {
+                face_dir.y = 0.0;
+                if face_dir.length_squared() > MIN_DIR_SQ {
+                    let fd = face_dir.normalize();
+                    row.transform.rotation = Quat::from_rotation_y((-fd.x).atan2(-fd.z));
+                }
             }
         }
-    }
 
-    let mut v = row.velocity.0;
-    v.y = match row.intents.climb.vertical {
-        ClimbVerticalIntent::Up => movement.speed,
-        ClimbVerticalIntent::Down => -movement.speed,
-        ClimbVerticalIntent::Neutral => 0.0,
-    };
+        let mut v = row.velocity.0;
+        v.y = match row.intents.climb.vertical {
+            ClimbVerticalIntent::Up => movement.speed,
+            ClimbVerticalIntent::Down => -movement.speed,
+            ClimbVerticalIntent::Neutral => 0.0,
+        };
 
-    // Lateral movement, gated by side-wall presence.
-    let lateral_input = match row.intents.climb.lateral {
-        ClimbLateralIntent::Left if ledge.has_wall_left => -1.0,
-        ClimbLateralIntent::Right if ledge.has_wall_right => 1.0,
-        _ => 0.0,
-    };
-    let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
-    let lateral_vel = right_dir * lateral_input * movement.speed;
+        // Lateral movement, gated by side-wall presence.
+        let lateral_input = match row.intents.climb.lateral {
+            ClimbLateralIntent::Left if ledge.has_wall_left => -1.0,
+            ClimbLateralIntent::Right if ledge.has_wall_right => 1.0,
+            _ => 0.0,
+        };
+        let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
+        let lateral_vel = right_dir * lateral_input * movement.speed;
 
-    // Wall-stick: pull toward the actual contact point while approaching.
-    // Only when the sensor still sees the wall — with no `wall_point` there
-    // is nothing to stick to (the old `Vec3::ZERO` sentinel silently pulled
-    // toward the world origin here).
-    let mut wall_stick = Vec3::ZERO;
-    if !near_apex
-        && !touching_wall
-        && let Some(wall_point) = ledge.wall_point
-    {
-        let mut to_wall = wall_point - row.transform.translation;
-        to_wall.y = 0.0;
-        if to_wall.length_squared() > MIN_DIR_SQ {
-            wall_stick = to_wall.normalize() * movement.wall_approach_speed;
+        // Wall-stick: pull toward the actual contact point while approaching.
+        // Only when the sensor still sees the wall — with no `wall_point` there
+        // is nothing to stick to (the old `Vec3::ZERO` sentinel silently pulled
+        // toward the world origin here).
+        let mut wall_stick = Vec3::ZERO;
+        if !near_apex
+            && !touching_wall
+            && let Some(wall_point) = ledge.wall_point
+        {
+            let mut to_wall = wall_point - row.transform.translation;
+            to_wall.y = 0.0;
+            if to_wall.length_squared() > MIN_DIR_SQ {
+                wall_stick = to_wall.normalize() * movement.wall_approach_speed;
+            }
+        }
+        v.x = lateral_vel.x + wall_stick.x;
+        v.z = lateral_vel.z + wall_stick.z;
+
+        // Soft ceiling: cap climb just below the lip so the player can't climb
+        // over — forces a Mantle.
+        clip_below_ledge_lip(&mut row.transform, &mut v, ledge.lip_height, *row.body, dt);
+
+        row.velocity.0 = body_move_and_slide(
+            &mas,
+            row.entity,
+            row.collider,
+            &mut row.transform,
+            v,
+            time.delta(),
+            &mut row.contact,
+        );
+
+        if let Some(stamina) = stamina.as_deref_mut() {
+            stamina.drain(movement.stamina_cost_per_sec * dt);
         }
     }
-    v.x = lateral_vel.x + wall_stick.x;
-    v.z = lateral_vel.z + wall_stick.z;
-
-    // Soft ceiling: cap climb just below the lip so the player can't climb
-    // over — forces a Mantle.
-    clip_below_ledge_lip(&mut row.transform, &mut v, ledge.lip_height, *row.body, dt);
-
-    row.velocity.0 = body_move_and_slide(
-        mas,
-        row.entity,
-        row.collider,
-        &mut row.transform,
-        v,
-        time.delta(),
-        &mut row.contact,
-    );
-
-    row.stamina.drain(movement.stamina_cost_per_sec * dt);
 }
 
 #[cfg(test)]
@@ -142,7 +160,7 @@ mod tests {
     //! apex/wall-continuation rules. The tick assertions need a physics world
     //! and are covered by play-testing.
     use super::*;
-    use crate::movement::Player;
+    use crate::movement::{Actor, Player};
     use bevy::ecs::system::RunSystemOnce;
 
     /// Spawn a lone player, run `climb::propose`, return its resulting proposals.
@@ -158,6 +176,7 @@ mod tests {
             .spawn((
                 Player,
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 ClimbMovement::PLAYER,
                 ground,
                 ledge,
@@ -326,6 +345,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts::default(),
                 LedgeFacts {
                     can_climb: true,

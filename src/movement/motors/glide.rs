@@ -7,14 +7,15 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::movement::GRAVITY;
 use crate::movement::abilities::GlideMovement;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{GlideIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
+use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, GRAVITY};
 
 #[derive(Component, Default)]
 pub struct GlideLocal {
@@ -24,14 +25,19 @@ pub struct GlideLocal {
 
 type ProposeQuery<'a> = (
     &'a GroundFacts,
-    &'a LedgeFacts,
+    Option<&'a LedgeFacts>,
     &'a Intents,
     &'a LocomotionState,
     &'a mut GlideLocal,
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
+type ProposeFilter = (
+    crate::movement::attachment::LocomotionActorFilter,
+    With<GlideMovement>,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     for (ground, ledge, intents, current, mut s, mut buffer) in &mut q {
         // Clear glide-press memory when leaving GLIDE, so a fresh press right after
         // (e.g. leaving a wall) is not suppressed.
@@ -51,11 +57,12 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
             if intents.glide == GlideIntent::Requested {
                 // Downgrade to PLAYER_REQUESTED on a climbable wall so ClimbMotor's
                 // heavier PLAYER_REQUESTED out-arbitrates glide (see `weight`).
-                let category = if ledge.can_climb && intents.climb.requested {
-                    Priority::PlayerRequested
-                } else {
-                    Priority::Forced
-                };
+                let category =
+                    if ledge.is_some_and(|ledge| ledge.can_climb) && intents.climb.requested {
+                        Priority::PlayerRequested
+                    } else {
+                        Priority::Forced
+                    };
                 let _ = buffer.push(TransitionProposal::new(
                     LocomotionState::Glide,
                     category,
@@ -80,52 +87,62 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GlideMovement>)>) {
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(movement) = row.glide_movement else {
-        return;
-    };
-    let dt = time.delta_secs();
+type TickQuery<'a> = (MotorCore, &'a GlideMovement, Option<&'a mut Stamina>);
 
-    apply_locomotion_rotation(
-        &mut row.transform,
-        row.intents.planar.direction,
-        dt,
-        movement.rotation_speed,
-    );
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, mut stamina) in &mut actors {
+        if *row.state != LocomotionState::Glide {
+            continue;
+        }
+        let dt = time.delta_secs();
 
-    let mut v = row.velocity.0;
-    v.y -= GRAVITY * movement.gravity_multiplier * dt;
-    v.y = v.y.max(-movement.fall_speed);
-
-    let move_dir = Vec3::new(
-        row.intents.planar.direction.x,
-        0.0,
-        row.intents.planar.direction.y,
-    )
-    .normalize_or_zero();
-    if move_dir != Vec3::ZERO {
-        v.x = move_toward(
-            v.x,
-            move_dir.x * movement.max_speed,
-            movement.acceleration * dt,
+        apply_locomotion_rotation(
+            &mut row.transform,
+            row.intents.planar.direction,
+            dt,
+            movement.rotation_speed,
         );
-        v.z = move_toward(
-            v.z,
-            move_dir.z * movement.max_speed,
-            movement.acceleration * dt,
+
+        let mut v = row.velocity.0;
+        v.y -= GRAVITY * movement.gravity_multiplier * dt;
+        v.y = v.y.max(-movement.fall_speed);
+
+        let move_dir = Vec3::new(
+            row.intents.planar.direction.x,
+            0.0,
+            row.intents.planar.direction.y,
+        )
+        .normalize_or_zero();
+        if move_dir != Vec3::ZERO {
+            v.x = move_toward(
+                v.x,
+                move_dir.x * movement.max_speed,
+                movement.acceleration * dt,
+            );
+            v.z = move_toward(
+                v.z,
+                move_dir.z * movement.max_speed,
+                movement.acceleration * dt,
+            );
+        }
+
+        if let Some(stamina) = stamina.as_deref_mut() {
+            stamina
+                .recover(movement.stamina_recover_per_sec * movement.stamina_recovery_factor * dt);
+        }
+
+        row.velocity.0 = body_move_and_slide(
+            &mas,
+            row.entity,
+            row.collider,
+            &mut row.transform,
+            v,
+            time.delta(),
+            &mut row.contact,
         );
     }
-
-    row.stamina
-        .recover(movement.stamina_recover_per_sec * movement.stamina_recovery_factor * dt);
-
-    row.velocity.0 = body_move_and_slide(
-        mas,
-        row.entity,
-        row.collider,
-        &mut row.transform,
-        v,
-        time.delta(),
-        &mut row.contact,
-    );
 }

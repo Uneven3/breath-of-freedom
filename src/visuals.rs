@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use crate::combat::motors::attack::ComboLocal;
 use crate::combat::state::CombatState;
-use crate::combat::weapon::WeaponProfile;
 use crate::enemies::Enemy;
 use crate::enemies::perception::Awareness;
+use crate::mounts::data::Horse;
 use crate::movement::BodyVelocity;
 use crate::movement::Player;
 use crate::movement::body::BodyDimensions;
@@ -48,6 +48,11 @@ struct EnemyVisual {
     actor: Entity,
 }
 
+#[derive(Component)]
+struct HorseVisual {
+    actor: Entity,
+}
+
 type ProbeActorQuery<'a> = (&'a Transform, &'a LocomotionState);
 type ProbeActorFilter = (With<TraversalProbe>, Without<TraversalProbeVisual>);
 type ProbeVisualQuery<'a> = (&'a mut Transform, &'a TraversalProbeVisual);
@@ -66,9 +71,12 @@ impl Plugin for VisualsPlugin {
                 despawn_orphaned_probe_visual,
                 spawn_enemy_visual,
                 despawn_orphaned_enemy_visual,
+                spawn_horse_visual,
+                despawn_orphaned_horse_visual,
                 interpolate_visual,
                 interpolate_probe_visual,
                 interpolate_enemy_visual,
+                interpolate_horse_visual,
                 tint_enemy_visual,
                 spawn_swing_vfx,
                 fade_swing_vfx,
@@ -341,6 +349,58 @@ fn despawn_orphaned_enemy_visual(
     }
 }
 
+/// Graybox horse presentation. The simulation entity carries no mesh,
+/// material or asset handle; this disposable visual follows it by `VisualOf`.
+fn spawn_horse_visual(
+    mut commands: Commands,
+    horses: Query<(Entity, &Transform, &BodyDimensions), Added<Horse>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (actor, transform, body) in &horses {
+        commands.spawn((
+            HorseVisual { actor },
+            VisualOf(actor),
+            Name::new("HorseVisual"),
+            Mesh3d(meshes.add(Capsule3d::new(body.radius, body.standing_capsule_length))),
+            MeshMaterial3d(materials.add(Color::srgb(0.42, 0.23, 0.1))),
+            transform.with_scale(Vec3::new(0.9, 0.9, 1.45)),
+        ));
+    }
+}
+
+fn despawn_orphaned_horse_visual(
+    mut commands: Commands,
+    visuals: Query<(Entity, &HorseVisual)>,
+    actors: Query<(), With<Horse>>,
+) {
+    for (visual, horse) in &visuals {
+        if actors.get(horse.actor).is_err() {
+            commands.entity(visual).despawn();
+        }
+    }
+}
+
+type HorseActorFilter = (With<Horse>, Without<HorseVisual>);
+type HorseVisualFilter = (With<HorseVisual>, Without<Horse>);
+
+fn interpolate_horse_visual(
+    actors: Query<&Transform, HorseActorFilter>,
+    mut visuals: Query<(&mut Transform, &HorseVisual), HorseVisualFilter>,
+    time: Res<Time>,
+) {
+    let t = (INTERPOLATION_SPEED * time.delta_secs()).clamp(0.0, 1.0);
+    for (mut visual, horse) in &mut visuals {
+        let Ok(body) = actors.get(horse.actor) else {
+            continue;
+        };
+        visual.translation.x = body.translation.x;
+        visual.translation.z = body.translation.z;
+        visual.translation.y += (body.translation.y - visual.translation.y) * t;
+        visual.rotation = visual.rotation.slerp(body.rotation, t);
+    }
+}
+
 type EnemyActorQuery<'a> = &'a Transform;
 type EnemyActorFilter = (With<Enemy>, Without<EnemyVisual>);
 type EnemyVisualQuery<'a> = (&'a mut Transform, &'a EnemyVisual);
@@ -396,12 +456,7 @@ struct SwingVfx {
     remaining: f32,
 }
 
-type SwingSourceQuery<'a> = (
-    &'a Transform,
-    &'a WeaponProfile,
-    &'a ComboLocal,
-    &'a CombatState,
-);
+type SwingSourceQuery<'a> = (&'a Transform, &'a ComboLocal, &'a CombatState);
 
 fn spawn_swing_vfx(
     mut commands: Commands,
@@ -409,11 +464,11 @@ fn spawn_swing_vfx(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (transform, weapon, combo, state) in &attackers {
+    for (transform, combo, state) in &attackers {
         if *state != CombatState::Active {
             continue;
         }
-        let Some(step) = weapon.step(combo.step) else {
+        let Some(step) = combo.current_step() else {
             continue;
         };
         // `CircularSector` is an XY-plane fan opening along +Y: tilt it flat
@@ -674,5 +729,33 @@ fn animate_bow_visual(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn orphaned_horse_visual_despawns_without_touching_simulation() {
+        let mut world = World::new();
+        let missing_horse = world.spawn_empty().id();
+        world.entity_mut(missing_horse).despawn();
+        let visual = world
+            .spawn((
+                HorseVisual {
+                    actor: missing_horse,
+                },
+                VisualOf(missing_horse),
+            ))
+            .id();
+
+        world
+            .run_system_once(despawn_orphaned_horse_visual)
+            .unwrap();
+        world.flush();
+
+        assert!(world.get_entity(visual).is_err());
     }
 }

@@ -57,7 +57,13 @@ type LedgeServiceQuery<'a> = (
 
 pub fn ledge_service(
     spatial: SpatialQuery,
-    mut q: Query<LedgeServiceQuery, With<Actor>>,
+    mut q: Query<
+        LedgeServiceQuery,
+        (
+            With<Actor>,
+            With<crate::movement::attachment::LocomotionEnabled>,
+        ),
+    >,
     non_climbable: Query<(), With<NonClimbable>>,
     mut trace: ResMut<CastTrace>,
 ) {

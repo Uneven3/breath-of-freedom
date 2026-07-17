@@ -4,13 +4,15 @@
 
 use bevy::prelude::*;
 
-use crate::movement::Actor;
+use crate::movement::attachment::LocomotionActorFilter;
 use crate::movement::facts::LadderFacts;
 use crate::movement::lod::SensingLod;
 use crate::world::Ladder;
 
+type LadderActors<'a> = (&'a Transform, &'a mut LadderFacts, Option<&'a SensingLod>);
+
 pub fn ladder_service(
-    mut actors: Query<(&Transform, &mut LadderFacts, Option<&SensingLod>), With<Actor>>,
+    mut actors: Query<LadderActors, LocomotionActorFilter>,
     ladders: Query<&Ladder>,
 ) {
     for (transform, mut facts, lod) in &mut actors {

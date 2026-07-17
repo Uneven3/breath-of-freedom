@@ -25,16 +25,16 @@ explícitamente — el objetivo es que este inventario nunca oculte un hueco.
 | Sistema | Doc | Responsabilidad primaria | Datos clave |
 |---|---|---|---|
 | `Movement` | `movement.md` | Traversal del cuerpo cinemático: caminar, trepar, planear, etc. | `Intents`, `LocomotionState`, `ProposalBuffer` |
-| `Combat` | `combat.md` | Ataque, parry, apuntado, stagger | `CombatIntents`, `CombatState` |
+| `Combat` | `combat.md` | Combo melee, arco y perfiles montados; Guard/Parry/Staggered aún no existen | `CombatIntents`, `CombatState`, `CombatContext` |
 | `World` | `world.md` | Terreno, clima, ciclo día/noche y biomas | `TimeOfDay`, `Weather` |
 | `Enemies` | `enemies.md` | IA hostil que controla actores no-jugador | `EnemyAiState`, `Perception` |
-| `Mounts` | `mounts.md` | Locomoción de criaturas montables | `MountIntents`, `MountLocomotionState` |
+| `Mounts` | `mounts.md` | Relación jinete--montura, silla y carga | `Horse`, `MountedOn`, `HorseCharge` |
 | `Multiplayer` | `multiplayer.md` | Replicación host-autoritativa | `NetworkRole`, `RemoteActor` |
 | `UI` | `ui.md` | HUD y prompts, solo lectura | — (sin datos propios) |
 | `SFX` | `sfx.md` | Audio real + placeholder de debug | `CueMessage` (compartido) |
 | `VFX` | `vfx.md` | Partículas + placeholder | `CueMessage` (compartido) |
 | `Camera` | `camera.md` | Cámara de presentación: rig orbital, mouse-look/keyboard-look, landing feedback, modo apuntado y lock-on | `CameraRig`, `MouseCaptured` |
-| `Health`/`Damage` | `health.md` | Vida y aplicación de daño para cualquier actor (Player, Enemies) | `Health`, `DamageRequestMessage`, `DamageAppliedMessage`, `DeathMessage` |
+| `Health`/`Damage` | `health.md` | Vida, inmunidad por fuente y aplicación autoritativa de daño | `Health`, `HostileInteractionImmunity`, `DamageRequestMessage`, `DeathMessage` |
 | `Projectiles` | `projectiles.md` | Flechas del arco: vuelo, colisión, daño | `Projectile`, `SpawnProjectileMessage` |
 | `Inventory`/`Equipment` | `inventory.md` | Qué posee y qué tiene equipado cada actor; dónde vive la durabilidad de armas (GDD §7-8) | `Inventory`, `EquipmentSlots`, `Durability` |
 | `Crafting` | `crafting.md` | Árbol de crafteo de equipo a partir de materiales (GDD §8, §11-5) — depende de Inventory | `Recipe`, `RecipeBook` |
@@ -55,15 +55,17 @@ explícitamente — el objetivo es que este inventario nunca oculte un hueco.
 | Enemies | Movement, Combate | `SHARED-CONTRACT` | Mismo `Intents`/`CombatIntents`, Brain de IA en vez de hardware |
 | Enemies | World | `READ` | Lee `TimeOfDay` para spawn/comportamiento |
 | Enemies | *(fundacional)* | `BLOCKING-PREREQUISITE` | **Resuelto** — Movement ya opera sobre `Query<Actor>` (ticket `multi-actor-migration`); Enemies puede empezar (`rationale/multi-actor-dispatch.md`) |
-| Mounts | Movement | `READ` + `WRITE-OWN` | Mounts lee `movement::Intents` del jinete y escribe `MountIntents` en la montura mediante `translate_mount_intents`; Movement no conoce Mounts |
-| Movement, Combat, Mounts | *(núcleo compartido `src/proposal.rs`)* | `SHARED-CONTRACT` | Cada uno usa un type alias sobre `proposal::ProposalBuffer<S, N>` de capacidad fija — mismo algoritmo de arbitración, tipos concretos propios por sistema (`rationale/proposal-arbitration-core.md`) |
+| Mounts | Movement | `MESSAGE` | Emite `ActorLinkRequestMessage` y confirma por ack; Movement aplica suspensión/redirect/collider atómicamente, posee cuerpos y sync de silla. El horse recorre el pipeline `Actor` ordinario. |
+| Mounts | Combat | `MESSAGE` | Emite `SetMountedCombatMessage`; Combat selecciona perfiles efectivos y snapshottea cada acción sin mutar el arma base. |
+| Mounts | Health | `READ` + `MESSAGE` | Compone el horse con `Health`/inmunidad persistente, consulta la política al cargar y emite daño atribuido; Health valida y aplica. |
+| Mounts | Enemies | `READ` + `MESSAGE` | Charge acepta solo entidades `Enemy` devueltas por el sweep espacial y emite daño/impulso/feedback una vez por generación. |
+| Movement, Combat | *(núcleo compartido `src/proposal.rs`)* | `SHARED-CONTRACT` | Cada uno usa un type alias sobre `proposal::ProposalBuffer<S, N>` de capacidad fija — mismo algoritmo de arbitración, tipos concretos propios por sistema (`rationale/proposal-arbitration-core.md`) |
 | Multiplayer | Movement, Combate, Mounts | `SHARED-CONTRACT` | Un jugador remoto es un `Actor` más, controlado por un `InputSource` de red; corren los mismos Brains genéricos |
 | Multiplayer | *(fundacional)* | `BLOCKING-PREREQUISITE` | **Resuelto** — mismo contrato multi-actor que Enemies, ya implementado |
 | Multiplayer | World | `SHARED-CONTRACT` | `TimeOfDay`/`Weather` son estado de sesión; solo el host los simula |
 | UI | Movement, Combate, Mounts, Health | `READ` | Nunca escribe hacia atrás (Constitución §20) |
 | SFX, VFX | Movement, Combate, World | `MESSAGE` + `READ` | `CueMessage` para sucesos discretos emitidos por simulación o colas de transición; lectura read-only en `Update` para parámetros continuos (`rationale/presentation-cues.md`) |
-| Combate, Projectiles | Health | `MESSAGE` | Emiten `DamageRequestMessage`; Health valida/aplica y emite `DamageAppliedMessage`/`DeathMessage` (`rationale/health-ownership-boundary.md`) |
-| Combate | Health | `MESSAGE` | Combate escucha `DamageAppliedMessage`/`DeathMessage` sobre su propio actor para decidir `CombatState::Staggered` |
+| Combate, Projectiles | Health | `READ` + `MESSAGE` | Consultan `HostileInteractionImmunity` antes de todas las consecuencias y emiten `DamageRequestMessage`; Health repite la validación, aplica HP y emite `DeathMessage`. No existe `DamageAppliedMessage`. |
 | Enemies | Health | `READ` | Lee su propio `Health` para decidir `Flee` (GDD §7) |
 | Combate | Projectiles | `MESSAGE` | Emite `SpawnProjectileMessage`; Projectiles posee la entidad desde el spawn |
 | Projectiles | *(fundacional)* | `BLOCKING-PREREQUISITE` | Requiere `Health` para poder emitir `DamageRequestMessage` al impactar |
@@ -100,10 +102,11 @@ explícitamente — el objetivo es que este inventario nunca oculte un hueco.
 
 - **Trabajo aditivo:** World, UI, SFX/VFX y Combat se diseñan como consumidores
   o extensiones aditivas de contratos existentes.
-- **Prerequisito fundacional (Movement: resuelto):** Enemies y Multiplayer
-  requieren que Movement y Combat operen sobre `Actor` genérico en vez de
-  asumir un único jugador. Movement ya lo cumple (`multi-actor-migration`);
-  Combat sigue pendiente de la misma migración.
-- **Mounts:** usa pipeline propio y un sistema de traducción de input ordenado
-  después de `MovementSet::ReadIntents` y antes de `MountSet::GatherProposals`;
-  no requiere que `movement::brain` importe tipos de Mounts.
+- **Prerequisito multi-actor (resuelto):** Movement y Combat operan sobre
+  `Actor`; Player, Enemies y horse comparten pipelines con datos y Brains
+  distintos.
+- **Mounts:** lifecycle emite sus requests antes de
+  `MovementSet::ApplyExternal`; `MountsSet::Confirm` consume el ack antes de
+  `ReadIntents`, el redirect persistente se ejecuta después de ese set, y
+  `MountsSet::PostMove` queda entre `SyncAttachments` y
+  `CombatSet::ApplyContext`.

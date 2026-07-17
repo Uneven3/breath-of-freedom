@@ -9,12 +9,11 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::Actor;
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::LedgeFacts;
 use crate::movement::intents::{ClimbVerticalIntent, Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 
@@ -37,7 +36,12 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) {
+type ProposeFilter = (
+    crate::movement::attachment::LocomotionActorFilter,
+    With<LedgeTraversal>,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     for (intents, current, ledge, mut state, mut buffer) in &mut q {
         if intents.traversal != TraversalActionIntent::Mantle {
             state.needs_release = false;
@@ -84,31 +88,42 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(movement) = row.ledge_traversal else {
-        return;
-    };
-    let Some(state) = row.mantle_state.as_mut() else {
-        return;
-    };
-    let dt = time.delta_secs();
+type TickQuery<'a> = (
+    MotorCore,
+    &'a LedgeTraversal,
+    &'a LedgeFacts,
+    &'a mut MantleState,
+);
 
-    // First active frame: begin the mantle. No valid target — hold still
-    // for this frame; mantle will drop next frame.
-    if state.arc.running || begin_mantle(state, row.transform.translation, row.ledge, movement) {
-        row.transform.translation = state.arc.step(dt, movement.mantle.arc_height);
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, ledge, mut state) in &mut actors {
+        if *row.state != LocomotionState::Mantle {
+            continue;
+        }
+        let dt = time.delta_secs();
+
+        // First active frame: begin the mantle. No valid target — hold still
+        // for this frame; mantle will drop next frame.
+        if state.arc.running || begin_mantle(&mut state, row.transform.translation, ledge, movement)
+        {
+            row.transform.translation = state.arc.step(dt, movement.mantle.arc_height);
+        }
+
+        row.velocity.0 = Vec3::ZERO;
+        body_move_and_slide(
+            &mas,
+            row.entity,
+            row.collider,
+            &mut row.transform,
+            Vec3::ZERO,
+            time.delta(),
+            &mut row.contact,
+        );
     }
-
-    row.velocity.0 = Vec3::ZERO;
-    body_move_and_slide(
-        mas,
-        row.entity,
-        row.collider,
-        &mut row.transform,
-        Vec3::ZERO,
-        time.delta(),
-        &mut row.contact,
-    );
 }
 
 fn begin_mantle(
@@ -135,6 +150,7 @@ fn begin_mantle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::Actor;
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]
@@ -143,6 +159,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 LedgeTraversal::PLAYER,
                 crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
@@ -177,6 +194,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 LedgeTraversal::PLAYER,
                 crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
@@ -216,6 +234,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 LedgeTraversal::PLAYER,
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
@@ -262,6 +281,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 LedgeTraversal::PLAYER,
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
@@ -306,6 +326,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 Intents {
                     traversal: crate::movement::intents::TraversalActionIntent::Mantle,
                     ..default()

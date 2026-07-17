@@ -8,12 +8,12 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::movement::Actor;
-use crate::movement::abilities::GroundMovement;
+use crate::movement::abilities::SprintMovement;
 use crate::movement::constraints::LocomotionConstraintFacts;
 use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
-use crate::movement::intents::{GaitIntent, Intents};
-use crate::movement::motor_common::{GroundLocomotionStep, ground_locomotion_step};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::intents::Intents;
+use crate::movement::motor_common::{GroundDriveStep, ground_drive_step};
+use crate::movement::motors::MotorCore;
 use crate::movement::motors::sneak::{Crouched, StandClearance};
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
@@ -25,28 +25,36 @@ use crate::movement::state::LocomotionState;
 #[derive(Component, Default)]
 pub struct SprintLock(pub bool);
 
-const SPRINT_RECHARGE_THRESHOLD: f32 = 20.0;
-
 /// Propose SPRINT at PLAYER_REQUESTED priority while grounded, holding sprint,
 /// and not stamina-locked. Abstains on stairs (StairsMotor owns the climb), on
 /// a climbable wall the player wants to climb (so ClimbMotor can win), and
 /// while forced to stay crouched (standing up would expand into a ceiling —
 /// SneakMotor keeps the actor down until the full capsule fits).
 type ProposeQuery<'a> = (
+    &'a SprintMovement,
     &'a GroundFacts,
-    &'a StairsFacts,
-    &'a LedgeFacts,
+    Option<&'a StairsFacts>,
+    Option<&'a LedgeFacts>,
     &'a Intents,
     &'a Stamina,
-    &'a Crouched,
-    &'a StandClearance,
+    Option<&'a Crouched>,
+    Option<&'a StandClearance>,
     Option<&'a LocomotionConstraintFacts>,
     &'a mut SprintLock,
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) {
+pub fn propose(
+    mut q: Query<
+        ProposeQuery,
+        (
+            With<Actor>,
+            With<crate::movement::attachment::LocomotionEnabled>,
+        ),
+    >,
+) {
     for (
+        profile,
         ground,
         stairs,
         ledge,
@@ -62,7 +70,7 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
         let cur = stamina.current();
         if cur <= 0.0 {
             stamina_locked.0 = true;
-        } else if cur >= SPRINT_RECHARGE_THRESHOLD {
+        } else if cur >= profile.recharge_threshold {
             stamina_locked.0 = false;
         }
 
@@ -72,17 +80,19 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
             continue;
         }
         // Abstain so StairsMotor / ClimbMotor / SneakMotor can take over.
-        if stairs.on_stairs {
+        if stairs.is_some_and(|stairs| stairs.on_stairs) {
             continue;
         }
-        if ledge.can_climb && intents.climb.requested {
+        if ledge.is_some_and(|ledge| ledge.can_climb) && intents.climb.requested {
             continue;
         }
-        if crouched.0 && !clearance.0 {
+        if crouched.is_some_and(|crouched| crouched.0)
+            && clearance.is_some_and(|clearance| !clearance.0)
+        {
             continue;
         }
 
-        if ground.grounded && intents.gait == GaitIntent::Sprint && !stamina_locked.0 {
+        if ground.grounded && intents.wants_sprint && !stamina_locked.0 {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sprint,
                 Priority::PlayerRequested,
@@ -93,38 +103,45 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<GroundMovement>)>) 
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(ground_movement) = row.ground_movement else {
-        return;
-    };
-    ground_locomotion_step(
-        GroundLocomotionStep {
-            entity: row.entity,
-            collider: row.collider,
-            transform: &mut row.transform,
-            velocity: &mut row.velocity,
-            intents: row.intents,
-            stamina: &mut row.stamina,
-            contact: &mut row.contact,
-            ground: row.ground,
-            state: *row.state,
-        },
-        LocomotionState::Sprint,
-        mas,
-        time,
-        &ground_movement.sprint,
-    );
+type TickQuery<'a> = (MotorCore, &'a SprintMovement, Option<&'a mut Stamina>);
+
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, mut stamina) in &mut actors {
+        ground_drive_step(
+            GroundDriveStep {
+                entity: row.entity,
+                collider: row.collider,
+                transform: &mut row.transform,
+                velocity: &mut row.velocity,
+                intents: row.intents,
+                stamina: stamina.as_deref_mut(),
+                contact: &mut row.contact,
+                ground: row.ground,
+                state: *row.state,
+            },
+            LocomotionState::Sprint,
+            &mas,
+            &time,
+            &movement.drive,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::abilities::SprintMovement;
     use bevy::ecs::system::RunSystemOnce;
 
     fn sprint_actor(crouched: bool, clearance: bool) -> impl Bundle {
         (
             Actor,
-            GroundMovement::PLAYER,
+            crate::movement::attachment::LocomotionEnabled,
+            SprintMovement::PLAYER,
             GroundFacts {
                 grounded: true,
                 ..default()
@@ -132,7 +149,7 @@ mod tests {
             StairsFacts::default(),
             LedgeFacts::default(),
             Intents {
-                gait: crate::movement::intents::GaitIntent::Sprint,
+                wants_sprint: true,
                 ..default()
             },
             Stamina::default(),
@@ -157,6 +174,7 @@ mod tests {
         let incapable = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -164,7 +182,7 @@ mod tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sprint,
+                    wants_sprint: true,
                     ..default()
                 },
                 Stamina::default(),

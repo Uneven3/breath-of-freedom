@@ -9,6 +9,8 @@
 use bevy::prelude::*;
 
 pub mod brain;
+pub mod context;
+pub mod context_data;
 pub mod intent;
 pub mod motors;
 pub mod proposal;
@@ -23,6 +25,7 @@ use state::CombatState;
 /// Ordered phases of the combat pipeline within `FixedUpdate`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CombatSet {
+    ApplyContext,
     ReadIntents,
     GatherProposals,
     Arbitrate,
@@ -37,10 +40,12 @@ impl Plugin for CombatPlugin {
         app.add_message::<motors::attack::MeleeHitMessage>();
         app.add_message::<motors::attack::HitImpactMessage>();
         app.add_message::<motors::aim::BowFiredMessage>();
+        app.add_message::<context_data::SetMountedCombatMessage>();
 
         app.configure_sets(
             FixedUpdate,
             (
+                CombatSet::ApplyContext,
                 CombatSet::ReadIntents,
                 CombatSet::GatherProposals,
                 CombatSet::Arbitrate,
@@ -54,6 +59,7 @@ impl Plugin for CombatPlugin {
         app.add_systems(
             FixedUpdate,
             (
+                context::apply_mounted_context.in_set(CombatSet::ApplyContext),
                 brain::read_intents.in_set(CombatSet::ReadIntents),
                 (
                     motors::idle::propose,

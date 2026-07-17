@@ -12,7 +12,7 @@ use bevy::prelude::*;
 // `combat-weapon-classes` phase — no field before a system reads it.
 
 /// One strike of a combo chain. Pure data (Constitución §6).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttackStep {
     /// Committed, not cancelable by attack input.
     pub windup_secs: f32,
@@ -35,7 +35,7 @@ pub const MAX_COMBO_STEPS: usize = 4;
 
 /// The wielded weapon: capability + tuning. Presets follow the
 /// `GroundMovement::PLAYER` pattern.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct WeaponProfile {
     pub base_damage: f32,
     combo: [Option<AttackStep>; MAX_COMBO_STEPS],
@@ -95,6 +95,32 @@ impl WeaponProfile {
                 arc_deg: 110.0,
             }),
             None,
+            None,
+            None,
+        ],
+    };
+
+    pub const MOUNTED_SWORD: Self = Self {
+        base_damage: 12.0,
+        combo: [
+            Some(AttackStep {
+                windup_secs: 0.14,
+                active_secs: 0.12,
+                recovery_secs: 0.28,
+                chain_window_secs: 0.25,
+                damage_mult: 1.0,
+                reach: 2.3,
+                arc_deg: 135.0,
+            }),
+            Some(AttackStep {
+                windup_secs: 0.16,
+                active_secs: 0.12,
+                recovery_secs: 0.35,
+                chain_window_secs: 0.0,
+                damage_mult: 1.35,
+                reach: 2.5,
+                arc_deg: 145.0,
+            }),
             None,
             None,
         ],

@@ -13,13 +13,13 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::movement::Actor;
-use crate::movement::abilities::GroundMovement;
+use crate::movement::abilities::{SneakMovement, SprintMovement};
 use crate::movement::body::BodyDimensions;
 use crate::movement::facts::GroundFacts;
-use crate::movement::intents::{GaitIntent, Intents};
+use crate::movement::intents::Intents;
 use crate::movement::lod::SensingLod;
-use crate::movement::motor_common::{GroundLocomotionStep, ground_locomotion_step};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motor_common::{GroundDriveStep, ground_drive_step};
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -61,7 +61,13 @@ type StandClearanceQuery<'a> = (
 
 pub fn update_stand_clearance(
     spatial: SpatialQuery,
-    mut q: Query<StandClearanceQuery, With<Actor>>,
+    mut q: Query<
+        StandClearanceQuery,
+        (
+            With<Actor>,
+            With<crate::movement::attachment::LocomotionEnabled>,
+        ),
+    >,
 ) {
     for (entity, transform, crouched, stand_collider, body, mut clearance, lod) in &mut q {
         if SensingLod::skips(lod) {
@@ -98,7 +104,11 @@ type SneakProposalQuery<'a> = (
     &'a mut SneakLock,
     &'a mut ProposalBuffer,
 );
-type SneakProposalFilter = (With<Actor>, With<GroundMovement>);
+type SneakProposalFilter = (
+    With<Actor>,
+    With<SneakMovement>,
+    With<crate::movement::attachment::LocomotionEnabled>,
+);
 
 pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
     for (ground, intents, crouched, clearance, stamina, mut sneak_lock, mut buffer) in &mut q {
@@ -112,9 +122,7 @@ pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
         let must_remain_crouched = crouched.0 && !clearance.0;
         let can_sneak = !sneak_lock.0 || must_remain_crouched;
 
-        if ground.grounded
-            && ((intents.gait == GaitIntent::Sneak && can_sneak) || must_remain_crouched)
-        {
+        if ground.grounded && ((intents.wants_sneak && can_sneak) || must_remain_crouched) {
             let _ = buffer.push(TransitionProposal::new(
                 LocomotionState::Sneak,
                 Priority::PlayerRequested,
@@ -125,35 +133,42 @@ pub fn propose(mut q: Query<SneakProposalQuery, SneakProposalFilter>) {
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(ground_movement) = row.ground_movement else {
-        return;
-    };
+type TickQuery<'a> = (
+    MotorCore,
+    &'a SneakMovement,
+    Option<&'a SprintMovement>,
+    Option<&'a mut Stamina>,
+);
 
-    let mut sneak_profile = ground_movement.sneak;
-    let is_moving = row.intents.planar.direction.length_squared() > 0.01;
-    if is_moving {
-        // Drain stamina at half the rate of sprint (sprint stamina_per_sec is negative)
-        sneak_profile.stamina_per_sec = -ground_movement.sprint.stamina_per_sec.abs() * 0.5;
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, sprint, mut stamina) in &mut actors {
+        let mut sneak_profile = movement.drive;
+        if row.intents.planar.direction.length_squared() > 0.01 {
+            let sprint_cost = sprint.map_or(0.0, |value| value.drive.stamina_per_sec.abs());
+            sneak_profile.stamina_per_sec = -sprint_cost * movement.sprinting_stamina_factor;
+        }
+        ground_drive_step(
+            GroundDriveStep {
+                entity: row.entity,
+                collider: row.collider,
+                transform: &mut row.transform,
+                velocity: &mut row.velocity,
+                intents: row.intents,
+                stamina: stamina.as_deref_mut(),
+                contact: &mut row.contact,
+                ground: row.ground,
+                state: *row.state,
+            },
+            LocomotionState::Sneak,
+            &mas,
+            &time,
+            &sneak_profile,
+        );
     }
-
-    ground_locomotion_step(
-        GroundLocomotionStep {
-            entity: row.entity,
-            collider: row.collider,
-            transform: &mut row.transform,
-            velocity: &mut row.velocity,
-            intents: row.intents,
-            stamina: &mut row.stamina,
-            contact: &mut row.contact,
-            ground: row.ground,
-            state: *row.state,
-        },
-        LocomotionState::Sneak,
-        mas,
-        time,
-        &sneak_profile,
-    );
 }
 
 /// Crouch is a modifier orthogonal to the active state: an actor can be crouched
@@ -187,14 +202,22 @@ type CrouchSyncQuery<'a> = (
     &'a BodyDimensions,
 );
 
-pub fn sync_crouch_collider(mut q: Query<CrouchSyncQuery, With<Actor>>) {
+pub fn sync_crouch_collider(
+    mut q: Query<
+        CrouchSyncQuery,
+        (
+            With<Actor>,
+            With<crate::movement::attachment::LocomotionEnabled>,
+        ),
+    >,
+) {
     for (state, intents, clearance, sneak_lock, mut crouched, mut collider, mut transform, body) in
         &mut q
     {
         let must_remain_crouched = crouched.0 && !clearance.0;
         let can_sneak = !sneak_lock.0 || must_remain_crouched;
         let want_crouch = is_ground_locomotion(*state)
-            && ((intents.gait == GaitIntent::Sneak && can_sneak) || must_remain_crouched);
+            && ((intents.wants_sneak && can_sneak) || must_remain_crouched);
         if want_crouch == crouched.0 {
             continue;
         }
@@ -225,6 +248,7 @@ fn standing_center(crouched_center: Vec3, body: BodyDimensions) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::abilities::SneakMovement;
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]
@@ -243,13 +267,14 @@ mod tests {
         let capable = world
             .spawn((
                 Actor,
-                GroundMovement::PLAYER,
+                crate::movement::attachment::LocomotionEnabled,
+                SneakMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
                 },
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sneak,
+                    wants_sneak: true,
                     ..default()
                 },
                 Crouched::default(),
@@ -262,12 +287,13 @@ mod tests {
         let incapable = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
                     ..default()
                 },
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sneak,
+                    wants_sneak: true,
                     ..default()
                 },
                 Crouched::default(),
@@ -303,13 +329,14 @@ mod tests {
         let actor = world
             .spawn((
                 Actor,
-                GroundMovement::PLAYER,
+                crate::movement::attachment::LocomotionEnabled,
+                SneakMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
                 },
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sneak,
+                    wants_sneak: true,
                     ..default()
                 },
                 Crouched::default(),
@@ -347,13 +374,14 @@ mod tests {
         let actor = world
             .spawn((
                 Actor,
-                GroundMovement::PLAYER,
+                crate::movement::attachment::LocomotionEnabled,
+                SneakMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
                 },
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sneak,
+                    wants_sneak: true,
                     ..default()
                 },
                 Crouched(true),
@@ -380,15 +408,19 @@ mod tests {
 
     fn crouch_actor(
         state: LocomotionState,
-        gait: GaitIntent,
+        wants_sneak: bool,
         crouched: bool,
         clearance: bool,
     ) -> impl Bundle {
         let body = BodyDimensions::PLAYER;
         (
             Actor,
+            crate::movement::attachment::LocomotionEnabled,
             state,
-            Intents { gait, ..default() },
+            Intents {
+                wants_sneak,
+                ..default()
+            },
             StandClearance(clearance),
             Crouched(crouched),
             SneakLock::default(),
@@ -410,12 +442,7 @@ mod tests {
         let mut world = World::new();
         let body = BodyDimensions::PLAYER;
         let e = world
-            .spawn(crouch_actor(
-                LocomotionState::Stairs,
-                GaitIntent::Sneak,
-                false,
-                true,
-            ))
+            .spawn(crouch_actor(LocomotionState::Stairs, true, false, true))
             .id();
 
         world.run_system_once(sync_crouch_collider).unwrap();
@@ -437,12 +464,7 @@ mod tests {
     fn crouch_releases_when_state_leaves_ground_locomotion() {
         let mut world = World::new();
         let e = world
-            .spawn(crouch_actor(
-                LocomotionState::Jump,
-                GaitIntent::Sneak,
-                true,
-                true,
-            ))
+            .spawn(crouch_actor(LocomotionState::Jump, true, true, true))
             .id();
 
         world.run_system_once(sync_crouch_collider).unwrap();
@@ -458,12 +480,7 @@ mod tests {
     fn crouch_holds_without_clearance_after_release() {
         let mut world = World::new();
         let e = world
-            .spawn(crouch_actor(
-                LocomotionState::Walk,
-                GaitIntent::Walk,
-                true,
-                false,
-            ))
+            .spawn(crouch_actor(LocomotionState::Walk, false, true, false))
             .id();
 
         world.run_system_once(sync_crouch_collider).unwrap();

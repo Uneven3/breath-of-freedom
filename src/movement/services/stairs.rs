@@ -5,12 +5,20 @@ use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use crate::movement::Actor;
+use crate::movement::abilities::StairsMovement;
 use crate::movement::facts::StairsFacts;
 use crate::movement::lod::SensingLod;
 use crate::world::Stairs;
 
+type StairsActorQuery<'a> = (&'a Transform, &'a mut StairsFacts, Option<&'a SensingLod>);
+type StairsActorFilter = (
+    With<Actor>,
+    With<StairsMovement>,
+    With<crate::movement::attachment::LocomotionEnabled>,
+);
+
 pub fn stairs_service(
-    mut actors: Query<(&Transform, &mut StairsFacts, Option<&SensingLod>), With<Actor>>,
+    mut actors: Query<StairsActorQuery, StairsActorFilter>,
     stairs: Query<&Stairs>,
 ) {
     for (transform, mut facts, lod) in &mut actors {
@@ -69,6 +77,8 @@ mod tests {
         let mut world = World::new();
         world.spawn((
             Actor,
+            crate::movement::attachment::LocomotionEnabled,
+            StairsMovement::PLAYER,
             Transform::from_xyz(0.4, 1.0, 0.0),
             StairsFacts::default(),
         ));

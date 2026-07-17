@@ -12,38 +12,25 @@ El pipeline de simulación no debe depender de `Single<..., With<Player>>`.
 Los sistemas de Movement y Combat operan sobre `Query<..., With<Actor>>`,
 iterando todos los actores relevantes.
 
-La fase `TickActiveMotor` es **un único sistema dispatcher**
-(`motors::tick_active_motor`): una sola pasada sobre
-`Query<MotorTick, With<Actor>>` que despacha cada actor con un `match`
-exhaustivo sobre su `LocomotionState` al `tick_body` del motor dueño.
-`MotorTick` (`#[derive(QueryData)]`) es la unión de las filas de todos los
-motores: el contrato de `KinematicActorBundle` como campos requeridos, y
-capacidades/estado-por-motor como `Option` — cada `tick_body` hace
-early-return si su capacidad no está (situación que el arbitraje ya
-previene: un motor solo propone para actores con su capacidad).
+La fase `TickActiveMotor` encadena sistemas `tick_body` con queries exactas
+por capacidad. Todos comparten un `MotorCore` pequeño; cada motor agrega solo
+su perfil, facts, pool y estado privado. Cada sistema comprueba su
+`LocomotionState` dueño antes de mover el cuerpo. El encadenamiento fija un
+único writer temporal y la SSoT de estado hace que un actor solo pueda ser
+movido por uno de ellos.
 
 Todo estado temporal que pueda variar por actor vive en componentes por
 entidad, no en `Local<T>` compartido por el sistema (`JumpLocal`,
 `GlideLocal`, `SprintLock`, `StairsLocal`, …).
 
-## Por qué el dispatcher (y no 13 sistemas auto-filtrados)
+## Por qué queries exactas encadenadas
 
-La versión anterior registraba los 13 `tick` como sistemas separados, cada
-uno con el guard `if *state != LocomotionState::X { continue }`. Eso
-funcionaba, pero el invariante "exactamente un motor mueve cada cuerpo por
-frame" era una **convención** que cada motor debía sostener, verificada por
-revisión humana. Además, los 13 sistemas conflictúan entre sí para el
-scheduler (todos con `&mut Transform` sobre `With<Actor>`): se serializaban
-igual, iterando 13 veces a todos los actores para saltarse casi todos.
-
-Con el dispatcher:
-
-- El invariante lo garantiza el **compilador**: un `match` exhaustivo no
-  puede olvidar un estado ni ejecutar dos motores; agregar un
-  `LocomotionState` nuevo es un error de compilación hasta escribir su brazo.
-- Una sola iteración por frame sobre los actores, en lugar de 13 pasadas.
-- El sistema único queda listo para `par_iter_mut` si el conteo de actores
-  alguna vez lo justifica (hoy no).
+La unión anterior forzaba a cada actor a participar en una query con alrededor
+de veinte `Option`, aunque careciera de esas capacidades. Las queries exactas
+conservan la composición ECS: un horse no carga ni expone datos de climb,
+mantle, ladder, glide, sneak o wall-jump. El costo es una pasada acotada por
+capacidad, compensada por filtros arquetípicos que excluyen actores no
+compatibles. El `.chain()` hace explícito el orden de writers.
 
 Los `propose` siguen siendo 13 sistemas independientes a propósito: ahí la
 gracia del Broker es que cada motor decida por sí mismo, y el orden de

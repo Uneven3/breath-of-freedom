@@ -1,57 +1,96 @@
 # Mounts
 
-**Carpeta objetivo:** `src/mounts/`
+**Carpeta:** `src/mounts/`
+**Estado:** refactor Actor/lifecycle implementado; checkpoint jugado final pendiente.
 
-## Datos (Components/Messages/Resources) — propuesta
+El horse es un `Actor` normal de Movement. Mounts posee únicamente la relación
+jinete–montura, owner persistente, reglas de montar/desmontar, carga y requests
+de debug. Movement sigue siendo el único escritor de `Transform`,
+`BodyVelocity`, collider e `Intents` de actores.
 
-| Tipo | Dónde | Qué es |
+## Composición y datos
+
+El horse compone `KinematicActorBundle`, Ground/Sprint/Stairs/Airborne/Jump,
+`Stamina`, `Health(120)` y `HorseCharge`. Sus perfiles alcanzan 9 m/s a paso,
+13 m/s en sprint y 6.5 m/s de impulso de salto. No recibe Sneak, crouch,
+Climb, Glide, Ladder, LedgeTraversal, Mantle ni WallJump.
+
+| Tipo | Dueño | Función |
 |---|---|---|
-| `MountIntents` | `mounts/intents.rs` | Propio, aislado de `movement::Intents` (mismo principio que `CombatIntents` en `combat.md`): `move_dir`, `wants_boost` (galope), `wants_takeoff`/`wants_dive` (voladoras). |
-| `MountLocomotionState` | `mounts/state.rs` | SSoT propio: `Idle`, `Gallop`, `Sprint`, `Rear`, `TakeOff`, `Fly`, `Dive`, `Land`. Terrestres nunca proponen `Fly`/`Dive`/`TakeOff` — es el motor de esa especie el que no existe, no un chequeo en runtime. |
-| `MountProposalBuffer` | `mounts/proposal.rs` | Type alias sobre el núcleo genérico compartido de capacidad fija `proposal::ProposalBuffer<MountLocomotionState, N>` (`src/proposal.rs`) — ver `rationale/proposal-arbitration-core.md`. |
-| `MountedOn(Entity)` | `mounts/mod.rs`, en el jinete | Apunta a la entidad-montura. Única relación entre jugador y montura; ver `rationale/mounts-intent-redirect.md`. |
-| `MountBody` | `mounts/mod.rs` | Marker de entidad montura simulada por Mounts. Una montura no necesita ser `Actor`; si también participa en Combat/Enemies se agregan markers adicionales explícitos. |
-| `Bond` | `mounts/bond.rs` | Vínculo personal jugador-criatura (GDD §8, estilo Avatar) — dato reservado, sin campos definidos todavía. |
+| `Horse` | Mounts | Marker de dominio sobre un `Actor`. |
+| `MountedOn(Entity)` / `RiddenBy(Option<Entity>)` | Mounts | Relación uno-a-uno mantenida en ambos extremos. |
+| `HorseOwner(Option<Entity>)` | Mounts | Owner persistente; cambiar de rider no lo reemplaza. |
+| `HorseCharge` | Mounts | Fase, generación y posición anterior del sweep. |
+| `KinematicAttachment` / `LocomotionEnabled` | Movement | Silla y suspensión/reactivación del pipeline físico. |
+| `ControlRedirect` | Movement | Redirect persistente con máscara planar/sprint/jump. |
+| `HostileInteractionImmunity(owner)` | Health | Bloquea HP y efectos hostiles atribuidos al owner. |
+| `CombatContext` / `MountedCombatProfile` | Combat | Selección read-only y tuning efectivo de espada/arco. |
 
-## Estados (`MountLocomotionState`) — propuesta, a confirmar
+## Lifecycle y ordering
 
-Terrestre: `Idle`, `Gallop`, `Sprint`, `Rear`. Voladora: agrega `TakeOff`,
-`Fly`, `Dive`, `Land`. Qué subset tiene cada especie: dato de la especie, no
-de la arquitectura.
+E usa un `MountInputCursor` propio. El candidato debe estar libre y a no más
+de 2.5 m. La transición emite un request atómico a Movement y solo escribe
+`MountedOn`/`RiddenBy` después del ack aceptado; un rechazo deja ambos extremos
+sin cambios. El desmontaje voluntario prueba candidatos fijos con suelo,
+pendiente, cápsula y headroom válidos. Sin candidato se rechaza. F8 y muerte
+usan búsqueda radial y, si toda validación falla, solicitan un detach de
+emergencia. Ese detach libera la relación y permite despawnear el horse, pero
+no reactiva colisión ni locomoción en la pose no validada; hereda solo la
+velocidad planar.
 
-## Sistemas (comportamiento) — propuesta
+```text
+Mounts Request/Lifecycle
+  -> Movement ApplyExternal
+  -> Mounts Confirm
+  -> Movement Read/Redirect/Sense/Gather/Arbitrate/Tick/Sync
+  -> Mounts PostMove
+  -> Combat ApplyContext/Read/Gather/Arbitrate/Tick
+  -> Projectiles Simulate
+  -> Mounts Charge
+  -> Health Apply
+  -> Mounts DeathCleanup
+```
 
-Pipeline hermano del de Movement, `SystemSet`s propios (`MountSet`),
-encadenados en `FixedUpdate`:
+`MovementSet::ApplyExternal` emite el ack; `MountsSet::Confirm` actualiza la
+relación y publica el contexto, y `MountsSet::PostMove` recién entonces puede
+despawnear un horse liberado. Un rechazo `CapacityPending` reencola el request
+exacto y se reintenta después de la preparación de capacidad en `Update`.
 
-1. **TranslateIntent** — `translate_mount_intents`, `.after(MovementSet::ReadIntents)`:
-   lee `Intents` del jinete vía `MountedOn` y escribe `MountIntents` en la
-   montura. Único punto donde Mounts lee algo de Movement.
-2. **GatherProposals** — motores de montura (`gallop`, `fly`, `dive`, …)
-   proponen a `MountProposalBuffer`, análogo a `motors::*::propose`.
-3. **Arbitrate** — mismo algoritmo que Movement/Combate (núcleo compartido,
-   ver `rationale/proposal-arbitration-core.md`), escribe
-   `MountLocomotionState`.
-4. **TickActiveMotor** — corre el motor activo de la montura sobre
-   `Query<.., With<MountBody>>`, gateado por su propio `MountLocomotionState`.
-   El jinete puede ser `Actor`; la montura es un cuerpo de Mounts salvo que
-   otro sistema le agregue markers adicionales explícitos.
+La muerte emite el desmontaje al lifecycle siguiente: el horse permanece
+`PendingHorseDespawn` y nunca desaparece antes de liberar al rider.
+F8 solo captura una solicitud en `Update`; spawn/despawn se decide en
+`FixedUpdate`. Un detach de emergencia o carrier desaparecido instala
+`PendingSafeRecovery`: Movement prueba cuatro alturas deterministas por tick,
+sin colecciones temporales, y conserva `ColliderDisabled` y locomoción
+suspendida hasta encontrar una pose sin overlap. Si desaparece el rider,
+Mounts limpia `RiddenBy` y pide a Movement neutralizar el horse.
 
-## Relaciones con otros sistemas
+## Charge
 
-| Relación | Categoría | Mecanismo |
-|---|---|---|
-| Mounts traduce `Intents` del jinete hacia `MountIntents` de la montura mientras existe `MountedOn` | READ + WRITE-OWN | `translate_mount_intents` vive en Mounts, corre en `MountSet::TranslateIntent`, después de `MovementSet::ReadIntents` y antes de `MountSet::GatherProposals`; `movement::brain` no conoce `MountIntents` — ver `rationale/mounts-intent-redirect.md` |
-| Mounts comparte el núcleo de arbitración con Movement/Combate | SHARED-CONTRACT | `MountProposalBuffer` es un type alias sobre `proposal::ProposalBuffer<MountLocomotionState, N>` de capacidad fija — ver `rationale/proposal-arbitration-core.md` |
-| Monturas es un pipeline hermano de Movement, no una extensión | ninguna | Su propio `MountBody`/`MountLocomotionState`/buffer/arbitración, no comparte estado locomotor con `movement::` |
-| Combate mientras se está montado (¿se puede disparar arco desde el lomo?) | decisión abierta | GDD no lo especifica |
+Se activa al sprintar a `>= 11 m/s`, permanece hasta `<= 10 m/s` (histéresis)
+y barre una esfera entre la posición anterior y la actual. `SpatialQuery`
+selecciona solo `Enemy`; un raycast que ignora actores descarta candidatos
+ocultos por geometría. Cada `(horse, generation, enemy)` emite una sola vez
+`DamageRequestMessage`, `BodyImpulseMessage` y `HitImpactMessage`.
 
-## Decisiones abiertas
+El ledger no tiene límite fijo: `Update` reserva capacidad según horses ×
+enemies vivos; `FixedUpdate` no hace crecer el heap. Si entidades aparecen
+después de la preparación, el hit se difiere, la posición previa no avanza y
+el mismo tramo se reintenta después de que `Update` amplíe capacidad.
 
-- Cuerpo físico del jugador mientras está montado (colisión, parenteado) —
-  ver `rationale/mounts-intent-redirect.md`.
-- Diseño concreto de criaturas (cuáles, terrestres vs. voladoras) — GDD §13.
-- Mecánica de vínculo/doma (`Bond`).
-- Desmontar a mitad de una maniobra.
-- Si Enemies puede montar: hereda esta misma traducción, leyendo los `Intents`
-  que produzca `EnemyBrain`.
+Los tests con el backend espacial real de Avian cubren tunneling entre
+endpoints a alta velocidad, pared oclusora y separación vertical, además de
+dedup/rearm y más de 16 objetivos con dos horses.
+
+## Presentación
+
+`visuals.rs` crea un `HorseVisual` separado enlazado por `VisualOf`; la entidad
+de simulación no contiene meshes, materiales ni assets. El cleanup tolera que
+el horse ya haya desaparecido. `assets/Prototype.glb` se conserva sin uso ni
+atribución: incorporarlo o retirarlo requiere una decisión humana separada.
+
+## Abierto
+
+- Monturas voladoras y soporte para enemigos montados.
+- Vínculo/doma y persistencia del owner.
+- Checkpoint jugado de feeling y escenarios físicos de carga/desmontaje.

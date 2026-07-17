@@ -6,12 +6,11 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::Actor;
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{Intents, TraversalActionIntent};
 use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
 
@@ -32,7 +31,12 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) {
+type ProposeFilter = (
+    crate::movement::attachment::LocomotionActorFilter,
+    With<LedgeTraversal>,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     for (ground, ledge, intents, current, state, mut buffer) in &mut q {
         if *current == LocomotionState::AutoVault && state.arc.running {
             let _ = buffer.push(TransitionProposal::new(
@@ -58,30 +62,42 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<LedgeTraversal>)>) 
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(movement) = row.ledge_traversal else {
-        return;
-    };
-    let Some(state) = row.vault_state.as_mut() else {
-        return;
-    };
-    let dt = time.delta_secs();
+type TickQuery<'a> = (
+    MotorCore,
+    &'a LedgeTraversal,
+    &'a LedgeFacts,
+    &'a mut VaultState,
+);
 
-    if !state.arc.running && !begin_vault(state, row.transform.translation, row.ledge, movement) {
-        return;
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, ledge, mut state) in &mut actors {
+        if *row.state != LocomotionState::AutoVault {
+            continue;
+        }
+        let dt = time.delta_secs();
+
+        if !state.arc.running
+            && !begin_vault(&mut state, row.transform.translation, ledge, movement)
+        {
+            continue;
+        }
+
+        row.transform.translation = state.arc.step(dt, movement.vault.arc_height);
+        row.velocity.0 = Vec3::ZERO;
+        body_move_and_slide(
+            &mas,
+            row.entity,
+            row.collider,
+            &mut row.transform,
+            Vec3::ZERO,
+            time.delta(),
+            &mut row.contact,
+        );
     }
-
-    row.transform.translation = state.arc.step(dt, movement.vault.arc_height);
-    row.velocity.0 = Vec3::ZERO;
-    body_move_and_slide(
-        mas,
-        row.entity,
-        row.collider,
-        &mut row.transform,
-        Vec3::ZERO,
-        time.delta(),
-        &mut row.contact,
-    );
 }
 
 fn begin_vault(
@@ -101,6 +117,7 @@ fn begin_vault(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::Actor;
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]

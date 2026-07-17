@@ -6,11 +6,11 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::movement::Actor;
 use crate::movement::abilities::WallJumpMovement;
+use crate::movement::facts::LedgeFacts;
 use crate::movement::intents::{ClimbLateralIntent, ClimbVerticalIntent, Intents};
 use crate::movement::motor_common::{body_move_and_slide, clip_below_ledge_lip, launch_normal};
-use crate::movement::motors::MotorTickItem;
+use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -35,7 +35,12 @@ type ProposeQuery<'a> = (
     &'a mut ProposalBuffer,
 );
 
-pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>) {
+type ProposeFilter = (
+    crate::movement::attachment::LocomotionActorFilter,
+    With<WallJumpMovement>,
+);
+
+pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     for (intents, current, stamina, movement, mut state, mut buffer) in &mut q {
         let jump_requested = intents.jump.held || intents.jump.pressed;
         if !intents.jump.held {
@@ -72,72 +77,89 @@ pub fn propose(mut q: Query<ProposeQuery, (With<Actor>, With<WallJumpMovement>)>
     }
 }
 
-pub(super) fn tick_body(row: &mut MotorTickItem, mas: &MoveAndSlide, time: &Time) {
-    let Some(movement) = row.wall_jump_movement else {
-        return;
-    };
-    let Some(state) = row.wall_jump_state.as_mut() else {
-        return;
-    };
-    let dt = time.delta_secs();
-    let ledge = row.ledge;
+type TickQuery<'a> = (
+    MotorCore,
+    &'a WallJumpMovement,
+    &'a LedgeFacts,
+    &'a mut WallJumpState,
+    Option<&'a mut Stamina>,
+);
 
-    let mut v = row.velocity.0;
+pub fn tick_body(
+    mut actors: Query<TickQuery, crate::movement::attachment::LocomotionActorFilter>,
+    mas: MoveAndSlide,
+    time: Res<Time>,
+) {
+    for (mut row, movement, ledge, mut state, mut stamina) in &mut actors {
+        if *row.state != LocomotionState::WallJump {
+            continue;
+        }
+        let dt = time.delta_secs();
 
-    // First tick: apply the launch impulse. Vertical intent wins over
-    // lateral; a neutral stick leaps away from the wall.
-    if state.launch_pending {
-        state.launch_pending = false;
-        let profile = movement.wall_jump;
-        let normal = launch_normal(ledge.climb_normal, &row.contact, &row.transform);
-        let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
-        let away_leap = || {
-            let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
-            away * profile.away_leap_speed + normal * profile.away_normal_push
-        };
-        let lateral_leap = |side_dir: Vec3| {
-            let mut v = side_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
-            v.y = profile.lateral_vertical_lift;
-            v - normal * profile.lateral_normal_retraction
-        };
+        let mut v = row.velocity.0;
 
-        v = match (row.intents.climb.vertical, row.intents.climb.lateral) {
-            (ClimbVerticalIntent::Up, _) => {
-                Vec3::Y * profile.jump_up_impulse - normal * profile.wall_contact_push
+        // First tick: apply the launch impulse. Vertical intent wins over
+        // lateral; a neutral stick leaps away from the wall.
+        if state.launch_pending {
+            state.launch_pending = false;
+            let profile = movement.wall_jump;
+            let normal = launch_normal(ledge.climb_normal, &row.contact, &row.transform);
+            let right_dir = Vec3::Y.cross(normal).normalize_or_zero();
+            let away_leap = || {
+                let away = (normal + Vec3::Y * profile.away_up_blend).normalize_or_zero();
+                away * profile.away_leap_speed + normal * profile.away_normal_push
+            };
+            let lateral_leap = |side_dir: Vec3| {
+                let mut v = side_dir * (profile.jump_up_impulse * profile.lateral_speed_fraction);
+                v.y = profile.lateral_vertical_lift;
+                v - normal * profile.lateral_normal_retraction
+            };
+
+            v = match (row.intents.climb.vertical, row.intents.climb.lateral) {
+                (ClimbVerticalIntent::Up, _) => {
+                    Vec3::Y * profile.jump_up_impulse - normal * profile.wall_contact_push
+                }
+                (ClimbVerticalIntent::Down, _) => away_leap(),
+                (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Left) => {
+                    lateral_leap(-right_dir)
+                }
+                (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Right) => {
+                    lateral_leap(right_dir)
+                }
+                (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Neutral) => away_leap(),
+            };
+            if let Some(stamina) = stamina.as_deref_mut() {
+                stamina.drain(profile.stamina_cost);
             }
-            (ClimbVerticalIntent::Down, _) => away_leap(),
-            (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Left) => lateral_leap(-right_dir),
-            (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Right) => lateral_leap(right_dir),
-            (ClimbVerticalIntent::Neutral, ClimbLateralIntent::Neutral) => away_leap(),
-        };
-        row.stamina.drain(profile.stamina_cost);
-    }
+        }
 
-    state.timer -= dt;
+        state.timer -= dt;
 
-    // Soft ceiling clip (shared with climb); pinning at the lip ends the jump.
-    if clip_below_ledge_lip(&mut row.transform, &mut v, ledge.lip_height, *row.body, dt) {
-        state.is_jumping = false;
-    }
+        // Soft ceiling clip (shared with climb); pinning at the lip ends the jump.
+        if clip_below_ledge_lip(&mut row.transform, &mut v, ledge.lip_height, *row.body, dt) {
+            state.is_jumping = false;
+        }
 
-    row.velocity.0 = body_move_and_slide(
-        mas,
-        row.entity,
-        row.collider,
-        &mut row.transform,
-        v,
-        time.delta(),
-        &mut row.contact,
-    );
+        row.velocity.0 = body_move_and_slide(
+            &mas,
+            row.entity,
+            row.collider,
+            &mut row.transform,
+            v,
+            time.delta(),
+            &mut row.contact,
+        );
 
-    if state.timer <= 0.0 {
-        state.is_jumping = false;
+        if state.timer <= 0.0 {
+            state.is_jumping = false;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::Actor;
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]
@@ -146,6 +168,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 WallJumpMovement::PLAYER,
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
@@ -177,6 +200,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 WallJumpMovement::PLAYER,
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
@@ -210,6 +234,7 @@ mod tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         pressed: true,

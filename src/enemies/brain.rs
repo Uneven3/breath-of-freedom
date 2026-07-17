@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use super::perception::{AggroTarget, Awareness};
 use super::state::EnemyAiState;
 use super::{Enemy, Home};
-use crate::movement::intents::{GaitIntent, Intents, PlanarMoveIntent};
+use crate::movement::intents::{Intents, PlanarMoveIntent};
 
 /// Behavior tuning, per enemy. Presets follow the `GroundMovement::PLAYER`
 /// pattern.
@@ -174,13 +174,13 @@ pub fn act(time: Res<Time>, mut q: Query<ActQuery, With<Enemy>>) {
                 chase_intents(pos, target, profile)
             }),
             EnemyAiState::Search => aggro.last_seen.map_or_else(Intents::default, |seen| {
-                walk_toward(pos, seen, profile.arrive_radius, GaitIntent::Walk)
+                walk_toward(pos, seen, profile.arrive_radius, false)
             }),
             // Fighting: keep pressing toward the target at a walk — the
             // approach is what keeps the melee facing it (motors rotate
             // toward planar intent); the archer's aim is ControlOrientation.
             EnemyAiState::Combat => aggro.last_seen.map_or_else(Intents::default, |seen| {
-                walk_toward(pos, seen, profile.engage_distance, GaitIntent::Walk)
+                walk_toward(pos, seen, profile.engage_distance, false)
             }),
         };
     }
@@ -216,14 +216,14 @@ fn patrol_intents(
     }
 
     local.waypoint.map_or_else(Intents::default, |wp| {
-        walk_toward(pos, wp, profile.arrive_radius, GaitIntent::Walk)
+        walk_toward(pos, wp, profile.arrive_radius, false)
     })
 }
 
 /// Sprint at the target, stopping inside the engage ring (stand and stare —
 /// combat picks it up from here when that system exists).
 fn chase_intents(pos: Vec3, target: Vec3, profile: &EnemyBrainProfile) -> Intents {
-    walk_toward(pos, target, profile.engage_distance, GaitIntent::Sprint)
+    walk_toward(pos, target, profile.engage_distance, true)
 }
 
 /// Deterministic pseudo-random waypoint around `home`: golden-angle sequence
@@ -239,7 +239,7 @@ pub(crate) fn patrol_waypoint(home: Vec3, radius: f32, entity_index: u32, step: 
     home + Vec3::new(angle.cos(), 0.0, angle.sin()) * (radius * reach)
 }
 
-fn walk_toward(pos: Vec3, target: Vec3, stop_radius: f32, gait: GaitIntent) -> Intents {
+fn walk_toward(pos: Vec3, target: Vec3, stop_radius: f32, wants_sprint: bool) -> Intents {
     let delta = target - pos;
     let planar = Vec2::new(delta.x, delta.z);
     if planar.length_squared() <= stop_radius * stop_radius {
@@ -250,7 +250,7 @@ fn walk_toward(pos: Vec3, target: Vec3, stop_radius: f32, gait: GaitIntent) -> I
             direction: planar.normalize_or_zero(),
             strength: 1.0,
         },
-        gait,
+        wants_sprint,
         ..default()
     }
 }
@@ -376,7 +376,7 @@ mod tests {
                 Actor,
                 Player,
                 Intents {
-                    gait: GaitIntent::Sprint,
+                    wants_sprint: true,
                     ..default()
                 },
             ))
@@ -400,13 +400,12 @@ mod tests {
 
         world.run_system_once(act).unwrap();
 
-        assert_eq!(
-            world.entity(player).get::<Intents>().unwrap().gait,
-            GaitIntent::Sprint,
+        assert!(
+            world.entity(player).get::<Intents>().unwrap().wants_sprint,
             "player intents must stay untouched"
         );
         let enemy_intents = world.entity(enemy).get::<Intents>().unwrap();
-        assert_eq!(enemy_intents.gait, GaitIntent::Sprint);
+        assert!(enemy_intents.wants_sprint);
         assert!(
             enemy_intents.planar.direction.x > 0.9,
             "alert enemy must move toward its target"

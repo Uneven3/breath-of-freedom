@@ -9,6 +9,8 @@
 
 use bevy::prelude::*;
 
+use crate::combat::context::effective_bow;
+use crate::combat::context_data::{BowProfile, CombatContext, MountedCombatProfile};
 use crate::combat::intent::CombatIntents;
 use crate::combat::proposal::{CombatProposalBuffer, Priority, TransitionProposal, weight};
 use crate::combat::state::CombatState;
@@ -16,16 +18,6 @@ use crate::input::frame::ControlOrientation;
 use crate::movement::Actor;
 use crate::projectiles::SpawnProjectileMessage;
 
-/// Arrow speed at zero charge (instant tap-fire).
-const ARROW_SPEED_MIN: f32 = 30.0;
-/// Arrow speed at full charge.
-const ARROW_SPEED_MAX: f32 = 95.0;
-/// Arrow damage at zero charge.
-const ARROW_DAMAGE_MIN: f32 = 6.0;
-/// Arrow damage at full charge.
-const ARROW_DAMAGE_MAX: f32 = 18.0;
-/// Seconds to reach full charge.
-const DRAW_TIME_SECS: f32 = 1.4;
 /// Aim shoulder pivot, owned by Combat (the projectile origin is simulation —
 /// §20). `camera.rs` imports both so the crosshair ray passes exactly through
 /// the muzzle: pivot height over the body center, and the rightward offset.
@@ -48,6 +40,9 @@ pub struct DrawStrength {
     pub charging: bool,
     /// Delay after firing before you can notch and pull another arrow.
     pub cooldown: f32,
+    /// Effective tuning captured on the first charging tick. Context changes
+    /// cannot retune a draw already in progress.
+    pub(crate) tuning: Option<BowProfile>,
 }
 
 /// Published the tick an arrow leaves the string. Presentation consumes it
@@ -92,13 +87,15 @@ type DrawQuery<'a> = (
     &'a CombatState,
     &'a mut DrawStrength,
     Option<&'a mut crate::movement::stamina::Stamina>,
+    Option<&'a CombatContext>,
+    Option<&'a MountedCombatProfile>,
 );
 
 /// `TickActiveMotor`: accumulate charge while attack is held during `Aiming`.
 /// Resets on any other state.
 pub fn tick_draw_strength(time: Res<Time>, mut q: Query<DrawQuery, With<Actor>>) {
     let dt = time.delta_secs();
-    for (intents, state, mut draw, mut stamina) in &mut q {
+    for (intents, state, mut draw, mut stamina, context, mounted_profile) in &mut q {
         // Cooldown ticks down at all times
         if draw.cooldown > 0.0 {
             draw.cooldown = (draw.cooldown - dt).max(0.0);
@@ -107,6 +104,7 @@ pub fn tick_draw_strength(time: Res<Time>, mut q: Query<DrawQuery, With<Actor>>)
         if *state != CombatState::Aiming {
             draw.factor = 0.0;
             draw.charging = false;
+            draw.tuning = None;
             continue;
         }
 
@@ -115,8 +113,12 @@ pub fn tick_draw_strength(time: Res<Time>, mut q: Query<DrawQuery, With<Actor>>)
         let can_charge = draw.cooldown <= 0.0 && has_stamina;
 
         if intents.attack.held && can_charge {
+            if draw.tuning.is_none() {
+                draw.tuning = Some(effective_bow(context, mounted_profile));
+            }
             draw.charging = true;
-            draw.factor = (draw.factor + dt / DRAW_TIME_SECS).min(1.0);
+            let tuning = draw.tuning.unwrap_or(BowProfile::ON_FOOT);
+            draw.factor = (draw.factor + dt / tuning.draw_time_secs).min(1.0);
 
             if let Some(ref mut s) = stamina {
                 s.drain(DRAW_STAMINA_DRAIN_PER_SEC * dt);
@@ -135,6 +137,8 @@ type ShootQuery<'a> = (
     &'a CombatState,
     &'a mut DrawStrength,
     Option<&'a crate::movement::stamina::Stamina>,
+    Option<&'a CombatContext>,
+    Option<&'a MountedCombatProfile>,
 );
 
 /// While `Aiming`, releasing the attack button (held last tick but not this
@@ -145,7 +149,18 @@ pub fn shoot_drawn_arrow(
     mut fired: MessageWriter<BowFiredMessage>,
     time: Res<Time>,
 ) {
-    for (shooter, transform, orientation, intents, state, mut draw, stamina) in &mut q {
+    for (
+        shooter,
+        transform,
+        orientation,
+        intents,
+        state,
+        mut draw,
+        stamina,
+        context,
+        mounted_profile,
+    ) in &mut q
+    {
         if *state != CombatState::Aiming {
             continue;
         }
@@ -171,8 +186,11 @@ pub fn shoot_drawn_arrow(
         }
 
         let factor = draw.factor;
-        let speed = lerp(ARROW_SPEED_MIN, ARROW_SPEED_MAX, factor);
-        let damage = lerp(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX, factor);
+        let profile = draw
+            .tuning
+            .unwrap_or_else(|| effective_bow(context, mounted_profile));
+        let speed = lerp(profile.speed_min, profile.speed_max, factor);
+        let damage = lerp(profile.damage_min, profile.damage_max, factor);
 
         let direction = aim_direction(orientation);
 
@@ -217,6 +235,7 @@ pub fn shoot_drawn_arrow(
 
         draw.factor = 0.0;
         draw.charging = false;
+        draw.tuning = None;
         draw.cooldown = RELOAD_COOLDOWN_SECS;
     }
 }
@@ -330,12 +349,65 @@ mod tests {
 
     #[test]
     fn draw_strength_scales_speed_and_damage() {
-        assert!((lerp(ARROW_SPEED_MIN, ARROW_SPEED_MAX, 0.0) - ARROW_SPEED_MIN).abs() < 1e-5);
-        assert!((lerp(ARROW_SPEED_MIN, ARROW_SPEED_MAX, 1.0) - ARROW_SPEED_MAX).abs() < 1e-5);
-        let half = lerp(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX, 0.5);
+        let profile = BowProfile::ON_FOOT;
+        assert!((lerp(profile.speed_min, profile.speed_max, 0.0) - profile.speed_min).abs() < 1e-5);
+        assert!((lerp(profile.speed_min, profile.speed_max, 1.0) - profile.speed_max).abs() < 1e-5);
+        let half = lerp(profile.damage_min, profile.damage_max, 0.5);
         assert!(
-            half > ARROW_DAMAGE_MIN && half < ARROW_DAMAGE_MAX,
+            half > profile.damage_min && half < profile.damage_max,
             "half charge must be between min and max, got {half}"
+        );
+    }
+
+    #[test]
+    fn active_draw_keeps_mounted_tuning_after_context_switch() {
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.init_resource::<Messages<crate::combat::context::SetMountedCombatMessage>>();
+        world
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(0.1));
+        let actor = world
+            .spawn((
+                Actor,
+                CombatIntents {
+                    attack: crate::combat::intent::AttackIntent {
+                        pressed: true,
+                        held: true,
+                    },
+                    ..default()
+                },
+                CombatState::Aiming,
+                DrawStrength::default(),
+                CombatContext::default(),
+                MountedCombatProfile::HORSE,
+            ))
+            .id();
+        world.write_message(crate::combat::context::SetMountedCombatMessage {
+            actor,
+            mounted: true,
+        });
+        world
+            .run_system_once(crate::combat::context::apply_mounted_context)
+            .unwrap();
+        world.run_system_once(tick_draw_strength).unwrap();
+        let mounted_tuning = MountedCombatProfile::HORSE.bow;
+        assert_eq!(
+            world.entity(actor).get::<DrawStrength>().unwrap().tuning,
+            Some(mounted_tuning)
+        );
+
+        world.write_message(crate::combat::context::SetMountedCombatMessage {
+            actor,
+            mounted: false,
+        });
+        world
+            .run_system_once(crate::combat::context::apply_mounted_context)
+            .unwrap();
+        world.run_system_once(tick_draw_strength).unwrap();
+        assert_eq!(
+            world.entity(actor).get::<DrawStrength>().unwrap().tuning,
+            Some(mounted_tuning)
         );
     }
 }

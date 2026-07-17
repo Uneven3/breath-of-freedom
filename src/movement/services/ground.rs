@@ -58,7 +58,13 @@ type ServiceQuery<'a> = (
 );
 
 pub fn ground_service(
-    mut q: Query<ServiceQuery, With<Actor>>,
+    mut q: Query<
+        ServiceQuery,
+        (
+            With<Actor>,
+            With<crate::movement::attachment::LocomotionEnabled>,
+        ),
+    >,
     spatial: SpatialQuery,
     mut trace: ResMut<CastTrace>,
 ) {

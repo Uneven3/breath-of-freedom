@@ -14,11 +14,9 @@ el juego.
    el mismo toggle de escalada. Se reemplaza por `ClimbInputState` por
    actor/controlador. (codex)
 
-2. **Montura no es automáticamente `Actor`.** `Actor` representa cuerpos que
-   consumen el pipeline Movement/Combat. Una montura usa `MountBody` y su
-   propio pipeline; si necesita participar en otros sistemas, se agregan
-   markers explícitos. Esto evita que Movement simule una montura como cuerpo
-   humanoide por accidente. (codex)
+2. **Montura es un `Actor` compuesto cuando comparte locomoción.** El horse
+   usa el pipeline Movement con sólo sus capacidades compatibles; `Horse`
+   conserva la relación y comportamientos propios de Mounts. (codex)
 
 3. **Combate no fuerza estados locomotores concretos.** Un evento como
    "apuntar impide sprint" o "stagger interrumpe" no debe elegir `Walk`/`Idle`

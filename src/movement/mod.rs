@@ -2,22 +2,26 @@
 //!
 //! Per-frame flow, expressed as ordered system sets in `FixedUpdate` (pinned to
 //! 60 Hz): read intents → assign sensing LOD → sense world → gather proposals →
-//! arbitrate → tick active motor. The tick phase is a single dispatcher system
-//! (`motors::tick_active_motor`) whose exhaustive `match` on `LocomotionState`
-//! guarantees — at compile time — that exactly one motor moves each body, the
-//! per-entity contract that lets multiple `Actor`s run independently. See
+//! arbitrate → tick active motor. The tick phase chains capability-specific
+//! systems whose exact queries keep optional data out of the actor core; each
+//! system gates on its owned `LocomotionState`, so exactly one moves each body.
+//! This is the per-entity contract that lets multiple `Actor`s run independently. See
 //! `docs/architecture/movement.md` and `rationale/multi-actor-dispatch.md`.
 
 use bevy::prelude::*;
 
 pub mod abilities;
+pub mod attachment;
+pub(crate) mod attachment_systems;
 pub mod body;
 pub mod brain;
 pub mod bundles;
 pub mod constraints;
+pub mod control;
 pub mod diag;
 pub mod facts;
 pub mod intents;
+pub mod link;
 pub mod lod;
 pub mod motor_common;
 pub mod motors;
@@ -59,11 +63,14 @@ pub struct BodyVelocity(pub Vec3);
 /// Ordered phases of the Broker pipeline within `FixedUpdate`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MovementSet {
+    ApplyExternal,
     ReadIntents,
+    ControlRedirect,
     SenseWorld,
     GatherProposals,
     Arbitrate,
     TickActiveMotor,
+    SyncAttachments,
 }
 
 pub struct MovementPlugin;
@@ -92,6 +99,10 @@ impl Plugin for MovementPlugin {
         // applied right before motors propose/tick.
         app.add_message::<constraints::LocomotionConstraintMessage>();
         app.add_message::<constraints::BodyImpulseMessage>();
+        app.add_message::<link::ActorLinkRequestMessage>();
+        app.add_message::<link::ActorLinkResultMessage>();
+        app.init_resource::<link::ActorLinkWorkspace>();
+        app.add_systems(Update, attachment_systems::prepare_actor_link_workspace);
         app.add_systems(
             FixedUpdate,
             (
@@ -105,11 +116,14 @@ impl Plugin for MovementPlugin {
         app.configure_sets(
             FixedUpdate,
             (
+                MovementSet::ApplyExternal,
                 MovementSet::ReadIntents,
+                MovementSet::ControlRedirect,
                 MovementSet::SenseWorld,
                 MovementSet::GatherProposals,
                 MovementSet::Arbitrate,
                 MovementSet::TickActiveMotor,
+                MovementSet::SyncAttachments,
             )
                 .chain(),
         );
@@ -121,6 +135,21 @@ impl Plugin for MovementPlugin {
             (probe::drive_intents, brain::read_intents)
                 .chain()
                 .in_set(MovementSet::ReadIntents),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                attachment_systems::apply_actor_link_requests,
+                attachment_systems::retry_capacity_pending,
+                attachment_systems::recover_orphaned_attachments,
+                attachment_systems::recover_pending_safe_poses,
+            )
+                .chain()
+                .in_set(MovementSet::ApplyExternal),
+        );
+        app.add_systems(
+            FixedUpdate,
+            attachment_systems::redirect_controls.in_set(MovementSet::ControlRedirect),
         );
         app.add_systems(
             FixedUpdate,
@@ -153,6 +182,12 @@ impl Plugin for MovementPlugin {
                 .in_set(MovementSet::GatherProposals),
         );
         app.add_systems(FixedUpdate, arbitrate.in_set(MovementSet::Arbitrate));
+        app.add_systems(
+            FixedUpdate,
+            motors::jump::pay_accepted_cost
+                .after(MovementSet::Arbitrate)
+                .before(MovementSet::TickActiveMotor),
+        );
         // Clear climb intent on the relevant transitions, right after the SSoT
         // write and before any motor ticks on it.
         app.add_systems(
@@ -162,12 +197,32 @@ impl Plugin for MovementPlugin {
                 .before(MovementSet::TickActiveMotor),
         );
 
-        // Tick phase: one dispatcher, one query pass, an exhaustive `match` on
-        // `LocomotionState` — the compiler guarantees every state has exactly
-        // one motor arm, per entity. See `motors::tick_active_motor`.
+        // Tick phase: exact capability queries chained in state order. Each
+        // body has one active state and therefore one moving system.
         app.add_systems(
             FixedUpdate,
-            motors::tick_active_motor.in_set(MovementSet::TickActiveMotor),
+            (
+                motors::stairs::clear_inactive_cache,
+                motors::walk::tick_body,
+                motors::sprint::tick_body,
+                motors::fall::tick_body,
+                motors::jump::tick_body,
+                motors::auto_vault::tick_body,
+                motors::climb::tick_body,
+                motors::mantle::tick_body,
+                motors::stairs::tick_body,
+                motors::ladder::tick_body,
+                motors::glide::tick_body,
+                motors::sneak::tick_body,
+                motors::wall_jump::tick_body,
+                motors::edge_leap::tick_body,
+            )
+                .chain()
+                .in_set(MovementSet::TickActiveMotor),
+        );
+        app.add_systems(
+            FixedUpdate,
+            attachment_systems::sync_attachments.in_set(MovementSet::SyncAttachments),
         );
 
         // Declarative crouch-capsule swap (orthogonal to the active state, so it
@@ -183,10 +238,90 @@ impl Plugin for MovementPlugin {
     }
 }
 
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn redirect_transfers_only_supported_controls_and_neutralizes_controller() {
+        let mut world = World::new();
+        let controller = world
+            .spawn((
+                Actor,
+                crate::movement::attachment::LocomotionEnabled,
+                control::ControlRedirect {
+                    controlled: Entity::PLACEHOLDER,
+                    mask: control::ControlMask::MOUNT,
+                },
+                intents::Intents {
+                    planar: intents::PlanarMoveIntent {
+                        direction: Vec2::X,
+                        strength: 1.0,
+                    },
+                    wants_sneak: true,
+                    jump: intents::JumpIntent {
+                        held: true,
+                        pressed: true,
+                    },
+                    climb: intents::ClimbIntent {
+                        requested: true,
+                        ..default()
+                    },
+                    ..default()
+                },
+            ))
+            .id();
+        let controlled = world.spawn((Actor, intents::Intents::default())).id();
+        world
+            .entity_mut(controller)
+            .get_mut::<control::ControlRedirect>()
+            .unwrap()
+            .controlled = controlled;
+        let unrelated = world
+            .spawn((
+                Actor,
+                crate::movement::attachment::LocomotionEnabled,
+                intents::Intents {
+                    wants_sprint: true,
+                    ..default()
+                },
+            ))
+            .id();
+        world
+            .run_system_once(attachment_systems::redirect_controls)
+            .unwrap();
+
+        let target = world.entity(controlled).get::<intents::Intents>().unwrap();
+        assert_eq!(target.planar.direction, Vec2::X);
+        assert!(!target.wants_sneak);
+        assert!(target.jump.held);
+        assert!(!target.climb.requested);
+        assert_eq!(
+            world
+                .entity(controller)
+                .get::<intents::Intents>()
+                .unwrap()
+                .planar
+                .direction,
+            Vec2::ZERO
+        );
+        assert!(
+            world
+                .entity(unrelated)
+                .get::<intents::Intents>()
+                .unwrap()
+                .wants_sprint
+        );
+    }
+}
+
 /// `Arbitrate`: pick the winning proposal, write the SSoT `LocomotionState`, then
 /// clear the buffer for next frame. This is the *only* writer of
 /// `LocomotionState` (see `docs/architecture/movement.md`).
-fn arbitrate(mut q: Query<(&mut LocomotionState, &mut ProposalBuffer), With<Actor>>) {
+type ArbitrationQuery<'a> = (&'a mut LocomotionState, &'a mut ProposalBuffer);
+
+fn arbitrate(mut q: Query<ArbitrationQuery, attachment::LocomotionActorFilter>) {
     for (mut state, mut buffer) in &mut q {
         let winner = buffer.arbitrate(*state);
         if *state != winner {
@@ -224,6 +359,7 @@ mod actor_isolation_tests {
         let walker = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundMovement::PLAYER,
                 JumpMovement::PLAYER,
                 GroundFacts {
@@ -237,6 +373,7 @@ mod actor_isolation_tests {
         let faller = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 AirborneMovement::PLAYER,
                 JumpMovement::PLAYER,
                 GroundMovement::PLAYER,
@@ -292,6 +429,7 @@ mod actor_isolation_tests {
         let jumper = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundMovement::PLAYER,
                 JumpMovement::PLAYER,
                 GroundFacts {
@@ -314,6 +452,7 @@ mod actor_isolation_tests {
         let neutral = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 JumpMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
@@ -377,7 +516,8 @@ mod actor_isolation_tests {
         let exhausted = world
             .spawn((
                 Actor,
-                GroundMovement::PLAYER,
+                crate::movement::attachment::LocomotionEnabled,
+                crate::movement::abilities::SprintMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -385,7 +525,7 @@ mod actor_isolation_tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sprint,
+                    wants_sprint: true,
                     ..default()
                 },
                 exhausted_stamina,
@@ -398,7 +538,8 @@ mod actor_isolation_tests {
         let full = world
             .spawn((
                 Actor,
-                GroundMovement::PLAYER,
+                crate::movement::attachment::LocomotionEnabled,
+                crate::movement::abilities::SprintMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -406,7 +547,7 @@ mod actor_isolation_tests {
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
-                    gait: crate::movement::intents::GaitIntent::Sprint,
+                    wants_sprint: true,
                     ..default()
                 },
                 Stamina::default(),
@@ -454,6 +595,7 @@ mod actor_isolation_tests {
             let e = world
                 .spawn((
                     Actor,
+                    crate::movement::attachment::LocomotionEnabled,
                     GroundMovement::PLAYER,
                     JumpMovement::PLAYER,
                     GroundFacts {
@@ -506,6 +648,7 @@ mod actor_isolation_tests {
             let e = world
                 .spawn((
                     Actor,
+                    crate::movement::attachment::LocomotionEnabled,
                     abilities::LedgeTraversal::PLAYER,
                     abilities::WallJumpMovement::PLAYER,
                     Intents {
@@ -559,6 +702,7 @@ mod actor_isolation_tests {
         let jumper = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -579,6 +723,7 @@ mod actor_isolation_tests {
         let glider = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts::default(),
                 LedgeFacts::default(),
                 Intents {
@@ -593,6 +738,7 @@ mod actor_isolation_tests {
         let stair_walker = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
                     ..default()
@@ -629,6 +775,7 @@ mod actor_isolation_tests {
         let entity = world
             .spawn((
                 Actor,
+                crate::movement::attachment::LocomotionEnabled,
                 GroundFacts::default(),
                 LocomotionState::default(),
                 ProposalBuffer::default(),
@@ -648,18 +795,4 @@ mod actor_isolation_tests {
             "an actor without AirborneMovement must not propose Fall"
         );
     }
-
-    // `tick_body` correctness under real physics (does the dispatcher-driven
-    // motor actually move the right actor and only that actor?) is NOT covered
-    // here. A headless `App` with Avian's real `PhysicsPlugins` was
-    // attempted and abandoned: `MoveAndSlide` pulls in several of Avian's
-    // internal sub-plugins (collider-tree diagnostics, spatial-query
-    // diagnostics, mesh-collider caching via `Assets<Mesh>`) that are only
-    // fully wired up by `DefaultPlugins`, not `MinimalPlugins` — each missing
-    // piece surfaced as its own "Resource does not exist" panic one at a
-    // time, with no indication of how many more remained. This is the same
-    // boundary `motors::climb::tests`/`motors::edge_leap::tests` already
-    // draw ("the tick assertions need a physics world and are covered by
-    // play-testing") — the user is the tester for feel/physics-in-motion,
-    // not this test suite.
 }

@@ -53,8 +53,7 @@ no hay propuestas, evitando estados dummy, `unwrap()` o panic en caso vacío
 
 Cada sistema sigue teniendo su **propio tipo concreto y con nombre propio**
 (`movement::ProposalBuffer = proposal::ProposalBuffer<LocomotionState, N>`,
-`combat::CombatProposalBuffer = proposal::ProposalBuffer<CombatState, N>`,
-`mounts::MountProposalBuffer = proposal::ProposalBuffer<MountLocomotionState, N>`)
+`combat::CombatProposalBuffer = proposal::ProposalBuffer<CombatState, N>`)
 vía type alias — nadie de afuera ve un tipo genérico compartido, solo el
 nombre de su propio sistema. Esto preserva el aislamiento ya decidido
 (`combat.md`: "aislar por sistema, no por instancia compartida") mientras
@@ -64,7 +63,7 @@ elimina la duplicación de la lógica de arbitración en sí.
 
 Rendimiento (Constitución §18, sin allocations en el hot path de
 `FixedUpdate`): un genérico monomorphiza en tiempo de compilación al mismo
-código que tres copias manuales, sin *boxing*, *dynamic dispatch* ni
+código que dos copias manuales, sin *boxing*, *dynamic dispatch* ni
 crecimiento de heap.
 
 ## Por qué en la raíz del crate y no dentro de `movement::`

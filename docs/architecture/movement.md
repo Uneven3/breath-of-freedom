@@ -6,13 +6,14 @@
 
 | Tipo | Dónde | Qué es |
 |---|---|---|
-| `Intents` | `intents.rs` | Snapshot semantico del frame: `PlanarMoveIntent`, `GaitIntent`, `JumpIntent`, `ClimbIntent`, `LadderIntent`, `TraversalActionIntent` y `GlideIntent`. Solo el Brain/controlador del actor lo escribe. |
+| `Intents` | `intents.rs` | Snapshot semántico: planar, solicitudes ortogonales sprint/sneak, salto, climb, ladder, traversal y glide. Lo escribe el Brain o el redirect propiedad de Movement. |
 | `LocomotionState` | `state.rs` | Enum SSoT del modo activo. Solo `arbitrate` lo escribe. |
 | `ProposalBuffer` | `proposal.rs` | Type alias sobre el núcleo genérico compartido de capacidad fija `proposal::ProposalBuffer<LocomotionState, N>` (`src/proposal.rs`), drenado por `arbitrate(current)`. Ver `rationale/proposal-arbitration-core.md`. |
 | `TransitionProposal` | `proposal.rs` | `{ target_state, category: Priority, override_weight, source_id }`. Los pesos de desempate de los 13 motores viven juntos en `proposal.rs` (`mod weight`), con su orden total fijado por `const` asserts — dos motores que pueden co-proponer en la misma categoría nunca empatan. El módulo de tests `arbitration_matrix` escribe la matriz completa (motor → estado → emisiones `(Priority, weight)`) como dato y verifica en el build que cada `LocomotionState` tenga exactamente un motor dueño y que ningún par co-proponente empate, con una lista explícita de excepciones mutuamente excluyentes (glide/stairs/ladder). |
 | `BodyVelocity` | `mod.rs` | Velocidad del cuerpo cinemático (análogo a `CharacterBody3D.velocity`). Solo el motor activo la escribe. |
 | `BodyDimensions` | `body.rs` | Perfil físico persistente de la cápsula del actor: radio y longitudes de pie/agachado. Los servicios y motores usan sus alturas semánticas; `Collider` sigue siendo la forma física de Avian. |
-| `GroundMovement` | `abilities.rs` | Capacidad persistente y perfiles de tuning de Walk, Sprint, Sneak y Stairs por actor. Esos motores solo consideran actores que llevan este componente. |
+| `GroundDriveProfile` | `abilities.rs` | Kernel data-driven de aceleración, coast, brake, reversa, alineación, giro y pérdida de velocidad; presets Player/Horse sin branches de especie. |
+| `GroundMovement`, `SprintMovement`, `SneakMovement`, `StairsMovement` | `abilities.rs` | Capacidades terrestres independientes. Presencia concede permiso y cada una lleva su tuning; el horse omite Sneak. |
 | `AirborneMovement` | `abilities.rs` | Perfil base de locomoción aérea para un actor sujeto a gravedad: controla Fall con velocidad, gravedad, salto corto, giro y recuperación por actor. No representa una acción discreta del jugador. |
 | `ClimbMovement` | `abilities.rs` | Capacidad persistente y tuning por actor de Climb. |
 | `LadderMovement` | `abilities.rs` | Capacidad persistente y velocidad por actor de Ladder. |
@@ -24,15 +25,20 @@
 | `LedgeSensing` | `sensing.rs` | Perfil físico opcional de LedgeService: muestras de altura, alcances y umbrales de pared, borde y vault por actor. No concede acciones. |
 | `SensingLod` | `lod.rs` | Decisión de LOD de sensing por actor, reescrita cada tick por `assign_sensing_lod`: tier (`Full`/`Reduced`) y si este tick le toca castear. Los servicios de SenseWorld la consultan vía `Option<&SensingLod>` (sin el componente, se sensa siempre). |
 | `SensingLodConfig` | `lod.rs` | `Resource` de tuning del LOD: radio de tasa completa alrededor del jugador e intervalo de ticks para actores lejanos. Valores por defecto documentados en el propio tipo, pensados para ajustarse. |
-| `Stamina` | `stamina.rs` | Pool de esfuerzo. Solo sus propios métodos `drain`/`recover` la mutan. |
-| `BodyContact`, `GroundFacts`, `LedgeFacts`, `StairsFacts`, `LadderFacts` | `facts.rs` | Hechos del mundo que los servicios calculan y los motores leen. |
+| `Stamina` | `stamina.rs` | Pool opt-in de esfuerzo, fuera del core. Tenerlo no concede Sprint/Jump; solo sus métodos mutan el valor. |
+| `BodyContact`, `GroundFacts` | `facts.rs` | Facts del núcleo cinemático. |
+| `LedgeFacts`, `StairsFacts`, `LadderFacts` | `facts.rs` | Facts opcionales instalados con sus capacidades/sensing correspondientes. |
 | `LocomotionConstraintMessage`, `LocomotionConstraintFacts` | `constraints.rs` | Restricciones semánticas pedidas por otros sistemas (Combate: `ForbidSprint` mientras hay compromiso de acción). Movement es dueño del mensaje (el receptor posee el contrato) y deriva los facts por actor antes de `GatherProposals`; expiran por silencio — el emisor re-emite cada tick. `sprint::propose` se abstiene bajo `forbid_sprint`. `Sneak` nunca se restringe. |
 | `BodyImpulseMessage` | `constraints.rs` | Impulso one-shot sobre `BodyVelocity` (knockback de Combate). Se suma una vez antes de que los motores tiquen; la fricción/aceleración normal del motor activo lo reabsorbe — un empujón, no un estado. |
+| `LocomotionEnabled` / `KinematicAttachment` | `attachment.rs` | Gate genérico del pipeline físico y pose local respecto de un carrier; Movement suspende/sincroniza actors adjuntos. |
+| `PendingSafeRecovery` | `attachment.rs` | Detach de emergencia ya desligado pero todavía sin pose validada; mantiene collider y locomoción deshabilitados mientras Movement busca sin overlap. |
+| `ControlRedirect` | `control.rs` | Redirect persistente con máscara; se instala o retira junto con el attachment mediante la transacción `ActorLinkRequestMessage`. |
+| `ActorLinkRequestMessage` / `ActorLinkResultMessage` | `link.rs` | Attach/detach/neutralize atómicos con aceptación o rechazo explícito; Movement valida batch, cardinalidad, chains y ciclos antes de aplicar. |
 | `ClimbInputState` | `brain.rs` | Estado del toggle de escalar por actor/controlador (tecla `1`, no un hold). No es `Resource` global, porque el contrato multi-actor requiere input independiente por actor. |
 | `JumpPhase`, `JumpLocal`, `GlideLocal`, `SprintLock`, `StairsLocal` | `motors/jump.rs`, `motors/glide.rs`, `motors/sprint.rs`, `motors/stairs.rs` | Estado propio de cada motor (timers, latches, cache de peldaños), por-actor. Eran `Local<T>` de sistema antes de `multi-actor-migration` — promovidos a componente para no compartir estado entre actores. |
 | `MantleState`, `VaultState`, `WallJumpState`, `EdgeLeapState` | `motors/mantle.rs`, `motors/auto_vault.rs`, `motors/wall_jump.rs`, `motors/edge_leap.rs` | Máquina de fase compartida entre `propose` y `tick` de cada motor, por-actor desde su diseño original (`Local` no se puede compartir entre dos sistemas). |
 | `KinematicActorBundle` | `bundles.rs` | Conveniencia de construccion para el contrato físico y de pipeline de un actor cinemático. No es una capacidad ni activa sistemas. |
-| `GroundMovementBundle`, `JumpMovementBundle`, `GlideMovementBundle`, `LedgeTraversalBundle`, `WallJumpMovementBundle` | `bundles.rs` | Conveniencias de construccion: emparejan cada capacidad con el estado runtime privado de sus propios motores. |
+| Bundles de capacidad | `bundles.rs` | Ground, Sprint, Sneak, Stairs, Stamina, Jump, Glide, Ladder, Ledge y WallJump emparejan permiso/tuning con solo su estado runtime privado. |
 
 `brain::read_intents` no lee `ButtonInput<KeyCode>` — lee
 `input::ActiveActions` para el `InputSource` enlazado por
@@ -62,6 +68,16 @@ La composicion de capacidades persistentes y la frontera entre `Climb`,
 [`rationale/movement-capability-composition.md`](rationale/movement-capability-composition.md).
 Las capacidades no son estados activos ni activan sistemas: los motores se
 seleccionan por `Query` y `LocomotionState` permanece exclusivo.
+
+### Capacidades terrestres implementadas
+
+Walk, Sprint, Sneak y Stairs son opt-ins separados. Un mismo
+`ground_drive_step` consume `GroundDriveProfile` y distingue input alineado,
+coast, brake, reversa y giro de alta velocidad sin conocer Player/Horse. El
+Player compone las cuatro capacidades; el horse compone Ground/Sprint/Stairs
+y usa perfiles de mayor inercia y steering limitado. La decisión y sus
+invariantes viven en
+[`rationale/movement-capability-composition.md`](rationale/movement-capability-composition.md).
 
 El curso gris puede incluir un `TraversalProbe`: un segundo `Actor` sin
 `Player` ni `InputControlledBy` cuyo brain de integracion escribe solo sus
@@ -132,15 +148,12 @@ Pipeline en `FixedUpdate` a 60Hz, `SystemSet`s encadenados (`MovementSet`):
    condición — cada uno decide si empuja un `TransitionProposal` al buffer.
 4. **Arbitrate** — `arbitrate()` (`mod.rs`) elige el ganador por
    `(category, override_weight)` y escribe `LocomotionState`.
-5. **TickActiveMotor** — un único sistema dispatcher
-   (`motors::tick_active_motor`) itera `Query<MotorTick, With<Actor>>` una vez
-   y despacha cada actor con un `match` **exhaustivo** sobre su
-   `LocomotionState` al `tick_body` del motor dueño. El invariante
-   "exactamente un motor mueve cada cuerpo por frame" lo garantiza el
-   compilador (un estado nuevo no compila hasta tener su brazo), no una
-   convención de guards — y sigue permitiendo simulación concurrente e
-   independiente de jugadores locales, remotos, enemigos y otros cuerpos
-   controlables. Ver `rationale/multi-actor-dispatch.md`.
+5. **TickActiveMotor** — sistemas `tick_body` encadenados consultan un
+   `MotorCore` mínimo más la capacidad/facts/estado exactos de cada motor.
+   Cada uno se activa solo para su `LocomotionState`; la SSoT de estado y el
+   orden total garantizan un único writer corporal por actor y tick, sin una
+   mega-query de capacidades opcionales. Ver
+   `rationale/multi-actor-dispatch.md`.
 
 `motors::sneak::sync_crouch_collider` corre en `FixedUpdate`, justo después
 de `Arbitrate` y antes de `TickActiveMotor`, para que el motor activo tique con
@@ -183,11 +196,23 @@ Salud pidan restricciones/interrupciones sin escribir directamente el estado
 de Movement. Movement valida esos pedidos contra sus facts físicos y decide
 el `LocomotionState` final — ver `docs/architecture/combat.md` § Relaciones.
 
-**Monturas** (`docs/architecture/mounts.md`) no modifica Movement ni obliga a
-`brain::read_intents` a conocer `MountIntents`. El input montado se resuelve
-con un sistema de traducción propio de Mounts que lee `Intents` del jinete y
-escribe `MountIntents` en la montura — ver
+**Monturas** (`docs/architecture/mounts.md`) usan el mismo pipeline `Actor`.
+Mounts emite un `ActorLinkRequestMessage` atómico y solo confirma su relación
+al recibir `ActorLinkResultMessage::Accepted`. Movement, sin conocer Mounts,
+instala o retira attachment, redirect, collider y gate como una sola
+transacción, suspende al rider mediante
+`LocomotionEnabled`, sincroniza su `KinematicAttachment`, copia sólo planar,
+sprint y salto al controlled actor y neutraliza al controller en
+`MovementSet::ControlRedirect`. El orden es `ApplyExternal -> ReadIntents ->
+ControlRedirect -> SenseWorld -> GatherProposals -> Arbitrate ->
+TickActiveMotor -> SyncAttachments`; ver
 `rationale/mounts-intent-redirect.md`.
+
+`Rejected(CapacityPending)` reencola el request exacto en orden de lectura para
+el tick posterior a `prepare_actor_link_workspace`. Un detach no validado o un
+carrier perdido quita el link pero conserva `ColliderDisabled`, retira
+`LocomotionEnabled` e instala `PendingSafeRecovery`; el recovery prueba un
+número fijo de candidatos por tick y solo restaura al hallar uno sin overlap.
 
 **Enemies** y **Multiplayer** no modifican Movement — reutilizan el mismo
 `Intents`/`LocomotionState` con un Brain distinto (IA o red), pero ambos
@@ -201,8 +226,8 @@ requieren el contrato multi-actor descrito abajo.
 - Nadar/Bucear y Snowboard (GDD §9) se diseñan como motores nuevos de este
   mismo plugin — ver `swim.md`, `snowboard.md` y
   `rationale/traversal-extensions-in-movement.md`.
-- **Contrato multi-actor:** `Query<.., With<Actor>>` + dispatch por `match`
-  exhaustivo en `motors::tick_active_motor` — implementado (ticket
-  `multi-actor-migration`, luego endurecido al dispatcher), ya no es un
+- **Contrato multi-actor:** `Query<.., With<Actor>>` + ticks encadenados con
+  queries exactas por capacidad — implementado (ticket
+  `multi-actor-migration`, luego reducido a `MotorCore`), ya no es un
   prerequisito pendiente de Enemies y Multiplayer. Ver
   `rationale/multi-actor-dispatch.md` y `docs/ARCHITECTURE-MAP.md`.

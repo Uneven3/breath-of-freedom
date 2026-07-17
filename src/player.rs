@@ -11,13 +11,14 @@ use bevy::prelude::*;
 use crate::health::{DeathMessage, Health, HealthSet};
 use crate::movement::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
-    LedgeTraversal, WallJumpMovement,
+    LedgeTraversal, SneakMovement, SprintMovement, StairsMovement, WallJumpMovement,
 };
 use crate::movement::body::BodyDimensions;
 use crate::movement::brain::ClimbInputState;
 use crate::movement::bundles::{
     GlideMovementBundle, GroundMovementBundle, JumpMovementBundle, KinematicActorBundle,
-    LedgeTraversalBundle, WallJumpMovementBundle,
+    LadderMovementBundle, LedgeTraversalBundle, SneakMovementBundle, SprintMovementBundle,
+    StairsMovementBundle, StaminaBundle, WallJumpMovementBundle,
 };
 use crate::movement::sensing::{GroundSensing, LedgeSensing};
 use crate::movement::{BodyVelocity, Player};
@@ -53,17 +54,24 @@ fn spawn_player(mut commands: Commands) {
             GroundSensing::PLAYER,
         ),
         (
-            GroundMovementBundle::new(GroundMovement::PLAYER, body_dimensions),
+            GroundMovementBundle::new(GroundMovement::PLAYER),
+            SprintMovementBundle::new(SprintMovement::PLAYER),
+            SneakMovementBundle::new(SneakMovement::PLAYER, body_dimensions),
+            StairsMovementBundle::new(StairsMovement::PLAYER),
+            StaminaBundle::default(),
             AirborneMovement::PLAYER,
             JumpMovementBundle::new(JumpMovement::PLAYER),
             GlideMovementBundle::new(GlideMovement::PLAYER),
             ClimbMovement::PLAYER,
-            LadderMovement::PLAYER,
+            LadderMovementBundle::new(LadderMovement::PLAYER),
             LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
             WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
             LedgeSensing::PLAYER,
             ClimbInputState::default(),
-            crate::input::InputConsumeCursor::default(),
+            (
+                crate::input::InputConsumeCursor::default(),
+                crate::mounts::data::MountInputCursor::default(),
+            ),
         ),
         // Combat contract: graybox sword until Equipment (Inventory) owns
         // what's wielded.
@@ -73,6 +81,8 @@ fn spawn_player(mut commands: Commands) {
             crate::combat::state::CombatState::default(),
             crate::combat::proposal::CombatProposalBuffer::default(),
             crate::combat::weapon::WeaponProfile::GRAYBOX_SWORD,
+            crate::combat::context_data::CombatContext::default(),
+            crate::combat::context_data::MountedCombatProfile::HORSE,
             crate::combat::motors::attack::ComboLocal::default(),
             crate::combat::motors::attack::ActiveSwing::default(),
             crate::combat::brain::CombatInputCursor::default(),

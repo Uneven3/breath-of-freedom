@@ -38,17 +38,11 @@ is why the arbiter/motor split exists (see the Invariants section and
 
 ## Current Objective
 
-Validate the completed ECS locomotion composition with a second, AI-controlled
-actor without changing stable motor behavior. Actors receive persistent
-capability/configuration components with per-actor values, while systems
-select compatible actors through queries.
-
-The target composition should allow, for example:
-
-- Link and a bokobo to share ground and climb capabilities with different
-  tuning.
-- A horse to have a faster ground profile but no climb capability.
-- Player input, network control, and AI to write the same `Intents` contract.
+Cerrar el refactor montado implementado con su checkpoint jugado. El horse ya
+es un `Actor` compuesto por capacidades Movement granulares, lifecycle
+uno-a-uno, owner persistente, combate montado snapshotteado y carga espacial.
+La validación pendiente es de integración/feeling: F8, E, safe dismount,
+sprint/salto/stairs, carga, espada/arco, inmunidad, daño enemigo y muerte.
 
 ## Architecture Decisions
 
@@ -88,13 +82,13 @@ while systems remain driven by individual component queries. The next cut
 should be selected from a fresh architecture review; the capability,
 construction, body, and sensor-profile foundations are complete.
 
-### Active Ticket
+### Foundational Movement Checkpoint (complete)
 
-`docs/tickets/traversal-probe.md` is active. It adds a visible,
-AI-controlled `TraversalProbe` to the graybox course. Its controller writes
+`docs/tickets/traversal-probe.md` added a visible, AI-controlled
+`TraversalProbe` to the graybox course. Its controller writes
 only its own `Intents` in `MovementSet::ReadIntents`; it never writes
 `LocomotionState`, facts, motor-private state, `Transform`, or body velocity.
-The current checkpoint is a continuous climb scenario: approach the climbable
+Its accepted checkpoint is a continuous climb scenario: approach the climbable
 wall, request `Climb` after the observed wall fact, then ascend and hold below
 the lip without requesting `Jump` or `Mantle`. It passes only after the
 ordinary sensor/proposal/arbiter pipeline reaches those observed conditions.
@@ -105,16 +99,9 @@ name avoids third-party game IP.
 
 ### Implemented
 
-- `src/movement/abilities.rs` defines:
-  - `GroundLocomotion`, a pure per-actor tuning profile.
-  - `GroundMovement`, the persistent ground capability with `walk`, `sprint`,
-    and `sneak` profiles.
-  - `GroundMovement::PLAYER`, preserving all prior values exactly:
-    Walk `(5.0, 20.0, 25.0, 15.0, +15.0)`, Sprint
-    `(10.0, 25.0, 35.0, 15.0, -10.0)`, Sneak
-    `(2.5, 15.0, 20.0, 10.0, +5.0)`, in the order max speed,
-    acceleration, friction, rotation speed, stamina/sec.
-- `GroundMovement` additionally owns the `StairsLocomotion` profile.
+- `src/movement/abilities.rs` define `GroundDriveProfile` y capacidades
+  independientes `GroundMovement`, `SprintMovement`, `SneakMovement` y
+  `StairsMovement`, con presets Player/Horse sobre el mismo kernel.
 - `BodyDimensions` owns capsule radius plus standing/crouched cylinder
   lengths. Ledge, Stairs, Ladder, Climb/WallJump lip clipping, Sneak, debug
   gizmos, and Player presentation use its derived heights or colliders rather
@@ -122,14 +109,12 @@ name avoids third-party game IP.
 - `JumpMovement`, `GlideMovement`, `ClimbMovement`, `LadderMovement`,
   `LedgeTraversal`, and `WallJumpMovement` are implemented with their Player
   values preserved exactly.
-- Every migrated motor filters its proposal and tick query by the component
-  that owns its tuning. `Stairs` uses `GroundMovement`.
+- Every migrated motor filters its proposal and tick query by the exact
+  component that owns its tuning; Stairs, Sprint and Sneak are opt-in.
 - `KinematicActorBundle` constructs the actor's physical/pipeline contract;
-  capability bundles construct `GroundMovement` with Sprint/Sneak state,
-  `JumpMovement` with its phase/timers, `GlideMovement` with press memory,
-  `LedgeTraversal` with Mantle/AutoVault state, and `WallJumpMovement` with
-  WallJump/EdgeLeap state. They are construction helpers only, not runtime
-  capability gates.
+  capability bundles construct each permission with only its runtime state.
+  `Stamina` and optional facts no longer belong to the core. Bundles remain
+  construction helpers, not runtime capability gates.
 - `GroundSensing` and `LedgeSensing` are the active physical sensor-profile
   migration: Ground belongs to the kinematic core, while Ledge remains an
   optional producer of facts independent from gameplay abilities.
@@ -243,8 +228,8 @@ allocated fresh mesh/material assets in `FixedUpdate` (§18 — now a Startup
 played checkpoint):** `src/health/` applies `DamageRequestMessage` (emitted
 by melee `resolve_melee_hits` and arrow `resolve_arrow_hit` — the log-cue
 placeholders are gone) → `DeathMessage` in `HealthSet::Apply` after
-`ProjectilesSet::Simulate` (`DamageAppliedMessage` is deferred to its first
-consumer — `combat-defense`'s Staggered — no message before a reader). Death reactions live
+`ProjectilesSet::Simulate`. `DamageAppliedMessage` no existe: se diseñará solo
+cuando haya un consumidor real. Death reactions live
 with each actor's owner: Player respawns (`player.rs`), enemies despawn
 (`enemies/mod.rs`), practice targets despawn (`world.rs`, now
 `PracticeTarget` + `Health`). F7 spawns a graybox pair — melee bokobo
@@ -263,14 +248,24 @@ another system may despawn the same frame now use tolerant commands
 (`try_insert`/`try_remove` in `juice.rs`, `try_insert` in `sfx`); rule
 recorded in the `health-core` ticket. Play-testing continues from there.
 
-**Next (user-decided 2026-07-16): `mounts-core`** — graybox terrestrial
-mount (spec ready for a fresh agent in `docs/tickets/mounts-core.md`; read
-`mounts.md` + `rationale/mounts-intent-redirect.md` first). After that:
+**Refactor montado implementado (2026-07-16; checkpoint final pendiente):**
+el horse comparte el pipeline `Actor` con perfiles Ground/Sprint/Stairs y sin
+Sneak/capacidades humanoides. Movement posee attachment, suspensión, redirect
+persistente y cuerpos; Mounts posee relación uno-a-uno, owner, safe dismount,
+F8, muerte y carga. Combat selecciona perfiles mounted sin mutar el arma base
+y snapshottea espada/arco al empezar cada acción. La inmunidad
+`HostileInteractionImmunity(owner)` cubre HP, impulso, threat y feedback;
+Health conserva la validación final. Charge usa sweep espacial con histéresis
+y ledger reservado fuera de `FixedUpdate`. Los mensajes tienen ordering
+explícito: lifecycle → Movement → Combat → Projectiles → Charge → Health →
+death cleanup. Fuente de entrega:
+`docs/implement-feature/movement-capabilities-and-mount-lifecycle-plan.md`.
+Después de aceptar el checkpoint:
 play-validate the combat checkpoints (melee combo, bow, health/death,
 enemy melee + archer — tune damages/cadences; decide the
 damage-aggro-without-sight question, `combat.md` § Decisiones abiertas) →
-`combat-defense` (shield/parry/`Staggered`, introduces
-`DamageAppliedMessage`) → `camera-lock-on`.
+`combat-defense` (shield/parry/`Staggered`; cualquier resultado de daño se
+diseña con su primer consumidor real) → `camera-lock-on`.
 
 ## Invariants To Preserve
 
@@ -281,10 +276,10 @@ damage-aggro-without-sight question, `combat.md` § Decisiones abiertas) →
   state directly. Bypassing the pipeline for a non-player actor is a bug, not a
   shortcut.
 - Facts/sensors remain separate from motor execution.
-- Only the active motor writes an actor's movement in a tick. The
-  `motors::tick_active_motor` dispatcher enforces this with an exhaustive
-  `match` on `LocomotionState` (one `tick_body` arm per state, checked by the
-  compiler); the flat-ground motors share
+- Only the active motor writes an actor's movement in a tick. Production
+  registers capability-exact `tick_body` systems in a total chain; each gates
+  on its owned `LocomotionState`, and a real-plugin physics test pins that an
+  actor with several capabilities receives only its active tick. Flat-ground motors share
   `motor_common::ground_locomotion_step`. The `arbitration_matrix` tests
   (`src/movement/proposal.rs`) pin that every state has exactly one owning
   motor and that no two co-proposing motors tie.

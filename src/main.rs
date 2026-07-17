@@ -11,6 +11,7 @@ mod debug;
 mod enemies;
 mod health;
 mod input;
+mod mounts;
 mod movement;
 mod player;
 mod presentation;
@@ -34,6 +35,7 @@ fn main() {
             world::WorldPlugin,
             input::InputPlugin,
             movement::MovementPlugin,
+            mounts::MountsPlugin,
             combat::CombatPlugin,
             projectiles::ProjectilesPlugin,
             health::HealthPlugin,

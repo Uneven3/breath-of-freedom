@@ -27,8 +27,8 @@ como UI/Camera — así que su columna es toda `L` y no suma una fila propia.
 | **Mov** | T | L | T | T | T | L | L | L | L | | | | | = | = | L | | M | M | L |
 | **Cmb** | | | T | T | T | L | L | L | L | L | L | L | | ? | ? | | | | M | L |
 | **Wld** | | | L | | T | | L | L | | | | ? | ? | L | L | L | L | M | | L |
-| **Ene** | | | | ? | ? | | | | ? | L | | ? | | | | | ? | | | L |
-| **Mnt** | | | | | T | L | | | | ? | | | | | | | | | | L |
+| **Ene** | | | | L | ? | | | | ? | L | | ? | | | | | ? | | | L |
+| **Mnt** | | | | | T | L | | | | L | | | | | | | | | | L |
 | **MPl** | | | | | | | | | | | T | | | | | | T | ? | T | L |
 | **UI** | | | | | | | | | | L | | L | L | | | | L | L | L | L |
 | **SFX** | | | | | | | | | | | | | | | | L | | | | L |
@@ -81,8 +81,10 @@ mecanismo — READ o MESSAGE — sin decidir.)
 
 ## Pares Middle — fijar el contrato, después paralelizable
 
-- **Mounts↔Movement:** `translate_mount_intents` lee `Intents` del jinete
-  y escribe `MountIntents` — el contrato es la forma de `Intents`.
+- **Mounts↔Movement:** Mounts emite `ActorLinkRequestMessage` y confirma su
+  relación solo desde `ActorLinkResultMessage`; Movement aplica attachment,
+  redirect, collider y gate atómicamente y es el único escritor de cuerpos e
+  `Intents` durante transferencia y sync.
 - **Input↔{Movement, Combat, NPCs}:** esos sistemas leen `ActiveActions` y
   escriben su propio `InputConsumeCursor` para gatillos discretos. El
   contrato a fijar es la forma de `IntentAction`, `InputSource` y el cursor;
@@ -99,7 +101,6 @@ mecanismo — READ o MESSAGE — sin decidir.)
 Estos son exactamente los que conviene decidir *antes* de repartir trabajo,
 para no descubrir a mitad de un ticket que dos sistemas se necesitan:
 
-- Mounts↔Combat: ¿se puede atacar/disparar montado?
 - Combat↔Swim/Dive, Combat↔Snowboard: ¿se puede atacar nadando o en tabla?
 - Enemies↔Mounts: ¿los enemigos montan criaturas?
 - Camera↔Enemies: criterio de selección de lock-on.
@@ -110,8 +111,7 @@ para no descubrir a mitad de un ticket que dos sistemas se necesitan:
 - Inventory↔Enemies, Inventory↔World: origen del loot (enemigos, cosecha,
   cofres).
 - NPCs↔Enemies: ¿un NPC puede volverse hostil?
-- NPCs↔Health, Mounts↔Health: ¿tienen `Health` los NPCs? ¿y las monturas
-  (`health.md` ya dice "potencialmente")?
+- NPCs↔Health: ¿tienen `Health` los NPCs?
 - Multiplayer↔Persistence: ¿el snapshot de red y el archivo de guardado
   comparten formato de serialización?
 

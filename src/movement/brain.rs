@@ -4,8 +4,8 @@ use bevy::prelude::*;
 
 use super::Actor;
 use super::intents::{
-    ClimbLateralIntent, ClimbVerticalIntent, GaitIntent, GlideIntent, Intents, JumpIntent,
-    LadderIntent, TraversalActionIntent,
+    ClimbLateralIntent, ClimbVerticalIntent, GlideIntent, Intents, JumpIntent, LadderIntent,
+    TraversalActionIntent,
 };
 use super::state::LocomotionState;
 use crate::input::InputConsumeCursor;
@@ -88,13 +88,8 @@ pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<A
         } else {
             GlideIntent::Inactive
         };
-        intents.gait = if frame.pressed(IntentAction::Sneak) {
-            GaitIntent::Sneak
-        } else if frame.pressed(IntentAction::Sprint) {
-            GaitIntent::Sprint
-        } else {
-            GaitIntent::Walk
-        };
+        intents.wants_sneak = frame.pressed(IntentAction::Sneak);
+        intents.wants_sprint = frame.pressed(IntentAction::Sprint);
         intents.climb.requested = climb.0;
         intents.ladder = match intents.climb.vertical {
             ClimbVerticalIntent::Up => LadderIntent::Up,
@@ -212,7 +207,7 @@ mod tests {
             ))
             .id();
         let ai_intents = Intents {
-            gait: crate::movement::intents::GaitIntent::Sprint,
+            wants_sprint: true,
             planar: crate::movement::intents::PlanarMoveIntent {
                 direction: Vec2::X,
                 strength: 1.0,
@@ -227,7 +222,7 @@ mod tests {
         assert!(player_intents.planar.direction.x < -0.99);
         assert!(player_intents.planar.direction.y.abs() < 1e-5);
         let preserved = world.entity(ai).get::<Intents>().unwrap();
-        assert_eq!(preserved.gait, GaitIntent::Sprint);
+        assert!(preserved.wants_sprint);
         assert_eq!(preserved.planar.direction, Vec2::X);
     }
 
@@ -288,7 +283,7 @@ mod tests {
         assert_eq!(intents.planar.direction, Vec2::NEG_Y);
         assert_eq!(intents.climb.vertical, ClimbVerticalIntent::Up);
         assert_eq!(intents.ladder, LadderIntent::Up);
-        assert_eq!(intents.gait, GaitIntent::Sneak);
+        assert!(intents.wants_sneak);
         assert!(intents.jump.held && intents.jump.pressed);
         assert!(intents.climb.requested);
         assert_eq!(intents.traversal, TraversalActionIntent::Mantle);

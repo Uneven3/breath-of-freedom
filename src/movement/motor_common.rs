@@ -11,7 +11,7 @@ use std::f32::consts::PI;
 use std::time::Duration;
 
 use super::BodyVelocity;
-use super::abilities::GroundLocomotion;
+use super::abilities::GroundDriveProfile;
 use super::body::BodyDimensions;
 use super::facts::{BodyContact, GroundFacts};
 use super::intents::Intents;
@@ -178,58 +178,46 @@ pub fn align_with_floor(planar: Vec3, floor_normal: Vec3) -> Vec3 {
 }
 
 /// Advance one actor through a flat-ground locomotion mode.
-pub struct GroundLocomotionStep<'a> {
+pub struct GroundDriveStep<'a> {
     pub entity: Entity,
     pub collider: &'a Collider,
     pub transform: &'a mut Transform,
     pub velocity: &'a mut BodyVelocity,
     pub intents: &'a Intents,
-    pub stamina: &'a mut Stamina,
+    pub stamina: Option<&'a mut Stamina>,
     pub contact: &'a mut BodyContact,
     pub ground: &'a GroundFacts,
     pub state: LocomotionState,
 }
 
-pub fn ground_locomotion_step(
-    step: GroundLocomotionStep,
+pub fn ground_drive_step(
+    mut step: GroundDriveStep,
     active: LocomotionState,
     mas: &MoveAndSlide,
     time: &Time,
-    params: &GroundLocomotion,
+    params: &GroundDriveProfile,
 ) {
     if step.state != active {
         return;
     }
 
     let dt = time.delta_secs();
-    apply_locomotion_rotation(
-        step.transform,
-        step.intents.planar.direction,
-        dt,
-        params.rotation_speed,
-    );
-
     let move_dir = Vec3::new(
         step.intents.planar.direction.x,
         0.0,
         step.intents.planar.direction.y,
     )
     .normalize_or_zero();
-    let mut next_velocity = step.velocity.0;
+    let (mut next_velocity, turn_rate) = drive_planar_velocity(
+        step.velocity.0,
+        move_dir,
+        step.transform.forward().as_vec3(),
+        step.intents.planar.strength,
+        dt,
+        params,
+    );
     if move_dir != Vec3::ZERO {
-        next_velocity.x = move_toward(
-            next_velocity.x,
-            move_dir.x * params.max_speed,
-            params.acceleration * dt,
-        );
-        next_velocity.z = move_toward(
-            next_velocity.z,
-            move_dir.z * params.max_speed,
-            params.acceleration * dt,
-        );
-    } else {
-        next_velocity.x = move_toward(next_velocity.x, 0.0, params.friction * dt);
-        next_velocity.z = move_toward(next_velocity.z, 0.0, params.friction * dt);
+        apply_locomotion_rotation(step.transform, step.intents.planar.direction, dt, turn_rate);
     }
     // Flat-ground motors own velocity.y: bookkeeping stays planar…
     next_velocity.y = 0.0;
@@ -240,10 +228,12 @@ pub fn ground_locomotion_step(
         next_velocity = align_with_floor(next_velocity, step.ground.floor_normal);
     }
 
-    if params.stamina_per_sec >= 0.0 {
-        step.stamina.recover(params.stamina_per_sec * dt);
-    } else {
-        step.stamina.drain(-params.stamina_per_sec * dt);
+    if let Some(stamina) = step.stamina.as_mut() {
+        if params.stamina_per_sec >= 0.0 {
+            stamina.recover(params.stamina_per_sec * dt);
+        } else {
+            stamina.drain(-params.stamina_per_sec * dt);
+        }
     }
 
     let projected_velocity = body_move_and_slide(
@@ -276,6 +266,67 @@ pub fn ground_locomotion_step(
     // `GroundService`'s ascend check read slope-walking as "launching off the
     // floor" (the Walk<->Fall flicker on the test ramp).
     step.velocity.0.y = 0.0;
+}
+
+pub(crate) fn drive_planar_velocity(
+    current: Vec3,
+    desired: Vec3,
+    facing: Vec3,
+    strength: f32,
+    dt: f32,
+    profile: &GroundDriveProfile,
+) -> (Vec3, f32) {
+    let planar = Vec3::new(current.x, 0.0, current.z);
+    let speed = planar.length();
+    let speed_factor = (speed / profile.max_forward_speed.max(f32::EPSILON)).clamp(0.0, 1.0);
+    let turn_rate = profile.turn_rate_at_zero_speed
+        + (profile.turn_rate_at_max_speed - profile.turn_rate_at_zero_speed) * speed_factor;
+    if desired == Vec3::ZERO {
+        return (
+            Vec3::new(
+                move_toward(current.x, 0.0, profile.coast_deceleration * dt),
+                current.y,
+                move_toward(current.z, 0.0, profile.coast_deceleration * dt),
+            ),
+            turn_rate,
+        );
+    }
+    let reversing = facing.dot(desired) < -0.15;
+    let target_speed = if reversing {
+        profile.max_reverse_speed
+    } else {
+        profile.max_forward_speed
+    };
+    let acceleration = if reversing {
+        profile.reverse_acceleration
+    } else {
+        profile.forward_acceleration
+    };
+    let alignment = planar.normalize_or_zero().dot(desired);
+    let rate = if speed > 0.0 && alignment < 0.0 {
+        profile.brake_deceleration
+    } else {
+        acceleration
+    };
+    let target = desired * target_speed * strength.clamp(0.0, 1.0);
+    let raw = Vec3::new(
+        move_toward(current.x, target.x, rate * dt),
+        current.y,
+        move_toward(current.z, target.z, rate * dt),
+    );
+    let aligned = Vec3::new(raw.x, 0.0, raw.z).lerp(
+        desired * Vec3::new(raw.x, 0.0, raw.z).length(),
+        (profile.velocity_alignment_rate * dt).clamp(0.0, 1.0),
+    );
+    let loss = (1.0 - alignment.clamp(0.0, 1.0)) * profile.turning_speed_loss * dt;
+    (
+        Vec3::new(
+            aligned.x * (1.0 - loss).max(0.0),
+            raw.y,
+            aligned.z * (1.0 - loss).max(0.0),
+        ),
+        turn_rate,
+    )
 }
 
 /// Position-lerped arc shared by Mantle and AutoVault: smoothstep from `start`
@@ -372,6 +423,7 @@ pub fn launch_normal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::abilities::GroundMovement;
 
     /// The 20° test ramp's surface normal (rises toward +X).
     fn ramp_normal() -> Vec3 {
@@ -405,5 +457,59 @@ mod tests {
     #[test]
     fn align_zero_velocity_is_untouched() {
         assert_eq!(align_with_floor(Vec3::ZERO, ramp_normal()), Vec3::ZERO);
+    }
+
+    #[test]
+    fn player_and_horse_profiles_have_distinct_deterministic_response() {
+        let input = Vec3::NEG_Z;
+        let facing = Vec3::NEG_Z;
+        let player = drive_planar_velocity(
+            Vec3::ZERO,
+            input,
+            facing,
+            1.0,
+            0.1,
+            &GroundMovement::PLAYER.drive,
+        )
+        .0;
+        let horse = drive_planar_velocity(
+            Vec3::ZERO,
+            input,
+            facing,
+            1.0,
+            0.1,
+            &GroundMovement::HORSE.drive,
+        )
+        .0;
+        assert_eq!(
+            player,
+            drive_planar_velocity(
+                Vec3::ZERO,
+                input,
+                facing,
+                1.0,
+                0.1,
+                &GroundMovement::PLAYER.drive
+            )
+            .0
+        );
+        assert!(
+            player.length() > horse.length(),
+            "player preset preserves its quicker initial response"
+        );
+    }
+
+    #[test]
+    fn drive_distinguishes_coast_brake_reverse_and_high_speed_turning() {
+        let profile = GroundMovement::HORSE.drive;
+        let moving = Vec3::new(0.0, 0.0, -8.0);
+        let coast = drive_planar_velocity(moving, Vec3::ZERO, Vec3::NEG_Z, 0.0, 0.1, &profile).0;
+        let brake = drive_planar_velocity(moving, Vec3::Z, Vec3::NEG_Z, 1.0, 0.1, &profile).0;
+        let reverse = drive_planar_velocity(Vec3::ZERO, Vec3::Z, Vec3::NEG_Z, 1.0, 1.0, &profile).0;
+        let (_, fast_turn) =
+            drive_planar_velocity(moving, Vec3::X, Vec3::NEG_Z, 1.0, 0.1, &profile);
+        assert!(brake.length() < coast.length());
+        assert!(reverse.length() <= profile.max_reverse_speed);
+        assert!(fast_turn < profile.turn_rate_at_zero_speed);
     }
 }

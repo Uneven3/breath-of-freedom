@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 pub mod data;
 
-pub use data::{DamageRequestMessage, DeathMessage, Health};
+pub use data::{DamageRequestMessage, DeathMessage, Health, HostileInteractionImmunity};
 
 use crate::projectiles::ProjectilesSet;
 
@@ -43,13 +43,23 @@ impl Plugin for HealthPlugin {
 /// conditions are handled, never panicked on).
 pub fn apply_damage(
     mut requests: MessageReader<DamageRequestMessage>,
-    mut pools: Query<(&mut Health, Option<&Name>)>,
+    mut pools: Query<(
+        &mut Health,
+        Option<&Name>,
+        Option<&HostileInteractionImmunity>,
+    )>,
     mut deaths: MessageWriter<DeathMessage>,
 ) {
     for request in requests.read() {
-        let Ok((mut health, name)) = pools.get_mut(request.target) else {
+        let Ok((mut health, name, immunity)) = pools.get_mut(request.target) else {
             continue;
         };
+        if request
+            .source
+            .is_some_and(|source| immunity.is_some_and(|immune| immune.blocks(source)))
+        {
+            continue;
+        }
         if health.is_dead() {
             continue;
         }
@@ -106,6 +116,7 @@ mod tests {
             world.write_message(DamageRequestMessage {
                 target: victim,
                 amount: 8.0,
+                source: None,
             });
         }
         world.run_system_once(apply_damage).unwrap();
@@ -127,10 +138,12 @@ mod tests {
         world.write_message(DamageRequestMessage {
             target: no_pool,
             amount: 5.0,
+            source: None,
         });
         world.write_message(DamageRequestMessage {
             target: dead,
             amount: 5.0,
+            source: None,
         });
         world.run_system_once(apply_damage).unwrap();
 
@@ -138,5 +151,27 @@ mod tests {
             deaths(&world).is_empty(),
             "no pool / already dead: no death re-emission"
         );
+    }
+
+    #[test]
+    fn immunity_rejects_only_the_matching_damage_source() {
+        let mut world = world_with_messages();
+        let owner = world.spawn_empty().id();
+        let enemy = world.spawn_empty().id();
+        let horse = world
+            .spawn((Health::new(20.0), HostileInteractionImmunity(owner)))
+            .id();
+        world.write_message(DamageRequestMessage {
+            target: horse,
+            amount: 10.0,
+            source: Some(owner),
+        });
+        world.write_message(DamageRequestMessage {
+            target: horse,
+            amount: 5.0,
+            source: Some(enemy),
+        });
+        world.run_system_once(apply_damage).unwrap();
+        assert_eq!(world.entity(horse).get::<Health>().unwrap().current(), 15.0);
     }
 }

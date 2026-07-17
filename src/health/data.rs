@@ -47,18 +47,30 @@ impl Health {
 /// Ask Health to damage `target`. Any system emits it (Combat melee,
 /// Projectiles, future hazards); Health validates that the target has a
 /// living `Health` and applies it. Owned by Health — the receiver owns the
-/// contract. (`source` attribution and `kind` join when a consumer reads
-/// them — no field before a system reads it.)
+/// contract. `source` attributes owner policies; a future damage kind lands
+/// only when a real consumer needs it.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct DamageRequestMessage {
     pub target: Entity,
     pub amount: f32,
+    pub source: Option<Entity>,
 }
 
-// `DamageAppliedMessage { target, amount, remaining }` — the channel systems
-// reacting to received damage will listen to (Staggered in `combat-defense`,
-// Flee when the enemy brain reads its own Health) — lands with its first
-// consumer: no message before a system reads it.
+/// Blocks every hostile interaction attributed to one source: HP damage,
+/// impact feedback, threat and knockback. Each hostile producer checks this
+/// policy before emitting side effects; Health repeats the check as the
+/// authoritative last line for damage requests.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HostileInteractionImmunity(pub Entity);
+
+impl HostileInteractionImmunity {
+    pub fn blocks(self, source: Entity) -> bool {
+        self.0 == source
+    }
+}
+
+// An applied/rejected result lands only with its first real consumer; Health
+// does not publish a message that nobody reads.
 
 /// `current` crossed to zero. Emitted exactly once per death; what happens
 /// next (despawn, respawn, loot) belongs to each actor's owning system,

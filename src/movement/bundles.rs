@@ -8,8 +8,10 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::abilities::{
-    GlideMovement, GroundMovement, JumpMovement, LedgeTraversal, WallJumpMovement,
+    GlideMovement, GroundMovement, JumpMovement, LadderMovement, LedgeTraversal, SneakMovement,
+    SprintMovement, StairsMovement, WallJumpMovement,
 };
+use super::attachment::LocomotionEnabled;
 use super::body::BodyDimensions;
 use super::constraints::LocomotionConstraintFacts;
 use super::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
@@ -23,7 +25,7 @@ use super::motors::{
     mantle::MantleState,
     sneak::{Crouched, SneakLock, StandClearance, StandCollider},
     sprint::SprintLock,
-    stairs::StairsLocal,
+    stairs::{StairsGrace, StairsLocal},
     wall_jump::WallJumpState,
 };
 use super::proposal::ProposalBuffer;
@@ -38,6 +40,7 @@ use crate::world::GameLayer;
 #[derive(Bundle)]
 pub struct KinematicActorBundle {
     pub actor: Actor,
+    pub locomotion_enabled: LocomotionEnabled,
     pub transform: Transform,
     pub rigid_body: RigidBody,
     pub collider: Collider,
@@ -47,12 +50,8 @@ pub struct KinematicActorBundle {
     pub intents: Intents,
     pub locomotion: LocomotionState,
     pub proposals: ProposalBuffer,
-    pub stamina: Stamina,
     pub contact: BodyContact,
     pub ground: GroundFacts,
-    pub ledge: LedgeFacts,
-    pub stairs: StairsFacts,
-    pub ladder: LadderFacts,
     pub ground_sensing: GroundSensing,
     pub sensing_lod: SensingLod,
     pub constraint_facts: LocomotionConstraintFacts,
@@ -62,6 +61,7 @@ impl KinematicActorBundle {
     pub fn new(transform: Transform, dimensions: BodyDimensions, sensing: GroundSensing) -> Self {
         Self {
             actor: Actor,
+            locomotion_enabled: LocomotionEnabled,
             transform,
             rigid_body: RigidBody::Kinematic,
             collider: dimensions.standing_collider(),
@@ -74,12 +74,8 @@ impl KinematicActorBundle {
             intents: Intents::default(),
             locomotion: LocomotionState::default(),
             proposals: ProposalBuffer::default(),
-            stamina: Stamina::default(),
             contact: BodyContact::default(),
             ground: GroundFacts::default(),
-            ledge: LedgeFacts::default(),
-            stairs: StairsFacts::default(),
-            ladder: LadderFacts::default(),
             ground_sensing: sensing,
             sensing_lod: SensingLod::default(),
             constraint_facts: LocomotionConstraintFacts::default(),
@@ -87,29 +83,88 @@ impl KinematicActorBundle {
     }
 }
 
-/// Ground capability and the per-actor state used by its Sprint and Sneak
-/// motors.
 #[derive(Bundle)]
 pub struct GroundMovementBundle {
     pub movement: GroundMovement,
+}
+
+impl GroundMovementBundle {
+    pub fn new(movement: GroundMovement) -> Self {
+        Self { movement }
+    }
+}
+
+#[derive(Bundle)]
+pub struct SprintMovementBundle {
+    pub movement: SprintMovement,
     pub sprint_lock: SprintLock,
+}
+
+impl SprintMovementBundle {
+    pub fn new(movement: SprintMovement) -> Self {
+        Self {
+            movement,
+            sprint_lock: default(),
+        }
+    }
+}
+
+#[derive(Bundle)]
+pub struct SneakMovementBundle {
+    pub movement: SneakMovement,
     pub sneak_lock: SneakLock,
     pub crouched: Crouched,
     pub stand_clearance: StandClearance,
     pub stand_collider: StandCollider,
-    pub stairs_local: StairsLocal,
 }
 
-impl GroundMovementBundle {
-    pub fn new(movement: GroundMovement, dimensions: BodyDimensions) -> Self {
+impl SneakMovementBundle {
+    pub fn new(movement: SneakMovement, dimensions: BodyDimensions) -> Self {
         Self {
             movement,
-            sprint_lock: SprintLock::default(),
             sneak_lock: SneakLock::default(),
             crouched: Crouched::default(),
             stand_clearance: StandClearance::default(),
             stand_collider: StandCollider(dimensions.standing_collider()),
-            stairs_local: StairsLocal::default(),
+        }
+    }
+}
+
+#[derive(Bundle)]
+pub struct StairsMovementBundle {
+    pub movement: StairsMovement,
+    pub facts: StairsFacts,
+    pub local: StairsLocal,
+    pub grace: StairsGrace,
+}
+
+impl StairsMovementBundle {
+    pub fn new(movement: StairsMovement) -> Self {
+        Self {
+            movement,
+            facts: default(),
+            local: default(),
+            grace: default(),
+        }
+    }
+}
+
+#[derive(Bundle, Default)]
+pub struct StaminaBundle {
+    pub stamina: Stamina,
+}
+
+#[derive(Bundle)]
+pub struct LadderMovementBundle {
+    pub movement: LadderMovement,
+    pub facts: LadderFacts,
+}
+
+impl LadderMovementBundle {
+    pub fn new(movement: LadderMovement) -> Self {
+        Self {
+            movement,
+            facts: default(),
         }
     }
 }
@@ -153,6 +208,7 @@ impl GlideMovementBundle {
 #[derive(Bundle)]
 pub struct LedgeTraversalBundle {
     pub traversal: LedgeTraversal,
+    pub facts: LedgeFacts,
     pub mantle: MantleState,
     pub vault: VaultState,
 }
@@ -161,6 +217,7 @@ impl LedgeTraversalBundle {
     pub fn new(traversal: LedgeTraversal) -> Self {
         Self {
             traversal,
+            facts: default(),
             mantle: MantleState::default(),
             vault: VaultState::default(),
         }
@@ -223,12 +280,12 @@ mod tests {
         assert!(actor.contains::<Intents>());
         assert!(actor.contains::<LocomotionState>());
         assert!(actor.contains::<ProposalBuffer>());
-        assert!(actor.contains::<Stamina>());
         assert!(actor.contains::<BodyContact>());
         assert!(actor.contains::<GroundFacts>());
-        assert!(actor.contains::<LedgeFacts>());
-        assert!(actor.contains::<StairsFacts>());
-        assert!(actor.contains::<LadderFacts>());
+        assert!(!actor.contains::<Stamina>());
+        assert!(!actor.contains::<LedgeFacts>());
+        assert!(!actor.contains::<StairsFacts>());
+        assert!(!actor.contains::<LadderFacts>());
         assert_eq!(actor.get::<GroundSensing>(), Some(&GroundSensing::PLAYER));
     }
 
@@ -238,7 +295,10 @@ mod tests {
         let mut world = World::new();
         let entity = world
             .spawn((
-                GroundMovementBundle::new(GroundMovement::PLAYER, dimensions),
+                GroundMovementBundle::new(GroundMovement::PLAYER),
+                SprintMovementBundle::new(SprintMovement::PLAYER),
+                SneakMovementBundle::new(SneakMovement::PLAYER, dimensions),
+                StairsMovementBundle::new(StairsMovement::PLAYER),
                 JumpMovementBundle::new(JumpMovement::PLAYER),
                 GlideMovementBundle::new(GlideMovement::PLAYER),
                 LedgeTraversalBundle::new(LedgeTraversal::PLAYER),

@@ -9,6 +9,8 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::combat::context::effective_weapon;
+use crate::combat::context_data::{CombatContext, MountedCombatProfile};
 use crate::combat::intent::CombatIntents;
 use crate::combat::motors::CombatMotorTickItem;
 use crate::combat::proposal::{CombatProposalBuffer, Priority, TransitionProposal, weight};
@@ -31,6 +33,13 @@ pub struct ComboLocal {
     pub(crate) phase_elapsed: f32,
     buffered: bool,
     last_phase: CombatState,
+    snapshot: Option<WeaponProfile>,
+}
+
+impl ComboLocal {
+    pub(crate) fn current_step(&self) -> Option<&crate::combat::weapon::AttackStep> {
+        self.snapshot.as_ref()?.step(self.step)
+    }
 }
 
 /// Entities already struck by the swing in progress — one hit per target per
@@ -95,6 +104,8 @@ type ProposeQuery<'a> = (
     &'a CombatIntents,
     &'a CombatState,
     &'a WeaponProfile,
+    Option<&'a CombatContext>,
+    Option<&'a MountedCombatProfile>,
     &'a mut ComboLocal,
     &'a mut CombatProposalBuffer,
 );
@@ -103,7 +114,7 @@ type ProposeQuery<'a> = (
 /// on elapsed timers, chain on a buffered press inside the window. Expired
 /// recoveries propose nothing — `Idle` (Default) wins by silence.
 pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
-    for (intents, state, weapon, mut local, mut buffer) in &mut q {
+    for (intents, state, base_weapon, context, mounted, mut local, mut buffer) in &mut q {
         // Buffer only inside the melee phases: an attack press while Aiming
         // is the bow release (`aim::shoot_drawn_arrow`), not a queued swing.
         let in_melee_phase = matches!(
@@ -118,7 +129,10 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
             CombatState::Idle => {
                 local.step = 0;
                 local.buffered = false;
-                if intents.attack.pressed && weapon.has_step(0) {
+                local.snapshot = None;
+                let effective = effective_weapon(*base_weapon, context, mounted);
+                if intents.attack.pressed && effective.has_step(0) {
+                    local.snapshot = Some(effective);
                     let _ = buffer.push(TransitionProposal::new(
                         CombatState::Windup,
                         Priority::PlayerRequested,
@@ -128,7 +142,7 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
                 }
             }
             CombatState::Windup => {
-                let Some(step) = weapon.step(local.step) else {
+                let Some(step) = local.current_step() else {
                     continue;
                 };
                 let (target, w, id) = if local.phase_elapsed >= step.windup_secs {
@@ -139,7 +153,7 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
                 let _ = buffer.push(TransitionProposal::new(target, Priority::Forced, w, id));
             }
             CombatState::Active => {
-                let Some(step) = weapon.step(local.step) else {
+                let Some(step) = local.current_step() else {
                     continue;
                 };
                 let (target, w, id) = if local.phase_elapsed >= step.active_secs {
@@ -154,11 +168,14 @@ pub fn propose(mut q: Query<ProposeQuery, With<Actor>>) {
                 let _ = buffer.push(TransitionProposal::new(target, Priority::Forced, w, id));
             }
             CombatState::Recovery => {
-                let Some(step) = weapon.step(local.step) else {
+                let Some(profile) = local.snapshot else {
+                    continue;
+                };
+                let Some(step) = profile.step(local.step) else {
                     continue;
                 };
                 let in_chain_window = local.phase_elapsed <= step.chain_window_secs;
-                if local.buffered && in_chain_window && weapon.has_step(local.step + 1) {
+                if local.buffered && in_chain_window && profile.has_step(local.step + 1) {
                     local.buffered = false;
                     local.step += 1;
                     let _ = buffer.push(TransitionProposal::new(
@@ -205,7 +222,6 @@ type SweepAttackerQuery<'a> = (
     Entity,
     &'a Transform,
     &'a CombatState,
-    &'a WeaponProfile,
     &'a ComboLocal,
     &'a mut ActiveSwing,
 );
@@ -223,11 +239,11 @@ pub fn sweep_active_swings(
     targets: Query<&Transform>,
     mut hits: MessageWriter<MeleeHitMessage>,
 ) {
-    for (attacker, transform, state, weapon, local, mut swing) in &mut attackers {
+    for (attacker, transform, state, local, mut swing) in &mut attackers {
         if *state != CombatState::Active {
             continue;
         }
-        let Some(step) = weapon.step(local.step) else {
+        let Some(step) = local.current_step() else {
             continue;
         };
 
@@ -308,11 +324,16 @@ pub(crate) fn final_damage(
 }
 
 type HitAttackerQuery<'a> = (
-    &'a WeaponProfile,
+    &'a ComboLocal,
     Option<&'a LocomotionState>,
     Option<&'a Name>,
 );
-type HitTargetQuery<'a> = (&'a Transform, Option<&'a Awareness>, Option<&'a Name>);
+type HitTargetQuery<'a> = (
+    &'a Transform,
+    Option<&'a Awareness>,
+    Option<&'a Name>,
+    Option<&'a crate::health::HostileInteractionImmunity>,
+);
 
 /// Turns swept candidates into consequences: real damage
 /// (`health::DamageRequestMessage`), instant aggro on the struck enemy,
@@ -328,21 +349,27 @@ pub fn resolve_melee_hits(
     mut impacts: MessageWriter<HitImpactMessage>,
 ) {
     for hit in messages.read() {
-        let Ok((weapon, locomotion, attacker_name)) = attackers.get(hit.attacker) else {
+        let Ok((combo, locomotion, attacker_name)) = attackers.get(hit.attacker) else {
             continue;
         };
-        let Some(step) = weapon.step(hit.step) else {
+        let Some(profile) = combo.snapshot else {
             continue;
         };
-        let Ok((target_tf, awareness, target_name)) = targets.get(hit.target) else {
+        let Some(step) = profile.step(hit.step) else {
             continue;
         };
+        let Ok((target_tf, awareness, target_name, immunity)) = targets.get(hit.target) else {
+            continue;
+        };
+        if immunity.is_some_and(|immunity| immunity.blocks(hit.attacker)) {
+            continue;
+        }
 
         let target_alerted = awareness.is_none_or(Awareness::is_alerted);
         let sneaking = matches!(locomotion, Some(LocomotionState::Sneak));
         let critical = !target_alerted && sneaking;
         let damage = final_damage(
-            weapon.base_damage,
+            profile.base_damage,
             step.damage_mult,
             target_alerted,
             sneaking,
@@ -357,6 +384,7 @@ pub fn resolve_melee_hits(
         damage_requests.write(crate::health::DamageRequestMessage {
             target: hit.target,
             amount: damage,
+            source: Some(hit.attacker),
         });
 
         // Knockback: shove the target away from the attacker (planar; the
@@ -392,7 +420,10 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    fn armed_actor(state: CombatState, local: ComboLocal, pressed: bool) -> impl Bundle {
+    fn armed_actor(state: CombatState, mut local: ComboLocal, pressed: bool) -> impl Bundle {
+        if state != CombatState::Idle && local.snapshot.is_none() {
+            local.snapshot = Some(WeaponProfile::GRAYBOX_SWORD);
+        }
         (
             Actor,
             CombatIntents {
@@ -404,6 +435,8 @@ mod tests {
             },
             state,
             WeaponProfile::GRAYBOX_SWORD,
+            CombatContext::default(),
+            MountedCombatProfile::HORSE,
             local,
             CombatProposalBuffer::default(),
         )
@@ -436,6 +469,45 @@ mod tests {
         assert_eq!(out[0].target_state, CombatState::Windup);
         assert_eq!(out[0].category, Priority::PlayerRequested);
         assert!(proposals(&world, calm).is_empty());
+    }
+
+    #[test]
+    fn mounted_profile_is_snapshotted_without_mutating_the_base_weapon() {
+        let mut world = World::new();
+        world.init_resource::<Messages<crate::combat::context::SetMountedCombatMessage>>();
+        let actor = world
+            .spawn(armed_actor(CombatState::Idle, ComboLocal::default(), true))
+            .id();
+        world.write_message(crate::combat::context::SetMountedCombatMessage {
+            actor,
+            mounted: true,
+        });
+        world
+            .run_system_once(crate::combat::context::apply_mounted_context)
+            .unwrap();
+        world.run_system_once(propose).unwrap();
+
+        assert_eq!(
+            world.entity(actor).get::<ComboLocal>().unwrap().snapshot,
+            Some(WeaponProfile::MOUNTED_SWORD)
+        );
+        assert_eq!(
+            *world.entity(actor).get::<WeaponProfile>().unwrap(),
+            WeaponProfile::GRAYBOX_SWORD
+        );
+
+        world.write_message(crate::combat::context::SetMountedCombatMessage {
+            actor,
+            mounted: false,
+        });
+        world
+            .run_system_once(crate::combat::context::apply_mounted_context)
+            .unwrap();
+        assert_eq!(
+            world.entity(actor).get::<ComboLocal>().unwrap().snapshot,
+            Some(WeaponProfile::MOUNTED_SWORD),
+            "an active action keeps its initial effective profile"
+        );
     }
 
     #[test]
@@ -661,5 +733,53 @@ mod tests {
         assert!(swing.contains(target));
         swing.clear();
         assert!(!swing.contains(target));
+    }
+
+    #[test]
+    fn hostile_immunity_blocks_all_melee_outcomes() {
+        let mut world = World::new();
+        world.init_resource::<Messages<MeleeHitMessage>>();
+        world.init_resource::<Messages<crate::health::DamageRequestMessage>>();
+        world.init_resource::<Messages<DirectThreatMessage>>();
+        world.init_resource::<Messages<crate::movement::constraints::BodyImpulseMessage>>();
+        world.init_resource::<Messages<HitImpactMessage>>();
+        let attacker = world
+            .spawn((
+                Actor,
+                ComboLocal {
+                    snapshot: Some(WeaponProfile::GRAYBOX_SWORD),
+                    ..default()
+                },
+                LocomotionState::Walk,
+                Name::new("Owner"),
+            ))
+            .id();
+        let target = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, -1.0),
+                crate::health::HostileInteractionImmunity(attacker),
+            ))
+            .id();
+        world.write_message(MeleeHitMessage {
+            attacker,
+            target,
+            attacker_pos: Vec3::ZERO,
+            step: 0,
+        });
+
+        world.run_system_once(resolve_melee_hits).unwrap();
+
+        assert!(
+            world
+                .resource::<Messages<crate::health::DamageRequestMessage>>()
+                .is_empty()
+        );
+        assert!(world.resource::<Messages<DirectThreatMessage>>().is_empty());
+        assert!(
+            world
+                .resource::<Messages<crate::movement::constraints::BodyImpulseMessage>>()
+                .is_empty()
+        );
+        assert!(world.resource::<Messages<HitImpactMessage>>().is_empty());
     }
 }

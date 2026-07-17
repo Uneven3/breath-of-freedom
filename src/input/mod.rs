@@ -81,6 +81,9 @@ fn resolve_local_actions(
     if keys.just_pressed(KeyCode::Space) {
         actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Jump);
     }
+    if keys.just_pressed(KeyCode::KeyE) {
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Interact);
+    }
 }
 
 const LOCAL_HELD_BINDINGS: [(IntentAction, KeyCode); 12] = [

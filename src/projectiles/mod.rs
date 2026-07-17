@@ -165,7 +165,15 @@ pub struct HitOutcomes<'w> {
 pub(crate) struct BallisticWorld<'w, 's> {
     spatial: SpatialQuery<'w, 's>,
     layers: Query<'w, 's, &'static CollisionLayers>,
-    targets: Query<'w, 's, (Option<&'static Awareness>, Option<&'static Name>)>,
+    targets: Query<
+        'w,
+        's,
+        (
+            Option<&'static Awareness>,
+            Option<&'static Name>,
+            Option<&'static crate::health::HostileInteractionImmunity>,
+        ),
+    >,
 }
 
 pub fn fly_arrows(
@@ -252,10 +260,17 @@ fn resolve_arrow_hit(
     arrow: &Arrow,
     target: Entity,
     hit_point: Vec3,
-    targets: &Query<(Option<&Awareness>, Option<&Name>)>,
+    targets: &Query<(
+        Option<&Awareness>,
+        Option<&Name>,
+        Option<&crate::health::HostileInteractionImmunity>,
+    )>,
     outcomes: &mut HitOutcomes,
 ) {
-    let (awareness, name) = targets.get(target).unwrap_or((None, None));
+    let (awareness, name, immunity) = targets.get(target).unwrap_or((None, None, None));
+    if immunity.is_some_and(|immunity| immunity.blocks(arrow.shooter)) {
+        return;
+    }
     // A target without an Awareness meter (practice target, another player)
     // counts as alerted: no stealth bonus.
     let target_alerted = awareness.is_none_or(Awareness::is_alerted);
@@ -269,6 +284,7 @@ fn resolve_arrow_hit(
     outcomes.damage.write(crate::health::DamageRequestMessage {
         target,
         amount: damage,
+        source: Some(arrow.shooter),
     });
     outcomes.impacts.write(HitImpactMessage {
         target,
@@ -309,10 +325,61 @@ fn tick_trail_particles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[derive(Component)]
+    struct TestTarget;
+
+    fn resolve_test_arrow(
+        arrows: Query<&Arrow>,
+        targets: Query<(
+            Option<&Awareness>,
+            Option<&Name>,
+            Option<&crate::health::HostileInteractionImmunity>,
+        )>,
+        target: Single<Entity, With<TestTarget>>,
+        mut outcomes: HitOutcomes,
+    ) {
+        let arrow = arrows.single().unwrap();
+        resolve_arrow_hit(arrow, *target, Vec3::ZERO, &targets, &mut outcomes);
+    }
 
     #[test]
     fn arrows_reward_hitting_the_unaware() {
         assert_eq!(arrow_damage(12.0, true), (12.0, false));
         assert_eq!(arrow_damage(12.0, false), (12.0 * ARROW_STEALTH_MULT, true));
+    }
+
+    #[test]
+    fn hostile_immunity_blocks_all_arrow_outcomes() {
+        let mut world = World::new();
+        world.init_resource::<Messages<crate::health::DamageRequestMessage>>();
+        world.init_resource::<Messages<HitImpactMessage>>();
+        world.init_resource::<Messages<DirectThreatMessage>>();
+        world.init_resource::<Messages<BodyImpulseMessage>>();
+        let shooter = world.spawn_empty().id();
+        world.spawn(Arrow {
+            velocity: Vec3::NEG_Z,
+            shooter,
+            damage: 10.0,
+            remaining: 1.0,
+            stuck: false,
+            trail_timer: 0.0,
+        });
+        world.spawn((
+            TestTarget,
+            crate::health::HostileInteractionImmunity(shooter),
+        ));
+
+        world.run_system_once(resolve_test_arrow).unwrap();
+
+        assert!(
+            world
+                .resource::<Messages<crate::health::DamageRequestMessage>>()
+                .is_empty()
+        );
+        assert!(world.resource::<Messages<HitImpactMessage>>().is_empty());
+        assert!(world.resource::<Messages<DirectThreatMessage>>().is_empty());
+        assert!(world.resource::<Messages<BodyImpulseMessage>>().is_empty());
     }
 }

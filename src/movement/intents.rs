@@ -12,14 +12,6 @@ pub struct PlanarMoveIntent {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum GaitIntent {
-    #[default]
-    Walk,
-    Sprint,
-    Sneak,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct JumpIntent {
     pub held: bool,
     pub pressed: bool,
@@ -74,7 +66,8 @@ pub enum GlideIntent {
 #[derive(Component, Debug, Clone, Default)]
 pub struct Intents {
     pub planar: PlanarMoveIntent,
-    pub gait: GaitIntent,
+    pub wants_sprint: bool,
+    pub wants_sneak: bool,
     pub jump: JumpIntent,
     pub climb: ClimbIntent,
     pub ladder: LadderIntent,

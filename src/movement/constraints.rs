@@ -44,7 +44,13 @@ pub struct BodyImpulseMessage {
 /// Runs alongside `apply_locomotion_constraints`, before motors tick.
 pub fn apply_body_impulses(
     mut messages: MessageReader<BodyImpulseMessage>,
-    mut actors: Query<&mut crate::movement::BodyVelocity, With<Actor>>,
+    mut actors: Query<
+        &mut crate::movement::BodyVelocity,
+        (
+            With<Actor>,
+            With<crate::movement::attachment::LocomotionEnabled>,
+        ),
+    >,
 ) {
     for message in messages.read() {
         if let Ok(mut velocity) = actors.get_mut(message.entity) {

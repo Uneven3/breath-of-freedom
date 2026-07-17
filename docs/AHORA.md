@@ -30,19 +30,36 @@ Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
 corregidos el mismo día (input a PreUpdate, patrón CapacityPending
 eliminado, `Perceivable`, test del veto ForbidSprint). 187 tests.
 
-## Foco activo
+## Foco activo — exprimir el graybox (decisión del usuario, 2026-07-17)
 
-**Preparar la fase de contenido** (pedido del usuario): agrandar el mundo y
-sumar modelos/animales/personajes sin que el costo crezca con cada pieza.
+Antes de assets/pipeline, hay sistemas enteros que se construyen sin arte:
 
-1. **Mundo-como-datos, paso 2:** mover las tablas de `world/layout.rs` a un
-   asset (RON o escena GLTF de Blender). El paso 1 (separar
-   mecanismo/contenido) ya está — `layout.rs` es la costura.
-2. **Animación por arquetipo:** al llegar el segundo modelo riggeado
-   (horse o enemigo), generalizar `visuals/animation.rs` — mapeo
-   estado→clip como datos por tipo de actor, no sistema por modelo.
-3. **Mapear clips restantes del player:** Jump_Start/Loop/Land a los
-   estados de salto; Sword_* al combate; Hit_Knockback al daño recibido.
+1. **Ciclo día/noche** — `TimeOfDay` en World (sustrato: no lee a nadie);
+   sol rotando + luz/ambiente. Baratísimo y desbloquea temperatura e IA
+   nocturna.
+2. **Temperatura** — StatusEffects: zonas frías/calientes + exposición por
+   hora del día → `DamageRequestMessage` a Health; HUD graybox. Mitigación
+   por equipo llega después (necesita inventario).
+3. **Inventario** — fundación de durabilidad, crafteo, loot de árboles y
+   equipo térmico. Pieza arquitectónica grande: modelo de datos primero,
+   UI graybox mínima después.
+4. **Toon shader** — cel-shading (norte visual); material extension de
+   Bevy, presentación pura, paralelizable con lo demás.
+5. **IA de combate** — flanqueo, reacciones grupales, huida al estar
+   herido (los enemigos ya leen su propio `Health`). Slice jugable sobre
+   los brains existentes.
+
+Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
+Hit_Knockback) a estados reales.
+
+## Estacionado — pipeline de assets (cuando termine la etapa graybox)
+
+Recomendación investigada (2026-07-17, fuentes en git): Blender → glTF con
+custom properties leídas vía `GltfExtras` de primera parte (sin Blenvy, que
+está alpha/estancado); RON solo para datos no-espaciales; USD se ignora
+(pipelines AAA). El editor oficial de Bevy se construye sobre BSN (0.19
+solo código; archivos `.bsn` futuros) — la inversión Blender/glTF migra
+limpio. `world/layout.rs` es la costura donde se enchufa.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
@@ -56,7 +73,5 @@ sumar modelos/animales/personajes sin que el costo crezca con cada pieza.
 
 ## Decisiones que el usuario debe tomar pronto
 
-- Formato de autoría del mundo: ¿tablas RON o escenas GLTF desde Blender?
-  (define el pipeline de assets de todo lo que viene).
-- Próximo modelo a integrar: ¿horse o enemigo? (dispara la generalización
-  de animación).
+- Orden de ataque de la lista graybox (sugerido: día/noche → temperatura →
+  inventario, con toon shader e IA de combate paralelizables).

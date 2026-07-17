@@ -3,10 +3,16 @@
 //! `propose` keeps `Aiming` alive while `wants_aim` holds (release = silence
 //! → `Idle`); charging accumulates `DrawStrength` while attack is held during
 //! `Aiming`, and releasing attack fires an arrow whose speed and damage scale
-//! with the charge. The arrow spawns from the shoulder pivot the crosshair
-//! ray passes through — pure simulation data (§20), no camera read; the
-//! camera imports the same constants so the alignment holds by construction.
+//! with the charge.
+//!
+//! Firing follows the two-phase third-person standard: a ray from the
+//! camera-aligned shoulder pivot finds the crosshair's world target, then the
+//! arrow leaves the bow socket converging on that point. Both the pivot and
+//! the socket are pure simulation data (§20), no camera read; the camera and
+//! the bow visual import the same constants so alignment holds by
+//! construction.
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::combat::context::effective_bow;
@@ -18,13 +24,35 @@ use crate::input::frame::ControlOrientation;
 use crate::movement::Actor;
 use crate::projectiles::SpawnProjectileMessage;
 
-/// Aim shoulder pivot, owned by Combat (the projectile origin is simulation —
-/// §20). `camera.rs` imports both so the crosshair ray passes exactly through
-/// the muzzle: pivot height over the body center, and the rightward offset.
-pub const AIM_MUZZLE_HEIGHT: f32 = 1.5;
+/// Aim shoulder pivot the crosshair ray passes through, owned by Combat
+/// (the aim line is simulation — §20). `camera.rs` imports both so the
+/// aim-mode camera orbit matches this ray exactly: pivot height over the
+/// body center, and the rightward offset.
+///
+/// Eye height of the rig (~1.7 m over the feet, body center is ~1.0 m up).
+/// Keeping this close to `BOW_SOCKET_LOCAL` keeps the convergence between
+/// the crosshair line and the arrow's actual path shallow — a large gap
+/// makes arrows fly visibly diagonal and clip cover the camera sees over.
+pub const AIM_PIVOT_HEIGHT: f32 = 0.7;
 pub const AIM_SHOULDER_OFFSET: f32 = 0.72;
+/// Bow socket relative to the body (shoulder level — where a drawn bow is
+/// held — slightly right and forward). The projectile origin is simulation
+/// (§20); `visuals.rs` places the bow mesh at this same offset so the arrow
+/// visibly leaves the bow.
+pub const BOW_SOCKET_LOCAL: Vec3 = Vec3::new(0.35, 0.4, -0.55);
 /// Forward nudge so the arrow doesn't spawn intersecting the body capsule.
 const ARROW_MUZZLE_FORWARD: f32 = 0.3;
+/// Max distance of the crosshair aim ray; with no hit inside this range the
+/// arrow flies toward the point at max range on the aim line.
+const AIM_RAY_MAX_RANGE: f32 = 120.0;
+/// Aim targets projecting closer than this ahead of the socket fire straight
+/// along the aim line instead of converging, so point-blank shots never get a
+/// degenerate or backward direction.
+const CONVERGENCE_MIN_DISTANCE: f32 = 1.5;
+/// Blockers this close to the target itself are not cover — they are
+/// practically the target (or its immediate surroundings) and the arrow
+/// should just fly and resolve naturally.
+const TARGET_BACKOFF: f32 = 0.5;
 /// Stamina drain rate per second when pulling/holding the bowstring.
 const DRAW_STAMINA_DRAIN_PER_SEC: f32 = 14.0;
 /// Delay (seconds) after firing before you can draw or shoot again.
@@ -148,6 +176,7 @@ pub fn shoot_drawn_arrow(
     mut spawns: MessageWriter<SpawnProjectileMessage>,
     mut fired: MessageWriter<BowFiredMessage>,
     time: Res<Time>,
+    spatial: SpatialQuery,
 ) {
     for (
         shooter,
@@ -192,7 +221,18 @@ pub fn shoot_drawn_arrow(
         let speed = lerp(profile.speed_min, profile.speed_max, factor);
         let damage = lerp(profile.damage_min, profile.damage_max, factor);
 
-        let direction = aim_direction(orientation);
+        let aim_dir = aim_direction(orientation);
+
+        // Two-phase aim: the crosshair ray (from the camera-aligned pivot)
+        // resolves the world target, and the arrow leaves the bow socket
+        // converging on it. Point-blank targets, or any cover blocking the
+        // bow's line that the crosshair already cleared, fall back to the
+        // aim line itself — if the player can see it, they can shoot it.
+        let pivot = aim_pivot(transform, orientation);
+        let socket = bow_socket(transform, orientation);
+        let target = aim_target(&spatial, shooter, pivot, aim_dir);
+        let blocked = bow_line_blocked(&spatial, shooter, socket, target, aim_dir);
+        let (launch_origin, direction) = launch_pose(pivot, socket, target, aim_dir, blocked);
 
         // Accuracy spread calculation: Bannerlord style
         // Maximum spread angle of ~8.5 degrees (0.15 rad) at zero charge,
@@ -217,10 +257,7 @@ pub fn shoot_drawn_arrow(
             direction
         };
 
-        // The crosshair ray passes through the shoulder pivot the camera
-        // orbits (same constants, owned here): spawning there keeps the
-        // arrow on the aim line for every actor, camera or not.
-        let origin = aim_muzzle(transform, orientation, perturbed_direction);
+        let origin = launch_origin + perturbed_direction * ARROW_MUZZLE_FORWARD;
 
         spawns.write(SpawnProjectileMessage {
             shooter,
@@ -245,12 +282,83 @@ fn next_random(seed: &mut u32) -> f32 {
     (*seed as f32) / (u32::MAX as f32)
 }
 
-fn aim_muzzle(transform: &Transform, orientation: &ControlOrientation, direction: Vec3) -> Vec3 {
+/// The camera-aligned shoulder pivot the crosshair ray starts from.
+fn aim_pivot(transform: &Transform, orientation: &ControlOrientation) -> Vec3 {
     let shoulder = Quat::from_rotation_y(orientation.yaw) * Vec3::X * AIM_SHOULDER_OFFSET;
-    transform.translation
-        + Vec3::Y * AIM_MUZZLE_HEIGHT
-        + shoulder
-        + direction * ARROW_MUZZLE_FORWARD
+    transform.translation + Vec3::Y * AIM_PIVOT_HEIGHT + shoulder
+}
+
+/// World position of the bow socket the arrow spawns at.
+fn bow_socket(transform: &Transform, orientation: &ControlOrientation) -> Vec3 {
+    transform.translation + Quat::from_rotation_y(orientation.yaw) * BOW_SOCKET_LOCAL
+}
+
+/// The crosshair's world target: first hit along the aim ray (ignoring the
+/// shooter), or the point at max range when the ray hits nothing.
+fn aim_target(spatial: &SpatialQuery, shooter: Entity, pivot: Vec3, aim_dir: Vec3) -> Vec3 {
+    let filter = SpatialQueryFilter::from_excluded_entities([shooter]);
+    let Ok(direction) = Dir3::new(aim_dir) else {
+        return pivot + aim_dir * AIM_RAY_MAX_RANGE;
+    };
+    match spatial.cast_ray(pivot, direction, AIM_RAY_MAX_RANGE, true, &filter) {
+        Some(hit) => pivot + aim_dir * hit.distance,
+        None => pivot + aim_dir * AIM_RAY_MAX_RANGE,
+    }
+}
+
+/// Direction from the bow socket to the crosshair target, so the trajectory
+/// converges on the point the player is looking at. Targets projecting closer
+/// than `CONVERGENCE_MIN_DISTANCE` ahead of the socket (including behind it)
+/// fall back to the aim line.
+fn converge_direction(socket: Vec3, target: Vec3, aim_dir: Vec3) -> Vec3 {
+    let to_target = target - socket;
+    if to_target.dot(aim_dir) < CONVERGENCE_MIN_DISTANCE {
+        return aim_dir;
+    }
+    to_target.normalize()
+}
+
+/// Whether anything blocks the bow's own line to the crosshair target. The
+/// crosshair ray already cleared the sight line up to the target, so any
+/// blocker here is something the camera sees past but the bow does not
+/// (stair edge, wall lip, parkour box) — checked over the whole flight path,
+/// backed off the target itself so the target never counts as cover.
+fn bow_line_blocked(
+    spatial: &SpatialQuery,
+    shooter: Entity,
+    socket: Vec3,
+    target: Vec3,
+    aim_dir: Vec3,
+) -> bool {
+    let direction = converge_direction(socket, target, aim_dir);
+    let check_distance = socket.distance(target) - TARGET_BACKOFF;
+    if check_distance <= 0.0 {
+        return false;
+    }
+    let Ok(direction) = Dir3::new(direction) else {
+        return false;
+    };
+    let filter = SpatialQueryFilter::from_excluded_entities([shooter]);
+    spatial
+        .cast_ray(socket, direction, check_distance, true, &filter)
+        .is_some()
+}
+
+/// Where the arrow launches. Normally from the bow socket, converging on the
+/// crosshair target; when near cover blocks the bow's line the crosshair
+/// already cleared, from the aim pivot straight down the aim line — the shot
+/// always goes where the player sees.
+fn launch_pose(
+    pivot: Vec3,
+    socket: Vec3,
+    target: Vec3,
+    aim_dir: Vec3,
+    bow_line_blocked: bool,
+) -> (Vec3, Vec3) {
+    if bow_line_blocked {
+        return (pivot, aim_dir);
+    }
+    (socket, converge_direction(socket, target, aim_dir))
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -291,6 +399,58 @@ mod tests {
             turned.x < -0.99,
             "quarter yaw must aim along -X, got {turned}"
         );
+    }
+
+    #[test]
+    fn convergence_points_from_socket_to_the_crosshair_target() {
+        let socket = Vec3::new(0.35, 1.15, -0.55);
+        let target = Vec3::new(0.0, 2.5, -30.0);
+        let aim_dir = Vec3::NEG_Z;
+
+        let direction = converge_direction(socket, target, aim_dir);
+
+        let expected = (target - socket).normalize();
+        assert!(
+            (direction - expected).length() < 1e-5,
+            "far targets must converge socket→target, got {direction}"
+        );
+        assert!(
+            (direction.length() - 1.0).abs() < 1e-5,
+            "direction must be normalized"
+        );
+    }
+
+    #[test]
+    fn blocked_bow_line_launches_from_the_aim_pivot_instead() {
+        let pivot = Vec3::new(0.72, 1.7, 0.0);
+        let socket = Vec3::new(0.35, 1.4, -0.55);
+        let target = Vec3::new(0.0, 1.7, -40.0);
+        let aim_dir = Vec3::NEG_Z;
+
+        let (origin, direction) = launch_pose(pivot, socket, target, aim_dir, true);
+        assert_eq!(origin, pivot, "blocked bow must fire from the aim line");
+        assert_eq!(direction, aim_dir);
+
+        let (origin, direction) = launch_pose(pivot, socket, target, aim_dir, false);
+        assert_eq!(origin, socket, "clear bow fires from the socket");
+        assert!(
+            (direction - (target - socket).normalize()).length() < 1e-5,
+            "clear bow converges on the target"
+        );
+    }
+
+    #[test]
+    fn point_blank_target_falls_back_to_the_aim_line() {
+        let socket = Vec3::new(0.35, 1.15, -0.55);
+        let aim_dir = Vec3::NEG_Z;
+
+        // Wall right in front: closer along the aim line than the minimum.
+        let close = socket + aim_dir * (CONVERGENCE_MIN_DISTANCE * 0.5);
+        assert_eq!(converge_direction(socket, close, aim_dir), aim_dir);
+
+        // Degenerate: the crosshair hit something behind the socket.
+        let behind = socket - aim_dir * 2.0;
+        assert_eq!(converge_direction(socket, behind, aim_dir), aim_dir);
     }
 
     #[test]

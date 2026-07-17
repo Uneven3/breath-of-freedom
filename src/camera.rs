@@ -12,13 +12,13 @@ use crate::movement::Player;
 use crate::movement::state::LocomotionState;
 use crate::visuals::PlayerVisual;
 
-use crate::combat::motors::aim::{AIM_MUZZLE_HEIGHT, AIM_SHOULDER_OFFSET};
+use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
 const SPRING_LENGTH: f32 = 6.5;
-/// The orbit pivot height doubles as the arrow muzzle height — Combat owns
-/// the constant (§20: the projectile origin is simulation) and equality is
-/// what puts the arrow exactly on the crosshair ray.
-const LENS_HEIGHT: f32 = AIM_MUZZLE_HEIGHT;
+/// Free-orbit pivot height, camera feel only. While aiming the pivot blends
+/// down to Combat's `AIM_PIVOT_HEIGHT` (§20: the aim line is simulation) so
+/// at full blend the crosshair ray and the aim ray are the same line.
+const LENS_HEIGHT: f32 = 1.5;
 /// Aim mode (bow drawn): tighter boom, shoulder offset shared with Combat
 /// (see `LENS_HEIGHT`), and how fast the camera blends in/out of it.
 const AIM_SPRING_LENGTH: f32 = 3.6;
@@ -241,12 +241,16 @@ fn follow_player(
     let aim_target = if aiming { 1.0 } else { 0.0 };
     rig.aim_blend = lerp(rig.aim_blend, aim_target, AIM_BLEND_PER_SEC * dt);
 
+    // Blend the pivot down to Combat's aim pivot while aiming, so the
+    // crosshair ray coincides with the arrow's aim ray at full blend.
+    let blended_lens_height = lerp(LENS_HEIGHT, AIM_PIVOT_HEIGHT, rig.aim_blend);
+
     // Dynamically cap lens height if there is a low ceiling directly above the player center.
     // This prevents the camera pivot from clipping inside low ceilings or stairs.
-    let mut effective_lens_height = LENS_HEIGHT;
+    let mut effective_lens_height = blended_lens_height;
     let up_dir = Dir3::Y;
     let filter = SpatialQueryFilter::from_excluded_entities([player_entity]);
-    if let Some(hit) = spatial.cast_ray(body, up_dir, LENS_HEIGHT, true, &filter) {
+    if let Some(hit) = spatial.cast_ray(body, up_dir, blended_lens_height, true, &filter) {
         effective_lens_height = (hit.distance - SPRING_MARGIN).max(0.2);
     }
 

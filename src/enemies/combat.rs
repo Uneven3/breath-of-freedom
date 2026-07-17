@@ -15,7 +15,7 @@ use super::brain::{EnemyBrainProfile, planar_distance_sq};
 use super::perception::AggroTarget;
 use super::state::EnemyAiState;
 use crate::combat::intent::{AttackIntent, CombatIntents};
-use crate::combat::motors::aim::{AIM_MUZZLE_HEIGHT, DrawStrength};
+use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, DrawStrength};
 use crate::combat::weapon::WeaponProfile;
 use crate::input::frame::ControlOrientation;
 
@@ -87,7 +87,7 @@ pub fn act_archer(time: Res<Time>, mut q: Query<ArcherActQuery, With<Enemy>>) {
         if *state == EnemyAiState::Combat
             && let Some(seen) = aggro.last_seen
         {
-            let eye = transform.translation + Vec3::Y * AIM_MUZZLE_HEIGHT;
+            let eye = transform.translation + Vec3::Y * AIM_PIVOT_HEIGHT;
             let to_target = seen - eye;
             if to_target.length_squared() > f32::EPSILON {
                 let (yaw, pitch) = yaw_pitch_toward(to_target);

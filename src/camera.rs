@@ -173,6 +173,14 @@ fn spawn_camera(mut commands: Commands) {
         CameraRig::default(),
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
+        // Silhouette outlines: the post-process pass reads these prepasses;
+        // MSAA off because it binds single-sample textures.
+        (
+            crate::visuals::outline::OutlineSettings::default(),
+            bevy::core_pipeline::prepass::DepthPrepass,
+            bevy::core_pipeline::prepass::NormalPrepass,
+            Msaa::Off,
+        ),
     ));
 }
 

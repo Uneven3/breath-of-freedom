@@ -17,12 +17,15 @@ use bevy::prelude::*;
 pub mod animation;
 pub mod enemy;
 pub mod horse;
+pub mod outline;
 pub mod player;
 pub mod probe;
+pub mod toon;
 pub mod vfx;
 
 pub use animation::{AnimationDebug, PlayerAnimations};
 pub use player::PlayerVisual;
+pub use toon::ToonMaterial;
 
 pub(crate) const INTERPOLATION_SPEED: f32 = 20.0;
 pub(crate) const SNEAK_Y_OFFSET: f32 = -0.4;
@@ -37,6 +40,8 @@ pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(MaterialPlugin::<ToonMaterial>::default());
+        app.add_plugins(outline::OutlinePlugin);
         app.init_resource::<AnimationDebug>();
         app.add_systems(
             Startup,

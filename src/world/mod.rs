@@ -13,6 +13,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+pub mod day_night;
 pub mod layout;
 mod spawn;
 
@@ -83,7 +84,10 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<day_night::TimeOfDay>();
         app.add_systems(Startup, layout::setup_world);
+        app.add_systems(FixedUpdate, day_night::advance_time);
+        app.add_systems(Update, day_night::apply_sun);
         app.add_systems(
             FixedUpdate,
             despawn_dead_targets.after(crate::health::HealthSet::Apply),

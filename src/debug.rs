@@ -24,6 +24,7 @@
 //! - **F7** — animation clip browser: plays any clip from the player GLB on
 //!   the player rig, bypassing the locomotion state machine; **[** / **]**
 //!   cycle through the clips (name shown in the HUD).
+//! - **F9** — day/night fast-forward (×120); **F10** — jump one hour.
 
 use avian3d::prelude::*;
 use bevy::color::palettes::css;
@@ -44,6 +45,7 @@ use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity, MovementSet, Player};
 use crate::visuals::{AnimationDebug, PlayerAnimations};
+use crate::world::day_night::TimeOfDay;
 use crate::world::{Ladder, Stairs};
 
 /// Which debug channels are active. Mirrored into `CastTrace.enabled` and
@@ -123,6 +125,7 @@ fn apply_initial_toggles(
     store.config_mut::<PhysicsGizmos>().0.enabled = config.show_colliders;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_toggles(
     keys: Res<ButtonInput<KeyCode>>,
     mut config: ResMut<DebugConfig>,
@@ -130,6 +133,7 @@ fn handle_toggles(
     mut store: ResMut<GizmoConfigStore>,
     mut anim_debug: ResMut<AnimationDebug>,
     anims: Option<Res<PlayerAnimations>>,
+    mut time_of_day: ResMut<TimeOfDay>,
 ) {
     if keys.just_pressed(KeyCode::F1) {
         config.show_colliders = !config.show_colliders;
@@ -159,6 +163,14 @@ fn handle_toggles(
     if keys.just_pressed(KeyCode::F7) {
         anim_debug.enabled = !anim_debug.enabled;
         info!("[debug] animation browser: {}", anim_debug.enabled);
+    }
+    if keys.just_pressed(KeyCode::F9) {
+        time_of_day.speed = if time_of_day.speed > 1.0 { 1.0 } else { 120.0 };
+        info!("[debug] time speed: x{}", time_of_day.speed);
+    }
+    if keys.just_pressed(KeyCode::F10) {
+        time_of_day.hours = (time_of_day.hours + 1.0).rem_euclid(24.0);
+        info!("[debug] time jump: {:05.2}h", time_of_day.hours);
     }
     if anim_debug.enabled
         && let Some(anims) = &anims
@@ -679,8 +691,19 @@ fn update_debug_text(
     probe_alive: Query<(), With<TraversalProbe>>,
     anim_debug: Res<AnimationDebug>,
     anims: Option<Res<PlayerAnimations>>,
+    time_of_day: Res<TimeOfDay>,
 ) {
     let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge, draw, hp) = *player;
+    let clock = {
+        let h = time_of_day.hours.floor() as u32;
+        let m = ((time_of_day.hours - h as f32) * 60.0).floor() as u32;
+        let speed = if time_of_day.speed > 1.0 {
+            format!("  x{:.0} [F9]", time_of_day.speed)
+        } else {
+            String::new()
+        };
+        format!("{h:02}:{m:02}{speed}")
+    };
     let speed = vel.0.length();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
@@ -705,7 +728,7 @@ fn update_debug_text(
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
     text.0 = format!(
-        "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}\n\
+        "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}  time: {clock}\n\
          state: {:?}  combat: {combat:?}  draw: {:.0}%   [t{:06}]\n\
          hp: {:.0}/{:.0}  stamina: {:.0}/{:.0}\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\

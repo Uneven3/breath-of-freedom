@@ -14,6 +14,8 @@ use super::spawn::{
     spawn_stair_segment,
 };
 use super::{Ladder, NonClimbable};
+use crate::visuals::ToonMaterial;
+use crate::visuals::toon::toon_color;
 
 // Graybox palette.
 const FLOOR_COLOR: Color = Color::srgb(0.4, 0.45, 0.4);
@@ -174,14 +176,16 @@ const STAIRS: &[StairRow] = &[
 pub(super) fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut toon_materials: ResMut<Assets<ToonMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let m = &mut meshes;
-    let mat = &mut materials;
+    let mat = &mut toon_materials;
 
-    // --- Lighting ---
+    // --- Lighting: the day/night cycle drives this light every frame ---
     commands.spawn((
         Name::new("Sun"),
+        super::day_night::Sun,
         DirectionalLight {
             shadow_maps_enabled: true,
             ..default()
@@ -192,6 +196,34 @@ pub(super) fn setup_world(
         brightness: 200.0,
         ..default()
     });
+
+    // Visible sun/moon discs: unlit spheres the cycle moves along their
+    // arcs, so the light source reads as a body in the sky.
+    commands.spawn((
+        Name::new("SunDisc"),
+        super::day_night::SunDisc,
+        bevy::light::NotShadowCaster,
+        Mesh3d(m.add(Sphere::new(14.0))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.93, 0.75),
+            unlit: true,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 400.0, 0.0),
+    ));
+    commands.spawn((
+        Name::new("MoonDisc"),
+        super::day_night::MoonDisc,
+        bevy::light::NotShadowCaster,
+        Mesh3d(m.add(Sphere::new(9.0))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.85, 0.9, 1.0),
+            unlit: true,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, -400.0, 0.0),
+        Visibility::Hidden,
+    ));
 
     // --- Declarative tables ---
     for row in BOXES {
@@ -209,7 +241,7 @@ pub(super) fn setup_world(
         }
     }
     for (name, center) in PRACTICE_TARGETS {
-        spawn_practice_target(&mut commands, m, mat, name, *center);
+        spawn_practice_target(&mut commands, m, mat, &mut materials, name, *center);
     }
     for row in STAIRS {
         spawn_stair_segment(
@@ -233,7 +265,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Rock"),
         Mesh3d(m.add(Sphere::new(2.0))),
-        MeshMaterial3d(mat.add(PROP_COLOR)),
+        MeshMaterial3d(mat.add(toon_color(PROP_COLOR))),
         Transform::from_xyz(-10.0, 1.0, -5.0),
         RigidBody::Static,
         Collider::sphere(2.0),
@@ -243,7 +275,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Tree"),
         Mesh3d(m.add(Cylinder::new(1.0, 10.0))),
-        MeshMaterial3d(mat.add(Color::srgb(0.4, 0.3, 0.2))),
+        MeshMaterial3d(mat.add(toon_color(Color::srgb(0.4, 0.3, 0.2)))),
         Transform::from_xyz(10.0, 5.0, -5.0),
         RigidBody::Static,
         Collider::cylinder(1.0, 10.0),
@@ -253,7 +285,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Slope"),
         Mesh3d(m.add(Cuboid::new(8.0, 0.3, 4.0))),
-        MeshMaterial3d(mat.add(FLOOR_COLOR)),
+        MeshMaterial3d(mat.add(toon_color(FLOOR_COLOR))),
         Transform::from_xyz(10.0, 1.37, 0.0)
             .with_rotation(Quat::from_rotation_z(20.0_f32.to_radians())),
         RigidBody::Static,
@@ -326,7 +358,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Ladder"),
         Mesh3d(m.add(Cuboid::new(0.8, 4.0, 0.1))),
-        MeshMaterial3d(mat.add(Color::srgb(0.5, 0.35, 0.2))),
+        MeshMaterial3d(mat.add(toon_color(Color::srgb(0.5, 0.35, 0.2)))),
         Transform::from_xyz(ladder_x, 2.0, ladder_surface_z + 0.05),
         Ladder {
             bottom: Vec3::new(ladder_x, 0.0, ladder_body_z),

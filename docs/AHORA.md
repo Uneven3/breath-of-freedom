@@ -32,25 +32,27 @@ eliminado, `Perceivable`, test del veto ForbidSprint). 187 tests.
 
 ## Foco activo — exprimir el graybox (decisión del usuario, 2026-07-17)
 
-Antes de assets/pipeline, hay sistemas enteros que se construyen sin arte:
+Hecho (checkpoint jugado 2026-07-17, "se ve increíble"): **ciclo día/noche**
+(`world/day_night.rs` — TimeOfDay a ritmo BotW, sol/luna visibles, cielo
+estilizado, F9/F10 de debug) y **identidad visual toon** (`visuals/toon.rs`
++ `visuals/outline.rs` — bandas discretas mate, outlines de post-proceso
+por profundidad/normales). Los actores aún usan StandardMaterial continuo
+(sus sistemas de tint/flash lo mutan) — toonificarlos es deuda menor.
 
-1. **Ciclo día/noche** — `TimeOfDay` en World (sustrato: no lee a nadie);
-   sol rotando + luz/ambiente. Baratísimo y desbloquea temperatura e IA
-   nocturna.
-2. **Temperatura** — StatusEffects: zonas frías/calientes + exposición por
-   hora del día → `DamageRequestMessage` a Health; HUD graybox. Mitigación
-   por equipo llega después (necesita inventario).
-3. **Inventario** — fundación de durabilidad, crafteo, loot de árboles y
+Queda, en orden sugerido:
+
+1. **Temperatura** — StatusEffects: zonas frías/calientes + exposición por
+   hora del día (`TimeOfDay` ya existe) → `DamageRequestMessage` a Health;
+   HUD graybox. Mitigación por equipo llega después (necesita inventario).
+2. **Inventario** — fundación de durabilidad, crafteo, loot de árboles y
    equipo térmico. Pieza arquitectónica grande: modelo de datos primero,
    UI graybox mínima después.
-4. **Toon shader** — cel-shading (norte visual); material extension de
-   Bevy, presentación pura, paralelizable con lo demás.
-5. **IA de combate** — flanqueo, reacciones grupales, huida al estar
+3. **IA de combate** — flanqueo, reacciones grupales, huida al estar
    herido (los enemigos ya leen su propio `Health`). Slice jugable sobre
    los brains existentes.
 
 Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
-Hit_Knockback) a estados reales.
+Hit_Knockback); toon en actores; FXAA (MSAA quedó off por el outline).
 
 ## Estacionado — pipeline de assets (cuando termine la etapa graybox)
 

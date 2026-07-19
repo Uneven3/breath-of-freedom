@@ -24,10 +24,7 @@ pub fn read_use_item_requests(
     mut heals: MessageWriter<HealRequestMessage>,
 ) {
     for (actor, source, mut cursor, mut inventory) in &mut actors {
-        let Some(frame) = actions.frame(source.0) else {
-            continue;
-        };
-        if !cursor.0.consume(frame, IntentAction::UseItem) {
+        if !cursor.triggered(&actions, source.0, IntentAction::UseItem) {
             continue;
         }
         let Some(heal) = inventory.consume_first_food() else {

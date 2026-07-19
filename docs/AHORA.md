@@ -90,7 +90,28 @@ limpio. `world/layout.rs` es la costura donde se enchufa.
   hasta re-equipar (quirk aceptado al agregar durabilidad).
 - **Árbitro único de interactuables:** `MountInputCursor` e
   `InventoryInputCursor` consumen `Interact` en paralelo — un caballo y un
-  arma ambos en rango disparan los dos sistemas con un solo `E`.
+  arma ambos en rango disparan los dos sistemas con un solo `E`. Hoy no se
+  dispara (los pickups del graybox están a ~8m del spawn del caballo); sin
+  árbitro central, el primer layout que los acerque dispara ambos con una
+  sola tecla.
+- **Respawn no restaura arma:** si el jugador muere desarmado (arma rota)
+  sin repuesto en `Inventory` ni un arma cercana en el mundo, respawnea
+  con HP completo pero sin `WeaponProfile` — incapaz de atacar cuerpo a
+  cuerpo hasta encontrar otra arma. `player.rs::respawn_on_death` no lo
+  toca a propósito hoy (el inventario sobrevive a la muerte); decidir si
+  el respawn debe garantizar un arma mínima.
+- **`InventorySet` y `MountsSet::PostMove` sin orden explícito entre sí:**
+  comparten banda (`.after(SyncAttachments).before(ApplyContext)`) sobre
+  componentes hoy disjuntos; el primer feature que cruce ambos dominios
+  (alforjas de caballo, loot al desmontar) hereda un orden no declarado.
+- **`read_interact_pickups` duplica la selección de "candidato más
+  cercano" de `mounts::lifecycle::read_interact_requests`** (filter +
+  `min_by`/`distance_squared`) en vez de un helper compartido — un tercer
+  sistema contextual (diálogo, campfire) copiaría por tercera vez.
+- **Apilado de comida por igualdad exacta de `f32`:** `ItemKind::Food`
+  apila por `PartialEq` derivado; una fuente futura que calcule `heal` en
+  runtime (en vez de reusar un const) puede fallar el apilado por
+  redondeo.
 
 ## Decisiones que el usuario debe tomar pronto
 

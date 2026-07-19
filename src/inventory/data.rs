@@ -8,6 +8,8 @@ use bevy::prelude::*;
 
 use crate::combat::weapon::WeaponProfile;
 use crate::input::InputConsumeCursor;
+use crate::input::action::IntentAction;
+use crate::input::frame::{ActiveActions, InputSource};
 
 pub const INVENTORY_SLOTS: usize = 8;
 
@@ -56,9 +58,10 @@ pub enum ItemKind {
     Food { label: &'static str, heal: f32 },
 }
 
-/// `quantity` is always 1 for `Weapon` — an invariant the type doesn't
-/// encode (splitting `ItemStack` in two isn't worth it for graybox, §15);
-/// `Inventory::try_add` upholds it by never stacking weapons.
+/// `quantity` is always 1 for `Weapon` and never 0 for any kind — invariants
+/// the type doesn't encode (splitting `ItemStack` in two isn't worth it for
+/// graybox, §15); `Inventory::try_add` is the only constructor and enforces
+/// both.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ItemStack {
     pub kind: ItemKind,
@@ -84,16 +87,27 @@ impl Default for Inventory {
 impl Inventory {
     /// Stacks onto an existing slot of the same `kind` (materials/food
     /// only — weapons never stack); otherwise opens the first free slot.
-    /// `Err` leaves the inventory unchanged.
+    /// `Err` leaves the inventory unchanged. A zero quantity is rejected
+    /// outright (an empty stack is a state to not create, not to hold —
+    /// `consume_first_food`'s decrement would underflow on it) and a
+    /// weapon's quantity is forced to 1 regardless of what's passed, so
+    /// `ItemStack`'s documented "weapons never stack" invariant holds by
+    /// construction instead of by caller discipline.
     pub fn try_add(&mut self, kind: ItemKind, quantity: u32) -> Result<(), ()> {
-        if !matches!(kind, ItemKind::Weapon(_)) {
+        if quantity == 0 {
+            return Err(());
+        }
+        let quantity = if matches!(kind, ItemKind::Weapon(_)) {
+            1
+        } else {
             for slot in self.slots.iter_mut().flatten() {
                 if slot.kind == kind {
                     slot.quantity += quantity;
                     return Ok(());
                 }
             }
-        }
+            quantity
+        };
         for slot in &mut self.slots {
             if slot.is_none() {
                 *slot = Some(ItemStack { kind, quantity });
@@ -139,47 +153,49 @@ impl Inventory {
     }
 }
 
-/// The equipped weapon's remaining hits, mirroring `WeaponItem`'s
-/// durability. Lives alongside `WeaponProfile` on the actor (Combat's
-/// tuning component); Combat never reads this — Inventory owns the whole
-/// equip/durability contract, per `combat::weapon`'s own noted intent.
+/// The equipped weapon's remaining hits. Wraps the `WeaponItem` itself
+/// (rather than re-declaring `label`/`max_durability`/`current_durability`
+/// as separate fields) so there is exactly one place that holds a weapon's
+/// durability — `equip::apply_equip_requests` reads `item()` straight back
+/// out on a swap instead of reconstructing it field-by-field. Lives
+/// alongside `WeaponProfile` on the actor (Combat's tuning component);
+/// Combat never reads this — Inventory owns the whole equip/durability
+/// contract, per `combat::weapon`'s own noted intent.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
-pub struct WeaponDurability {
-    current: u32,
-    max: u32,
-    label: &'static str,
-}
+pub struct WeaponDurability(WeaponItem);
 
 impl WeaponDurability {
     pub fn new(item: WeaponItem) -> Self {
-        Self {
-            current: item.current_durability,
-            max: item.max_durability,
-            label: item.label,
-        }
+        Self(item)
     }
 
     /// Subtracts up to `amount`, clamped at zero. Returns what was applied.
     pub fn apply_hit(&mut self, amount: u32) -> u32 {
-        let applied = amount.min(self.current);
-        self.current -= applied;
+        let applied = amount.min(self.0.current_durability);
+        self.0.current_durability -= applied;
         applied
     }
 
     pub fn is_broken(&self) -> bool {
-        self.current == 0
+        self.0.current_durability == 0
     }
 
     pub fn current(&self) -> u32 {
-        self.current
+        self.0.current_durability
     }
 
     pub fn max(&self) -> u32 {
-        self.max
+        self.0.max_durability
     }
 
     pub fn label(&self) -> &'static str {
-        self.label
+        self.0.label
+    }
+
+    /// The weapon as it should re-enter `Inventory` on a swap — remaining
+    /// durability included, not reset.
+    pub fn item(&self) -> WeaponItem {
+        self.0
     }
 }
 
@@ -222,6 +238,23 @@ pub struct WorldItem {
 #[derive(Component, Default)]
 pub struct InventoryInputCursor(pub InputConsumeCursor);
 
+impl InventoryInputCursor {
+    /// Resolves `source`'s frame and consumes `action`'s trigger edge in
+    /// one call — collapses the `actions.frame(source)` +
+    /// `cursor.0.consume(frame, action)` pair that pickup/equip/consume
+    /// each repeat once per action they read.
+    pub fn triggered(
+        &mut self,
+        actions: &ActiveActions,
+        source: InputSource,
+        action: IntentAction,
+    ) -> bool {
+        actions
+            .frame(source)
+            .is_some_and(|frame| self.0.consume(frame, action))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +286,26 @@ mod tests {
             .find(|s| s.kind == ItemKind::Material(MaterialKind::Wood))
             .unwrap();
         assert_eq!(wood.quantity, 3);
+    }
+
+    #[test]
+    fn try_add_rejects_zero_quantity_and_forces_weapon_quantity_to_one() {
+        let mut inventory = Inventory::default();
+        assert_eq!(
+            inventory.try_add(ItemKind::Material(MaterialKind::Wood), 0),
+            Err(()),
+            "a zero-quantity stack must never be created — nothing to decrement later"
+        );
+        assert!(inventory.iter().next().is_none());
+
+        inventory
+            .try_add(ItemKind::Weapon(WeaponItem::GRAYBOX_SWORD), 5)
+            .unwrap();
+        assert_eq!(
+            inventory.iter().next().unwrap().quantity,
+            1,
+            "a weapon stack is always quantity 1, regardless of what's requested"
+        );
     }
 
     #[test]

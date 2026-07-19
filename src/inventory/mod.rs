@@ -61,6 +61,10 @@ impl Plugin for InventoryPlugin {
             InventorySet::Break.after(InventorySet::Durability),
         );
 
+        // Chained: all three mutate the same actor's `Inventory` (and the
+        // last two can both write `EquipRequestMessage` off simultaneous
+        // key presses) — an unordered tuple would leave "who wins" up to
+        // the scheduler instead of a declared, deterministic order.
         app.add_systems(
             FixedUpdate,
             (
@@ -68,6 +72,7 @@ impl Plugin for InventoryPlugin {
                 pickup::read_interact_pickups,
                 equip::read_cycle_weapon_requests,
             )
+                .chain()
                 .in_set(InventorySet::Collect),
         );
         app.add_systems(

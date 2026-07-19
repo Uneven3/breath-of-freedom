@@ -3,43 +3,34 @@
 
 use bevy::prelude::*;
 
-use crate::combat::weapon::WeaponProfile;
 use crate::input::action::IntentAction;
 use crate::input::frame::{ActiveActions, InputControlledBy};
 use crate::movement::Player;
 
 use super::data::{
-    EquipRequestMessage, Inventory, InventoryInputCursor, ItemKind, WeaponDurability, WeaponItem,
+    EquipRequestMessage, Inventory, InventoryInputCursor, ItemKind, WeaponDurability,
 };
 
-type CurrentWeapon<'a> = (
-    Option<&'a WeaponProfile>,
-    Option<&'a WeaponDurability>,
-    &'a mut Inventory,
-);
+type CurrentWeapon<'a> = (Option<&'a WeaponDurability>, &'a mut Inventory);
 
 /// The only writer of `WeaponProfile`/`WeaponDurability` on an equipped
 /// actor. Swap is atomic: the outgoing weapon (if any) returns to
 /// `Inventory` with its remaining durability intact before the incoming one
-/// is inserted.
+/// is inserted. Reads `WeaponDurability` only, not `WeaponProfile` — the two
+/// are always inserted/removed together (here, in `player.rs`, and in
+/// `durability::unequip_broken_weapons`), so `WeaponDurability::item()`
+/// already carries the profile that would otherwise need a second query.
 pub fn apply_equip_requests(
     mut requests: MessageReader<EquipRequestMessage>,
     mut actors: Query<CurrentWeapon>,
     mut commands: Commands,
 ) {
     for request in requests.read() {
-        let Ok((current_profile, current_durability, mut inventory)) =
-            actors.get_mut(request.actor)
-        else {
+        let Ok((current_durability, mut inventory)) = actors.get_mut(request.actor) else {
             continue;
         };
-        if let (Some(profile), Some(durability)) = (current_profile, current_durability) {
-            let outgoing = WeaponItem {
-                profile: *profile,
-                label: durability.label(),
-                max_durability: durability.max(),
-                current_durability: durability.current(),
-            };
+        if let Some(durability) = current_durability {
+            let outgoing = durability.item();
             if inventory.try_add(ItemKind::Weapon(outgoing), 1).is_err() {
                 warn!(
                     "[inventory] no room to keep '{}', it was lost in the swap",
@@ -72,10 +63,7 @@ pub fn read_cycle_weapon_requests(
     mut equip: MessageWriter<EquipRequestMessage>,
 ) {
     for (actor, source, mut cursor, mut inventory) in &mut actors {
-        let Some(frame) = actions.frame(source.0) else {
-            continue;
-        };
-        if !cursor.0.consume(frame, IntentAction::CycleWeapon) {
+        if !cursor.triggered(&actions, source.0, IntentAction::CycleWeapon) {
             continue;
         }
         if let Some(item) = inventory.take_first_weapon() {
@@ -89,7 +77,9 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
+    use crate::combat::weapon::WeaponProfile;
     use crate::input::frame::LOCAL_INPUT_SOURCE;
+    use crate::inventory::data::WeaponItem;
 
     #[test]
     fn equipping_an_unarmed_actor_inserts_profile_and_durability() {

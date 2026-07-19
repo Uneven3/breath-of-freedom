@@ -100,10 +100,7 @@ pub fn read_interact_pickups(
     mut equip: MessageWriter<EquipRequestMessage>,
 ) {
     for (actor, source, mut cursor, actor_transform, mut inventory) in &mut actors {
-        let Some(frame) = actions.frame(source.0) else {
-            continue;
-        };
-        if !cursor.0.consume(frame, IntentAction::Interact) {
+        if !cursor.triggered(&actions, source.0, IntentAction::Interact) {
             continue;
         }
         let origin = actor_transform.translation;

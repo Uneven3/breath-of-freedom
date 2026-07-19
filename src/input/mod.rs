@@ -95,6 +95,12 @@ fn resolve_local_actions(
     if keys.just_pressed(KeyCode::KeyE) {
         actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Interact);
     }
+    if keys.just_pressed(KeyCode::KeyC) {
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::UseItem);
+    }
+    if keys.just_pressed(KeyCode::Digit4) {
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::CycleWeapon);
+    }
 }
 
 const LOCAL_HELD_BINDINGS: [(IntentAction, KeyCode); 12] = [

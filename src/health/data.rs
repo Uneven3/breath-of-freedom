@@ -31,6 +31,14 @@ impl Health {
         self.current = self.max;
     }
 
+    /// Adds up to `amount`, clamped at `max`. Returns what was actually
+    /// applied — mirrors `apply_damage`.
+    pub fn heal(&mut self, amount: f32) -> f32 {
+        let applied = amount.clamp(0.0, self.max - self.current);
+        self.current += applied;
+        applied
+    }
+
     pub fn is_dead(&self) -> bool {
         self.current <= 0.0
     }
@@ -71,6 +79,14 @@ impl HostileInteractionImmunity {
 
 // An applied/rejected result lands only with its first real consumer; Health
 // does not publish a message that nobody reads.
+
+/// Ask Health to heal `target`. Owned by Health, same contract shape as
+/// `DamageRequestMessage` (Inventory emits it when a consumable is eaten).
+#[derive(Message, Debug, Clone, Copy)]
+pub struct HealRequestMessage {
+    pub target: Entity,
+    pub amount: f32,
+}
 
 /// `current` crossed to zero. Emitted exactly once per death; what happens
 /// next (despawn, respawn, loot) belongs to each actor's owning system,

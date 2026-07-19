@@ -36,6 +36,7 @@ use std::fmt::Write;
 
 use crate::combat::motors::aim::DrawStrength;
 use crate::combat::state::CombatState;
+use crate::inventory::{Inventory, ItemKind, WeaponDurability};
 use crate::movement::diag::{CastKind, CastTrace};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use crate::movement::probe_data::TraversalProbe;
@@ -680,6 +681,8 @@ fn update_debug_text(
             &LedgeFacts,
             &DrawStrength,
             &crate::health::Health,
+            &Inventory,
+            Option<&WeaponDurability>,
         ),
         With<Player>,
     >,
@@ -693,7 +696,21 @@ fn update_debug_text(
     anims: Option<Res<PlayerAnimations>>,
     time_of_day: Res<TimeOfDay>,
 ) {
-    let (state, combat, stamina, vel, ground, contact, stairs, ladder, ledge, draw, hp) = *player;
+    let (
+        state,
+        combat,
+        stamina,
+        vel,
+        ground,
+        contact,
+        stairs,
+        ladder,
+        ledge,
+        draw,
+        hp,
+        inventory,
+        weapon,
+    ) = *player;
     let clock = {
         let h = time_of_day.hours.floor() as u32;
         let m = ((time_of_day.hours - h as f32) * 60.0).floor() as u32;
@@ -705,6 +722,25 @@ fn update_debug_text(
         format!("{h:02}:{m:02}{speed}")
     };
     let speed = vel.0.length();
+    let weapon_status = match weapon {
+        Some(durability) => format!(
+            "{} {}/{}",
+            durability.label(),
+            durability.current(),
+            durability.max()
+        ),
+        None => "unarmed".to_string(),
+    };
+    let materials: u32 = inventory
+        .iter()
+        .filter(|stack| matches!(stack.kind, ItemKind::Material(_)))
+        .map(|stack| stack.quantity)
+        .sum();
+    let food: u32 = inventory
+        .iter()
+        .filter(|stack| matches!(stack.kind, ItemKind::Food { .. }))
+        .map(|stack| stack.quantity)
+        .sum();
     let onoff = |b: bool| if b { "ON " } else { "off" };
     let probe_status = if probe_alive.is_empty() { "off" } else { "ON " };
     let anim_status = match (&anims, anim_debug.enabled) {
@@ -731,6 +767,7 @@ fn update_debug_text(
         "fps: {fps:.0}  ({frame_ms:.2} ms)  present: {:?}  time: {clock}\n\
          state: {:?}  combat: {combat:?}  draw: {:.0}%   [t{:06}]\n\
          hp: {:.0}/{:.0}  stamina: {:.0}/{:.0}\n\
+         weapon: {weapon_status}  materials: {materials}  food: {food}  [C] eat  [4] cycle weapon\n\
          vel: ({:.2}, {:.2}, {:.2})  |v|={:.2}\n\
          grounded: {}  (probe={} slope={} ascend_dot={:.3})\n\
          slide_wall: {}  stairs: {}  ladder: {}\n\

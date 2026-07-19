@@ -132,6 +132,48 @@ const PRACTICE_TARGETS: &[(&str, Vec3)] = &[
     ("PracticeTargetFar", Vec3::new(24.0, 1.4, 10.0)),
 ];
 
+struct PickupRow {
+    name: &'static str,
+    pos: Vec3,
+    stack: crate::inventory::ItemStack,
+    mode: crate::inventory::PickupMode,
+}
+
+/// Graybox inventory checkpoint: one lootable weapon (Interact) plus a
+/// couple of auto-collected stacks, all close to spawn.
+const PICKUPS: &[PickupRow] = &[
+    PickupRow {
+        name: "SpareClub",
+        pos: Vec3::new(-4.0, 0.5, 3.0),
+        stack: crate::inventory::ItemStack {
+            kind: crate::inventory::ItemKind::Weapon(crate::inventory::WeaponItem::LOOTABLE_CLUB),
+            quantity: 1,
+        },
+        mode: crate::inventory::PickupMode::Interact,
+    },
+    PickupRow {
+        name: "WoodPile",
+        pos: Vec3::new(-4.0, 0.3, 5.0),
+        stack: crate::inventory::ItemStack {
+            kind: crate::inventory::ItemKind::Material(crate::inventory::MaterialKind::Wood),
+            quantity: 3,
+        },
+        mode: crate::inventory::PickupMode::Auto,
+    },
+    PickupRow {
+        name: "Apple",
+        pos: Vec3::new(-4.0, 0.3, 6.5),
+        stack: crate::inventory::ItemStack {
+            kind: crate::inventory::ItemKind::Food {
+                label: "Apple",
+                heal: 25.0,
+            },
+            quantity: 1,
+        },
+        mode: crate::inventory::PickupMode::Auto,
+    },
+];
+
 struct StairRow {
     name: &'static str,
     base: Vec3,
@@ -242,6 +284,17 @@ pub(super) fn setup_world(
     }
     for (name, center) in PRACTICE_TARGETS {
         spawn_practice_target(&mut commands, m, mat, &mut materials, name, *center);
+    }
+    for row in PICKUPS {
+        crate::inventory::spawn_world_item(
+            &mut commands,
+            m,
+            mat,
+            row.name,
+            row.pos,
+            row.stack,
+            row.mode,
+        );
     }
     for row in STAIRS {
         spawn_stair_segment(
@@ -380,6 +433,7 @@ mod tests {
         let mut names: Vec<&str> = BOXES.iter().map(|row| row.name).collect();
         names.extend(PRACTICE_TARGETS.iter().map(|(name, _)| *name));
         names.extend(STAIRS.iter().map(|row| row.name));
+        names.extend(PICKUPS.iter().map(|row| row.name));
         let total = names.len();
         names.sort_unstable();
         names.dedup();

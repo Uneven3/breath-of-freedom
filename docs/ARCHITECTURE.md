@@ -143,6 +143,7 @@ crítico del audit 2026-07-17).
 | `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |
 | `projectiles` | Flechas: vuelo parabólico, impacto | Spawn por mensaje de Combat |
 | `health` | `Health`, inmunidad, aplicación autoritativa de daño | Único que resta HP; muerte por mensaje |
+| `inventory` | `Inventory`, equipo/durabilidad, pickups del mundo | Equipar inserta/retira `WeaponProfile` de Combat; lee `HitImpactMessage` (filtro `melee`); pide heal a Health |
 | `enemies` | Percepción, `Awareness`, brains melee/arquero | Escribe solo sus `*Intents`/`ControlOrientation` |
 | `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
 | `player` | Spawn y respawn del jugador | Dueño de la reacción a su muerte |

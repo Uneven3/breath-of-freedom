@@ -82,17 +82,22 @@ pub struct MeleeHitMessage {
 
 /// A resolved hit, published for presentation (flash, burst, damage text,
 /// camera shake, hitstop). Combat owns the type; consumers read it without
-/// Combat knowing they exist. (No `attacker` field until a consumer reads
-/// one — Health gets its own `DamageRequestMessage` with attribution.)
+/// Combat knowing they exist. Three producers write it: melee (below),
+/// arrows (`projectiles`), horse charge (`mounts::charge`) — `melee`
+/// distinguishes them for consumers that only care about a wielded weapon
+/// connecting (Inventory's durability tracker: an arrow or a charge must
+/// never wear down the equipped melee weapon).
 #[derive(Message, Debug, Clone, Copy)]
 pub struct HitImpactMessage {
     pub target: Entity,
+    pub attacker: Entity,
     /// Where the impact reads best (target center).
     pub position: Vec3,
     pub damage: f32,
     /// A critical connection (sneakstrike today, headshot with the bow):
     /// bigger feedback — hitstop, louder text.
     pub critical: bool,
+    pub melee: bool,
 }
 
 /// Planar knockback speed added to the struck body (m/s); the target's own
@@ -403,9 +408,11 @@ pub fn resolve_melee_hits(
 
         impacts.write(HitImpactMessage {
             target: hit.target,
+            attacker: hit.attacker,
             position: target_tf.translation,
             damage,
             critical,
+            melee: true,
         });
 
         threats.write(DirectThreatMessage {

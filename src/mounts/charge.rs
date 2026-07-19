@@ -197,9 +197,11 @@ fn emit_charge_outcomes(
     });
     outcomes.impacts.write(HitImpactMessage {
         target,
+        attacker: horse,
         position: target_position,
         damage: CHARGE_DAMAGE,
         critical: false,
+        melee: false,
     });
     RecordHit::New
 }

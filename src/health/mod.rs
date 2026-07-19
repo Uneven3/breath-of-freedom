@@ -1,8 +1,11 @@
 //! Health — the shared hit-point pool (see `docs/ARCHITECTURE.md`).
 //!
 //! One system: `apply_damage` turns `DamageRequestMessage`s into pool
-//! mutations and (once per death) `DeathMessage`s. No Broker: a pool has no
-//! exclusive states to arbitrate (`docs/ARCHITECTURE.md`).
+//! mutations and (once per death) `DeathMessage`s, and `HealRequestMessage`s
+//! into the mirror mutation — both request kinds share the system because
+//! Health stays the pool's only writer (never two systems racing to mutate
+//! the same component). No Broker: a pool has no exclusive states to
+//! arbitrate (`docs/ARCHITECTURE.md`).
 //! Death consequences live with each actor's owner (Player respawns,
 //! enemies/targets despawn).
 
@@ -10,7 +13,9 @@ use bevy::prelude::*;
 
 pub mod data;
 
-pub use data::{DamageRequestMessage, DeathMessage, Health, HostileInteractionImmunity};
+pub use data::{
+    DamageRequestMessage, DeathMessage, HealRequestMessage, Health, HostileInteractionImmunity,
+};
 
 use crate::projectiles::ProjectilesSet;
 
@@ -29,6 +34,7 @@ pub struct HealthPlugin;
 impl Plugin for HealthPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<DamageRequestMessage>();
+        app.add_message::<HealRequestMessage>();
         app.add_message::<DeathMessage>();
         app.configure_sets(
             FixedUpdate,
@@ -42,7 +48,8 @@ impl Plugin for HealthPlugin {
 /// `Health`, or already dead, are ignored (Constitución §9: game-state
 /// conditions are handled, never panicked on).
 pub fn apply_damage(
-    mut requests: MessageReader<DamageRequestMessage>,
+    mut damage_requests: MessageReader<DamageRequestMessage>,
+    mut heal_requests: MessageReader<HealRequestMessage>,
     mut pools: Query<(
         &mut Health,
         Option<&Name>,
@@ -50,7 +57,7 @@ pub fn apply_damage(
     )>,
     mut deaths: MessageWriter<DeathMessage>,
 ) {
-    for request in requests.read() {
+    for request in damage_requests.read() {
         let Ok((mut health, name, immunity)) = pools.get_mut(request.target) else {
             continue;
         };
@@ -76,6 +83,22 @@ pub fn apply_damage(
             });
         }
     }
+
+    for request in heal_requests.read() {
+        let Ok((mut health, name, _)) = pools.get_mut(request.target) else {
+            continue;
+        };
+        if health.is_dead() {
+            continue;
+        }
+        let amount = health.heal(request.amount);
+        let label = name.map(Name::as_str).unwrap_or("target");
+        info!(
+            "[health] {label} healed {amount:.0} → {:.0}/{:.0}",
+            health.current(),
+            health.max()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +109,7 @@ mod tests {
     fn world_with_messages() -> World {
         let mut world = World::new();
         world.init_resource::<Messages<DamageRequestMessage>>();
+        world.init_resource::<Messages<HealRequestMessage>>();
         world.init_resource::<Messages<DeathMessage>>();
         world
     }
@@ -105,6 +129,49 @@ mod tests {
         assert!(health.is_dead());
         health.heal_full();
         assert_eq!(health.current(), health.max());
+    }
+
+    #[test]
+    fn heal_clamps_at_max_and_reports_applied_amount() {
+        let mut health = Health::new(30.0);
+        let _ = health.apply_damage(20.0);
+        assert_eq!(health.current(), 10.0);
+        assert_eq!(health.heal(5.0), 5.0);
+        assert_eq!(health.current(), 15.0);
+        assert_eq!(health.heal(50.0), 15.0, "overheal clamps at max");
+        assert_eq!(health.current(), health.max());
+    }
+
+    #[test]
+    fn heal_request_restores_hp_but_never_revives_or_emits_death() {
+        let mut world = world_with_messages();
+        let injured = world.spawn((Health::new(30.0), Name::new("Injured"))).id();
+        let dead = world.spawn(Health::new(0.0)).id();
+        {
+            let mut entity = world.entity_mut(injured);
+            let mut health = entity.get_mut::<Health>().unwrap();
+            let _ = health.apply_damage(20.0);
+        }
+
+        world.write_message(HealRequestMessage {
+            target: injured,
+            amount: 5.0,
+        });
+        world.write_message(HealRequestMessage {
+            target: dead,
+            amount: 5.0,
+        });
+        world.run_system_once(apply_damage).unwrap();
+
+        assert_eq!(
+            world.entity(injured).get::<Health>().unwrap().current(),
+            15.0
+        );
+        assert!(
+            world.entity(dead).get::<Health>().unwrap().is_dead(),
+            "healing a dead pool is a no-op, not a revive"
+        );
+        assert!(deaths(&world).is_empty(), "heal never emits DeathMessage");
     }
 
     #[test]

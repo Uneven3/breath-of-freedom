@@ -11,6 +11,7 @@ mod debug;
 mod enemies;
 mod health;
 mod input;
+mod inventory;
 mod mounts;
 mod movement;
 mod player;
@@ -39,6 +40,7 @@ fn main() {
             combat::CombatPlugin,
             projectiles::ProjectilesPlugin,
             health::HealthPlugin,
+            inventory::InventoryPlugin,
             enemies::EnemiesPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,

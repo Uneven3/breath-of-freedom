@@ -288,9 +288,11 @@ fn resolve_arrow_hit(
     });
     outcomes.impacts.write(HitImpactMessage {
         target,
+        attacker: arrow.shooter,
         position: hit_point,
         damage,
         critical,
+        melee: false,
     });
     let planar = Vec3::new(arrow.velocity.x, 0.0, arrow.velocity.z).normalize_or_zero();
     outcomes.impulses.write(BodyImpulseMessage {

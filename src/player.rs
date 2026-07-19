@@ -74,8 +74,10 @@ fn spawn_player(mut commands: Commands) {
                 crate::mounts::data::MountInputCursor::default(),
             ),
         ),
-        // Combat contract: graybox sword until Equipment (Inventory) owns
-        // what's wielded.
+        // Combat contract: the starting sword is a breakable instance of
+        // `WeaponItem::GRAYBOX_SWORD` — Inventory owns the swap/durability
+        // contract from here on (`inventory::equip`), Combat only reads
+        // `WeaponProfile` as the armed boolean.
         (
             Health::new(PLAYER_HP),
             crate::combat::intent::CombatIntents::default(),
@@ -88,6 +90,11 @@ fn spawn_player(mut commands: Commands) {
             crate::combat::motors::attack::ActiveSwing::default(),
             crate::combat::brain::CombatInputCursor::default(),
             crate::combat::motors::aim::DrawStrength::default(),
+        ),
+        (
+            crate::inventory::Inventory::default(),
+            crate::inventory::WeaponDurability::new(crate::inventory::WeaponItem::GRAYBOX_SWORD),
+            crate::inventory::InventoryInputCursor::default(),
         ),
     ));
 }

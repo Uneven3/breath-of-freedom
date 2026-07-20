@@ -31,7 +31,8 @@ struct BoxRow {
     climbable: bool,
 }
 
-const PERIMETER_HALF_EXTENT: f32 = 49.5;
+pub const WORLD_SIZE: f32 = 320.0;
+const PERIMETER_HALF_EXTENT: f32 = WORLD_SIZE * 0.5 - 0.5;
 const PERIMETER_HEIGHT: f32 = 12.0;
 const PERIMETER_THICKNESS: f32 = 1.0;
 
@@ -42,35 +43,35 @@ const BOXES: &[BoxRow] = &[
     BoxRow {
         name: "Floor",
         pos: Vec3::new(0.0, -0.5, 0.0),
-        dims: Vec3::new(100.0, 1.0, 100.0),
+        dims: Vec3::new(WORLD_SIZE, 1.0, WORLD_SIZE),
         color: FLOOR_COLOR,
         climbable: true,
     },
     BoxRow {
         name: "NorthPerimeterWall",
         pos: Vec3::new(0.0, PERIMETER_HEIGHT * 0.5, -PERIMETER_HALF_EXTENT),
-        dims: Vec3::new(100.0, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
+        dims: Vec3::new(WORLD_SIZE, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
         color: PROP_COLOR,
         climbable: false,
     },
     BoxRow {
         name: "SouthPerimeterWall",
         pos: Vec3::new(0.0, PERIMETER_HEIGHT * 0.5, PERIMETER_HALF_EXTENT),
-        dims: Vec3::new(100.0, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
+        dims: Vec3::new(WORLD_SIZE, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
         color: PROP_COLOR,
         climbable: false,
     },
     BoxRow {
         name: "WestPerimeterWall",
         pos: Vec3::new(-PERIMETER_HALF_EXTENT, PERIMETER_HEIGHT * 0.5, 0.0),
-        dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, 100.0),
+        dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, WORLD_SIZE),
         color: PROP_COLOR,
         climbable: false,
     },
     BoxRow {
         name: "EastPerimeterWall",
         pos: Vec3::new(PERIMETER_HALF_EXTENT, PERIMETER_HEIGHT * 0.5, 0.0),
-        dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, 100.0),
+        dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, WORLD_SIZE),
         color: PROP_COLOR,
         climbable: false,
     },
@@ -313,6 +314,7 @@ pub(super) fn setup_world(
             },
         );
     }
+    super::forest::spawn_forest(&mut commands);
 
     // --- Rock: sphere r=2 at (-10,1,-5) ---
     commands.spawn((

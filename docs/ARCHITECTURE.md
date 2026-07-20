@@ -108,9 +108,16 @@ crítico del audit 2026-07-17).
   interpola hacia el cuerpo (`VisualOf` lo enlaza para efectos
   transversales). La simulación no porta meshes ni handles. Sistemas de
   presentación que tocan entidades despawneables el mismo frame usan
-  comandos tolerantes (`try_insert`). El GLB del player trae rig+clips en un
-  archivo: el loader auto-inserta `AnimationPlayer`/targets, sin linking
-  manual de huesos.
+  comandos tolerantes (`try_insert`). `AppearanceBinding` vive en esa raíz
+  visual y selecciona por clave+slot una receta de `VisualCatalog` (scene,
+  escala, orientación, pivot); la identidad de gameplay jamás es una ruta de
+  asset. Body/MainHand/OffHand/World permiten cuerpo, espada, escudo y props
+  separados por dueño. Catálogos de animación distintos se conservan como
+  fuentes distintas y se adaptan en presentación. LOD, culling e instancing
+  solo cambian entidades/recetas visuales: nunca eliminan el collider ni
+  alteran identidad o estado de simulación. La UI de inventario solo lee
+  `Inventory` en `Update` y emite comandos por slot; Inventory valida y aplica
+  en `FixedUpdate`. El foco modal pertenece a Input.
 - **Combate apuntado en dos fases.** El rayo del crosshair nace del pivote a
   altura de ojos (`AIM_PIVOT_HEIGHT`, simulación pura — §20; la cámara lo
   importa y se alinea al apuntar) y resuelve el target; la flecha sale del
@@ -123,21 +130,31 @@ crítico del audit 2026-07-17).
   cruzan capas; lo que compran es *sensing selectivo* (el sensing de ledges
   enmascara a `Default` para no trepar cápsulas ajenas; espada/flechas
   seleccionan `Actor`).
+- **Colisiones independientes del asset (decisión 2026-07-19).** La
+  migración separará tres geometrías: cuerpo sólido simple para locomoción,
+  hurtboxes sensoras para recibir daño y hitboxes barridas para atacar. El
+  mesh renderizado nunca es collider ni autoridad. Hurtboxes/hitboxes viven
+  en `FixedUpdate`, enlazan a su `Actor` dueño y usan primitivas/perfiles de
+  capacidad fija. Un GLTF puede aportar nodos/socket espaciales que el loader
+  convierte a datos puros; simulación nunca lee huesos/`AnimationPlayer` de
+  `Update`. Cambiar solo el visual no cambia resultados de simulación.
 - **Mundo en tres capas.** `world/mod.rs` (tipos y reglas propias),
-  `world/spawn.rs` (mecanismo agnóstico del nivel), `world/layout.rs` (el
-  nivel como tablas de datos + geometría derivada). Agrandar el mapa es
-  editar `layout.rs`; esa es la costura donde un loader de assets
-  (RON/escena GLTF) se enchufa sin tocar el mecanismo.
+  `world/spawn.rs` (mecanismo agnóstico del nivel), `world/layout.rs` +
+  submódulos authored como `world/forest.rs` (tablas/diseño y geometría
+  derivada). Agrandar el mapa toca solo autoría; esa es la costura donde un
+  loader de assets (RON/escena GLTF) se enchufa sin tocar el mecanismo.
 - **Checkpoint jugado, luego tests.** El feeling se valida jugando
   (§10-§11); el loop operativo es: implementar → `fmt`+`clippy`+`test` →
   lanzar el juego para el usuario → leer el log de la sesión
   (`[health] X took N`, `[debug] animation clip …`) antes de reportar.
+  Rendimiento requiere además escena/build/resolución repetibles y frame time
+  antes/después; no se optimiza por intuición ni se acepta solo porque corre.
 
 ## Mapa de módulos (los que existen)
 
 | Módulo | Posee | Frontera |
 |---|---|---|
-| `input` | `ActiveActions`, `ControlOrientation`, bindings | Nadie lee hardware salvo él; resuelve en PreUpdate |
+| `input` | `ActiveActions`, `ControlOrientation`, bindings, foco modal | Nadie lee hardware salvo él; resuelve en PreUpdate |
 | `movement` | `Intents`, `LocomotionState`, motores, facts, attachment/link | Brains escriben Intents; Combat pide por mensaje |
 | `proposal` | Núcleo genérico de arbitración | Type-aliases por sistema |
 | `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |
@@ -148,8 +165,8 @@ crítico del audit 2026-07-17).
 | `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
 | `player` | Spawn y respawn del jugador | Dueño de la reacción a su muerte |
 | `world` | Geometría, capas, nivel, targets | Sustrato: no lee a nadie |
-| `visuals`, `camera`, `presentation`, `sfx`, `debug` | Presentación | Solo READ sobre simulación (§20); debug F1-F7 |
+| `visuals`, `camera`, `presentation`, `sfx`, `debug` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20); debug F1-F7 |
 
-Sistemas futuros (inventario, crafteo, swim, snowboard, clima, NPCs,
+Sistemas futuros (crafteo, swim, snowboard, clima, NPCs,
 multiplayer, persistencia) se diseñan cuando toquen, como consumidores
 aditivos de estos contratos — sus borradores viejos están en git.

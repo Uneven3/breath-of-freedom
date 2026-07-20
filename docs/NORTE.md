@@ -39,6 +39,10 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 
 - Cel-shaded con iluminación realista sobre shading estilizado; paleta
   vibrante tipo BotW.
+- Assets de prototipado reemplazables mediante catálogo de presentación:
+  identidad de gameplay, visual y colisión permanecen independientes.
+- Objetivo de 60 FPS en el hardware de referencia con presupuestos medidos;
+  más mundo no justifica degradar la respuesta del movimiento.
 - Música ambiental minimalista; SFX estilizados. Hasta tener audio real,
   cada punto sonoro emite un *cue* de debug (`[audio] cue: …`).
 
@@ -47,14 +51,15 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 1. **Movimiento** — traversal físico gateado por stamina. ✅ base jugable
 2. **Cámara** — orbital tercera persona, modo apuntado. ✅ (lock-on pendiente)
 3. **Combate** — melee con peso ✅, arco ✅, sigilo ✅ (bonus ×4), durabilidad
-   de armas ⏳ (llega con inventario). Escudo/parry ⏳.
+   de armas e inventario base ✅. Escudo/parry ⏳.
 4. **Monturas** — ✅ horse base (montar, carga, inmunidad de dueño). El
    diseño final es más ambicioso: criaturas variadas, terrestres y
    voladoras, con vínculo personal jugador-criatura (línea *Avatar*:
    Ikran/Direwolf), no transporte genérico.
-5. **Mundo y entorno** — ⏳ próximo foco: agrandar el mundo, más modelos,
-   cortar árboles, animales, más personajes. Después: clima, ciclo
-   día/noche, crafteo, buceo.
+5. **Mundo y entorno** — ciclo día/noche ✅, mundo 320×320 + bosque ✅;
+   ⏳ próximo foco: recuperar rendimiento con profiling/LOD/culling antes de
+   sumar temperatura, clima, tala, animales o personajes. Después: crafteo y
+   buceo.
 6. **Multiplayer** — co-op host-autoritativo (contrato multi-actor ya
    implementado; red no empezada).
 7. **Personajes/problemas** — quests opcionales estilo Majora's Mask.
@@ -70,9 +75,9 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
   reacciones grupales y huida al estar heridos ⏳.
 - **Traversal:** escalar ✅, planear ✅, nadar/bucear ⏳ (con oxígeno y
   corrientes, línea Fontaine de Genshin), snowboard en pendientes ⏳.
-- **Clima/día-noche ⏳:** frío/calor exigen preparación; lluvia moja y
-  afecta el agarre; tormentas eléctricas atraen metal; la noche cambia
-  spawns y comportamiento.
+- **Clima/día-noche ⏳:** ciclo visual y noche iluminada ✅; frío/calor
+  exigen preparación; lluvia moja y afecta el agarre; tormentas eléctricas
+  atraen metal; la noche cambia spawns y comportamiento.
 - **Crafteo ⏳:** equipo a partir de materiales del mundo (más que cocinar).
 
 ## Qué NO estamos construyendo

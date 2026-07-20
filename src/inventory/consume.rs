@@ -9,7 +9,7 @@ use crate::input::action::IntentAction;
 use crate::input::frame::{ActiveActions, InputControlledBy};
 use crate::movement::Player;
 
-use super::data::{Inventory, InventoryInputCursor};
+use super::data::{ConsumeSlotRequestMessage, Inventory, InventoryInputCursor};
 
 type ConsumeActorQuery<'a> = (
     Entity,
@@ -34,6 +34,24 @@ pub fn read_use_item_requests(
             target: actor,
             amount: heal,
         });
+    }
+}
+
+pub fn read_consume_slot_requests(
+    mut requests: MessageReader<ConsumeSlotRequestMessage>,
+    mut actors: Query<&mut Inventory>,
+    mut heals: MessageWriter<HealRequestMessage>,
+) {
+    for request in requests.read() {
+        let Ok(mut inventory) = actors.get_mut(request.actor) else {
+            continue;
+        };
+        if let Some(amount) = inventory.consume_food_at(request.slot) {
+            heals.write(HealRequestMessage {
+                target: request.actor,
+                amount,
+            });
+        }
     }
 }
 
@@ -108,6 +126,80 @@ mod tests {
 
         world.run_system_once(read_use_item_requests).unwrap();
 
+        assert!(world.resource::<Messages<HealRequestMessage>>().is_empty());
+    }
+
+    #[test]
+    fn slot_request_consumes_selected_food_and_emits_one_heal() {
+        let mut world = World::new();
+        world.init_resource::<Messages<ConsumeSlotRequestMessage>>();
+        world.init_resource::<Messages<HealRequestMessage>>();
+        let mut inventory = Inventory::default();
+        inventory
+            .try_add(ItemKind::Material(crate::inventory::MaterialKind::Wood), 2)
+            .unwrap();
+        inventory
+            .try_add(
+                ItemKind::Food {
+                    label: "Apple",
+                    heal: 25.0,
+                },
+                2,
+            )
+            .unwrap();
+        let actor = world.spawn(inventory).id();
+        world.write_message(ConsumeSlotRequestMessage { actor, slot: 1 });
+
+        world.run_system_once(read_consume_slot_requests).unwrap();
+
+        assert_eq!(
+            world
+                .entity(actor)
+                .get::<Inventory>()
+                .unwrap()
+                .slot(1)
+                .unwrap()
+                .quantity,
+            1
+        );
+        let messages = world.resource::<Messages<HealRequestMessage>>();
+        let mut cursor = messages.get_cursor();
+        let requests: Vec<_> = cursor.read(messages).collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].target, actor);
+        assert_eq!(requests[0].amount, 25.0);
+    }
+
+    #[test]
+    fn invalid_slot_or_non_food_does_not_mutate_or_emit() {
+        let mut world = World::new();
+        world.init_resource::<Messages<ConsumeSlotRequestMessage>>();
+        world.init_resource::<Messages<HealRequestMessage>>();
+        let mut inventory = Inventory::default();
+        inventory
+            .try_add(
+                ItemKind::Weapon(crate::inventory::WeaponItem::LOOTABLE_CLUB),
+                1,
+            )
+            .unwrap();
+        let actor = world.spawn(inventory).id();
+        world.write_message(ConsumeSlotRequestMessage { actor, slot: 0 });
+        world.write_message(ConsumeSlotRequestMessage {
+            actor,
+            slot: super::super::data::INVENTORY_SLOTS,
+        });
+
+        world.run_system_once(read_consume_slot_requests).unwrap();
+
+        assert!(matches!(
+            world
+                .entity(actor)
+                .get::<Inventory>()
+                .unwrap()
+                .slot(0)
+                .map(|stack| stack.kind),
+            Some(ItemKind::Weapon(_))
+        ));
         assert!(world.resource::<Messages<HealRequestMessage>>().is_empty());
     }
 }

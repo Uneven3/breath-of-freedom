@@ -14,8 +14,11 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub mod day_night;
+pub mod forest;
 pub mod layout;
 mod spawn;
+
+pub use forest::TreeKind;
 
 /// Authored uniform straight stair segment. Curved stairs are composed from
 /// adjacent one-step segments with independently oriented trigger volumes.
@@ -85,7 +88,7 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<day_night::TimeOfDay>();
-        app.add_systems(Startup, layout::setup_world);
+        app.add_systems(Startup, (layout::setup_world, day_night::setup_moon_light));
         app.add_systems(FixedUpdate, day_night::advance_time);
         app.add_systems(Update, day_night::apply_sun);
         app.add_systems(

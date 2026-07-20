@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 use super::player::PlayerVisual;
+use super::{PLAYER_APPEARANCE, VisualCatalog};
 use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
 
@@ -34,8 +35,19 @@ pub struct AnimationDebug {
 #[derive(Resource)]
 pub(super) struct AnimationLoader(Handle<Gltf>);
 
-pub(super) fn start_loading_animations(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(AnimationLoader(asset_server.load("Prototype.glb")));
+pub(super) fn start_loading_animations(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    catalog: Res<VisualCatalog>,
+) {
+    let Some(source) = catalog
+        .recipe(PLAYER_APPEARANCE)
+        .and_then(|recipe| recipe.animation_source)
+    else {
+        error!("[visuals] active player appearance has no animation source");
+        return;
+    };
+    commands.insert_resource(AnimationLoader(asset_server.load(source)));
 }
 
 pub(super) fn compile_animation_graph(
@@ -72,11 +84,9 @@ pub(super) fn compile_animation_graph(
             .find(|(name, _)| name == wanted)
             .map(|&(_, node)| node)
     };
-    let (Some(idle), Some(walk), Some(run)) =
-        (find("Idle_Loop"), find("Walk_Loop"), find("Sprint_Loop"))
-    else {
+    let (Some(idle), Some(walk)) = (find("Idle_No_Loop"), find("Walk_Carry_Loop")) else {
         error!(
-            "[visuals] player GLB is missing Idle_Loop/Walk_Loop/Sprint_Loop; \
+            "[visuals] Ranger GLB is missing Idle_No_Loop/Walk_Carry_Loop; \
              animation disabled. Available clips: {:?}",
             clips.iter().map(|(name, _)| name).collect::<Vec<_>>()
         );
@@ -94,7 +104,7 @@ pub(super) fn compile_animation_graph(
     commands.insert_resource(PlayerAnimations {
         idle,
         walk,
-        run,
+        run: walk,
         clips,
         graph: graph_handle,
     });

@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 pub mod cues;
+pub mod inventory_ui;
 pub mod juice;
 
 /// Registers the presentation-cue message so producers (Movement, Combat) and
@@ -13,6 +14,6 @@ pub struct PresentationPlugin;
 impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<cues::CueMessage>();
-        app.add_plugins(juice::JuicePlugin);
+        app.add_plugins((juice::JuicePlugin, inventory_ui::InventoryUiPlugin));
     }
 }

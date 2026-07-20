@@ -15,7 +15,9 @@
 use bevy::prelude::*;
 
 pub mod animation;
+pub mod catalog;
 pub mod enemy;
+pub mod forest;
 pub mod horse;
 pub mod outline;
 pub mod player;
@@ -24,6 +26,7 @@ pub mod toon;
 pub mod vfx;
 
 pub use animation::{AnimationDebug, PlayerAnimations};
+pub use catalog::{AppearanceBinding, AppearanceKey, PLAYER_APPEARANCE, VisualCatalog, VisualSlot};
 pub use player::PlayerVisual;
 pub use toon::ToonMaterial;
 
@@ -43,6 +46,7 @@ impl Plugin for VisualsPlugin {
         app.add_plugins(MaterialPlugin::<ToonMaterial>::default());
         app.add_plugins(outline::OutlinePlugin);
         app.init_resource::<AnimationDebug>();
+        app.init_resource::<VisualCatalog>();
         app.add_systems(
             Startup,
             (player::spawn_visual, animation::start_loading_animations),
@@ -63,6 +67,7 @@ impl Plugin for VisualsPlugin {
                 horse::spawn_horse_visual,
                 horse::despawn_orphaned_horse_visual,
                 horse::interpolate_horse_visual,
+                forest::spawn_tree_visuals,
                 vfx::spawn_swing_vfx,
                 vfx::fade_swing_vfx,
                 animation::compile_animation_graph,

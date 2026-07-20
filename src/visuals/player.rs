@@ -7,16 +7,13 @@
 
 use bevy::prelude::*;
 
-use super::{INTERPOLATION_SPEED, SNEAK_Y_OFFSET, VisualOf};
+use super::{
+    AppearanceBinding, INTERPOLATION_SPEED, PLAYER_APPEARANCE, SNEAK_Y_OFFSET, VisualCatalog,
+    VisualOf, VisualSlot,
+};
 use crate::combat::state::CombatState;
 use crate::movement::Player;
-use crate::movement::body::BodyDimensions;
 use crate::movement::state::LocomotionState;
-
-/// Authored height of the Prototype.glb rig in meters (feet to head, taken
-/// from the mesh's POSITION bounds). The visual is scaled so this matches the
-/// player capsule's full height.
-const PLAYER_MODEL_HEIGHT: f32 = 1.83;
 
 #[derive(Component)]
 pub struct PlayerVisual;
@@ -30,31 +27,33 @@ pub struct BowArrowVisual;
 pub(super) fn spawn_visual(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    catalog: Res<VisualCatalog>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let appearance = PLAYER_APPEARANCE;
+    let recipe = catalog
+        .recipe(appearance)
+        .expect("player appearance must be registered");
     commands
         .spawn((
             PlayerVisual,
+            AppearanceBinding {
+                key: appearance,
+                slot: VisualSlot::Body,
+            },
             Name::new("PlayerVisual"),
             Transform::from_xyz(0.0, 1.5, 0.0),
             Visibility::default(),
         ))
         .with_children(|parent| {
-            // Load the player prototype GLB scene (rig + animations in one file)
-            let player_scene = asset_server.load("Prototype.glb#Scene0");
+            // The selected body and its compatible UAL2 clips share one GLB.
+            let player_scene = asset_server.load(recipe.scene);
 
-            // The model is authored with its pivot/origin at its feet.
-            // Offset down by the half-height so feet touch the ground, rotate 180 deg
-            // around Y so the model faces forward (-Z in Bevy) instead of backward (+Z),
-            // and scale it so the rig's height matches the capsule's full height.
-            let model_scale =
-                2.0 * BodyDimensions::PLAYER.standing_half_height() / PLAYER_MODEL_HEIGHT;
             parent.spawn((
+                Name::new(recipe.label),
                 WorldAssetRoot(player_scene),
-                Transform::from_xyz(0.0, -BodyDimensions::PLAYER.standing_half_height(), 0.0)
-                    .with_rotation(Quat::from_rotation_y(std::f32::consts::PI))
-                    .with_scale(Vec3::splat(model_scale)),
+                recipe.root_transform,
             ));
 
             // Spawn the Bow Visual Root at Combat's bow socket (the arrow

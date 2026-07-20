@@ -6,7 +6,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs};
+use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs, TreeKind};
 use crate::visuals::ToonMaterial;
 use crate::visuals::toon::toon_color;
 
@@ -26,6 +26,30 @@ pub(super) struct StairSegmentSpec<'a> {
     pub step_rise: f32,
     pub width: f32,
     pub color: Color,
+}
+
+pub(super) struct TreeSpec {
+    pub kind: TreeKind,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub trunk_radius: f32,
+    pub trunk_height: f32,
+}
+
+pub(super) fn spawn_tree(commands: &mut Commands, name: String, spec: TreeSpec) {
+    commands
+        .spawn((
+            Name::new(name),
+            spec.kind,
+            Transform::from_translation(spec.position)
+                .with_rotation(Quat::from_rotation_y(spec.yaw)),
+            RigidBody::Static,
+        ))
+        .with_child((
+            Name::new("TrunkCollider"),
+            Collider::cylinder(spec.trunk_radius, spec.trunk_height),
+            Transform::from_xyz(0.0, spec.trunk_height * 0.5, 0.0),
+        ));
 }
 
 /// Spawn a static axis-aligned box with full-size `dims` centred at `pos`.

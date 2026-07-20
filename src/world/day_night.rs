@@ -11,26 +11,39 @@ const REAL_MINUTES_PER_GAME_DAY: f32 = 24.0;
 const SUN_ARC_TILT: f32 = 0.35;
 
 const SUN_NOON_LUX: f32 = 10_000.0;
-const MOON_LUX: f32 = 30.0;
+// Stylized rather than physical moonlight: night must remain navigable without
+// flattening the much stronger daylight bands.
+const MOON_LUX: f32 = 400.0;
 // Ambient stays low on purpose: it fills shadowed faces, and too much of it
 // flattens the toon bands until every surface merges.
 const AMBIENT_DAY: f32 = 90.0;
-const AMBIENT_NIGHT: f32 = 20.0;
+const AMBIENT_NIGHT: f32 = 40.0;
 
 const SUN_NOON_COLOR: Color = Color::srgb(1.0, 0.98, 0.92);
-const SUN_HORIZON_COLOR: Color = Color::srgb(1.0, 0.55, 0.25);
+const SUN_DAWN_COLOR: Color = Color::srgb(1.0, 0.68, 0.42);
+const SUN_DUSK_COLOR: Color = Color::srgb(1.0, 0.38, 0.2);
 const MOON_COLOR: Color = Color::srgb(0.55, 0.65, 0.9);
 const AMBIENT_DAY_COLOR: Color = Color::srgb(1.0, 1.0, 1.0);
-const AMBIENT_NIGHT_COLOR: Color = Color::srgb(0.45, 0.55, 0.85);
+const AMBIENT_NIGHT_COLOR: Color = Color::srgb(0.38, 0.48, 0.78);
+const AMBIENT_DAWN_COLOR: Color = Color::srgb(1.0, 0.65, 0.52);
+const AMBIENT_DUSK_COLOR: Color = Color::srgb(0.9, 0.42, 0.52);
 
-// Stylized sky gradient (BotW-like, not physical): the camera clear color
-// blends across night → horizon glow → day, following the sun.
+// Stylized sky gradient (BotW-like, not physical). Dawn leans coral and dusk
+// leans magenta so the two horizon transitions have different identities.
 const SKY_DAY: Color = Color::srgb(0.45, 0.68, 0.95);
-const SKY_HORIZON: Color = Color::srgb(0.95, 0.55, 0.3);
-const SKY_NIGHT: Color = Color::srgb(0.04, 0.05, 0.12);
+const SKY_DAWN: Color = Color::srgb(0.95, 0.42, 0.38);
+const SKY_DUSK: Color = Color::srgb(0.72, 0.2, 0.42);
+const SKY_NIGHT: Color = Color::srgb(0.055, 0.075, 0.17);
+
+const DAWN_START: f32 = 4.5;
+const DAWN_PEAK: f32 = 6.0;
+const DAWN_END: f32 = 7.75;
+const DUSK_START: f32 = 16.25;
+const DUSK_PEAK: f32 = 18.0;
+const DUSK_END: f32 = 20.0;
 
 /// How far out the visible sun/moon discs orbit (inside the default far
-/// plane, far outside the 100 m course).
+/// plane, outside the playable terrain).
 const DISC_ORBIT_RADIUS: f32 = 420.0;
 
 /// Simulation clock: `hours` in `0.0..24.0`, advanced on the fixed step.
@@ -54,6 +67,11 @@ impl Default for TimeOfDay {
 #[derive(Component)]
 pub struct Sun;
 
+/// Presentation-only directional moonlight. Keeping it separate from the sun
+/// lets both fade across the horizon without rotating one light by 180 degrees.
+#[derive(Component)]
+pub(super) struct MoonLight;
+
 /// Marker for the visible sun disc (unlit sphere on the sun's arc).
 #[derive(Component)]
 pub struct SunDisc;
@@ -68,11 +86,88 @@ pub(super) fn advance_time(time: Res<Time>, mut tod: ResMut<TimeOfDay>) {
         (tod.hours + time.delta_secs() * game_hours_per_real_second * tod.speed).rem_euclid(24.0);
 }
 
+pub(super) fn setup_moon_light(mut commands: Commands) {
+    commands.spawn((
+        Name::new("MoonLight"),
+        MoonLight,
+        DirectionalLight {
+            color: MOON_COLOR,
+            illuminance: MOON_LUX,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::default(),
+    ));
+}
+
 /// Unit vector pointing *toward* the sun: east horizon at 06:00, zenith at
 /// 12:00, west horizon at 18:00, below the horizon at night.
 pub(crate) fn sun_direction(hours: f32) -> Vec3 {
     let angle = (hours / 24.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
     Vec3::new(angle.cos(), angle.sin(), SUN_ARC_TILT).normalize()
+}
+
+#[derive(Clone, Copy)]
+struct LightingPalette {
+    sun_illuminance: f32,
+    sun_color: Color,
+    moon_illuminance: f32,
+    ambient_brightness: f32,
+    ambient_color: Color,
+    sky_color: Color,
+}
+
+fn smoothstep(start: f32, end: f32, value: f32) -> f32 {
+    let t = ((value - start) / (end - start)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn phase_weight(hours: f32, start: f32, peak: f32, end: f32) -> f32 {
+    let hours = hours.rem_euclid(24.0);
+    if hours <= peak {
+        smoothstep(start, peak, hours)
+    } else {
+        1.0 - smoothstep(peak, end, hours)
+    }
+}
+
+fn lighting_palette(hours: f32, elevation: f32) -> LightingPalette {
+    let hours = hours.rem_euclid(24.0);
+    let sun_strength = smoothstep(0.0, 1.0, elevation).powf(0.6);
+    let dawn = phase_weight(hours, DAWN_START, DAWN_PEAK, DAWN_END);
+    let dusk = phase_weight(hours, DUSK_START, DUSK_PEAK, DUSK_END);
+    let sun_visibility = smoothstep(-0.08, 0.08, elevation);
+    let moon_visibility = smoothstep(-0.08, 0.08, -elevation);
+
+    // Ambient and sky start changing before the sun crosses the horizon. This
+    // avoids an abrupt black-to-day transition while the directional light
+    // continues to follow the actual sun/moon arc.
+    let daylight = smoothstep(-0.08, 0.25, elevation);
+    let horizon_color = if hours < 12.0 {
+        SUN_DAWN_COLOR
+    } else {
+        SUN_DUSK_COLOR
+    };
+    let sun_color = horizon_color.mix(&SUN_NOON_COLOR, sun_strength);
+    let sun_illuminance = sun_visibility * (MOON_LUX + (SUN_NOON_LUX - MOON_LUX) * sun_strength);
+    let moon_illuminance = moon_visibility * MOON_LUX;
+
+    let mut ambient_color = AMBIENT_NIGHT_COLOR.mix(&AMBIENT_DAY_COLOR, daylight);
+    ambient_color = ambient_color.mix(&AMBIENT_DAWN_COLOR, dawn * 0.35);
+    ambient_color = ambient_color.mix(&AMBIENT_DUSK_COLOR, dusk * 0.4);
+
+    let mut sky_color = SKY_NIGHT.mix(&SKY_DAY, daylight);
+    sky_color = sky_color.mix(&SKY_DAWN, dawn * 0.9);
+    sky_color = sky_color.mix(&SKY_DUSK, dusk * 0.9);
+
+    LightingPalette {
+        sun_illuminance,
+        sun_color,
+        moon_illuminance,
+        ambient_brightness: AMBIENT_NIGHT + (AMBIENT_DAY - AMBIENT_NIGHT) * daylight,
+        ambient_color,
+        sky_color,
+    }
 }
 
 /// Presentation: place and tint the sun (or moon, when the sun is below the
@@ -84,7 +179,23 @@ pub(super) fn apply_sun(
     sun: Option<
         Single<
             (&mut Transform, &mut DirectionalLight),
-            (With<Sun>, Without<SunDisc>, Without<MoonDisc>),
+            (
+                With<Sun>,
+                Without<MoonLight>,
+                Without<SunDisc>,
+                Without<MoonDisc>,
+            ),
+        >,
+    >,
+    moon: Option<
+        Single<
+            (&mut Transform, &mut DirectionalLight),
+            (
+                With<MoonLight>,
+                Without<Sun>,
+                Without<SunDisc>,
+                Without<MoonDisc>,
+            ),
         >,
     >,
     mut discs: ParamSet<(
@@ -94,38 +205,27 @@ pub(super) fn apply_sun(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut sky: ResMut<ClearColor>,
 ) {
-    let Some(sun) = sun else {
-        return;
-    };
-    let (mut transform, mut light) = sun.into_inner();
-
     let to_sun = sun_direction(tod.hours);
     let to_moon = Vec3::new(-to_sun.x, -to_sun.y, SUN_ARC_TILT).normalize();
     let elevation = to_sun.y;
+    let palette = lighting_palette(tod.hours, elevation);
 
-    if elevation >= 0.0 {
-        // Daytime: intensity and warmth follow the elevation; near the
-        // horizon the light is dim and orange, at noon bright and white.
-        let strength = elevation.clamp(0.0, 1.0).powf(0.6);
+    if let Some(sun) = sun {
+        let (mut transform, mut light) = sun.into_inner();
         transform.look_to(-to_sun, Vec3::Y);
-        light.illuminance = MOON_LUX + (SUN_NOON_LUX - MOON_LUX) * strength;
-        light.color = SUN_HORIZON_COLOR.mix(&SUN_NOON_COLOR, strength);
-    } else {
-        // Night: the same light acts as the moon, opposite the sun's arc.
+        light.illuminance = palette.sun_illuminance;
+        light.color = palette.sun_color;
+    }
+    if let Some(moon) = moon {
+        let (mut transform, mut light) = moon.into_inner();
         transform.look_to(-to_moon, Vec3::Y);
-        light.illuminance = MOON_LUX;
+        light.illuminance = palette.moon_illuminance;
         light.color = MOON_COLOR;
     }
 
-    let daylight = elevation.clamp(0.0, 1.0).powf(0.6);
-    ambient.brightness = AMBIENT_NIGHT + (AMBIENT_DAY - AMBIENT_NIGHT) * daylight;
-    ambient.color = AMBIENT_NIGHT_COLOR.mix(&AMBIENT_DAY_COLOR, daylight);
-
-    // Stylized sky: night → horizon glow → day, driven by sun elevation.
-    // The glow window is ±0.25 of elevation around the horizon.
-    let horizon_glow = (1.0 - (elevation.abs() / 0.25).min(1.0)).powi(2);
-    let base = SKY_NIGHT.mix(&SKY_DAY, daylight);
-    sky.0 = base.mix(&SKY_HORIZON, horizon_glow * 0.85);
+    ambient.brightness = palette.ambient_brightness;
+    ambient.color = palette.ambient_color;
+    sky.0 = palette.sky_color;
 
     // Visible discs ride their arcs; each hides below the horizon.
     if let Some(disc) = discs.p0().as_mut() {
@@ -187,5 +287,66 @@ mod tests {
         world.run_system_once(advance_time).unwrap();
         let tod = world.resource::<TimeOfDay>();
         assert!((tod.hours - expected_step * 60.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn twilight_phase_weights_are_smooth_and_distinct() {
+        assert_eq!(
+            phase_weight(DAWN_START, DAWN_START, DAWN_PEAK, DAWN_END),
+            0.0
+        );
+        assert_eq!(
+            phase_weight(DAWN_PEAK, DAWN_START, DAWN_PEAK, DAWN_END),
+            1.0
+        );
+        assert_eq!(phase_weight(DAWN_END, DAWN_START, DAWN_PEAK, DAWN_END), 0.0);
+        assert_eq!(
+            phase_weight(DUSK_PEAK, DUSK_START, DUSK_PEAK, DUSK_END),
+            1.0
+        );
+
+        let dawn = lighting_palette(DAWN_PEAK, sun_direction(DAWN_PEAK).y)
+            .sky_color
+            .to_srgba();
+        let dusk = lighting_palette(DUSK_PEAK, sun_direction(DUSK_PEAK).y)
+            .sky_color
+            .to_srgba();
+        assert!(dawn.green > dusk.green, "dawn must read warmer/coral");
+        assert!(dusk.blue > dawn.blue, "dusk must read more magenta");
+    }
+
+    #[test]
+    fn deep_night_keeps_readable_cool_light() {
+        let midnight = lighting_palette(0.0, sun_direction(0.0).y);
+        let moon = MOON_COLOR.to_srgba();
+        let sky = midnight.sky_color.to_srgba();
+
+        assert_eq!(midnight.sun_illuminance, 0.0);
+        assert_eq!(midnight.moon_illuminance, MOON_LUX);
+        assert!(midnight.ambient_brightness >= AMBIENT_NIGHT);
+        assert!(moon.blue > moon.red, "moonlight must stay cool");
+        assert!(sky.blue > sky.red, "night sky must stay cool");
+    }
+
+    #[test]
+    fn palette_is_continuous_at_horizons_and_midnight() {
+        for hour in [6.0_f32, 18.0, 24.0] {
+            let before_hour = hour - 0.001;
+            let after_hour = (hour + 0.001).rem_euclid(24.0);
+            let before = lighting_palette(before_hour, sun_direction(before_hour).y);
+            let after = lighting_palette(after_hour, sun_direction(after_hour).y);
+            let before_directional = before.sun_illuminance + before.moon_illuminance;
+            let after_directional = after.sun_illuminance + after.moon_illuminance;
+
+            assert!((before_directional - after_directional).abs() < 5.0);
+            assert!((before.ambient_brightness - after.ambient_brightness).abs() < 0.1);
+            assert!(color_distance(before.sky_color, after.sky_color) < 0.01);
+        }
+    }
+
+    fn color_distance(a: Color, b: Color) -> f32 {
+        let a = a.to_srgba();
+        let b = b.to_srgba();
+        Vec3::new(a.red - b.red, a.green - b.green, a.blue - b.blue).length()
     }
 }

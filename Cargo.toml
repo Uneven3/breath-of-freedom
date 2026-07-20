@@ -4,14 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-avian3d = "0.7.0"
-bevy = "0.19"
-petgraph = "0.8.3"
-
-# Faster iterative builds: optimize dependencies even in dev, keep our own
-# crate cheap to recompile. (Bevy's recommended dev-profile tweak.)
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package."*"]
-opt-level = 3
+avian3d = { workspace = true }
+bevy = { workspace = true }
+petgraph = { workspace = true }

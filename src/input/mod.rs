@@ -22,6 +22,27 @@ const PITCH_MAX: f32 = 1.2;
 #[derive(Resource)]
 pub struct PointerCaptured(pub bool);
 
+/// Exclusive presentation focus. While held, local gameplay actions and
+/// camera look are neutralized and the pointer is released.
+#[derive(Resource, Default)]
+pub struct ModalInputFocus {
+    owner: Option<Entity>,
+}
+
+impl ModalInputFocus {
+    pub fn is_active(&self) -> bool {
+        self.owner.is_some()
+    }
+}
+
+/// Input owns modal focus and validates releases, so presentation layers do
+/// not mutate cursor or gameplay input resources directly.
+#[derive(Message, Debug, Clone, Copy)]
+pub enum ModalInputFocusRequest {
+    Acquire(Entity),
+    Release(Entity),
+}
+
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputSet {
     UpdateOrientation,
@@ -33,6 +54,8 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveActions>();
         app.insert_resource(PointerCaptured(true));
+        app.init_resource::<ModalInputFocus>();
+        app.add_message::<ModalInputFocusRequest>();
         app.add_systems(Startup, grab_cursor);
         // Everything the fixed-step simulation reads (actions AND orientation)
         // must resolve in PreUpdate: Bevy runs FixedUpdate *before* Update in
@@ -41,6 +64,7 @@ impl Plugin for InputPlugin {
         app.add_systems(
             PreUpdate,
             (
+                apply_modal_focus_requests,
                 resolve_local_actions,
                 cursor_control,
                 update_local_orientation,
@@ -59,8 +83,13 @@ fn resolve_local_actions(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     captured: Res<PointerCaptured>,
+    focus: Res<ModalInputFocus>,
     mut actions: ResMut<ActiveActions>,
 ) {
+    if focus.is_active() {
+        actions.clear_pressed(LOCAL_INPUT_SOURCE);
+        return;
+    }
     for (action, key) in LOCAL_HELD_BINDINGS {
         actions.set_pressed(LOCAL_INPUT_SOURCE, action, keys.pressed(key));
     }
@@ -128,10 +157,14 @@ fn grab_cursor(
 fn cursor_control(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    focus: Res<ModalInputFocus>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut captured: ResMut<PointerCaptured>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if focus.is_active() {
+        return;
+    }
     if keys.just_pressed(KeyCode::Escape) {
         if captured.0 {
             set_cursor(&mut cursor, &mut captured, false);
@@ -159,12 +192,41 @@ fn set_cursor(
     captured.0 = grab;
 }
 
+fn apply_modal_focus_requests(
+    mut requests: MessageReader<ModalInputFocusRequest>,
+    mut focus: ResMut<ModalInputFocus>,
+    mut actions: ResMut<ActiveActions>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    mut captured: ResMut<PointerCaptured>,
+) {
+    let mut changed = false;
+    for request in requests.read() {
+        match *request {
+            ModalInputFocusRequest::Acquire(owner) => {
+                focus.owner = Some(owner);
+                actions.clear_pressed(LOCAL_INPUT_SOURCE);
+                actions.discard_pending(LOCAL_INPUT_SOURCE);
+                changed = true;
+            }
+            ModalInputFocusRequest::Release(owner) if focus.owner == Some(owner) => {
+                focus.owner = None;
+                changed = true;
+            }
+            ModalInputFocusRequest::Release(_) => {}
+        }
+    }
+    if changed {
+        set_cursor(&mut cursor, &mut captured, !focus.is_active());
+    }
+}
+
 fn update_local_orientation(
     motion: Res<AccumulatedMouseMotion>,
     captured: Res<PointerCaptured>,
+    focus: Res<ModalInputFocus>,
     mut q: Query<(&InputControlledBy, &mut ControlOrientation)>,
 ) {
-    if !captured.0 || motion.delta == Vec2::ZERO {
+    if focus.is_active() || !captured.0 || motion.delta == Vec2::ZERO {
         return;
     }
     for (source, mut orientation) in &mut q {
@@ -174,5 +236,36 @@ fn update_local_orientation(
         orientation.yaw -= motion.delta.x * MOUSE_SENSITIVITY;
         orientation.pitch =
             (orientation.pitch - motion.delta.y * MOUSE_SENSITIVITY).clamp(PITCH_MIN, PITCH_MAX);
+    }
+}
+
+#[cfg(test)]
+mod modal_focus_tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    #[test]
+    fn modal_focus_neutralizes_held_local_actions() {
+        let mut world = World::new();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        world.insert_resource(PointerCaptured(false));
+        world.insert_resource(ModalInputFocus {
+            owner: Some(Entity::PLACEHOLDER),
+        });
+        let mut actions = ActiveActions::default();
+        actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::MoveForward, true);
+        world.insert_resource(actions);
+
+        world.run_system_once(resolve_local_actions).unwrap();
+
+        assert!(
+            !world
+                .resource::<ActiveActions>()
+                .frame(LOCAL_INPUT_SOURCE)
+                .unwrap()
+                .pressed(IntentAction::MoveForward)
+        );
     }
 }

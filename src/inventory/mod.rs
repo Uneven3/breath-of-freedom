@@ -11,8 +11,8 @@ pub mod equip;
 pub mod pickup;
 
 pub use data::{
-    Inventory, InventoryInputCursor, ItemKind, ItemStack, MaterialKind, PickupMode,
-    WeaponDurability, WeaponItem,
+    ConsumeSlotRequestMessage, EquipSlotRequestMessage, Inventory, InventoryInputCursor, ItemKind,
+    ItemStack, MaterialKind, PickupMode, WeaponDurability, WeaponItem,
 };
 pub use pickup::spawn_world_item;
 
@@ -35,6 +35,8 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<EquipRequestMessage>();
+        app.add_message::<EquipSlotRequestMessage>();
+        app.add_message::<ConsumeSlotRequestMessage>();
         app.add_message::<WeaponBrokeMessage>();
 
         // Same band as `MountsSet::PostMove`: disjoint data, no conflict.
@@ -77,11 +79,18 @@ impl Plugin for InventoryPlugin {
         );
         app.add_systems(
             FixedUpdate,
-            equip::apply_equip_requests.in_set(InventorySet::Equip),
+            (equip::read_equip_slot_requests, equip::apply_equip_requests)
+                .chain()
+                .in_set(InventorySet::Equip),
         );
         app.add_systems(
             FixedUpdate,
-            consume::read_use_item_requests.in_set(InventorySet::Consume),
+            (
+                consume::read_consume_slot_requests,
+                consume::read_use_item_requests,
+            )
+                .chain()
+                .in_set(InventorySet::Consume),
         );
         app.add_systems(
             FixedUpdate,

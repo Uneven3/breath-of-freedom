@@ -17,54 +17,87 @@ cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`.
   de clips de animación (`[`/`]` ciclan, nombre en HUD).
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
-## Estado (2026-07-17)
+## Estado (2026-07-19)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/
 jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
 percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
 F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
-fases con carga Bannerlord, modelo del player `Prototype.glb` (18 clips,
-navegador F7), mundo graybox como tablas de datos (`world/layout.rs`).
+fases con carga Bannerlord, Ranger Quaternius femenino + UAL2 (43 clips,
+navegador F7), mundo 320×320 con graybox central y bosque. El checkpoint del
+usuario confirma que funciona, pero **no supera 30 FPS**: rendimiento
+rechazado, no se considera cerrado.
 
 Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
 corregidos el mismo día (input a PreUpdate, patrón CapacityPending
 eliminado, `Perceivable`, test del veto ForbidSprint). 187 tests.
 
-## Foco activo — exprimir el graybox (decisión del usuario, 2026-07-17)
+## Foco activo — rendimiento (decisión del usuario, 2026-07-19)
 
-Hecho (checkpoint jugado 2026-07-17, "se ve increíble"): **ciclo día/noche**
-(`world/day_night.rs` — TimeOfDay a ritmo BotW, sol/luna visibles, cielo
-estilizado, F9/F10 de debug) y **identidad visual toon** (`visuals/toon.rs`
-+ `visuals/outline.rs` — bandas discretas mate, outlines de post-proceso
-por profundidad/normales). Los actores aún usan StandardMaterial continuo
-(sus sistemas de tint/flash lo mutan) — toonificarlos es deuda menor.
+Próximo trabajo antes de seguir agrandando mundo o agregando features:
 
-Hecho, **pendiente de checkpoint jugado** (implementado 2026-07-18, tests
-verdes 209/209, clippy/fmt limpios; el playtest lo hace el usuario —
-entorno pasó a Wayland nativo, ver [[playtest-loop-launch-x11]]):
-**inventario** (`src/inventory/` — arma equipable con swap/durabilidad,
-materiales/comida apilables, pickup mixto: `Interact` para armas del
-suelo, auto-collect para materiales/comida). Equipar inserta/retira
-`WeaponProfile` (el componente ES el booleano de armado, tal como ya lo
-anotaba `combat/weapon.rs`); romper el arma emite `WeaponBrokeMessage` y
-desarma; `IntentAction::CycleWeapon` (tecla 4) re-equipa la primera arma
-guardada; `IntentAction::UseItem` (tecla C) come el primer alimento y pide
-`health::HealRequestMessage`. Pickups graybox en `world/layout.rs`:
-`SpareClub` (Interact), `WoodPile`/`Apple` (auto), cerca del spawn.
+1. **Baseline reproducible:** misma cámara/escena/hora, resolución, present
+   mode y build; registrar FPS y frame time del HUD en clearing y bosque. El
+   objetivo provisional es 60 FPS sostenidos en la máquina actual; medir
+   también estabilidad, no solo promedio.
+2. **Atribución A/B, una variable por vez:** visuales del bosque vs colliders,
+   cantidad/distancia de árboles, sombras de sol/luna, outline +
+   depth/normal prepass, y skinning/animación del Ranger. No asumir que 179
+   árboles son la única causa.
+3. **Optimizar el cuello medido:** instancing/batching, culling por distancia y
+   LOD para props; presupuesto/rango de shadow casters; reducir pases o
+   materiales solo si el perfil lo justifica. Mantener las 15 variantes y las
+   carpetas vendor; optimizar recetas/derivados, no borrar fuentes.
+4. **Criterio de cierre:** repetir el baseline y dejar tabla antes/después. El
+   LOD visual nunca elimina el collider ni cambia `TreeKind`, hitbox, hurtbox
+   o resultados de `FixedUpdate`.
 
-Queda, en orden sugerido:
+El HUD ya muestra FPS/frame time y `present_mode`; falta instrumentación para
+separar CPU/GPU y toggles de benchmark. No avanzar temperatura/IA/vegetación
+hasta recuperar un frame budget aceptable.
 
-1. **Temperatura** — StatusEffects: zonas frías/calientes + exposición por
-   hora del día (`TimeOfDay` ya existe) → `DamageRequestMessage` a Health;
-   HUD graybox. Mitigación por equipo ya es viable (Inventory existe).
-2. **IA de combate** — flanqueo, reacciones grupales, huida al estar
-   herido (los enemigos ya leen su propio `Health`). Slice jugable sobre
-   los brains existentes.
+## Cierre del graybox (decisión del usuario, 2026-07-17)
+
+Hecho y probado en conjunto; el checkpoint queda rechazado por rendimiento
+(2026-07-19):
+
+- **Ciclo día/noche con identidad por transición** (`world/day_night.rs`):
+  amanecer coral/dorado, atardecer magenta/naranja, cielo y ambiente con
+  `smoothstep`; luna direccional independiente (400 lux + sombras) y
+  ambiente azul nocturno (40) para mantener volumen y navegación. Sol/luna
+  cruzan el horizonte sin salto de dirección. Cinco tests enfocados verdes;
+  medir en playtest el costo de dos shadow maps.
+- **Inventario con UI en capa propia**
+  (`presentation/inventory_ui/`): overlay modal con categorías, ocho slots,
+  cantidades, arma equipada, durabilidad, detalle y acciones equipar/
+  consumir por mouse o teclado. Presentación solo lee; emite mensajes por
+  slot que `InventoryPlugin` valida y aplica en `FixedUpdate`. Input posee
+  el foco modal, libera el cursor y neutraliza movimiento/cámara/ataque.
+  Tras los últimos ajustes (trigger descartado al abrir, acción única por
+  frame, swap atómico, queries disjuntas y layout adaptable), `cargo check`
+  y `cargo build` pasan limpios usando el build-dir compartido. Suite completa
+  verde; la validación de feeling queda subordinada al checkpoint de rendimiento.
+- **Mundo 320×320 + bosque Quaternius** (`world/forest.rs`,
+  `visuals/forest.rs`): 179 árboles deterministas alrededor de una clearing de
+  42 m, camino N/S libre, 15 variantes Common/Pine/Twisted y colliders de
+  tronco cilíndricos authored independientes del mesh. `TreeKind` vive en
+  mundo; presentación lo resuelve a `Stylized Nature MegaKit` mediante
+  `VisualCatalog`. Las raíces visuales cargan como hijos descartables y las
+  carpetas vendor quedan intactas.
+
+El inventario de simulación conserva swap/durabilidad, materiales/comida
+apilables y pickups mixtos. Equipar inserta/retira `WeaponProfile`; romper
+emite `WeaponBrokeMessage`; tecla 4 cicla arma y C usa comida. Pickups
+graybox: `SpareClub`, `WoodPile` y `Apple` cerca del spawn.
+
+Queda: repetir el checkpoint tras la optimización y revisar el feeling de
+día/noche + inventario + bosque + Ranger; después conseguir locomoción normal
+compatible para reemplazar los fallbacks UAL2.
 
 Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
 Hit_Knockback); toon en actores; FXAA (MSAA quedó off por el outline).
 
-## Estacionado — pipeline de assets (cuando termine la etapa graybox)
+## Pipeline de assets y personaje — estado cerrado
 
 Recomendación investigada (2026-07-17, fuentes en git): Blender → glTF con
 custom properties leídas vía `GltfExtras` de primera parte (sin Blenvy, que
@@ -72,6 +105,95 @@ está alpha/estancado); RON solo para datos no-espaciales; USD se ignora
 (pipelines AAA). El editor oficial de Bevy se construye sobre BSN (0.19
 solo código; archivos `.bsn` futuros) — la inversión Blender/glTF migra
 limpio. `world/layout.rs` es la costura donde se enchufa.
+
+Assets Quaternius agregados por el usuario (2026-07-19): biblioteca
+intencional de **prototipado**, no arte final ni fuente automática de
+colisión. Nature trae glTF y Universal Animation trae GLB; Farm Animals y
+Medieval Weapons requieren conversión Blender/FBX→glTF. Los licenses
+incluidos de MegaKits/Nature/Universal Animation declaran CC0. Antes de
+versionar: recuperar license/procedencia de Farm Animals y Medieval Weapons
+(no quedó archivo en sus carpetas). Las dos carpetas Universal Animation son
+dos bibliotecas intencionales: **se preservan ambas** y el futuro import debe
+identificar su catálogo/version por separado, aunque compartan nombres.
+
+También están `Universal Base Characters[Standard]` y `Modular Character
+Outfits - Fantasy[Standard]`. El README del outfit exige combinar Ranger solo
+con la cabeza del base (el cuerpo completo clippea). El script reproducible
+`tools/build_ranger_candidates.py` repara en memoria los URI `_png.png`
+erróneos del vendor, corta por pesos `Head`/`neck_01`, une un único rig y
+reduce texturas derivadas a 1024 px. Generó y se inspeccionaron visualmente
+`assets/game/characters/ranger_{female,male}.glb` (~16 MB cada uno). Ambos
+están registrados en `VisualCatalog`; femenino es el default provisional.
+
+`Prototype.glb` está obsoleto por decisión del usuario y ya no tiene clave,
+receta ni ruta en `src/`; no borrarlo sin pedido porque sigue siendo un asset
+del worktree. Sus rest poses difieren del Ranger en los 65 huesos (máximo
+medido 18 cm; además `head` vs `Head`), así que sus clips no se reutilizan.
+El script monta las mallas sobre `UAL2_Standard.glb`, cuyo rig coincide, y
+hornea sus 43 clips (combate, escudo, tala, slide, etc.) dentro de cada Ranger.
+El subset Standard no trae Walk/Sprint normales: locomoción usa provisionalmente
+`Idle_No_Loop` y `Walk_Carry_Loop` (acelerado en sprint). En este host Blender
+5.2 exporta pero queda colgado al cerrar por PipeWire; usar
+`timeout 120s blender -noaudio --background --factory-startup --python
+tools/build_ranger_candidates.py` hasta corregir el entorno.
+
+Validación automática tras bosque/personajes: `cargo check`, `cargo build`,
+Clippy `--all-targets -D warnings` y 226 tests pasan usando el build-dir
+compartido. Smoke X11 del Ranger regenerado estable: Vulkan, 15 tipos de árbol
+y 43 clips cargan sin warning/error/panic. El checkpoint funcional fue recibido,
+pero queda rechazado por rendimiento inferior a 30 FPS (§10).
+
+`visuals/catalog.rs` introduce el binding entidad→asset sin invertir capas:
+la raíz visual combina `VisualOf(owner)` con `AppearanceBinding { key, slot }`;
+`VisualCatalog` resuelve scene + adapter de escala/orientación/pivot. La
+simulación conserva identidades semánticas (especie de árbol, tipo de arma,
+tipo de escudo), nunca `Handle` ni rutas. El catálogo ya posee recetas para el
+Ranger femenino/masculino y 15 árboles; el player consume la receta activa y
+dejó de derivar su
+escala desde `BodyDimensions`. Al integrar equipo, presentación observará el
+arma/escudo semántico equipado y creará raíces `MainHand`/`OffHand`; al
+integrar árboles, `TreeKind`/estado seleccionarán una raíz `World`. Cambiar
+receta, variante o biblioteca no cambia collider, hurtbox ni hitbox.
+
+### Decisión — colisiones e hitboxes para assets finales (2026-07-19)
+
+Las fuentes públicas de Nintendo confirman el uso amplio de física en BotW,
+pero no documentan sus hurtboxes exactas; se toma el *feeling*, no una
+implementación supuesta. Hoy un único `Collider` cápsula sirve como cuerpo
+sólido y receptor de melee/flechas/carga (`GameLayer::Actor`). El visual ya
+es separado; su escala/pivot salieron de `BodyDimensions` y viven en la
+receta de presentación, sin convertir todavía ningún asset fuente.
+
+Contrato acordado:
+
+1. **Locomotion body:** cápsula simple y estable, elegida por traversal y
+   capacidades, no generada desde el mesh. La forma (`standing/crouched`)
+   se separará del envelope semántico (pies, cabeza, radio de soporte) que
+   consumen ledges/stairs/ladders. Puede variar por arquetipo; un cambio
+   cosmético conserva el perfil y no altera `FixedUpdate`.
+2. **Hurtboxes:** primitivas sensoras hijas con `owner` + región, sin
+   respuesta física. Posturas (stand/sneak/mounted) cambian desde estado de
+   simulación, nunca desde el esqueleto renderizado.
+3. **Hitboxes:** sweeps de capacidad fija definidos por arma/ataque y fase
+   autoritativa. Si una animación exige precisión, Blender exporta sockets o
+   curvas horneadas que el loader convierte a datos puros de simulación.
+4. **Mundo/assets:** colisión simplificada y semántica (`climbable`, material,
+   etc.) en nodos GLTF propios; nunca trimesh visual automático como default.
+
+Migración incremental antes del primer asset final:
+
+0. Corregir deudas descubiertas por la auditoría: Projectiles crea mesh/trail
+   desde `FixedUpdate` (§20); Charge usa `HashSet` asignable (§18); ground y
+   snap no enmascaran actores.
+1. Separar layers Body/Hurtbox y agregar vínculo hurtbox→Actor; primero la
+   raíz puede conservar el volumen actual para migrar sin cambiar feeling.
+2. Migrar melee/flecha/carga a resolver dueño/región y deduplicar por Actor.
+3. Separar `LocomotionShapeSet` de `BodyEnvelope`; después importar perfiles
+   espaciales y traces de ataque authored fuera del hot path.
+
+Tests obligatorios: swap visual no cambia simulación; múltiples hurtboxes dan
+un solo hit por ataque; self-hit imposible; sensores no bloquean locomoción;
+mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
@@ -112,8 +234,3 @@ limpio. `world/layout.rs` es la costura donde se enchufa.
   apila por `PartialEq` derivado; una fuente futura que calcule `heal` en
   runtime (en vez de reusar un const) puede fallar el apilado por
   redondeo.
-
-## Decisiones que el usuario debe tomar pronto
-
-- Orden de ataque de la lista graybox (sugerido: día/noche → temperatura →
-  inventario, con toon shader e IA de combate paralelizables).

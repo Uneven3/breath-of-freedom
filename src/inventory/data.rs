@@ -134,6 +134,18 @@ impl Inventory {
         None
     }
 
+    pub fn consume_food_at(&mut self, index: usize) -> Option<f32> {
+        let stack = self.slots.get_mut(index)?.as_mut()?;
+        let ItemKind::Food { heal, .. } = stack.kind else {
+            return None;
+        };
+        stack.quantity -= 1;
+        if stack.quantity == 0 {
+            self.slots[index] = None;
+        }
+        Some(heal)
+    }
+
     /// Removes and returns the first `Weapon` stack found (`CycleWeapon`
     /// re-equips whatever this returns).
     pub fn take_first_weapon(&mut self) -> Option<WeaponItem> {
@@ -148,8 +160,21 @@ impl Inventory {
         None
     }
 
+    pub fn take_weapon_at(&mut self, index: usize) -> Option<WeaponItem> {
+        let stack = self.slots.get(index)?.as_ref()?;
+        let ItemKind::Weapon(item) = stack.kind else {
+            return None;
+        };
+        self.slots[index] = None;
+        Some(item)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &ItemStack> {
         self.slots.iter().flatten()
+    }
+
+    pub fn slot(&self, index: usize) -> Option<&ItemStack> {
+        self.slots.get(index).and_then(Option::as_ref)
     }
 }
 
@@ -207,6 +232,22 @@ impl WeaponDurability {
 pub struct EquipRequestMessage {
     pub actor: Entity,
     pub item: WeaponItem,
+}
+
+/// Presentation intent to equip the weapon currently stored in `slot`.
+/// Inventory validates the actor, index, and item kind in `FixedUpdate`.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EquipSlotRequestMessage {
+    pub actor: Entity,
+    pub slot: usize,
+}
+
+/// Presentation intent to consume the food currently stored in `slot`.
+/// Inventory validates the actor, index, and item kind in `FixedUpdate`.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsumeSlotRequestMessage {
+    pub actor: Entity,
+    pub slot: usize,
 }
 
 /// `actor`'s equipped weapon reached zero durability. Emitted exactly once

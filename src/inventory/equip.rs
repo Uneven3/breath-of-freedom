@@ -1,6 +1,7 @@
 //! Equip: the swap contract `combat::weapon` already anticipates — "equip
 //! inserts/retires `WeaponProfile`; the component IS the armed boolean."
 
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 
 use crate::input::action::IntentAction;
@@ -8,10 +9,9 @@ use crate::input::frame::{ActiveActions, InputControlledBy};
 use crate::movement::Player;
 
 use super::data::{
-    EquipRequestMessage, Inventory, InventoryInputCursor, ItemKind, WeaponDurability,
+    EquipRequestMessage, EquipSlotRequestMessage, Inventory, InventoryInputCursor, ItemKind,
+    WeaponDurability,
 };
-
-type CurrentWeapon<'a> = (Option<&'a WeaponDurability>, &'a mut Inventory);
 
 /// The only writer of `WeaponProfile`/`WeaponDurability` on an equipped
 /// actor. Swap is atomic: the outgoing weapon (if any) returns to
@@ -21,28 +21,49 @@ type CurrentWeapon<'a> = (Option<&'a WeaponDurability>, &'a mut Inventory);
 /// `durability::unequip_broken_weapons`), so `WeaponDurability::item()`
 /// already carries the profile that would otherwise need a second query.
 pub fn apply_equip_requests(
-    mut requests: MessageReader<EquipRequestMessage>,
-    mut actors: Query<CurrentWeapon>,
-    mut commands: Commands,
+    world: &mut World,
+    mut requests: Local<MessageCursor<EquipRequestMessage>>,
+) {
+    world.resource_scope(|world, messages: Mut<Messages<EquipRequestMessage>>| {
+        for request in requests.read(&messages) {
+            let Ok(mut actor) = world.get_entity_mut(request.actor) else {
+                continue;
+            };
+            let outgoing = actor.get::<WeaponDurability>().map(WeaponDurability::item);
+            {
+                let Some(mut inventory) = actor.get_mut::<Inventory>() else {
+                    continue;
+                };
+                if let Some(outgoing) = outgoing
+                    && inventory.try_add(ItemKind::Weapon(outgoing), 1).is_err()
+                {
+                    warn!(
+                        "[inventory] no room to keep '{}', it was lost in the swap",
+                        outgoing.label
+                    );
+                }
+            }
+            actor.insert((request.item.profile, WeaponDurability::new(request.item)));
+            info!("[inventory] equipped {}", request.item.label);
+        }
+    });
+}
+
+pub fn read_equip_slot_requests(
+    mut requests: MessageReader<EquipSlotRequestMessage>,
+    mut actors: Query<&mut Inventory>,
+    mut equip: MessageWriter<EquipRequestMessage>,
 ) {
     for request in requests.read() {
-        let Ok((current_durability, mut inventory)) = actors.get_mut(request.actor) else {
+        let Ok(mut inventory) = actors.get_mut(request.actor) else {
             continue;
         };
-        if let Some(durability) = current_durability {
-            let outgoing = durability.item();
-            if inventory.try_add(ItemKind::Weapon(outgoing), 1).is_err() {
-                warn!(
-                    "[inventory] no room to keep '{}', it was lost in the swap",
-                    outgoing.label
-                );
-            }
+        if let Some(item) = inventory.take_weapon_at(request.slot) {
+            equip.write(EquipRequestMessage {
+                actor: request.actor,
+                item,
+            });
         }
-        commands
-            .entity(request.actor)
-            .insert(request.item.profile)
-            .insert(WeaponDurability::new(request.item));
-        info!("[inventory] equipped {}", request.item.label);
     }
 }
 
@@ -135,6 +156,44 @@ mod tests {
     }
 
     #[test]
+    fn multiple_swaps_in_one_tick_observe_the_previous_swap() {
+        let mut world = World::new();
+        world.init_resource::<Messages<EquipRequestMessage>>();
+        let actor = world
+            .spawn((
+                WeaponProfile::GRAYBOX_SWORD,
+                WeaponDurability::new(WeaponItem::GRAYBOX_SWORD),
+                Inventory::default(),
+            ))
+            .id();
+
+        world.write_message(EquipRequestMessage {
+            actor,
+            item: WeaponItem::LOOTABLE_CLUB,
+        });
+        world.write_message(EquipRequestMessage {
+            actor,
+            item: WeaponItem::GRAYBOX_SWORD,
+        });
+        world.run_system_once(apply_equip_requests).unwrap();
+
+        let entity = world.entity(actor);
+        assert_eq!(
+            entity.get::<WeaponDurability>().unwrap().label(),
+            WeaponItem::GRAYBOX_SWORD.label
+        );
+        let stashed: Vec<_> = entity
+            .get::<Inventory>()
+            .unwrap()
+            .iter()
+            .map(|stack| stack.kind)
+            .collect();
+        assert_eq!(stashed.len(), 2);
+        assert!(stashed.contains(&ItemKind::Weapon(WeaponItem::GRAYBOX_SWORD)));
+        assert!(stashed.contains(&ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB)));
+    }
+
+    #[test]
     fn swap_with_a_full_inventory_still_equips_and_loses_the_old_weapon_without_panic() {
         let mut world = World::new();
         world.init_resource::<Messages<EquipRequestMessage>>();
@@ -208,5 +267,69 @@ mod tests {
             0,
             "taken out of the pool the moment the request is written"
         );
+    }
+
+    #[test]
+    fn slot_request_removes_the_selected_weapon_and_emits_one_equip() {
+        let mut world = World::new();
+        world.init_resource::<Messages<EquipSlotRequestMessage>>();
+        world.init_resource::<Messages<EquipRequestMessage>>();
+        let mut inventory = Inventory::default();
+        inventory
+            .try_add(ItemKind::Material(crate::inventory::MaterialKind::Wood), 2)
+            .unwrap();
+        inventory
+            .try_add(ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB), 1)
+            .unwrap();
+        let actor = world.spawn(inventory).id();
+        world.write_message(EquipSlotRequestMessage { actor, slot: 1 });
+
+        world.run_system_once(read_equip_slot_requests).unwrap();
+
+        assert!(
+            world
+                .entity(actor)
+                .get::<Inventory>()
+                .unwrap()
+                .slot(1)
+                .is_none()
+        );
+        let messages = world.resource::<Messages<EquipRequestMessage>>();
+        let mut cursor = messages.get_cursor();
+        let requests: Vec<_> = cursor.read(messages).collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].actor, actor);
+        assert_eq!(requests[0].item, WeaponItem::LOOTABLE_CLUB);
+    }
+
+    #[test]
+    fn invalid_slot_or_non_weapon_does_not_mutate_or_emit() {
+        let mut world = World::new();
+        world.init_resource::<Messages<EquipSlotRequestMessage>>();
+        world.init_resource::<Messages<EquipRequestMessage>>();
+        let mut inventory = Inventory::default();
+        inventory
+            .try_add(ItemKind::Material(crate::inventory::MaterialKind::Wood), 2)
+            .unwrap();
+        let actor = world.spawn(inventory).id();
+        world.write_message(EquipSlotRequestMessage { actor, slot: 0 });
+        world.write_message(EquipSlotRequestMessage {
+            actor,
+            slot: super::super::data::INVENTORY_SLOTS,
+        });
+
+        world.run_system_once(read_equip_slot_requests).unwrap();
+
+        assert_eq!(
+            world
+                .entity(actor)
+                .get::<Inventory>()
+                .unwrap()
+                .slot(0)
+                .unwrap()
+                .quantity,
+            2
+        );
+        assert!(world.resource::<Messages<EquipRequestMessage>>().is_empty());
     }
 }

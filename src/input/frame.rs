@@ -37,6 +37,7 @@ pub struct ControlOrientation {
 pub struct ActionFrame {
     held: u32,
     generations: [u64; ACTION_COUNT],
+    discarded_through: [u64; ACTION_COUNT],
 }
 
 impl Default for ActionFrame {
@@ -44,6 +45,7 @@ impl Default for ActionFrame {
         Self {
             held: 0,
             generations: [0; ACTION_COUNT],
+            discarded_through: [0; ACTION_COUNT],
         }
     }
 }
@@ -105,6 +107,20 @@ impl ActiveActions {
         }
     }
 
+    pub(crate) fn clear_pressed(&mut self, source: InputSource) {
+        if let Some(frame) = self.frame_mut(source) {
+            frame.held = 0;
+        }
+    }
+
+    /// Drops every trigger currently pending for all consumers of `source`.
+    /// New generations published after this call remain consumable.
+    pub(crate) fn discard_pending(&mut self, source: InputSource) {
+        if let Some(frame) = self.frame_mut(source) {
+            frame.discarded_through = frame.generations;
+        }
+    }
+
     fn frame_mut(&mut self, source: InputSource) -> Option<&mut ActionFrame> {
         source.slot().map(|slot| &mut self.frames[slot])
     }
@@ -120,6 +136,10 @@ impl InputConsumeCursor {
     pub fn consume(&mut self, frame: &ActionFrame, action: IntentAction) -> bool {
         let generation = frame.generation(action);
         let seen = &mut self.seen_generations[action.index()];
+        if generation == frame.discarded_through[action.index()] {
+            *seen = generation;
+            return false;
+        }
         if *seen == generation {
             return false;
         }
@@ -164,5 +184,20 @@ mod tests {
                 .unwrap()
                 .pressed(IntentAction::Sprint)
         );
+    }
+
+    #[test]
+    fn discarded_trigger_is_not_replayed_but_the_next_one_is_consumed() {
+        let mut actions = ActiveActions::default();
+        let mut cursor = InputConsumeCursor::default();
+
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Interact);
+        actions.discard_pending(LOCAL_INPUT_SOURCE);
+        let frame = actions.frame(LOCAL_INPUT_SOURCE).unwrap();
+        assert!(!cursor.consume(frame, IntentAction::Interact));
+
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Interact);
+        let frame = actions.frame(LOCAL_INPUT_SOURCE).unwrap();
+        assert!(cursor.consume(frame, IntentAction::Interact));
     }
 }

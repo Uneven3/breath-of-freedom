@@ -143,6 +143,39 @@ crítico del audit 2026-07-17).
   submódulos authored como `world/forest.rs` (tablas/diseño y geometría
   derivada). Agrandar el mapa toca solo autoría; esa es la costura donde un
   loader de assets (RON/escena GLTF) se enchufa sin tocar el mecanismo.
+- **El costo es una propiedad de la representación, no de la identidad.** Una
+  entidad semántica (`TreeKind`, un actor) carga *tiers* de representación en
+  `VisualCatalog` — proxy procedural barato, malla detallada, y en el futuro
+  impostor/LOD — elegidos por presupuesto, nunca una receta fija. El graybox usa
+  el tier barato para no mentir sobre el costo: un placeholder caro que la
+  versión final no shipeará invalida toda medición hecha contra él. El watchdog
+  de triángulos (`visuals/budget.rs`) hace visible en el log cualquier malla que
+  exceda el presupuesto. La estilización va en el material (por-fragmento, que
+  escala), no en pasadas fullscreen extra (costo fijo sin importar la escena).
+- **Debug: un snapshot, dos sinks.** Consola y pantalla responden preguntas
+  distintas y no pueden contradecirse: el jugador mira el HUD para juzgar
+  *feeling*, y el log es lo único que sobrevive al playtest para armar la tabla
+  antes/después. Por eso `debug/collect.rs` es el único que convierte valores en
+  texto, hacia un `DebugSnapshot` de datos puros (§6, §19); `hud` y `console`
+  solo lo acomodan. Las secciones tienen slots fijos, así el orden del reporte
+  no depende del orden de los sistemas. La consola emite periódico (serie
+  temporal del A/B), por cambio (secciones no volátiles) y a demanda con **P**.
+  El *trace* por tick (transiciones, flips, casts) queda aparte: es un flujo de
+  eventos, no un estado presente, y un snapshot solo mostraría el último.
+- **La instrumentación tiene puntos ciegos declarados.** El total `gpu:` es la
+  suma de los spans que Bevy *registra*, no el costo real de GPU. Los pases de
+  sombra quedan afuera: Bevy los marca con `info_span!` y no con el grabador de
+  diagnostics (`bevy_pbr/render/light.rs`), así que no aportan timestamps. Una
+  lectura de "el gpu medido no cambió" no significa "el GPU no es el cuello" —
+  ese error ya se cometió una vez y desvió el diagnóstico hacia el prepass
+  cuando el costo dominante eran las sombras. Lo no instrumentado se mide por
+  A/B (perilla + frame time), nunca por ausencia en la tabla de pases.
+- **Suavizado invariante al framerate.** Toda interpolación de presentación usa
+  `StableInterpolate::smooth_nudge` (decaimiento exponencial), nunca
+  `(rate * dt)` como factor de lerp: esa forma llega a 1.0 a ~20 fps y elimina
+  el suavizado justo cuando más se nota, cambiando el comportamiento de cámara
+  y visuales entre configuraciones de un mismo A/B. Los `lerp` que quedan
+  mezclan por un factor de estado (p. ej. `aim_blend`), no por tiempo.
 - **Checkpoint jugado, luego tests.** El feeling se valida jugando
   (§10-§11); el loop operativo es: implementar → `fmt`+`clippy`+`test` →
   lanzar el juego para el usuario → leer el log de la sesión
@@ -162,10 +195,13 @@ crítico del audit 2026-07-17).
 | `health` | `Health`, inmunidad, aplicación autoritativa de daño | Único que resta HP; muerte por mensaje |
 | `inventory` | `Inventory`, equipo/durabilidad, pickups del mundo | Equipar inserta/retira `WeaponProfile` de Combat; lee `HitImpactMessage` (filtro `melee`); pide heal a Health |
 | `enemies` | Percepción, `Awareness`, brains melee/arquero | Escribe solo sus `*Intents`/`ControlOrientation` |
+| `interaction` | Árbitro de `Interact`, `Interactable`, prioridad | Único consumidor de la tecla; emite la decisión por mensaje |
 | `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
 | `player` | Spawn y respawn del jugador | Dueño de la reacción a su muerte |
 | `world` | Geometría, capas, nivel, targets | Sustrato: no lee a nadie |
-| `visuals`, `camera`, `presentation`, `sfx`, `debug` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20); debug F1-F7 |
+| `visuals`, `camera`, `presentation`, `sfx` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20) |
+| `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
+| `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las lee y las aplica a lo suyo |
 
 Sistemas futuros (crafteo, swim, snowboard, clima, NPCs,
 multiplayer, persistencia) se diseñan cuando toquen, como consumidores

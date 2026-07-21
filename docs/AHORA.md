@@ -9,12 +9,21 @@ cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`.
 
 - Validación mínima antes de terminar: `cargo fmt` + `cargo clippy
   --all-targets -- -D warnings` + `cargo test`.
+- **Medir en `cargo run` (dev), no en release.** Las deps ya compilan en
+  `opt-level 3` en dev (`[profile.dev.package."*"]`), y el cuello es GPU, así que
+  la diferencia de perfil medida en el punto menos dependiente de la vista es
+  0.38 ms contra deltas de 4-12 ms. Release tarda ~9 min por `codegen-units = 1`
+  + `lto`; se reserva para validar el número absoluto antes de dar por cumplido
+  un objetivo. Correr la secuencia **dos veces** y quedarse con la limpia: la
+  primera a veces trae outliers.
 - El feeling se valida jugando (checkpoint, §10): lanzar con
   `env -u WAYLAND_DISPLAY DISPLAY=:1 cargo run` en background para el
   usuario; al cerrar la sesión, leer el log filtrando
   `error|panic|took|destroyed` antes de reportar.
-- Debug in-game: F1 colliders, F2 casts, F3-F5 logs, F6 probe, F7 navegador
-  de clips de animación (`[`/`]` ciclan, nombre en HUD).
+- Debug in-game: **F1 abre el hub** (`presentation/debug_ui/`) — canales,
+  perillas de render, acciones y la secuencia de medición, todo por click.
+  Sobreviven dos teclas: `[`/`]` ciclan clips con el navegador abierto, y **P**
+  vuelca el snapshot al log sin abrir un modal sobre lo observado.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
 ## Estado (2026-07-19)
@@ -24,42 +33,74 @@ jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
 percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
 F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
 fases con carga Bannerlord, Ranger Quaternius femenino + UAL2 (43 clips,
-navegador F7), mundo 320×320 con graybox central y bosque. El checkpoint del
-usuario confirma que funciona, pero **no supera 30 FPS**: rendimiento
-rechazado, no se considera cerrado.
+navegador F7), mundo 320×320 con graybox central y bosque. Rendimiento cerrado
+2026-07-21 (60 FPS estables, ver arriba).
 
 Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
 corregidos el mismo día (input a PreUpdate, patrón CapacityPending
 eliminado, `Perceivable`, test del veto ForbidSprint). 187 tests.
 
-## Foco activo — rendimiento (decisión del usuario, 2026-07-19)
+## Cierre de rendimiento (2026-07-21): 13 → 60 FPS estables
 
-Próximo trabajo antes de seguir agrandando mundo o agregando features:
+En el peor punto del bosque (dentro, al ras del suelo) el frame pasó de ~72 ms
+(13 FPS) a **nunca bajar de 60 FPS**, con vsync. Sin sacar features: sombras de
+sol, bosque completo y outline siguen. El camino, medido con la secuencia:
 
-1. **Baseline reproducible:** misma cámara/escena/hora, resolución, present
-   mode y build; registrar FPS y frame time del HUD en clearing y bosque. El
-   objetivo provisional es 60 FPS sostenidos en la máquina actual; medir
-   también estabilidad, no solo promedio.
-2. **Atribución A/B, una variable por vez:** visuales del bosque vs colliders,
-   cantidad/distancia de árboles, sombras de sol/luna, outline +
-   depth/normal prepass, y skinning/animación del Ranger. No asumir que 179
-   árboles son la única causa.
-3. **Optimizar el cuello medido:** instancing/batching, culling por distancia y
-   LOD para props; presupuesto/rango de shadow casters; reducir pases o
-   materiales solo si el perfil lo justifica. Mantener las 15 variantes y las
-   carpetas vendor; optimizar recetas/derivados, no borrar fuentes.
-4. **Criterio de cierre:** repetir el baseline y dejar tabla antes/después. El
-   LOD visual nunca elimina el collider ni cambia `TreeKind`, hitbox, hurtbox
-   o resultados de `FixedUpdate`.
+1. **Materiales de tronco a `OPAQUE`/single-sided** (`visuals/foliage.rs`): la
+   corteza es 100% opaca pero venía `MASK`+`doubleSided`; restaurar early-Z
+   sobre el ~70% de la geometría del bosque. Sin cambio visual.
+2. **Mapa de sombras 2048→1024 y hojas sin sombra por default**: el costo del
+   sol dentro del bosque pasó de dominar el frame a ~2.7 ms. El sol no se apaga,
+   se presupuesta.
+3. **La decisión de raíz (2026-07-21): el graybox tenía que ser honesto sobre el
+   costo.** Los árboles Quaternius (miles de triángulos, hojas alpha-masked)
+   eran placeholder que fingían ser baratos y nos daban un número falso. Se
+   reemplazaron por **proxies procedurales** (cilindro+copa por familia, mallas
+   compartidas e instanciadas) como default; el modelo detallado quedó como tier
+   opt-in (`tree-detail`). Esto es lo que llevó el peor caso a 60 estables.
 
-El HUD ya muestra FPS/frame time y `present_mode`; falta instrumentación para
-separar CPU/GPU y toggles de benchmark. No avanzar temperatura/IA/vegetación
-hasta recuperar un frame budget aceptable.
+Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
+
+- **El costo es propiedad de la representación, no de la identidad.** `TreeKind`
+  resuelve a dos tiers en `VisualCatalog` (proxy barato / escena detallada);
+  impostores e instancing se enchufan ahí sin tocar simulación.
+- **Watchdog de polígonos** (`visuals/budget.rs`): cuenta triángulos de cada
+  malla al cargar y avisa sobre presupuesto. Agnóstico de asset — ya delató que
+  el Ranger femenino es igual de pesado (pies: 9172 tris; ver deudas).
+- **La estilización va en el material, no en pasadas extra.** El outline cuesta
+  un prepass entero (~7 ms) sin importar la escena; es el próximo candidato si
+  se busca más techo, y además se ve más agresivo que BotW.
+
+Instrumentación clave que hizo esto medible: secuencia automática con
+precalentamiento de pipelines, dos modos de vantage ("aquí" para zonas lentas /
+canónico para comparar), detección de movimiento que invalida pasos, y overlay
+en pantalla. El domo que "seguía" al jugador era el shader de outline
+detectando el suelo lejano como borde (primera derivada de profundidad);
+corregido a laplaciana (segunda derivada), que da cero en cualquier plano.
+
+## Referencia de rendimiento (cerrado 2026-07-21)
+
+- **Máquina de destino:** AMD Polaris 11 (RX 460/560), 2 GB VRAM, 2016 — low-end
+  real. El costo escala con lo que se **ve**, no con el tamaño del mundo (Bevy
+  hace frustum culling), mientras la distancia de dibujo esté acotada.
+- **Herramientas** (`src/perf/`, hub F1): split CPU/GPU con timestamps; ~11
+  perillas A/B por click; secuencia automática (precalienta pipelines, vsync
+  off, dos vantages, invalida al moverse, tabla al log con deriva); overlay de
+  progreso. Cascadas se fijan al arrancar (`BOF_CASCADES=1..4`): cambiarlas en
+  vivo panica la contabilidad de visibilidad de Bevy.
+- **Ceguera medida:** el total `gpu:` suma solo spans registrados; los pases de
+  sombra usan `info_span!`, no el grabador. "El gpu medido no cambió" **no**
+  implica "no es GPU" — indujo un diagnóstico equivocado una vez. Lo no
+  instrumentado se mide por A/B.
+- **Pendientes de rendimiento** (no urgentes, hay margen): comprimir texturas
+  del bosque a BCn/KTX2 (~88 MB RGBA8 hoy); LOD/impostores cuando la densidad
+  suba; el outline cuesta un prepass entero (~7 ms) — próximo candidato si se
+  busca techo, y además se ve más agresivo que BotW. Streaming por chunks para
+  el mundo grande: la costura ya existe en `world/layout.rs`.
 
 ## Cierre del graybox (decisión del usuario, 2026-07-17)
 
-Hecho y probado en conjunto; el checkpoint queda rechazado por rendimiento
-(2026-07-19):
+Hecho, probado en conjunto y con rendimiento cerrado (2026-07-21):
 
 - **Ciclo día/noche con identidad por transición** (`world/day_night.rs`):
   amanecer coral/dorado, atardecer magenta/naranja, cielo y ambiente con
@@ -140,8 +181,8 @@ tools/build_ranger_candidates.py` hasta corregir el entorno.
 Validación automática tras bosque/personajes: `cargo check`, `cargo build`,
 Clippy `--all-targets -D warnings` y 226 tests pasan usando el build-dir
 compartido. Smoke X11 del Ranger regenerado estable: Vulkan, 15 tipos de árbol
-y 43 clips cargan sin warning/error/panic. El checkpoint funcional fue recibido,
-pero queda rechazado por rendimiento inferior a 30 FPS (§10).
+y 43 clips cargan sin warning/error/panic. El modelo detallado quedó como tier
+opt-in (`tree-detail`); el default es el proxy graybox (ver cierre de rendimiento).
 
 `visuals/catalog.rs` introduce el binding entidad→asset sin invertir capas:
 la raíz visual combina `VisualOf(owner)` con `AppearanceBinding { key, slot }`;
@@ -197,6 +238,13 @@ mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
+- **Ranger femenino sobredimensionado para graybox:** el watchdog
+  (`visuals/budget.rs`) reporta pies 9172 tris, brazos 3636/3000, cuerpo 2962,
+  capucha 2136 — cada pieza sobre el presupuesto de 2000. No es cuello hoy (hay
+  uno solo) pero es la misma deuda que tenían los árboles: asset descargado que
+  finge ser barato. Necesita LOD o proxy cuando el jugador deje de ser único
+  (NPCs con el mismo rig) o cuando se busque techo en móvil.
+
 - **Facciones:** `Perceivable` es un bit; reemplazar por facción cuando
   haya hostilidad entre no-jugadores (animales, aliados).
 - **Cortar árboles → madera real:** `Inventory`/`ItemKind::Material` ya
@@ -210,12 +258,6 @@ mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 - **`combat::motors::attack::ProposeQuery` requiere `WeaponProfile` no
   opcional:** romper el arma a pie también bloquea el combate montado
   hasta re-equipar (quirk aceptado al agregar durabilidad).
-- **Árbitro único de interactuables:** `MountInputCursor` e
-  `InventoryInputCursor` consumen `Interact` en paralelo — un caballo y un
-  arma ambos en rango disparan los dos sistemas con un solo `E`. Hoy no se
-  dispara (los pickups del graybox están a ~8m del spawn del caballo); sin
-  árbitro central, el primer layout que los acerque dispara ambos con una
-  sola tecla.
 - **Respawn no restaura arma:** si el jugador muere desarmado (arma rota)
   sin repuesto en `Inventory` ni un arma cercana en el mundo, respawnea
   con HP completo pero sin `WeaponProfile` — incapaz de atacar cuerpo a
@@ -226,10 +268,6 @@ mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
   comparten banda (`.after(SyncAttachments).before(ApplyContext)`) sobre
   componentes hoy disjuntos; el primer feature que cruce ambos dominios
   (alforjas de caballo, loot al desmontar) hereda un orden no declarado.
-- **`read_interact_pickups` duplica la selección de "candidato más
-  cercano" de `mounts::lifecycle::read_interact_requests`** (filter +
-  `min_by`/`distance_squared`) en vez de un helper compartido — un tercer
-  sistema contextual (diálogo, campfire) copiaría por tercera vez.
 - **Apilado de comida por igualdad exacta de `f32`:** `ItemKind::Food`
   apila por `PartialEq` derivado; una fuente futura que calcule `heal` en
   runtime (en vez de reusar un const) puede fallar el apilado por

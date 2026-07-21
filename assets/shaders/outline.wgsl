@@ -1,7 +1,15 @@
-// Silhouette outlines: Roberts-cross edge detection over the depth and
-// normal prepasses, inked on top of the rendered frame. Depth edges are
-// relative to view distance (no false lines on receding floors); normal
-// edges catch creases between faces the depth test misses.
+// Silhouette outlines: edge detection over the depth and normal prepasses,
+// inked on top of the rendered frame.
+//
+// Depth edges use the *second* derivative, not the first. A Roberts cross
+// measures how fast depth changes between neighbours, which on a receding
+// floor is large and constant — dividing by view distance does not cancel it,
+// because grazing angle makes it grow faster than distance does. Past some
+// range every ground pixel crossed the threshold and the terrain inked solid,
+// leaving a dark disc that followed the camera and read as a domed ceiling.
+//
+// A Laplacian is zero on any plane regardless of how steeply it recedes, and
+// only spikes where depth actually breaks. That is what a silhouette is.
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
@@ -43,11 +51,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     );
     let t = max(i32(settings.thickness), 1);
 
-    // Roberts cross on linearized depth, relative to the center distance.
+    // Laplacian of linearized depth, relative to the center distance so a
+    // given break inks the same whether it is near or far.
     let center = depth_at(px);
-    let d_a = abs(depth_at(px + vec2(-t, -t)) - depth_at(px + vec2(t, t)));
-    let d_b = abs(depth_at(px + vec2(t, -t)) - depth_at(px + vec2(-t, t)));
-    let depth_edge = (d_a + d_b) / max(center, 1e-3);
+    let dx = depth_at(px - vec2(t, 0)) + depth_at(px + vec2(t, 0)) - 2.0 * center;
+    let dy = depth_at(px - vec2(0, t)) + depth_at(px + vec2(0, t)) - 2.0 * center;
+    let depth_edge = (abs(dx) + abs(dy)) / max(center, 1e-3);
 
     // Roberts cross on world normals.
     let n_a = 1.0 - dot(normal_at(px + vec2(-t, -t)), normal_at(px + vec2(t, t)));

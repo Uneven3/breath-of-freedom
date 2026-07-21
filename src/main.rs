@@ -11,9 +11,11 @@ mod debug;
 mod enemies;
 mod health;
 mod input;
+mod interaction;
 mod inventory;
 mod mounts;
 mod movement;
+mod perf;
 mod player;
 mod presentation;
 mod projectiles;
@@ -49,5 +51,7 @@ fn main() {
             presentation::PresentationPlugin,
             sfx::SfxPlugin,
         ))
+        // Separate call: `add_plugins` tuples cap at 15 elements.
+        .add_plugins((perf::PerfPlugin, interaction::InteractionPlugin))
         .run();
 }

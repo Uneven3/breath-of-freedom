@@ -53,7 +53,7 @@ pub(super) fn interpolate_probe_visual(
     mut visuals: Query<ProbeVisualQuery, ProbeVisualFilter>,
     time: Res<Time>,
 ) {
-    let t = (INTERPOLATION_SPEED * time.delta_secs()).clamp(0.0, 1.0);
+    let dt = time.delta_secs();
     for (mut visual, probe) in &mut visuals {
         let Ok((body, state)) = actors.get(probe.actor) else {
             continue;
@@ -63,9 +63,15 @@ pub(super) fn interpolate_probe_visual(
         } else {
             0.0
         };
+        let target_y = body.translation.y + offset;
         visual.translation.x = body.translation.x;
         visual.translation.z = body.translation.z;
-        visual.translation.y += (body.translation.y + offset - visual.translation.y) * t;
-        visual.rotation = visual.rotation.slerp(body.rotation, t);
+        visual
+            .translation
+            .y
+            .smooth_nudge(&target_y, INTERPOLATION_SPEED, dt);
+        visual
+            .rotation
+            .smooth_nudge(&body.rotation, INTERPOLATION_SPEED, dt);
     }
 }

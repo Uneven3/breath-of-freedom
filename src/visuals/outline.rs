@@ -48,6 +48,37 @@ impl Default for OutlineSettings {
     }
 }
 
+/// Benchmark knob: strips the ink pass *and* the two prepasses that only
+/// exist to feed it, so an A/B measures the whole outline feature rather than
+/// just its fullscreen pass. Restoring re-inserts all three.
+pub(super) fn apply_outline_perf(
+    mut commands: Commands,
+    perf: Res<crate::perf::PerfToggles>,
+    camera: Single<(Entity, Option<&OutlineSettings>), With<Camera3d>>,
+) {
+    if !perf.is_changed() {
+        return;
+    }
+    let (camera, settings) = *camera;
+    match (perf.outline, settings.is_some()) {
+        (true, false) => {
+            commands.entity(camera).try_insert((
+                OutlineSettings::default(),
+                bevy::core_pipeline::prepass::DepthPrepass,
+                bevy::core_pipeline::prepass::NormalPrepass,
+            ));
+        }
+        (false, true) => {
+            commands
+                .entity(camera)
+                .remove::<OutlineSettings>()
+                .remove::<bevy::core_pipeline::prepass::DepthPrepass>()
+                .remove::<bevy::core_pipeline::prepass::NormalPrepass>();
+        }
+        _ => {}
+    }
+}
+
 pub struct OutlinePlugin;
 
 impl Plugin for OutlinePlugin {
@@ -56,6 +87,7 @@ impl Plugin for OutlinePlugin {
             ExtractComponentPlugin::<OutlineSettings>::default(),
             UniformComponentPlugin::<OutlineSettings>::default(),
         ));
+        app.add_systems(Update, apply_outline_perf);
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;

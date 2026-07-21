@@ -2,7 +2,21 @@
 //! StatusEffects will read it); the sun/ambient presentation reads it in
 //! `Update` and never writes back (§20).
 
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
+
+use crate::perf::PerfToggles;
+
+/// Below this illuminance a directional light contributes nothing visible, so
+/// its cascades are pure waste. Bevy gates shadow-map rendering on
+/// `shadow_maps_enabled` alone — never on illuminance — so without this the
+/// moon renders four full cascade passes over the whole forest at noon (and
+/// the sun does the same at midnight).
+const SHADOW_CASTING_LUX: f32 = 1.0;
+
+fn casts_shadows(illuminance: f32) -> bool {
+    illuminance >= SHADOW_CASTING_LUX
+}
 
 /// One full in-game day per this many real minutes (BotW pacing).
 const REAL_MINUTES_PER_GAME_DAY: f32 = 24.0;
@@ -44,6 +58,12 @@ const DUSK_END: f32 = 20.0;
 
 /// How far out the visible sun/moon discs orbit (inside the default far
 /// plane, outside the playable terrain).
+///
+/// The orbit is centred on the *camera*, not the world origin. A sun has to
+/// behave as if at infinity: its apparent direction must not change as you
+/// walk. Orbiting the origin gave it parallax — crossing 112 m of a 320 m map
+/// swung the disc by ~14 degrees and pulled it from 420 m to ~308 m, so it
+/// drifted and grew as you moved. On a Zelda-sized map that would be grotesque.
 const DISC_ORBIT_RADIUS: f32 = 420.0;
 
 /// Simulation clock: `hours` in `0.0..24.0`, advanced on the fixed step.
@@ -198,12 +218,9 @@ pub(super) fn apply_sun(
             ),
         >,
     >,
-    mut discs: ParamSet<(
-        Option<Single<(&mut Transform, &mut Visibility), With<SunDisc>>>,
-        Option<Single<(&mut Transform, &mut Visibility), With<MoonDisc>>>,
-    )>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut sky: ResMut<ClearColor>,
+    perf: Res<PerfToggles>,
 ) {
     let to_sun = sun_direction(tod.hours);
     let to_moon = Vec3::new(-to_sun.x, -to_sun.y, SUN_ARC_TILT).normalize();
@@ -215,23 +232,44 @@ pub(super) fn apply_sun(
         transform.look_to(-to_sun, Vec3::Y);
         light.illuminance = palette.sun_illuminance;
         light.color = palette.sun_color;
+        light.shadow_maps_enabled = perf.sun_shadows && casts_shadows(palette.sun_illuminance);
     }
     if let Some(moon) = moon {
         let (mut transform, mut light) = moon.into_inner();
         transform.look_to(-to_moon, Vec3::Y);
         light.illuminance = palette.moon_illuminance;
         light.color = MOON_COLOR;
+        light.shadow_maps_enabled = perf.moon_shadows && casts_shadows(palette.moon_illuminance);
     }
 
     ambient.brightness = palette.ambient_brightness;
     ambient.color = palette.ambient_color;
     sky.0 = palette.sky_color;
+}
 
-    // Visible discs ride their arcs; each hides below the horizon.
+/// Rides the visible discs around the viewer and hides each below the horizon.
+///
+/// Separate from [`apply_sun`] because it answers a different question: that
+/// one decides what the light *is*, this one decides where the body appears.
+#[allow(clippy::type_complexity)]
+pub(super) fn place_sky_discs(
+    tod: Res<TimeOfDay>,
+    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    mut discs: ParamSet<(
+        Option<Single<(&mut Transform, &mut Visibility), With<SunDisc>>>,
+        Option<Single<(&mut Transform, &mut Visibility), With<MoonDisc>>>,
+    )>,
+) {
+    let to_sun = sun_direction(tod.hours);
+    let to_moon = Vec3::new(-to_sun.x, -to_sun.y, SUN_ARC_TILT).normalize();
+    let eye = camera
+        .map(|camera| camera.translation())
+        .unwrap_or(Vec3::ZERO);
+
     if let Some(disc) = discs.p0().as_mut() {
         let (transform, visibility) = &mut **disc;
-        transform.translation = to_sun * DISC_ORBIT_RADIUS;
-        **visibility = if elevation > -0.05 {
+        transform.translation = eye + to_sun * DISC_ORBIT_RADIUS;
+        **visibility = if to_sun.y > -0.05 {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -239,7 +277,7 @@ pub(super) fn apply_sun(
     }
     if let Some(disc) = discs.p1().as_mut() {
         let (transform, visibility) = &mut **disc;
-        transform.translation = to_moon * DISC_ORBIT_RADIUS;
+        transform.translation = eye + to_moon * DISC_ORBIT_RADIUS;
         **visibility = if to_moon.y > -0.05 {
             Visibility::Inherited
         } else {
@@ -248,10 +286,121 @@ pub(super) fn apply_sun(
     }
 }
 
+/// Shadow cost inside dense foliage is fill-bound, so the map edge is the most
+/// direct lever there is on it — halving it quarters the texels rendered.
+pub(super) fn apply_shadow_map_size(
+    perf: Res<PerfToggles>,
+    mut shadow_map: ResMut<DirectionalLightShadowMap>,
+) {
+    let wanted = perf.shadow_map_size();
+    if shadow_map.size != wanted {
+        shadow_map.size = wanted;
+        info!("[world] shadow map: {wanted}px");
+    }
+}
+
+type DirectionalLightFilter = Or<(With<Sun>, With<MoonLight>)>;
+
+/// Env var that sets the cascade count for an attribution run, e.g.
+/// `BOF_CASCADES=2 cargo run --release`.
+const CASCADE_ENV: &str = "BOF_CASCADES";
+
+/// Reads the cascade count once at startup. Deliberately *not* a runtime knob:
+/// changing the count while the app runs desynchronises Bevy's per-cascade
+/// visibility bookkeeping (`check_dir_light_mesh_visibility` sizes its queues
+/// from the frusta) and panics with an out-of-bounds index. A debug affordance
+/// that can crash the game is worse than no affordance (§9), so this costs one
+/// relaunch per value instead.
+fn configured_cascades() -> usize {
+    match std::env::var(CASCADE_ENV)
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+    {
+        Some(count @ 1..=4) => count,
+        Some(invalid) => {
+            warn!("[world] ignoring {CASCADE_ENV}={invalid}: expected 1..=4");
+            4
+        }
+        None => 4,
+    }
+}
+
+/// Applies the cascade configuration. The count is fixed at launch; the far
+/// distance is a live dial, because how close the shadowed disc ends is
+/// something you judge by looking, not by reading a table.
+///
+/// Rebuilding on distance change is safe — the cascade *count* is what Bevy's
+/// per-cascade visibility bookkeeping is sized from, and that never moves here.
+pub(super) fn apply_cascade_config(
+    mut commands: Commands,
+    perf: Res<PerfToggles>,
+    lights: Query<Entity, DirectionalLightFilter>,
+    mut applied: Local<Option<f32>>,
+) {
+    let distance = perf.shadow_distance();
+    if *applied == Some(distance) || lights.is_empty() {
+        return;
+    }
+    let first_run = applied.is_none();
+    *applied = Some(distance);
+    let count = configured_cascades();
+    // Bevy defaults to 150 m, which spends cascade texels on ground no tree
+    // casts onto any more (`visuals::foliage` budgets casters by distance).
+    // Shrinking the covered area concentrates the same shadow map on what is
+    // actually near, so this buys resolution as well as time.
+    let config: CascadeShadowConfig = CascadeShadowConfigBuilder {
+        num_cascades: count,
+        maximum_distance: distance,
+        ..default()
+    }
+    .into();
+    for light in &lights {
+        commands.entity(light).try_insert(config.clone());
+    }
+    if first_run {
+        info!("[world] directional shadow cascades: {count} ({CASCADE_ENV})");
+    }
+    info!("[world] shadow distance: {distance:.0}m");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// The light below the horizon contributes nothing, so it must not render
+    /// cascades. Bevy gates shadow maps on `shadow_maps_enabled` alone, so this
+    /// is the only thing standing between the frame and eight cascade passes
+    /// when only four can ever be seen.
+    #[test]
+    fn only_the_light_above_the_horizon_casts_shadows() {
+        for (hours, sun_expected, moon_expected) in [(12.0_f32, true, false), (0.0, false, true)] {
+            let palette = lighting_palette(hours, sun_direction(hours).y);
+            assert_eq!(
+                casts_shadows(palette.sun_illuminance),
+                sun_expected,
+                "sun at {hours:05.2}h"
+            );
+            assert_eq!(
+                casts_shadows(palette.moon_illuminance),
+                moon_expected,
+                "moon at {hours:05.2}h"
+            );
+        }
+    }
+
+    /// Both knobs must be able to force shadows off regardless of the clock,
+    /// otherwise the A/B in `docs/AHORA.md` cannot isolate shadow cost.
+    #[test]
+    fn the_benchmark_knob_can_veto_a_lit_light() {
+        let noon = lighting_palette(12.0, sun_direction(12.0).y);
+        let veto = PerfToggles {
+            sun_shadows: false,
+            ..default()
+        };
+        assert!(casts_shadows(noon.sun_illuminance));
+        assert!(!(veto.sun_shadows && casts_shadows(noon.sun_illuminance)));
+    }
 
     #[test]
     fn sun_hits_the_cardinal_hours() {

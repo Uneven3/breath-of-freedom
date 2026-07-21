@@ -15,8 +15,10 @@
 use bevy::prelude::*;
 
 pub mod animation;
+pub mod budget;
 pub mod catalog;
 pub mod enemy;
+pub mod foliage;
 pub mod forest;
 pub mod horse;
 pub mod outline;
@@ -26,10 +28,22 @@ pub mod toon;
 pub mod vfx;
 
 pub use animation::{AnimationDebug, PlayerAnimations};
-pub use catalog::{AppearanceBinding, AppearanceKey, PLAYER_APPEARANCE, VisualCatalog, VisualSlot};
+pub use catalog::{
+    AppearanceBinding, AppearanceKey, PLAYER_APPEARANCE, TreeSilhouette, VisualCatalog, VisualSlot,
+};
 pub use player::PlayerVisual;
 pub use toon::ToonMaterial;
 
+/// Exponential decay rate for visual smoothing, fed to
+/// [`StableInterpolate::smooth_nudge`](bevy::math::StableInterpolate::smooth_nudge).
+///
+/// It is a *rate*, not a per-frame fraction. The previous form —
+/// `(RATE * dt).clamp(0.0, 1.0)` as a lerp factor — was frame-rate dependent
+/// in a way that bit exactly where it hurt most: at 20 fps the factor reached
+/// 1.0 and the smoothing vanished entirely, so the visuals snapped instead of
+/// easing. Low framerate did not just show fewer frames, it silently swapped
+/// the follow behaviour for a different one, which also made every benchmark
+/// step judge feel on a different curve.
 pub(crate) const INTERPOLATION_SPEED: f32 = 20.0;
 pub(crate) const SNEAK_Y_OFFSET: f32 = -0.4;
 
@@ -49,7 +63,11 @@ impl Plugin for VisualsPlugin {
         app.init_resource::<VisualCatalog>();
         app.add_systems(
             Startup,
-            (player::spawn_visual, animation::start_loading_animations),
+            (
+                player::spawn_visual,
+                animation::start_loading_animations,
+                forest::build_tree_proxy_assets,
+            ),
         );
         app.add_systems(
             Update,
@@ -67,7 +85,14 @@ impl Plugin for VisualsPlugin {
                 horse::spawn_horse_visual,
                 horse::despawn_orphaned_horse_visual,
                 horse::interpolate_horse_visual,
-                forest::spawn_tree_visuals,
+                (
+                    forest::sync_tree_visuals,
+                    forest::apply_forest_perf,
+                    foliage::apply_foliage_material_policy,
+                    foliage::apply_foliage_lod,
+                    foliage::apply_shadow_caster_budget,
+                ),
+                budget::warn_on_heavy_meshes,
                 vfx::spawn_swing_vfx,
                 vfx::fade_swing_vfx,
                 animation::compile_animation_graph,

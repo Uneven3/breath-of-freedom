@@ -1,0 +1,93 @@
+//! Benchmark overlay: the only on-screen sign that a run is happening.
+//!
+//! It exists separately from the hub panel because the panel *closes* when a
+//! run starts — a modal is extra draw work and holds the pointer, neither of
+//! which belongs in the frame times being recorded. Without this the sequence
+//! ran for 33 seconds with no feedback at all and ended in silence.
+//!
+//! Three things it must say, in order of how much they save you:
+//!
+//! 1. **Spoiled** — the current step has already been invalidated by movement.
+//!    Seeing that at second 8 lets you abandon and restart instead of holding
+//!    still for another 25 seconds to earn a table full of `INVALID`.
+//! 2. **Progress** — which step, which phase, seconds left.
+//! 3. **Done** — with how many steps survived, so the log is worth opening.
+//!
+//! Cost is one text node, constant across every step, so it cannot bias the
+//! A/B it reports on.
+
+use bevy::prelude::*;
+
+use crate::perf::Benchmark;
+
+/// How long the completion notice stays up after a run ends.
+const NOTICE_SECS: f32 = 12.0;
+
+const RUNNING: Color = Color::srgb(0.25, 0.82, 0.67);
+const SPOILED: Color = Color::srgb(0.95, 0.55, 0.25);
+const DONE: Color = Color::srgb(0.75, 0.85, 0.95);
+
+#[derive(Component)]
+pub(super) struct BenchmarkOverlay;
+
+pub(super) fn spawn_overlay(mut commands: Commands) {
+    commands.spawn((
+        BenchmarkOverlay,
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(20.0),
+            ..default()
+        },
+        TextColor(RUNNING),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(16.0),
+            right: Val::Px(16.0),
+            max_width: Val::Percent(50.0),
+            ..default()
+        },
+        // Above the HUD, below the modal panel.
+        GlobalZIndex(110),
+        Visibility::Hidden,
+    ));
+}
+
+type OverlayQuery = (
+    &'static mut Text,
+    &'static mut TextColor,
+    &'static mut Visibility,
+);
+
+pub(super) fn update_overlay(
+    benchmark: Res<Benchmark>,
+    time: Res<Time<Real>>,
+    overlay: Single<OverlayQuery, With<BenchmarkOverlay>>,
+) {
+    let (mut text, mut color, mut visibility) = overlay.into_inner();
+
+    if let Some(status) = benchmark.status() {
+        let spoiled = benchmark.current_step_spoiled();
+        text.0 = if spoiled {
+            format!("BENCHMARK  {status}\nTE MOVISTE — este paso queda inválido")
+        } else {
+            format!("BENCHMARK  {status}\nno te muevas")
+        };
+        *color = TextColor(if spoiled { SPOILED } else { RUNNING });
+        *visibility = Visibility::Inherited;
+        return;
+    }
+
+    if let Some(finished) = &benchmark.finished
+        && time.elapsed_secs() - finished.at < NOTICE_SECS
+    {
+        text.0 = format!(
+            "BENCHMARK TERMINADO\n{}/{} pasos válidos — tabla en el log",
+            finished.valid, finished.total
+        );
+        *color = TextColor(DONE);
+        *visibility = Visibility::Inherited;
+        return;
+    }
+
+    *visibility = Visibility::Hidden;
+}

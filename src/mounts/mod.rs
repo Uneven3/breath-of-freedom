@@ -57,6 +57,12 @@ impl Plugin for MountsPlugin {
                 .after(ProjectilesSet::Simulate)
                 .before(HealthSet::Apply),
         );
+        // The arbiter owns `Interact` and must resolve before any domain reads
+        // its decision; without this the request would land a tick late.
+        app.configure_sets(
+            FixedUpdate,
+            MountsSet::Request.after(crate::interaction::InteractionSet::Arbitrate),
+        );
         app.add_systems(
             FixedUpdate,
             (
@@ -66,6 +72,16 @@ impl Plugin for MountsPlugin {
             )
                 .chain()
                 .in_set(MountsSet::Request),
+        );
+        // Availability and priority are declared to the arbiter as components,
+        // so it never needs to know what makes a horse mountable.
+        app.add_systems(
+            FixedUpdate,
+            (
+                lifecycle::sync_horse_interactable,
+                lifecycle::sync_rider_override,
+            )
+                .before(crate::interaction::InteractionSet::Arbitrate),
         );
         app.add_systems(
             FixedUpdate,
@@ -150,6 +166,9 @@ mod plugin_tests {
         )));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.init_resource::<ActiveActions>();
+        // `InteractionRequest` is the arbiter's contract; `InteractionPlugin`
+        // is not part of this app, so the message is registered by hand.
+        app.add_message::<crate::interaction::InteractionRequest>();
         app.add_message::<DirectThreatMessage>();
         app.add_message::<DamageRequestMessage>();
         app.add_message::<DeathMessage>();

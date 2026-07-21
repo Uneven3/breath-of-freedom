@@ -86,6 +86,8 @@ impl Plugin for CameraPlugin {
                 camera_landing_dip,
                 follow_player,
                 apply_camera_shake,
+                // Last, so it overrides follow and shake for the duration.
+                park_camera_for_benchmark,
                 toggle_crosshair,
             )
                 .chain(),
@@ -207,6 +209,20 @@ fn camera_landing_dip(
 
 type FollowFilter = (With<Player>, Without<CameraRig>);
 
+/// While a benchmark measures, the camera holds an authored pose instead of
+/// following. Hand-placing it was only reproducible to ~0.5 m, and that was
+/// worth about 1 ms of frame time — larger than the effects being measured.
+fn park_camera_for_benchmark(
+    benchmark: Res<crate::perf::Benchmark>,
+    mut cam: Single<&mut Transform, With<CameraRig>>,
+) {
+    let Some((position, facing)) = benchmark.parked_pose() else {
+        return;
+    };
+    cam.translation = position;
+    cam.look_to(facing, Vec3::Y);
+}
+
 /// Intentionally scoped to `Player`, not `Actor` — see `camera_landing_dip`.
 #[allow(clippy::type_complexity)]
 fn follow_player(
@@ -235,11 +251,11 @@ fn follow_player(
         let default_fov = std::f32::consts::FRAC_PI_4; // ~45 deg half fov (90 deg full)
         let draw_factor = draw_strength.map_or(0.0, |d| d.factor);
         let target_fov = default_fov - (0.12 * rig.aim_blend) - (0.16 * draw_factor);
-        persp.fov = lerp(persp.fov, target_fov, FOV_LERP_PER_SEC * dt);
+        persp.fov.smooth_nudge(&target_fov, FOV_LERP_PER_SEC, dt);
     }
 
     // Recover the landing dip, then smooth the pivot Y (handles stairs/steps).
-    rig.current_dip = lerp(rig.current_dip, 0.0, LANDING_DIP_RECOVERY * dt);
+    rig.current_dip.smooth_nudge(&0.0, LANDING_DIP_RECOVERY, dt);
 
     // Blend toward the aim camera while the bow is drawn.
     let aiming = matches!(
@@ -247,7 +263,8 @@ fn follow_player(
         Some(crate::combat::state::CombatState::Aiming)
     );
     let aim_target = if aiming { 1.0 } else { 0.0 };
-    rig.aim_blend = lerp(rig.aim_blend, aim_target, AIM_BLEND_PER_SEC * dt);
+    rig.aim_blend
+        .smooth_nudge(&aim_target, AIM_BLEND_PER_SEC, dt);
 
     // Blend the pivot down to Combat's aim pivot while aiming, so the
     // crosshair ray coincides with the arrow's aim ray at full blend.
@@ -266,7 +283,7 @@ fn follow_player(
     if rig.smoothed_y.is_nan() {
         rig.smoothed_y = target_y;
     } else {
-        rig.smoothed_y = lerp(rig.smoothed_y, target_y, FOLLOW_LERP_Y * dt);
+        rig.smoothed_y.smooth_nudge(&target_y, FOLLOW_LERP_Y, dt);
     }
     let rot = Quat::from_rotation_y(orientation.yaw) * Quat::from_rotation_x(orientation.pitch);
     let dir = rot * Vec3::Z;

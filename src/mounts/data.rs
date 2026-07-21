@@ -1,7 +1,5 @@
 use bevy::prelude::*;
 
-use crate::input::InputConsumeCursor;
-
 /// Per-horse charge phase. The generation changes on every activation so a
 /// target can be hit once per charge and becomes eligible again after rearm.
 #[derive(Component, Debug, Clone, Copy)]
@@ -32,9 +30,6 @@ pub struct RiddenBy(pub Option<Entity>);
 
 #[derive(Component, Clone, Copy, Default)]
 pub struct HorseOwner(pub Option<Entity>);
-
-#[derive(Component, Default)]
-pub struct MountInputCursor(pub InputConsumeCursor);
 
 #[derive(Component)]
 pub struct PendingHorseDespawn;

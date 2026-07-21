@@ -3,8 +3,6 @@ use bevy::prelude::*;
 
 use crate::combat::context_data::SetMountedCombatMessage;
 use crate::health::{DeathMessage, Health, HostileInteractionImmunity};
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, InputControlledBy};
 use crate::movement::abilities::{
     AirborneMovement, GroundMovement, JumpMovement, JumpStaminaCost, SprintMovement, StairsMovement,
 };
@@ -22,9 +20,10 @@ use crate::movement::{Actor, BodyVelocity, Player};
 
 use super::control::MountControlWriters;
 use super::data::{
-    Horse, HorseCharge, HorseOwner, MountInputCursor, MountTransitionRequest, MountedOn,
-    PendingHorseDespawn, RiddenBy,
+    Horse, HorseCharge, HorseOwner, MountTransitionRequest, MountedOn, PendingHorseDespawn,
+    RiddenBy,
 };
+use crate::interaction::{Interactable, InteractionKind, InteractionOverride, InteractionRequest};
 
 const HORSE_DIMENSIONS: BodyDimensions = BodyDimensions {
     radius: 0.65,
@@ -60,56 +59,84 @@ pub fn spawn_horse_bundle() -> impl Bundle {
     )
 }
 
-type RiderInput<'a> = (
-    Entity,
-    &'a InputControlledBy,
-    &'a mut MountInputCursor,
-    Option<&'a MountedOn>,
-    &'a Transform,
-);
 type AvailableHorseFilter = (With<Horse>, Without<PendingHorseDespawn>);
-type AvailableHorses<'w, 's> =
-    Query<'w, 's, (Entity, &'static Transform, &'static RiddenBy), AvailableHorseFilter>;
 
+/// Turns the arbiter's decision into a mount/dismount transition. Reads no
+/// input: `interaction` owns the key and already resolved who wins, which is
+/// what keeps a horse and a nearby weapon from both firing on one press.
 pub fn read_interact_requests(
-    actions: Res<ActiveActions>,
-    mut riders: Query<RiderInput, With<Player>>,
-    horses: AvailableHorses,
+    mut interactions: MessageReader<InteractionRequest>,
+    riders: Query<Option<&MountedOn>>,
     mut requests: MessageWriter<MountTransitionRequest>,
 ) {
-    for (rider, source, mut cursor, mounted, rider_transform) in &mut riders {
-        let Some(frame) = actions.frame(source.0) else {
-            continue;
-        };
-        if !cursor.0.consume(frame, IntentAction::Interact) {
-            continue;
+    for interaction in interactions.read() {
+        match interaction.kind {
+            InteractionKind::Dismount => {
+                let Ok(Some(mounted)) = riders.get(interaction.actor) else {
+                    continue;
+                };
+                requests.write(MountTransitionRequest::Dismount {
+                    rider: interaction.actor,
+                    horse: mounted.0,
+                    forced: false,
+                });
+            }
+            InteractionKind::Mount => {
+                let Some(horse) = interaction.target else {
+                    continue;
+                };
+                requests.write(MountTransitionRequest::Mount {
+                    rider: interaction.actor,
+                    horse,
+                });
+            }
+            InteractionKind::Pickup => {}
         }
-        if let Some(mounted) = mounted {
-            requests.write(MountTransitionRequest::Dismount {
-                rider,
-                horse: mounted.0,
-                forced: false,
-            });
-            continue;
+    }
+}
+
+type DespawningInteractableFilter = (With<Horse>, With<PendingHorseDespawn>, With<Interactable>);
+
+/// Availability as a component, so the arbiter never has to know what makes a
+/// horse mountable. A ridden or dying horse simply stops being a candidate.
+pub fn sync_horse_interactable(
+    mut commands: Commands,
+    horses: Query<(Entity, &RiddenBy, Has<Interactable>), AvailableHorseFilter>,
+    despawning: Query<Entity, DespawningInteractableFilter>,
+) {
+    for (horse, ridden, marked) in &horses {
+        match (ridden.0.is_none(), marked) {
+            (true, false) => {
+                commands.entity(horse).try_insert(Interactable {
+                    kind: InteractionKind::Mount,
+                    range: MOUNT_RANGE,
+                });
+            }
+            (false, true) => {
+                commands.entity(horse).remove::<Interactable>();
+            }
+            _ => {}
         }
-        let candidate = horses
-            .iter()
-            .filter(|(_, transform, ridden)| {
-                ridden.0.is_none()
-                    && transform.translation.distance(rider_transform.translation) <= MOUNT_RANGE
-            })
-            .min_by(|(_, left, _), (_, right, _)| {
-                left.translation
-                    .distance_squared(rider_transform.translation)
-                    .total_cmp(
-                        &right
-                            .translation
-                            .distance_squared(rider_transform.translation),
-                    )
-            });
-        if let Some((horse, _, _)) = candidate {
-            requests.write(MountTransitionRequest::Mount { rider, horse });
-        }
+    }
+    for horse in &despawning {
+        commands.entity(horse).remove::<Interactable>();
+    }
+}
+
+/// While mounted, `Interact` means dismount — declared to the arbiter rather
+/// than hidden as an early return in this module.
+pub fn sync_rider_override(
+    mut commands: Commands,
+    mounted: Query<Entity, (With<MountedOn>, Without<InteractionOverride>)>,
+    dismounted: Query<Entity, (With<InteractionOverride>, Without<MountedOn>)>,
+) {
+    for rider in &mounted {
+        commands.entity(rider).try_insert(InteractionOverride {
+            kind: InteractionKind::Dismount,
+        });
+    }
+    for rider in &dismounted {
+        commands.entity(rider).remove::<InteractionOverride>();
     }
 }
 

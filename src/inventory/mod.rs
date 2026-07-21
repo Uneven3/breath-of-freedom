@@ -77,6 +77,10 @@ impl Plugin for InventoryPlugin {
                 .chain()
                 .in_set(InventorySet::Collect),
         );
+        app.configure_sets(
+            FixedUpdate,
+            InventorySet::Collect.after(crate::interaction::InteractionSet::Arbitrate),
+        );
         app.add_systems(
             FixedUpdate,
             (equip::read_equip_slot_requests, equip::apply_equip_requests)
@@ -124,6 +128,7 @@ mod plugin_tests {
         // Input's resource; neither plugin is part of this test app, so
         // both are registered by hand here.
         app.add_message::<HitImpactMessage>();
+        app.add_message::<crate::interaction::InteractionRequest>();
         app.init_resource::<crate::input::frame::ActiveActions>();
         app.add_plugins((HealthPlugin, InventoryPlugin));
         app.finish();

@@ -8,16 +8,12 @@
 
 use bevy::prelude::*;
 
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, InputControlledBy};
+use crate::interaction::{Interactable, InteractionKind, InteractionRequest};
 use crate::movement::Player;
 use crate::visuals::ToonMaterial;
 use crate::visuals::toon::toon_color;
 
-use super::data::{
-    EquipRequestMessage, Inventory, InventoryInputCursor, ItemKind, ItemStack, PickupMode,
-    WorldItem,
-};
+use super::data::{EquipRequestMessage, Inventory, ItemKind, ItemStack, PickupMode, WorldItem};
 
 const AUTO_PICKUP_RANGE: f32 = 1.2;
 const INTERACT_PICKUP_RANGE: f32 = 2.5;
@@ -39,20 +35,26 @@ pub fn spawn_world_item(
         ItemKind::Material(_) => (Vec3::new(0.3, 0.3, 0.3), Color::srgb(0.45, 0.3, 0.15)),
         ItemKind::Food { .. } => (Vec3::new(0.25, 0.25, 0.25), Color::srgb(0.8, 0.2, 0.2)),
     };
-    commands
-        .spawn((
-            Name::new(name.to_string()),
-            WorldItem { stack, mode },
-            Mesh3d(meshes.add(Cuboid::new(dims.x, dims.y, dims.z))),
-            MeshMaterial3d(materials.add(toon_color(color))),
-            Transform::from_translation(position),
-        ))
-        .id()
+    let mut item = commands.spawn((
+        Name::new(name.to_string()),
+        WorldItem { stack, mode },
+        Mesh3d(meshes.add(Cuboid::new(dims.x, dims.y, dims.z))),
+        MeshMaterial3d(materials.add(toon_color(color))),
+        Transform::from_translation(position),
+    ));
+    // `Auto` items are swept up by proximity and never compete for the key.
+    if mode == PickupMode::Interact {
+        item.insert(Interactable {
+            kind: InteractionKind::Pickup,
+            range: INTERACT_PICKUP_RANGE,
+        });
+    }
+    item.id()
 }
 
 /// `InventorySet::Collect`: every `Auto` item within range joins the pool
-/// this tick, no input required. Scoped to `Player` for graybox — the same
-/// scoping `mounts::lifecycle::read_interact_requests` uses today.
+/// this tick, no input required. Still scoped to `Player` for graybox; the
+/// interact path is actor-generic now, this one is the remaining holdout.
 pub fn auto_collect(
     mut actors: Query<(&Transform, &mut Inventory), With<Player>>,
     items: Query<(Entity, &Transform, &WorldItem)>,
@@ -80,47 +82,36 @@ pub fn auto_collect(
     }
 }
 
-type PickupActorQuery<'a> = (
-    Entity,
-    &'a InputControlledBy,
-    &'a mut InventoryInputCursor,
-    &'a Transform,
-    &'a mut Inventory,
-);
-
-/// `InventorySet::Collect`: `Interact` on the nearest `Interact`-mode item
-/// in range. A weapon requests an equip swap (never enters `Inventory`
-/// directly — `equip::apply_equip_requests` decides where the outgoing
-/// weapon lands); anything else stacks straight into the pool.
+/// `InventorySet::Collect`: a weapon requests an equip swap (never enters
+/// `Inventory` directly — `equip::apply_equip_requests` decides where the
+/// outgoing weapon lands); anything else stacks straight into the pool.
+/// Applies the arbiter's decision to a world item. Reads no input: after the
+/// interaction arbiter, only one domain can win a given press.
 pub fn read_interact_pickups(
-    actions: Res<ActiveActions>,
-    mut actors: Query<PickupActorQuery, With<Player>>,
-    items: Query<(Entity, &Transform, &WorldItem)>,
+    mut interactions: MessageReader<InteractionRequest>,
+    mut actors: Query<&mut Inventory>,
+    items: Query<&WorldItem>,
     mut commands: Commands,
     mut equip: MessageWriter<EquipRequestMessage>,
 ) {
-    for (actor, source, mut cursor, actor_transform, mut inventory) in &mut actors {
-        if !cursor.triggered(&actions, source.0, IntentAction::Interact) {
+    for interaction in interactions.read() {
+        if interaction.kind != InteractionKind::Pickup {
             continue;
         }
-        let origin = actor_transform.translation;
-        let candidate = items
-            .iter()
-            .filter(|(_, transform, item)| {
-                item.mode == PickupMode::Interact
-                    && transform.translation.distance(origin) <= INTERACT_PICKUP_RANGE
-            })
-            .min_by(|(_, left, _), (_, right, _)| {
-                left.translation
-                    .distance_squared(origin)
-                    .total_cmp(&right.translation.distance_squared(origin))
-            });
-        let Some((item_entity, _, world_item)) = candidate else {
+        let (Some(item_entity), Ok(mut inventory)) =
+            (interaction.target, actors.get_mut(interaction.actor))
+        else {
+            continue;
+        };
+        let Ok(world_item) = items.get(item_entity) else {
             continue;
         };
         match world_item.stack.kind {
             ItemKind::Weapon(item) => {
-                equip.write(EquipRequestMessage { actor, item });
+                equip.write(EquipRequestMessage {
+                    actor: interaction.actor,
+                    item,
+                });
                 commands.entity(item_entity).despawn();
             }
             kind => {
@@ -137,7 +128,6 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    use crate::input::frame::{ActiveActions, LOCAL_INPUT_SOURCE};
     use crate::inventory::data::{MaterialKind, WeaponItem};
 
     fn material_stack() -> ItemStack {
@@ -209,22 +199,18 @@ mod tests {
         );
     }
 
+    /// Input is no longer this system's concern: `interaction` resolves the
+    /// press and this only applies the decision. The "one press, one
+    /// interaction" and "consumed exactly once" invariants moved with it and
+    /// are covered in `interaction::tests`.
     #[test]
-    fn interact_pickup_on_weapon_requests_equip_instead_of_stacking() {
+    fn an_interaction_request_on_a_weapon_asks_for_an_equip_instead_of_stacking() {
         let mut world = World::new();
         world.init_resource::<Messages<EquipRequestMessage>>();
-        let mut actions = ActiveActions::default();
-        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Interact);
-        world.insert_resource(actions);
+        world.init_resource::<Messages<InteractionRequest>>();
 
         let player = world
-            .spawn((
-                Player,
-                InputControlledBy(LOCAL_INPUT_SOURCE),
-                InventoryInputCursor::default(),
-                Transform::default(),
-                Inventory::default(),
-            ))
+            .spawn((Player, Transform::default(), Inventory::default()))
             .id();
         let weapon_item = world
             .spawn((
@@ -238,6 +224,11 @@ mod tests {
                 },
             ))
             .id();
+        world.write_message(InteractionRequest {
+            actor: player,
+            target: Some(weapon_item),
+            kind: InteractionKind::Pickup,
+        });
 
         world.run_system_once(read_interact_pickups).unwrap();
 
@@ -260,50 +251,36 @@ mod tests {
         assert_eq!(requests[0].item, WeaponItem::LOOTABLE_CLUB);
     }
 
+    /// A decision aimed at another domain must not be acted on here.
     #[test]
-    fn interact_pickup_consumes_the_trigger_exactly_once() {
+    fn a_mount_interaction_is_ignored_by_pickup() {
         let mut world = World::new();
         world.init_resource::<Messages<EquipRequestMessage>>();
-        let mut actions = ActiveActions::default();
-        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::Interact);
-        world.insert_resource(actions);
+        world.init_resource::<Messages<InteractionRequest>>();
 
         let player = world
+            .spawn((Player, Transform::default(), Inventory::default()))
+            .id();
+        let item = world
             .spawn((
-                Player,
-                InputControlledBy(LOCAL_INPUT_SOURCE),
-                InventoryInputCursor::default(),
-                Transform::default(),
-                Inventory::default(),
+                Transform::from_xyz(0.5, 0.0, 0.0),
+                WorldItem {
+                    stack: material_stack(),
+                    mode: PickupMode::Interact,
+                },
             ))
             .id();
-        world.spawn((
-            Transform::from_xyz(0.5, 0.0, 0.0),
-            WorldItem {
-                stack: material_stack(),
-                mode: PickupMode::Interact,
-            },
-        ));
+        world.write_message(InteractionRequest {
+            actor: player,
+            target: Some(item),
+            kind: InteractionKind::Mount,
+        });
 
         world.run_system_once(read_interact_pickups).unwrap();
-        world.spawn((
-            Transform::from_xyz(0.5, 0.0, 0.0),
-            WorldItem {
-                stack: material_stack(),
-                mode: PickupMode::Interact,
-            },
-        ));
-        world.run_system_once(read_interact_pickups).unwrap();
 
-        assert_eq!(
-            world
-                .entity(player)
-                .get::<Inventory>()
-                .unwrap()
-                .iter()
-                .count(),
-            1,
-            "second run sees no new trigger generation, so no second pickup"
+        assert!(
+            world.get_entity(item).is_ok(),
+            "untouched by another domain"
         );
     }
 }

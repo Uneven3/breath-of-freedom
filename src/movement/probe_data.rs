@@ -6,6 +6,15 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct TraversalProbe;
 
+/// Ask Movement to spawn or despawn the probe.
+///
+/// Owned here rather than by `debug` because Movement is the receiver and owns
+/// the entity (§7). The dependency has to point this way: simulation cannot
+/// rely on a debug type existing, or every test app that builds
+/// `MovementPlugin` without `DebugPlugin` fails to validate.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct ProbeToggleRequest;
+
 /// One phase of the full traversal scenario: climb the wall, mantle its top,
 /// turn around, and glide back down. Historial: git history (probe-mantle-glide).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

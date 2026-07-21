@@ -90,7 +90,15 @@ impl Plugin for WorldPlugin {
         app.init_resource::<day_night::TimeOfDay>();
         app.add_systems(Startup, (layout::setup_world, day_night::setup_moon_light));
         app.add_systems(FixedUpdate, day_night::advance_time);
-        app.add_systems(Update, day_night::apply_sun);
+        app.add_systems(
+            Update,
+            (
+                day_night::apply_sun,
+                day_night::place_sky_discs,
+                day_night::apply_cascade_config,
+                day_night::apply_shadow_map_size,
+            ),
+        );
         app.add_systems(
             FixedUpdate,
             despawn_dead_targets.after(crate::health::HealthSet::Apply),

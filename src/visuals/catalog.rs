@@ -57,6 +57,28 @@ pub struct VisualRecipe {
     pub root_transform: Transform,
 }
 
+/// Coarse tree shape for the cheap graybox proxy. Distinguishes the three
+/// families at a glance without the 15 distinct detailed meshes — graybox does
+/// not need per-variant silhouettes, only readable species.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeSilhouette {
+    Rounded,
+    Conical,
+    Gnarled,
+}
+
+/// The cheap representation tier for a tree.
+///
+/// A semantic tree carries *two* representations: this near-free proxy (the
+/// graybox default) and the detailed glTF scene ([`VisualRecipe`]). Cost is a
+/// property of the representation, not of the identity — so the same `TreeKind`
+/// can be a proxy now and an impostor or full mesh later, chosen by budget,
+/// with the simulation none the wiser.
+#[derive(Debug, Clone, Copy)]
+pub struct TreeProxy {
+    pub silhouette: TreeSilhouette,
+}
+
 /// Presentation registry. Quaternius libraries may coexist here even when
 /// they use different source scales, pivots, rigs, or animation catalogs.
 #[derive(Resource)]
@@ -204,8 +226,34 @@ impl Default for VisualCatalog {
 }
 
 impl VisualCatalog {
+    /// The detailed tier: a loaded glTF scene. Used by the player, and by trees
+    /// only when the detail knob opts in.
     pub fn recipe(&self, key: AppearanceKey) -> Option<&VisualRecipe> {
         self.recipes.get(&key)
+    }
+
+    /// The cheap graybox tier for a tree appearance. `None` for anything that
+    /// is not a tree (the player has no proxy — it is always its scene).
+    pub fn tree_proxy(&self, key: AppearanceKey) -> Option<TreeProxy> {
+        let silhouette = match key {
+            AppearanceKey::COMMON_TREE_1
+            | AppearanceKey::COMMON_TREE_2
+            | AppearanceKey::COMMON_TREE_3
+            | AppearanceKey::COMMON_TREE_4
+            | AppearanceKey::COMMON_TREE_5 => TreeSilhouette::Rounded,
+            AppearanceKey::PINE_1
+            | AppearanceKey::PINE_2
+            | AppearanceKey::PINE_3
+            | AppearanceKey::PINE_4
+            | AppearanceKey::PINE_5 => TreeSilhouette::Conical,
+            AppearanceKey::TWISTED_TREE_1
+            | AppearanceKey::TWISTED_TREE_2
+            | AppearanceKey::TWISTED_TREE_3
+            | AppearanceKey::TWISTED_TREE_4
+            | AppearanceKey::TWISTED_TREE_5 => TreeSilhouette::Gnarled,
+            _ => return None,
+        };
+        Some(TreeProxy { silhouette })
     }
 }
 

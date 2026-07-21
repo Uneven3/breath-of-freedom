@@ -176,19 +176,24 @@ pub(super) fn interpolate_visual(
     time: Res<Time>,
 ) {
     let (body, state) = *player;
-    let t = (INTERPOLATION_SPEED * time.delta_secs()).clamp(0.0, 1.0);
+    let dt = time.delta_secs();
     let offset = if *state == LocomotionState::Sneak {
         SNEAK_Y_OFFSET
     } else {
         0.0
     };
 
-    // X/Z track the body directly; Y and rotation interpolate.
+    // X/Z track the body directly; Y and rotation ease.
     let target_y = body.translation.y + offset;
     visual.translation.x = body.translation.x;
     visual.translation.z = body.translation.z;
-    visual.translation.y += (target_y - visual.translation.y) * t;
-    visual.rotation = visual.rotation.slerp(body.rotation, t);
+    visual
+        .translation
+        .y
+        .smooth_nudge(&target_y, INTERPOLATION_SPEED, dt);
+    visual
+        .rotation
+        .smooth_nudge(&body.rotation, INTERPOLATION_SPEED, dt);
 }
 
 #[allow(clippy::type_complexity)]

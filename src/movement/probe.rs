@@ -40,20 +40,22 @@ const PROBE_STANDING_CENTER_Y: f32 = 1.125;
 /// the direction `ProbeStage::ApproachWall` walks.
 const PROBE_SPAWN_POSITION: Vec3 = Vec3::new(0.0, PROBE_STANDING_CENTER_Y, -3.0);
 
-/// F6 toggle: spawns or despawns the traversal probe at its authored start.
+/// Spawns or despawns the traversal probe at its authored start. Driven by
+/// [`ProbeToggleRequest`]: `movement` owns the probe entity, so it owns the
+/// message and consumes it, rather than reading a debug-layer type.
 pub fn toggle_spawn(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut requests: MessageReader<super::probe_data::ProbeToggleRequest>,
     existing: Query<Entity, With<TraversalProbe>>,
 ) {
-    if !keys.just_pressed(KeyCode::F6) {
+    if requests.read().count() == 0 {
         return;
     }
 
     // If a probe already exists, despawn it (toggle off).
     if let Ok(entity) = existing.single() {
         commands.entity(entity).despawn();
-        info!("[debug] TraversalProbe despawned (F6)");
+        info!("[debug] TraversalProbe despawned");
         return;
     }
 

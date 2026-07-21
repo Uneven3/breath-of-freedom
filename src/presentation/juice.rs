@@ -29,6 +29,8 @@ const HIT_FLASH_COLOR: Color = Color::srgb(2.5, 2.5, 2.5);
 
 const BURST_PARTICLES: usize = 8;
 const BURST_SECS: f32 = 0.22;
+/// Exponential decay rate for burst-particle velocity (was an inline `6.0`).
+const BURST_DRAG_PER_SEC: f32 = 6.0;
 const BURST_SPEED: f32 = 5.0;
 
 const DAMAGE_TEXT_SECS: f32 = 0.8;
@@ -206,8 +208,11 @@ fn tick_burst_particles(
             continue;
         }
         transform.translation += particle.velocity * dt;
-        // Decelerate and shrink out.
-        particle.velocity *= 1.0 - (6.0 * dt).min(1.0);
+        // Decelerate and shrink out. Exponential decay, not `1 - k*dt`: that
+        // form reaches zero drag in one frame once `k*dt >= 1`.
+        particle
+            .velocity
+            .smooth_nudge(&Vec3::ZERO, BURST_DRAG_PER_SEC, dt);
         transform.scale = Vec3::splat((particle.remaining / BURST_SECS).max(0.05));
     }
 }
@@ -346,7 +351,7 @@ fn apply_jelly(
             }
             jelly.last_state = *state;
         }
-        jelly.amount *= 1.0 - (JELLY_RECOVERY_PER_SEC * dt).min(1.0);
+        jelly.amount.smooth_nudge(&0.0, JELLY_RECOVERY_PER_SEC, dt);
         transform.scale = Vec3::new(
             1.0 - jelly.amount * 0.6,
             1.0 + jelly.amount,

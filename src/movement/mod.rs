@@ -127,6 +127,7 @@ impl Plugin for MovementPlugin {
                 .chain(),
         );
 
+        app.add_message::<probe_data::ProbeToggleRequest>();
         app.add_systems(Update, probe::toggle_spawn);
 
         app.add_systems(

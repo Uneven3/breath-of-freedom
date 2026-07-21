@@ -89,14 +89,19 @@ pub(super) fn interpolate_enemy_visual(
     mut visuals: Query<EnemyVisualQuery, EnemyVisualFilter>,
     time: Res<Time>,
 ) {
-    let t = (INTERPOLATION_SPEED * time.delta_secs()).clamp(0.0, 1.0);
+    let dt = time.delta_secs();
     for (mut visual, enemy) in &mut visuals {
         let Ok(body) = actors.get(enemy.actor) else {
             continue;
         };
         visual.translation.x = body.translation.x;
         visual.translation.z = body.translation.z;
-        visual.translation.y += (body.translation.y - visual.translation.y) * t;
-        visual.rotation = visual.rotation.slerp(body.rotation, t);
+        visual
+            .translation
+            .y
+            .smooth_nudge(&body.translation.y, INTERPOLATION_SPEED, dt);
+        visual
+            .rotation
+            .smooth_nudge(&body.rotation, INTERPOLATION_SPEED, dt);
     }
 }

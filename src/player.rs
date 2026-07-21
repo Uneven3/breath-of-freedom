@@ -71,7 +71,7 @@ fn spawn_player(mut commands: Commands) {
             ClimbInputState::default(),
             (
                 crate::input::InputConsumeCursor::default(),
-                crate::mounts::data::MountInputCursor::default(),
+                crate::interaction::InteractionInputCursor::default(),
             ),
         ),
         // Combat contract: the starting sword is a breakable instance of

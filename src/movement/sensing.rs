@@ -1,5 +1,6 @@
 //! Per-actor physical sensing profiles used by Movement services.
 
+use avian3d::prelude::Collider;
 use bevy::prelude::*;
 
 /// Configuration for GroundService's downward shape cast.
@@ -62,6 +63,16 @@ impl LedgeSensing {
         climb_wall_angle_max_deg: 30.0,
         continue_climb_angle_max_deg: 45.0,
     };
+}
+
+/// Prebuilt sphere used by all ledge shape casts for one actor.
+#[derive(Component)]
+pub struct LedgeCastShape(pub Collider);
+
+impl LedgeCastShape {
+    pub fn new(sensing: LedgeSensing) -> Self {
+        Self(Collider::sphere(sensing.sphere_radius))
+    }
 }
 
 #[cfg(test)]

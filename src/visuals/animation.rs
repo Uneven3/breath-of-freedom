@@ -35,6 +35,11 @@ pub struct AnimationDebug {
 #[derive(Resource)]
 pub(super) struct AnimationLoader(Handle<Gltf>);
 
+/// Rig whose graph is driven by the local player's animation state machine.
+/// The marker prevents unrelated animated scenes from receiving player clips.
+#[derive(Component)]
+pub(super) struct PlayerAnimationRig;
+
 pub(super) fn start_loading_animations(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -144,6 +149,7 @@ pub(super) fn init_player_animation_graph(
             commands.entity(entity).insert((
                 AnimationGraphHandle(anims.graph.clone()),
                 AnimationTransitions::new(),
+                PlayerAnimationRig,
             ));
         }
     }
@@ -151,7 +157,10 @@ pub(super) fn init_player_animation_graph(
 
 pub(super) fn animate_player(
     player_query: Query<(&LocomotionState, &BodyVelocity), With<Player>>,
-    mut animated_query: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+    mut animated_query: Query<
+        (&mut AnimationPlayer, &mut AnimationTransitions),
+        With<PlayerAnimationRig>,
+    >,
     anims: Option<Res<PlayerAnimations>>,
     debug: Res<AnimationDebug>,
 ) {
@@ -194,5 +203,54 @@ pub(super) fn animate_player(
         } else if let Some(active) = player.animation_mut(target_node) {
             active.set_speed(speed_multiplier);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn player_animation_never_drives_an_unmarked_rig() {
+        let mut world = World::new();
+        let idle = petgraph::graph::NodeIndex::new(0);
+        let walk = petgraph::graph::NodeIndex::new(1);
+        world.insert_resource(PlayerAnimations {
+            idle,
+            walk,
+            run: walk,
+            clips: Vec::new(),
+            graph: Handle::default(),
+        });
+        world.insert_resource(AnimationDebug::default());
+        world.spawn((Player, LocomotionState::Walk, BodyVelocity(Vec3::X)));
+        let player_rig = world
+            .spawn((
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                PlayerAnimationRig,
+            ))
+            .id();
+        let unrelated_rig = world
+            .spawn((AnimationPlayer::default(), AnimationTransitions::new()))
+            .id();
+
+        world.run_system_once(animate_player).unwrap();
+
+        assert!(
+            world
+                .entity(player_rig)
+                .get::<AnimationPlayer>()
+                .unwrap()
+                .is_playing_animation(walk)
+        );
+        assert!(
+            !world
+                .entity(unrelated_rig)
+                .get::<AnimationPlayer>()
+                .unwrap()
+                .is_playing_animation(walk)
+        );
     }
 }

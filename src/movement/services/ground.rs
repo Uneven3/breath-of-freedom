@@ -20,6 +20,7 @@ use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::GroundSensing;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
+use crate::world::GameLayer;
 
 /// Suppress grounding only while *genuinely launching off* the floor (m/s).
 /// During a jump's first ticks the body is still within probe range of the
@@ -72,7 +73,9 @@ pub fn ground_service(
         if SensingLod::skips(lod) {
             continue;
         }
-        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        // Actors live exclusively on `Actor`; the world-only mask also
+        // excludes `entity` without building an EntityHashSet every tick.
+        let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
         let hit = spatial.cast_shape(
             collider,
             transform.translation,
@@ -128,6 +131,19 @@ mod tests {
     //! The velocity/normal pairs come from real play-session logs (2026-07-13):
     //! the slope-flicker regressions this check used to cause.
     use super::*;
+
+    #[test]
+    fn ground_probe_sees_world_but_not_actor_bodies() {
+        let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
+        assert!(filter.test(
+            Entity::PLACEHOLDER,
+            CollisionLayers::new(GameLayer::Default, LayerMask::ALL)
+        ));
+        assert!(!filter.test(
+            Entity::PLACEHOLDER,
+            CollisionLayers::new(GameLayer::Actor, LayerMask::ALL)
+        ));
+    }
 
     /// The 20° test ramp's surface normal.
     fn ramp_normal() -> Vec3 {

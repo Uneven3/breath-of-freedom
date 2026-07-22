@@ -37,6 +37,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<motors::attack::MeleeSweepShapes>();
         app.add_message::<motors::attack::MeleeHitMessage>();
         app.add_message::<motors::attack::HitImpactMessage>();
         app.add_message::<motors::aim::BowFiredMessage>();

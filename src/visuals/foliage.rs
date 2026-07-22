@@ -144,27 +144,33 @@ pub(super) fn apply_foliage_lod(
     mut commands: Commands,
     perf: Res<PerfToggles>,
     foliage: Query<Entity, With<FoliageMesh>>,
+    added: Query<Entity, Added<FoliageMesh>>,
     mut applied: Local<Option<Option<f32>>>,
 ) {
     let cull = perf.cull_distance();
-    let fresh = foliage.iter().len();
-    if *applied == Some(cull) && fresh == 0 {
-        return;
+    if *applied != Some(cull) {
+        *applied = Some(cull);
+        for entity in &foliage {
+            apply_lod_to_entity(&mut commands, entity, cull);
+        }
+    } else {
+        for entity in &added {
+            apply_lod_to_entity(&mut commands, entity, cull);
+        }
     }
-    *applied = Some(cull);
+}
 
-    for entity in &foliage {
-        match cull {
-            Some(max) => {
-                commands.entity(entity).try_insert(VisibilityRange {
-                    start_margin: 0.0..0.0,
-                    end_margin: (max - LOD_FADE).max(0.0)..max,
-                    use_aabb: false,
-                });
-            }
-            None => {
-                commands.entity(entity).remove::<VisibilityRange>();
-            }
+fn apply_lod_to_entity(commands: &mut Commands, entity: Entity, cull: Option<f32>) {
+    match cull {
+        Some(max) => {
+            commands.entity(entity).try_insert(VisibilityRange {
+                start_margin: 0.0..0.0,
+                end_margin: (max - LOD_FADE).max(0.0)..max,
+                use_aabb: false,
+            });
+        }
+        None => {
+            commands.entity(entity).remove::<VisibilityRange>();
         }
     }
 }
@@ -212,5 +218,35 @@ pub(super) fn apply_shadow_caster_budget(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_lod_only_configures_new_foliage() {
+        let mut world = World::new();
+        let perf = PerfToggles {
+            cull_step: 1,
+            ..default()
+        };
+        world.insert_resource(perf);
+        let existing = world.spawn(FoliageMesh).id();
+        let system = world.register_system(apply_foliage_lod);
+
+        world.run_system(system).unwrap();
+        assert!(world.entity(existing).contains::<VisibilityRange>());
+
+        world.entity_mut(existing).remove::<VisibilityRange>();
+        let added = world.spawn(FoliageMesh).id();
+        world.run_system(system).unwrap();
+
+        assert!(
+            !world.entity(existing).contains::<VisibilityRange>(),
+            "unchanged foliage must not be rewritten every frame"
+        );
+        assert!(world.entity(added).contains::<VisibilityRange>());
     }
 }

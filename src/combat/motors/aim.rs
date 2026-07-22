@@ -74,7 +74,7 @@ pub struct DrawStrength {
 }
 
 /// Published the tick an arrow leaves the string. Presentation consumes it
-/// (camera kick, hitstop at full charge) — same ownership pattern as
+/// for camera kick and `time_control` for full-charge hitstop — same pattern as
 /// `HitImpactMessage`: Combat owns the type, consumers read it without
 /// Combat knowing they exist.
 #[derive(Message, Debug, Clone, Copy)]

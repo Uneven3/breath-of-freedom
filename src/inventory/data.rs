@@ -102,7 +102,10 @@ impl Inventory {
         } else {
             for slot in self.slots.iter_mut().flatten() {
                 if slot.kind == kind {
-                    slot.quantity += quantity;
+                    let Some(total) = slot.quantity.checked_add(quantity) else {
+                        return Err(());
+                    };
+                    slot.quantity = total;
                     return Ok(());
                 }
             }
@@ -232,6 +235,9 @@ impl WeaponDurability {
 pub struct EquipRequestMessage {
     pub actor: Entity,
     pub item: WeaponItem,
+    /// World pickup that owns `item`, when applicable. Inventory despawns it
+    /// only after the swap commits; a rejected request leaves it recoverable.
+    pub world_item: Option<Entity>,
 }
 
 /// Presentation intent to equip the weapon currently stored in `slot`.
@@ -365,6 +371,20 @@ mod tests {
         );
         let after: Vec<_> = inventory.iter().copied().collect();
         assert_eq!(before, after, "a rejected add must leave slots untouched");
+    }
+
+    #[test]
+    fn try_add_rejects_quantity_overflow_without_mutating_the_stack() {
+        let mut inventory = Inventory::default();
+        inventory
+            .try_add(ItemKind::Material(MaterialKind::Wood), u32::MAX)
+            .unwrap();
+
+        assert_eq!(
+            inventory.try_add(ItemKind::Material(MaterialKind::Wood), 1),
+            Err(())
+        );
+        assert_eq!(inventory.iter().next().unwrap().quantity, u32::MAX);
     }
 
     #[test]

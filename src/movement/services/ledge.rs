@@ -13,7 +13,7 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::LedgeFacts;
 use crate::movement::lod::SensingLod;
-use crate::movement::sensing::LedgeSensing;
+use crate::movement::sensing::{LedgeCastShape, LedgeSensing};
 use crate::movement::state::LocomotionState;
 use crate::world::{GameLayer, NonClimbable};
 
@@ -43,6 +43,7 @@ struct LedgeActor<'a> {
     state: LocomotionState,
     body: BodyDimensions,
     sensing: LedgeSensing,
+    shape: &'a Collider,
 }
 
 type LedgeServiceQuery<'a> = (
@@ -51,6 +52,7 @@ type LedgeServiceQuery<'a> = (
     &'a LocomotionState,
     &'a BodyDimensions,
     &'a LedgeSensing,
+    &'a LedgeCastShape,
     &'a mut LedgeFacts,
     Option<&'a SensingLod>,
 );
@@ -67,7 +69,7 @@ pub fn ledge_service(
     non_climbable: Query<(), With<NonClimbable>>,
     mut trace: ResMut<CastTrace>,
 ) {
-    for (entity, transform, state, body, sensing, mut facts, lod) in &mut q {
+    for (entity, transform, state, body, sensing, shape, mut facts, lod) in &mut q {
         if SensingLod::skips(lod) {
             continue;
         }
@@ -79,6 +81,7 @@ pub fn ledge_service(
                 state: *state,
                 body: *body,
                 sensing: *sensing,
+                shape: &shape.0,
             },
             &mut facts,
             &non_climbable,
@@ -113,7 +116,7 @@ fn sense_ledges(
     // wall, mantle lip, or vault obstacle. Bodies still collide physically.
     let filter =
         SpatialQueryFilter::from_mask(GameLayer::Default).with_excluded_entities([actor.entity]);
-    let sphere = Collider::sphere(sensing.sphere_radius);
+    let sphere = actor.shape;
     let facing_dir = Dir3::new(facing).unwrap_or(Dir3::NEG_Z);
     let down = Dir3::NEG_Y;
 
@@ -123,7 +126,7 @@ fn sense_ledges(
     for (i, &y) in sensing.height_samples.iter().enumerate() {
         let origin = pos + Vec3::new(0.0, y, 0.0);
         let h = spatial.cast_shape(
-            &sphere,
+            sphere,
             origin,
             Quat::IDENTITY,
             facing_dir,
@@ -155,7 +158,7 @@ fn sense_ledges(
         + facing * sensing.forward_sample_offset
         + Vec3::Y * (sensing.mantle_max_height + sensing.down_cast_margin);
     let down_hit = spatial.cast_shape(
-        &sphere,
+        sphere,
         down_origin,
         Quat::IDENTITY,
         down,
@@ -177,7 +180,7 @@ fn sense_ledges(
         + facing * v_dist
         + Vec3::Y * (sensing.vault_detection_range + sensing.down_cast_margin);
     let vault_down_hit = spatial.cast_shape(
-        &sphere,
+        sphere,
         vault_down_origin,
         Quat::IDENTITY,
         down,

@@ -9,7 +9,7 @@ use crate::movement::constraints::BodyImpulseMessage;
 use crate::movement::{BodyVelocity, intents::Intents};
 use crate::world::GameLayer;
 
-use super::charge_data::{ChargeHitLedger, ChargeShape};
+use super::charge_data::{ChargeHitKey, ChargeHitLedger, ChargeShape};
 use super::data::{Horse, HorseCharge};
 
 const CHARGE_ENTER_SPEED: f32 = 11.0;
@@ -21,6 +21,7 @@ const CHARGE_KNOCKBACK: f32 = 9.0;
 enum RecordHit {
     New,
     Duplicate,
+    Saturated,
 }
 
 fn record_hit(
@@ -29,18 +30,24 @@ fn record_hit(
     generation: u64,
     enemy: Entity,
 ) -> RecordHit {
-    let key = (horse, generation, enemy);
-    if ledger.hits.contains(&key) {
+    let key = ChargeHitKey {
+        horse,
+        generation,
+        enemy,
+    };
+    if ledger.contains(key) {
         return RecordHit::Duplicate;
     }
-    ledger.hits.insert(key);
-    RecordHit::New
+    if ledger.insert(key) {
+        RecordHit::New
+    } else {
+        warn!("charge hit ledger saturated; rejecting hit on {enemy:?}");
+        RecordHit::Saturated
+    }
 }
 
 fn clear_generation(ledger: &mut ChargeHitLedger, horse: Entity, generation: u64) {
-    ledger.hits.retain(|(seen_horse, seen_generation, _)| {
-        *seen_horse != horse || *seen_generation != generation
-    });
+    ledger.retain(|key| key.horse != horse || key.generation != generation);
 }
 
 /// Drop ledger entries whose horse or enemy despawned, so the set doesn't
@@ -50,9 +57,7 @@ pub fn prune_hit_ledger(
     horses: Query<(), With<Horse>>,
     enemies: Query<(), With<Enemy>>,
 ) {
-    ledger
-        .hits
-        .retain(|(horse, _, enemy)| horses.get(*horse).is_ok() && enemies.get(*enemy).is_ok());
+    ledger.retain(|key| horses.get(key.horse).is_ok() && enemies.get(key.enemy).is_ok());
 }
 
 type HorseQuery<'a> = (
@@ -183,8 +188,9 @@ fn emit_charge_outcomes(
     ledger: &mut ChargeHitLedger,
     outcomes: &mut ChargeOutcomes,
 ) -> RecordHit {
-    if record_hit(ledger, horse, generation, target) == RecordHit::Duplicate {
-        return RecordHit::Duplicate;
+    let record = record_hit(ledger, horse, generation, target);
+    if record != RecordHit::New {
+        return record;
     }
     outcomes.damage.write(DamageRequestMessage {
         target,
@@ -404,7 +410,7 @@ mod tests {
             }
         }
 
-        assert_eq!(ledger.hits.len(), 40);
+        assert_eq!(ledger.len(), 40);
         clear_generation(&mut ledger, horses[0], 1);
         for enemy in enemies {
             assert_eq!(record_hit(&mut ledger, horses[0], 2, enemy), RecordHit::New);

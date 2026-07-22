@@ -11,6 +11,7 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use std::cmp::Ordering;
 
 use super::Enemy;
 use crate::movement::state::LocomotionState;
@@ -181,7 +182,6 @@ type TargetQuery<'a> = (
     Option<&'a BodyVelocity>,
 );
 type EnemyQuery<'a> = (
-    Entity,
     &'a Transform,
     &'a Perception,
     &'a mut AggroTarget,
@@ -195,16 +195,20 @@ pub fn perceive(
     targets: Query<TargetQuery, (With<Perceivable>, With<Actor>)>,
 ) {
     let dt = time.delta_secs();
-    for (enemy_entity, enemy_tf, perception, mut aggro, mut awareness) in &mut enemies {
-        let seen = targets.iter().find(|(_, target_tf, _, _)| {
-            within_sight_cone(enemy_tf, target_tf.translation, *perception)
-                && line_of_sight_clear(
-                    &spatial,
-                    enemy_entity,
+    for (enemy_tf, perception, mut aggro, mut awareness) in &mut enemies {
+        let seen = targets
+            .iter()
+            .filter(|(_, target_tf, _, _)| {
+                within_sight_cone(enemy_tf, target_tf.translation, *perception)
+                    && line_of_sight_clear(&spatial, enemy_tf.translation, target_tf.translation)
+            })
+            .min_by(|(a_entity, a_tf, _, _), (b_entity, b_tf, _, _)| {
+                stable_target_order(
                     enemy_tf.translation,
-                    target_tf.translation,
+                    (*a_entity, a_tf.translation),
+                    (*b_entity, b_tf.translation),
                 )
-        });
+            });
 
         if let Some((target, target_tf, locomotion, _)) = seen {
             let sneaking = matches!(locomotion, Some(LocomotionState::Sneak));
@@ -222,7 +226,7 @@ pub fn perceive(
         // around to investigate; only sight completes the detection.
         let heard = targets
             .iter()
-            .filter_map(|(_, target_tf, locomotion, velocity)| {
+            .filter_map(|(target, target_tf, locomotion, velocity)| {
                 let planar_speed = velocity
                     .map(|v| Vec2::new(v.0.x, v.0.z).length())
                     .unwrap_or(0.0);
@@ -230,23 +234,26 @@ pub fn perceive(
                 if loudness <= 0.0 {
                     return None;
                 }
-                if !line_of_sight_clear(
-                    &spatial,
-                    enemy_entity,
-                    enemy_tf.translation,
-                    target_tf.translation,
-                ) {
+                if !line_of_sight_clear(&spatial, enemy_tf.translation, target_tf.translation) {
                     loudness *= perception.wall_muffle;
                 }
                 let distance = enemy_tf.translation.distance(target_tf.translation);
                 let audible_radius = perception.hearing_range * loudness;
                 hearing_fill_rate(distance, audible_radius, *perception)
-                    .map(|rate| (rate, target_tf.translation))
+                    .map(|rate| (rate, target, target_tf.translation))
             })
-            .max_by(|(a, _), (b, _)| a.total_cmp(b));
+            .max_by(|(a_rate, a_entity, a_pos), (b_rate, b_entity, b_pos)| {
+                a_rate.total_cmp(b_rate).then_with(|| {
+                    stable_target_order(
+                        enemy_tf.translation,
+                        (*b_entity, *b_pos),
+                        (*a_entity, *a_pos),
+                    )
+                })
+            });
 
         match heard {
-            Some((rate, noise_pos)) => {
+            Some((rate, _, noise_pos)) => {
                 // Fill toward the suspicion ceiling; never *lower* a meter
                 // that is already higher (noise sustains, sight decays).
                 if awareness.0 < Awareness::SUSPICIOUS {
@@ -260,6 +267,18 @@ pub fn perceive(
             }
         }
     }
+}
+
+/// Closest target wins; exact distance ties are broken by world position and
+/// finally entity identity. This policy is independent of archetype/query
+/// iteration order and therefore stable as actors spawn or move archetypes.
+fn stable_target_order(origin: Vec3, a: (Entity, Vec3), b: (Entity, Vec3)) -> Ordering {
+    a.1.distance_squared(origin)
+        .total_cmp(&b.1.distance_squared(origin))
+        .then_with(|| a.1.x.total_cmp(&b.1.x))
+        .then_with(|| a.1.y.total_cmp(&b.1.y))
+        .then_with(|| a.1.z.total_cmp(&b.1.z))
+        .then_with(|| a.0.to_bits().cmp(&b.0.to_bits()))
 }
 
 /// An unmistakable threat (taking damage) aimed at one enemy: jumps its
@@ -290,14 +309,14 @@ pub fn receive_direct_threats(
 /// One ray from enemy center to target center against world geometry only
 /// (`GameLayer::Default`): any hit before the target means a wall is in the
 /// way.
-fn line_of_sight_clear(spatial: &SpatialQuery, enemy: Entity, from: Vec3, to: Vec3) -> bool {
+fn line_of_sight_clear(spatial: &SpatialQuery, from: Vec3, to: Vec3) -> bool {
     let to_target = to - from;
     let distance = to_target.length();
     let Ok(dir) = Dir3::new(to_target) else {
         // Coincident positions: nothing can be in between.
         return true;
     };
-    let filter = SpatialQueryFilter::from_mask(GameLayer::Default).with_excluded_entities([enemy]);
+    let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
     spatial
         .cast_ray(from, dir, distance, true, &filter)
         .is_none()
@@ -383,6 +402,22 @@ mod tests {
         assert!(
             awareness_fill_rate(1.0, p, false) > awareness_fill_rate(p.sight_range - 1.0, p, false)
         );
+    }
+
+    #[test]
+    fn target_policy_is_independent_of_candidate_iteration_order() {
+        let origin = Vec3::ZERO;
+        let far = (Entity::from_raw_u32(1).unwrap(), Vec3::new(0.0, 0.0, 8.0));
+        let near = (Entity::from_raw_u32(2).unwrap(), Vec3::new(0.0, 0.0, 2.0));
+        let choose = |candidates: [(Entity, Vec3); 2]| {
+            candidates
+                .into_iter()
+                .min_by(|a, b| stable_target_order(origin, *a, *b))
+                .unwrap()
+        };
+
+        assert_eq!(choose([far, near]), near);
+        assert_eq!(choose([near, far]), near);
     }
 
     #[test]

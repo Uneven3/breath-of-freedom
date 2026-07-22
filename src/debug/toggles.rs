@@ -15,7 +15,7 @@ use super::DebugConfig;
 use super::channel::{DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle};
 use crate::movement::diag::CastTrace;
 use crate::visuals::{AnimationDebug, PlayerAnimations};
-use crate::world::day_night::TimeOfDay;
+use crate::world::day_night::TimeOfDayRequest;
 
 pub(super) fn apply_initial_toggles(
     config: Res<DebugConfig>,
@@ -73,7 +73,7 @@ pub(super) fn apply_channel_toggles(
 
 pub(super) fn apply_debug_actions(
     mut requests: MessageReader<DebugActionRequest>,
-    mut time_of_day: ResMut<TimeOfDay>,
+    mut time_of_day: MessageWriter<TimeOfDayRequest>,
     mut probe: MessageWriter<crate::movement::probe_data::ProbeToggleRequest>,
 ) {
     for DebugActionRequest(action) in requests.read().copied() {
@@ -84,12 +84,10 @@ pub(super) fn apply_debug_actions(
                 probe.write(crate::movement::probe_data::ProbeToggleRequest);
             }
             DebugAction::AdvanceHour => {
-                time_of_day.hours = (time_of_day.hours + 1.0).rem_euclid(24.0);
-                info!("[debug] time jump: {:05.2}h", time_of_day.hours);
+                time_of_day.write(TimeOfDayRequest::AdvanceHour);
             }
             DebugAction::ToggleTimeSpeed => {
-                time_of_day.speed = if time_of_day.speed > 1.0 { 1.0 } else { 120.0 };
-                info!("[debug] time speed: x{}", time_of_day.speed);
+                time_of_day.write(TimeOfDayRequest::ToggleSpeed);
             }
         }
     }

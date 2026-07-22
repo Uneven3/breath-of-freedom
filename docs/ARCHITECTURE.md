@@ -1,9 +1,7 @@
 # Arquitectura y rationale
 
-El código es la documentación de lo que se hizo; este archivo (≤200 líneas)
-documenta las **leyes** que todo código debe cumplir y **por qué** la
-arquitectura es la que es. El detalle vive en los módulos y sus tests.
-Historial de diseño: `git log -- docs/`.
+El código documenta lo hecho; este archivo (≤200 líneas) fija las **leyes** y el
+**por qué** arquitectónico. El detalle vive en módulos/tests; historial: `git log -- docs/`.
 
 ## Leyes (la Constitución — el código las cita por §)
 
@@ -16,30 +14,25 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§5** Depender de componentes/mensajes expuestos, jamás de internals.
 - **§6** Components/Resources/Messages son datos puros; la lógica va en
   sistemas (helpers puros ok).
-- **§7** Cada sistema muta solo lo que posee. Comunicación cruzada diferida =
-  `Message` (0.19: `MessageReader`/`Writer`); `Event`/observer solo si la
-  inmediatez es explícitamente necesaria.
-- **§8** Evitar `unwrap()`/`expect()`: estados inválidos irrepresentables por
-  tipos, no panics en runtime. (Tests exentos.)
+- **§7** Cada sistema muta solo lo que posee. Comunicación diferida = `Message`
+  (0.19: `MessageReader`/`Writer`); `Event`/observer solo si exige inmediatez.
+- **§8** Evitar `unwrap()`/`expect()`: tipos, no panics en runtime. (Tests exentos.)
 - **§9** Panic = bug de programador. Todo lo que el juego puede producir
   (asset faltante, input raro, red) se modela con `Result`/`Option`.
 - **§10** *Checkpoint* = comportamiento validado **jugándolo**.
-- **§11** Tests después del checkpoint (no fijar feeling no validado).
-  Excepción obligatoria: invariantes de arquitectura/ECS se testean desde el
-  diseño (no-bleed entre actores, ordering, overflow, contratos multi-actor).
+- **§11** Tests después del checkpoint; invariantes arquitectura/ECS sí se testean
+  desde diseño (no-bleed, ordering, overflow, contratos multi-actor).
 - **§12** Sin `unsafe` en el proyecto.
 - **§13** `cargo fmt` + `clippy -D warnings` antes de terminar; `#[allow]`
   solo con justificación puntual.
 - **§14** Un plugin por sistema, carpeta propia bajo `src/`.
-- **§15** Comentarios solo para lo que el código no puede decir (invariantes,
-  restricciones, workarounds). Nunca el *qué*.
+- **§15** Comentarios solo para invariantes/restricciones/workarounds. Nunca el *qué*.
 - **§16** ~300 líneas es señal de dividir, no bloqueo.
 - **§17** Dependencia nueva en `Cargo.toml` requiere OK humano previo.
 - **§18** Sin allocations en el hot path de `FixedUpdate`.
-- **§19** Datos separados de sistemas en archivos distintos
-  (`state.rs`/`intents.rs` vs `mod.rs`/motores).
-- **§20** Simulación (FixedUpdate) nunca depende de nada visual. Cámara, HUD,
-  interpolación y cues viven en `Update` y solo **leen**.
+- **§19** Datos separados de sistemas (`state.rs`/`intents.rs` vs `mod.rs`/motores).
+- **§20** Simulación nunca depende de visuales; cámara/HUD/interpolación/cues
+  viven en `Update` y solo **leen**.
 
 ## El pipeline seleccionado
 
@@ -60,10 +53,9 @@ FixedUpdate Brain → Intents → [Sense → Propose → Arbitrate → Tick moto
 Update      Presentación: visuals, camera, HUD/debug, juice, sfx — solo READ
 ```
 
-**Regla de schedules:** Bevy corre `FixedUpdate` *antes* que `Update` en cada
-frame. Por eso todo lo que la simulación lee del hardware se resuelve en
-`PreUpdate`; un escritor en `Update` llega un frame tarde (fue el hallazgo
-crítico del audit 2026-07-17).
+**Regla de schedules:** Bevy corre `FixedUpdate` antes que `Update`; todo hardware
+que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tarde
+(hallazgo crítico del audit 2026-07-17).
 
 ## Por qué (rationale destilado)
 
@@ -92,14 +84,14 @@ crítico del audit 2026-07-17).
   atómicamente attachment, redirect de control, collider y gate, y responde
   con ack. Mounts solo confirma su relación (`MountedOn`/`RiddenBy`) desde
   un ack aceptado. Los requests aplican el mismo tick (el workspace se
-  dimensiona en el propio tick — no existe rechazo por capacidad). Detach
+  dimensiona en `PreUpdate` — no existe allocation en `FixedUpdate`). Detach
   sin pose segura = collider off + suspensión hasta que Movement encuentre
   pose válida (`PendingSafeRecovery`, candidatos fijos por tick).
 - **Salud y hostilidad.** Combat/Projectiles/Charge consultan
   `HostileInteractionImmunity` antes de toda consecuencia y emiten
   `DamageRequestMessage`; Health re-valida, aplica y emite `DeathMessage`.
   La reacción a la muerte vive con el dueño del actor (Player respawnea en
-  `player.rs`, enemigos en `enemies/`, targets en `world/`). No existe
+  `player/`, enemigos en `enemies/`, targets en `world/`). No existe
   `DamageAppliedMessage`: se diseñará con su primer consumidor real.
 - **Percepción por marcador.** Los enemigos perciben actores `Perceivable`
   (marcador de Perception; hoy solo el player). Cuando la hostilidad
@@ -191,7 +183,7 @@ crítico del audit 2026-07-17).
 | `movement` | `Intents`, `LocomotionState`, motores, facts, attachment/link | Brains escriben Intents; Combat pide por mensaje |
 | `proposal` | Núcleo genérico de arbitración | Type-aliases por sistema |
 | `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |
-| `projectiles` | Flechas: vuelo parabólico, impacto | Spawn por mensaje de Combat |
+| `projectiles` | Pool fijo de flechas: vuelo/impacto | Simulación sin visuales; Update sincroniza representación |
 | `health` | `Health`, inmunidad, aplicación autoritativa de daño | Único que resta HP; muerte por mensaje |
 | `inventory` | `Inventory`, equipo/durabilidad, pickups del mundo | Equipar inserta/retira `WeaponProfile` de Combat; lee `HitImpactMessage` (filtro `melee`); pide heal a Health |
 | `enemies` | Percepción, `Awareness`, brains melee/arquero | Escribe solo sus `*Intents`/`ControlOrientation` |
@@ -202,7 +194,7 @@ crítico del audit 2026-07-17).
 | `visuals`, `camera`, `presentation`, `sfx` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20) |
 | `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
 | `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las lee y las aplica a lo suyo |
+| `time_control` | Hitstop y `Time<Virtual>` | Único escritor del reloj virtual de simulación |
 
-Sistemas futuros (crafteo, swim, snowboard, clima, NPCs,
-multiplayer, persistencia) se diseñan cuando toquen, como consumidores
-aditivos de estos contratos — sus borradores viejos están en git.
+Sistemas futuros (crafteo, swim, snowboard, clima, NPCs, multiplayer,
+persistencia) se diseñan al tocar como consumidores aditivos; borradores en git.

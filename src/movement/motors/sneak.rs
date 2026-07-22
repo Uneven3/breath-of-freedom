@@ -42,6 +42,11 @@ pub struct Crouched(pub bool);
 #[derive(Component)]
 pub struct StandCollider(pub Collider);
 
+/// Reusable crouched capsule. Swapping a cloned handle is allocation-free;
+/// constructing the Parry shared shape inside `FixedUpdate` is not.
+#[derive(Component)]
+pub struct CrouchCollider(pub Collider);
+
 /// Whether the crouched actor has room to restore its standing capsule.
 #[derive(Component, Default)]
 pub struct StandClearance(pub bool);
@@ -198,6 +203,8 @@ type CrouchSyncQuery<'a> = (
     &'a SneakLock,
     &'a mut Crouched,
     &'a mut Collider,
+    &'a StandCollider,
+    &'a CrouchCollider,
     &'a mut Transform,
     &'a BodyDimensions,
 );
@@ -211,8 +218,18 @@ pub fn sync_crouch_collider(
         ),
     >,
 ) {
-    for (state, intents, clearance, sneak_lock, mut crouched, mut collider, mut transform, body) in
-        &mut q
+    for (
+        state,
+        intents,
+        clearance,
+        sneak_lock,
+        mut crouched,
+        mut collider,
+        stand_collider,
+        crouch_collider,
+        mut transform,
+        body,
+    ) in &mut q
     {
         let must_remain_crouched = crouched.0 && !clearance.0;
         let can_sneak = !sneak_lock.0 || must_remain_crouched;
@@ -233,9 +250,9 @@ pub fn sync_crouch_collider(
         };
         crouched.0 = want_crouch;
         *collider = if want_crouch {
-            body.crouched_collider()
+            crouch_collider.0.clone()
         } else {
-            body.standing_collider()
+            stand_collider.0.clone()
         };
         transform.translation.y += new_half_height - old_half_height;
     }
@@ -424,6 +441,8 @@ mod tests {
             StandClearance(clearance),
             Crouched(crouched),
             SneakLock::default(),
+            StandCollider(body.standing_collider()),
+            CrouchCollider(body.crouched_collider()),
             if crouched {
                 body.crouched_collider()
             } else {

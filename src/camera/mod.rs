@@ -13,6 +13,11 @@ use crate::visuals::PlayerVisual;
 
 use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
+mod crosshair;
+mod data;
+
+pub use data::{CameraRig, CameraShake, Crosshair, CrosshairRing};
+
 const SPRING_LENGTH: f32 = 6.5;
 /// Free-orbit pivot height, camera feel only. While aiming the pivot blends
 /// down to Combat's `AIM_PIVOT_HEIGHT` (§20: the aim line is simulation) so
@@ -34,50 +39,16 @@ const SPRING_PROBE_RADIUS: f32 = 0.2;
 /// Fade out the player model if the camera is closer than this to prevent clipping.
 const FIRST_PERSON_THRESHOLD: f32 = 0.8;
 
-#[derive(Component)]
-pub struct CameraRig {
-    pub current_dip: f32,
-    pub smoothed_y: f32,
-    /// 0 = orbit camera, 1 = aim camera; eased toward the player's
-    /// `CombatState::Aiming`.
-    pub aim_blend: f32,
-}
-
-/// Trauma-based screen shake: writers add trauma (0..=1), the offset applied
-/// is `trauma²` (small hits barely register, big ones slam), decaying on
-/// *real* time so it works through hitstop. Written by
-/// `presentation::juice::player_hit_feedback`.
-#[derive(Resource, Default)]
-pub struct CameraShake {
-    trauma: f32,
-}
-
-impl CameraShake {
-    pub fn add_trauma(&mut self, amount: f32) {
-        self.trauma = (self.trauma + amount).min(1.0);
-    }
-}
-
 const SHAKE_DECAY_PER_SEC: f32 = 2.2;
 const SHAKE_MAX_OFFSET: f32 = 0.25;
 const SHAKE_MAX_ROLL: f32 = 0.03;
-
-impl Default for CameraRig {
-    fn default() -> Self {
-        Self {
-            current_dip: 0.0,
-            smoothed_y: f32::NAN, // initialised to the body on the first follow frame
-            aim_blend: 0.0,
-        }
-    }
-}
 
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraShake>();
-        app.add_systems(Startup, (spawn_camera, spawn_crosshair));
+        app.add_systems(Startup, (spawn_camera, crosshair::spawn));
         // Orientation resolves in PreUpdate (see InputPlugin), so Update-time
         // camera systems always read the current frame's orientation.
         app.add_systems(
@@ -88,85 +59,11 @@ impl Plugin for CameraPlugin {
                 apply_camera_shake,
                 // Last, so it overrides follow and shake for the duration.
                 park_camera_for_benchmark,
-                toggle_crosshair,
+                crosshair::toggle,
             )
                 .chain(),
         );
     }
-}
-
-/// Center-screen dot, visible only while the aim camera is blended in.
-#[derive(Component)]
-pub struct Crosshair;
-
-#[derive(Component)]
-pub struct CrosshairRing;
-
-fn spawn_crosshair(mut commands: Commands) {
-    commands
-        .spawn((
-            Crosshair,
-            Name::new("Crosshair"),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                top: Val::Percent(50.0),
-                width: Val::Px(0.0),
-                height: Val::Px(0.0),
-                ..default()
-            },
-            Visibility::Hidden,
-        ))
-        .with_children(|parent| {
-            // Center dot (4px solid white)
-            parent.spawn((
-                Name::new("CrosshairDot"),
-                Node {
-                    position_type: PositionType::Absolute,
-                    width: Val::Px(4.0),
-                    height: Val::Px(4.0),
-                    margin: UiRect {
-                        left: Val::Px(-2.0),
-                        top: Val::Px(-2.0),
-                        ..default()
-                    },
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.95)),
-            ));
-
-            // Outer accuracy ring (shrinks on draw/charge)
-            parent.spawn((
-                CrosshairRing,
-                Name::new("CrosshairRing"),
-                Node {
-                    position_type: PositionType::Absolute,
-                    width: Val::Px(64.0),
-                    height: Val::Px(64.0),
-                    margin: UiRect {
-                        left: Val::Px(-32.0),
-                        top: Val::Px(-32.0),
-                        ..default()
-                    },
-                    border_radius: BorderRadius::MAX,
-                    border: UiRect::all(Val::Px(1.5)),
-                    ..default()
-                },
-                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.75)),
-            ));
-        });
-}
-
-fn toggle_crosshair(
-    rig: Single<&CameraRig>,
-    mut crosshair: Single<&mut Visibility, With<Crosshair>>,
-) {
-    **crosshair = if rig.aim_blend > 0.5 {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
 }
 
 fn spawn_camera(mut commands: Commands) {

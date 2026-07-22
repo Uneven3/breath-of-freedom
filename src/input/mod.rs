@@ -22,16 +22,44 @@ const PITCH_MAX: f32 = 1.2;
 #[derive(Resource)]
 pub struct PointerCaptured(pub bool);
 
-/// Exclusive presentation focus. While held, local gameplay actions and
-/// camera look are neutralized and the pointer is released.
+/// Presentation focus owners. While at least one owner is registered, local
+/// gameplay actions and camera look are neutralized and the pointer is
+/// released. Fixed capacity keeps `PreUpdate` allocation-free.
 #[derive(Resource, Default)]
 pub struct ModalInputFocus {
-    owner: Option<Entity>,
+    owners: [Option<Entity>; 8],
+    len: usize,
 }
 
 impl ModalInputFocus {
     pub fn is_active(&self) -> bool {
-        self.owner.is_some()
+        self.len != 0
+    }
+
+    fn acquire(&mut self, owner: Entity) -> bool {
+        if self.owners[..self.len].contains(&Some(owner)) {
+            return false;
+        }
+        if self.len == self.owners.len() {
+            warn!("modal input focus capacity exhausted; rejecting {owner:?}");
+            return false;
+        }
+        self.owners[self.len] = Some(owner);
+        self.len += 1;
+        true
+    }
+
+    fn release(&mut self, owner: Entity) -> bool {
+        let Some(index) = self.owners[..self.len]
+            .iter()
+            .position(|candidate| *candidate == Some(owner))
+        else {
+            return false;
+        };
+        self.len -= 1;
+        self.owners[index] = self.owners[self.len];
+        self.owners[self.len] = None;
+        true
     }
 }
 
@@ -203,16 +231,13 @@ fn apply_modal_focus_requests(
     for request in requests.read() {
         match *request {
             ModalInputFocusRequest::Acquire(owner) => {
-                focus.owner = Some(owner);
-                actions.clear_pressed(LOCAL_INPUT_SOURCE);
-                actions.discard_pending(LOCAL_INPUT_SOURCE);
-                changed = true;
+                if focus.acquire(owner) {
+                    actions.clear_pressed(LOCAL_INPUT_SOURCE);
+                    actions.discard_pending(LOCAL_INPUT_SOURCE);
+                    changed = true;
+                }
             }
-            ModalInputFocusRequest::Release(owner) if focus.owner == Some(owner) => {
-                focus.owner = None;
-                changed = true;
-            }
-            ModalInputFocusRequest::Release(_) => {}
+            ModalInputFocusRequest::Release(owner) => changed |= focus.release(owner),
         }
     }
     if changed {
@@ -251,9 +276,9 @@ mod modal_focus_tests {
         world.init_resource::<ButtonInput<KeyCode>>();
         world.init_resource::<ButtonInput<MouseButton>>();
         world.insert_resource(PointerCaptured(false));
-        world.insert_resource(ModalInputFocus {
-            owner: Some(Entity::PLACEHOLDER),
-        });
+        let mut focus = ModalInputFocus::default();
+        assert!(focus.acquire(Entity::PLACEHOLDER));
+        world.insert_resource(focus);
         let mut actions = ActiveActions::default();
         actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::MoveForward, true);
         world.insert_resource(actions);
@@ -267,5 +292,26 @@ mod modal_focus_tests {
                 .unwrap()
                 .pressed(IntentAction::MoveForward)
         );
+    }
+
+    #[test]
+    fn modal_focus_remains_active_until_every_owner_releases() {
+        let first = Entity::from_raw_u32(1).unwrap();
+        let second = Entity::from_raw_u32(2).unwrap();
+        let mut focus = ModalInputFocus::default();
+
+        assert!(focus.acquire(first));
+        assert!(focus.acquire(second));
+        assert!(focus.release(first));
+        assert!(focus.is_active());
+        assert!(focus.release(second));
+        assert!(!focus.is_active());
+
+        assert!(focus.acquire(first));
+        assert!(focus.acquire(second));
+        assert!(focus.release(second));
+        assert!(focus.is_active());
+        assert!(focus.release(first));
+        assert!(!focus.is_active());
     }
 }

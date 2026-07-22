@@ -28,7 +28,7 @@ use super::intents::{
     TraversalActionIntent,
 };
 use super::probe_data::{ProbeCoverage, ProbeScript, ProbeStage, TraversalProbe};
-use super::sensing::{GroundSensing, LedgeSensing};
+use super::sensing::{GroundSensing, LedgeCastShape, LedgeSensing};
 use super::state::LocomotionState;
 
 const STAGE_TIMEOUT_SECS: f32 = 8.0;
@@ -94,7 +94,10 @@ pub fn toggle_spawn(
             LadderMovementBundle::new(LadderMovement::PLAYER),
             LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
             WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
-            LedgeSensing::PLAYER,
+            (
+                LedgeSensing::PLAYER,
+                LedgeCastShape::new(LedgeSensing::PLAYER),
+            ),
             ProbeScript::default(),
             ProbeCoverage::default(),
         ),

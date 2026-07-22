@@ -5,7 +5,10 @@ pub mod charge_data;
 pub mod control;
 pub mod data;
 pub mod debug;
+mod dismount;
 pub mod lifecycle;
+mod recovery;
+mod transition;
 
 use crate::combat::CombatSet;
 use crate::health::HealthSet;

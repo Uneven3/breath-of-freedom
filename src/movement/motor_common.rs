@@ -17,6 +17,7 @@ use super::facts::{BodyContact, GroundFacts};
 use super::intents::Intents;
 use super::stamina::Stamina;
 use super::state::LocomotionState;
+use crate::world::GameLayer;
 
 /// A surface counts as floor if its normal is within this dot of straight up.
 /// `cos(60°) = 0.5` matches `GroundService`'s `max_slope_angle_deg = 60`.
@@ -128,7 +129,6 @@ const GROUND_SNAP_EPSILON: f32 = 0.02;
 /// into motors (like Stairs) that expect to own that climb themselves.
 pub fn snap_to_ground(
     mas: &MoveAndSlide,
-    entity: Entity,
     collider: &Collider,
     transform: &mut Transform,
     contact: &BodyContact,
@@ -137,7 +137,8 @@ pub fn snap_to_ground(
         return;
     }
 
-    let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+    // World-only sensing prevents another actor capsule becoming a floor.
+    let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
     let Some(hit) = mas.spatial_query.cast_shape(
         collider,
         transform.translation,
@@ -254,13 +255,7 @@ pub fn ground_drive_step(
     } else {
         planar_velocity
     };
-    snap_to_ground(
-        mas,
-        step.entity,
-        step.collider,
-        step.transform,
-        step.contact,
-    );
+    snap_to_ground(mas, step.collider, step.transform, step.contact);
     // Flat-ground motors are strictly planar: discard the tangential Y the
     // slide projected onto ramps. Leaving it in `BodyVelocity` made
     // `GroundService`'s ascend check read slope-walking as "launching off the

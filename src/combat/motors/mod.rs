@@ -10,6 +10,10 @@ use bevy::prelude::*;
 
 pub mod aim;
 pub mod attack;
+mod attack_data;
+mod attack_resolution;
+#[cfg(test)]
+mod attack_tests;
 pub mod idle;
 
 use crate::combat::state::CombatState;

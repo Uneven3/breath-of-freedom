@@ -20,7 +20,7 @@ use crate::movement::bundles::{
     LadderMovementBundle, LedgeTraversalBundle, SneakMovementBundle, SprintMovementBundle,
     StairsMovementBundle, StaminaBundle, WallJumpMovementBundle,
 };
-use crate::movement::sensing::{GroundSensing, LedgeSensing};
+use crate::movement::sensing::{GroundSensing, LedgeCastShape, LedgeSensing};
 use crate::movement::{BodyVelocity, Player};
 
 /// Authored spawn point; death teleports back here (graybox respawn).
@@ -67,7 +67,10 @@ fn spawn_player(mut commands: Commands) {
             LadderMovementBundle::new(LadderMovement::PLAYER),
             LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
             WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
-            LedgeSensing::PLAYER,
+            (
+                LedgeSensing::PLAYER,
+                LedgeCastShape::new(LedgeSensing::PLAYER),
+            ),
             ClimbInputState::default(),
             (
                 crate::input::InputConsumeCursor::default(),

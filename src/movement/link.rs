@@ -53,11 +53,24 @@ pub struct ActorLinkResultMessage {
     pub status: ActorLinkStatus,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct ActorLinkWorkspace {
     pub(crate) controllers: EntityHashSet,
     pub(crate) controlled: EntityHashSet,
     pub(crate) attached: EntityHashSet,
     pub(crate) carriers: EntityHashSet,
     pub(crate) processed: EntityHashSet,
+}
+
+impl Default for ActorLinkWorkspace {
+    fn default() -> Self {
+        const INITIAL_ACTORS: usize = 32;
+        Self {
+            controllers: EntityHashSet::with_capacity(INITIAL_ACTORS),
+            controlled: EntityHashSet::with_capacity(INITIAL_ACTORS),
+            attached: EntityHashSet::with_capacity(INITIAL_ACTORS),
+            carriers: EntityHashSet::with_capacity(INITIAL_ACTORS),
+            processed: EntityHashSet::with_capacity(INITIAL_ACTORS),
+        }
+    }
 }

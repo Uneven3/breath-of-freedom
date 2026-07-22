@@ -32,9 +32,10 @@ pub(super) fn spawn_visual(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let appearance = PLAYER_APPEARANCE;
-    let recipe = catalog
-        .recipe(appearance)
-        .expect("player appearance must be registered");
+    let Some(recipe) = catalog.recipe(appearance) else {
+        error!("[visuals] player appearance is not registered; visual disabled");
+        return;
+    };
     commands
         .spawn((
             PlayerVisual,

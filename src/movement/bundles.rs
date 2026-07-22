@@ -23,7 +23,7 @@ use super::motors::{
     glide::GlideLocal,
     jump::{JumpLocal, JumpPhase},
     mantle::MantleState,
-    sneak::{Crouched, SneakLock, StandClearance, StandCollider},
+    sneak::{CrouchCollider, Crouched, SneakLock, StandClearance, StandCollider},
     sprint::SprintLock,
     stairs::{StairsGrace, StairsLocal},
     wall_jump::WallJumpState,
@@ -116,6 +116,7 @@ pub struct SneakMovementBundle {
     pub crouched: Crouched,
     pub stand_clearance: StandClearance,
     pub stand_collider: StandCollider,
+    pub crouch_collider: CrouchCollider,
 }
 
 impl SneakMovementBundle {
@@ -126,6 +127,7 @@ impl SneakMovementBundle {
             crouched: Crouched::default(),
             stand_clearance: StandClearance::default(),
             stand_collider: StandCollider(dimensions.standing_collider()),
+            crouch_collider: CrouchCollider(dimensions.crouched_collider()),
         }
     }
 }

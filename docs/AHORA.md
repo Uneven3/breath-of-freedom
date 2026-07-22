@@ -223,14 +223,20 @@ Contrato acordado:
 
 Migración incremental antes del primer asset final:
 
-0. Corregir deudas descubiertas por la auditoría: Projectiles crea mesh/trail
-   desde `FixedUpdate` (§20); Charge usa `HashSet` asignable (§18); ground y
-   snap no enmascaran actores.
 1. Separar layers Body/Hurtbox y agregar vínculo hurtbox→Actor; primero la
    raíz puede conservar el volumen actual para migrar sin cambiar feeling.
 2. Migrar melee/flecha/carga a resolver dueño/región y deduplicar por Actor.
 3. Separar `LocomotionShapeSet` de `BodyEnvelope`; después importar perfiles
    espaciales y traces de ataque authored fuera del hot path.
+
+Auditoría de salud cerrada (2026-07-22): Projectiles usa pool autoritativo y
+crea mesh/trails solo en `Update`; ledgers, shapes y workspaces tienen capacidad
+preparada fuera del tick; ground/snap excluyen `GameLayer::Actor`. También se
+corrigieron overflow/doble-hit de melee, transacciones destructivas de
+inventario, foco modal componible, selección determinista de percepción,
+alcance de rigs/LOD y orden de feedback. Los módulos grandes de cámara,
+player, ataque, movement, attachments, mounts y projectiles quedaron partidos
+por responsabilidad; `time_control` es el único dueño de `Time<Virtual>`.
 
 Tests obligatorios: swap visual no cambia simulación; múltiples hurtboxes dan
 un solo hit por ataque; self-hit imposible; sensores no bloquean locomoción;
@@ -261,7 +267,7 @@ mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 - **Respawn no restaura arma:** si el jugador muere desarmado (arma rota)
   sin repuesto en `Inventory` ni un arma cercana en el mundo, respawnea
   con HP completo pero sin `WeaponProfile` — incapaz de atacar cuerpo a
-  cuerpo hasta encontrar otra arma. `player.rs::respawn_on_death` no lo
+  cuerpo hasta encontrar otra arma. `player/mod.rs::respawn_on_death` no lo
   toca a propósito hoy (el inventario sobrevive a la muerte); decidir si
   el respawn debe garantizar un arma mínima.
 - **`InventorySet` y `MountsSet::PostMove` sin orden explícito entre sí:**

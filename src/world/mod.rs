@@ -88,8 +88,12 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<day_night::TimeOfDay>();
+        app.add_message::<day_night::TimeOfDayRequest>();
         app.add_systems(Startup, (layout::setup_world, day_night::setup_moon_light));
-        app.add_systems(FixedUpdate, day_night::advance_time);
+        app.add_systems(
+            FixedUpdate,
+            (day_night::apply_time_requests, day_night::advance_time).chain(),
+        );
         app.add_systems(
             Update,
             (

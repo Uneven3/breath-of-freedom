@@ -10,7 +10,7 @@ use crate::movement::Player;
 
 use super::data::{
     EquipRequestMessage, EquipSlotRequestMessage, Inventory, InventoryInputCursor, ItemKind,
-    WeaponDurability,
+    WeaponDurability, WorldItem,
 };
 
 /// The only writer of `WeaponProfile`/`WeaponDurability` on an equipped
@@ -26,6 +26,14 @@ pub fn apply_equip_requests(
 ) {
     world.resource_scope(|world, messages: Mut<Messages<EquipRequestMessage>>| {
         for request in requests.read(&messages) {
+            if let Some(source) = request.world_item {
+                let Some(world_item) = world.get::<WorldItem>(source) else {
+                    continue;
+                };
+                if world_item.stack.kind != ItemKind::Weapon(request.item) {
+                    continue;
+                }
+            }
             let Ok(mut actor) = world.get_entity_mut(request.actor) else {
                 continue;
             };
@@ -38,13 +46,19 @@ pub fn apply_equip_requests(
                     && inventory.try_add(ItemKind::Weapon(outgoing), 1).is_err()
                 {
                     warn!(
-                        "[inventory] no room to keep '{}', it was lost in the swap",
+                        "[inventory] no room to keep '{}'; swap rejected",
                         outgoing.label
                     );
+                    continue;
                 }
             }
             actor.insert((request.item.profile, WeaponDurability::new(request.item)));
             info!("[inventory] equipped {}", request.item.label);
+            if let Some(source) = request.world_item
+                && let Ok(item) = world.get_entity_mut(source)
+            {
+                item.despawn();
+            }
         }
     });
 }
@@ -62,6 +76,7 @@ pub fn read_equip_slot_requests(
             equip.write(EquipRequestMessage {
                 actor: request.actor,
                 item,
+                world_item: None,
             });
         }
     }
@@ -88,7 +103,11 @@ pub fn read_cycle_weapon_requests(
             continue;
         }
         if let Some(item) = inventory.take_first_weapon() {
-            equip.write(EquipRequestMessage { actor, item });
+            equip.write(EquipRequestMessage {
+                actor,
+                item,
+                world_item: None,
+            });
         }
     }
 }
@@ -110,6 +129,7 @@ mod tests {
         world.write_message(EquipRequestMessage {
             actor,
             item: WeaponItem::GRAYBOX_SWORD,
+            world_item: None,
         });
 
         world.run_system_once(apply_equip_requests).unwrap();
@@ -136,6 +156,7 @@ mod tests {
         world.write_message(EquipRequestMessage {
             actor,
             item: WeaponItem::GRAYBOX_SWORD,
+            world_item: None,
         });
         world.run_system_once(apply_equip_requests).unwrap();
 
@@ -170,10 +191,12 @@ mod tests {
         world.write_message(EquipRequestMessage {
             actor,
             item: WeaponItem::LOOTABLE_CLUB,
+            world_item: None,
         });
         world.write_message(EquipRequestMessage {
             actor,
             item: WeaponItem::GRAYBOX_SWORD,
+            world_item: None,
         });
         world.run_system_once(apply_equip_requests).unwrap();
 
@@ -194,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn swap_with_a_full_inventory_still_equips_and_loses_the_old_weapon_without_panic() {
+    fn swap_with_a_full_inventory_is_rejected_without_losing_the_old_weapon() {
         let mut world = World::new();
         world.init_resource::<Messages<EquipRequestMessage>>();
         let mut full = Inventory::default();
@@ -213,18 +236,23 @@ mod tests {
         world.write_message(EquipRequestMessage {
             actor,
             item: WeaponItem::LOOTABLE_CLUB,
+            world_item: None,
         });
         world.run_system_once(apply_equip_requests).unwrap();
 
         let entity = world.entity(actor);
         assert_eq!(
             *entity.get::<WeaponProfile>().unwrap(),
-            WeaponProfile::BOKOBO_CLUB
+            WeaponProfile::GRAYBOX_SWORD
+        );
+        assert_eq!(
+            entity.get::<WeaponDurability>().unwrap().label(),
+            WeaponItem::GRAYBOX_SWORD.label
         );
         assert_eq!(
             entity.get::<Inventory>().unwrap().iter().count(),
             super::super::data::INVENTORY_SLOTS,
-            "still full — the outgoing sword had nowhere to go"
+            "a rejected swap leaves the inventory untouched"
         );
     }
 

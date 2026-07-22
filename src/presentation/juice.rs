@@ -9,12 +9,9 @@
 //! - **Floating damage text**: world-anchored UI number, louder on crits.
 //! - **Jelly**: squash & stretch on jump/landing for every actor visual.
 //! - **Screen flash + camera trauma** when the *player* is the one hit.
-//! - **Hitstop on criticals**: a ~90 ms global pause via
-//!   `Time<Virtual>::relative_speed` — `Time<Fixed>` accumulates from
-//!   virtual time, so the whole simulation freezes coherently and resumes
-//!   with no drift; the countdown runs on `Time<Real>`. This is the
-//!   "camera pause" of a sneakstrike, NOT the rejected flurry-rush slow-mo
-//!   (a fixed, tiny, non-gameplay pause — nothing reads or fights it).
+//!
+//! Hitstop belongs to `time_control`: presentation never mutates simulation
+//! time (§20), even when it consumes the same combat messages for feedback.
 
 use bevy::prelude::*;
 
@@ -40,7 +37,6 @@ const JELLY_JUMP_STRETCH: f32 = 0.28;
 const JELLY_LAND_SQUASH: f32 = -0.24;
 const JELLY_RECOVERY_PER_SEC: f32 = 9.0;
 
-const HITSTOP_SECS: f32 = 0.09;
 const PLAYER_HIT_TRAUMA: f32 = 0.55;
 const SCREEN_FLASH_ALPHA: f32 = 0.3;
 const SCREEN_FLASH_FADE_PER_SEC: f32 = 2.2;
@@ -48,20 +44,15 @@ const SCREEN_FLASH_FADE_PER_SEC: f32 = 2.2;
 /// Bow juice: camera trauma on release, scaled by draw charge.
 const BOW_FIRE_TRAUMA_MIN: f32 = 0.08;
 const BOW_FIRE_TRAUMA_MAX: f32 = 0.25;
-/// Charged shot hitstop: brief freeze on a max-charge release.
-const BOW_FULL_CHARGE_HITSTOP: f32 = 0.06;
-
 pub struct JuicePlugin;
 
 impl Plugin for JuicePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Hitstop>();
         app.add_systems(Startup, spawn_screen_flash);
         app.add_systems(
             Update,
             (
-                flash_on_hit,
-                expire_hit_flash,
+                (flash_on_hit, expire_hit_flash).chain(),
                 burst_on_hit,
                 tick_burst_particles,
                 damage_text_on_hit,
@@ -70,8 +61,6 @@ impl Plugin for JuicePlugin {
                 apply_jelly,
                 player_hit_feedback,
                 fade_screen_flash,
-                hitstop_on_crit,
-                tick_hitstop,
                 bow_fire_feedback,
                 animate_crosshair_charge,
             ),
@@ -89,6 +78,7 @@ impl Plugin for JuicePlugin {
 pub struct HitFlash {
     remaining: f32,
     original: Color,
+    refreshed: bool,
 }
 
 type FlashableVisual<'a> = (
@@ -110,7 +100,10 @@ fn flash_on_hit(
                 continue;
             }
             match flash {
-                Some(mut flash) => flash.remaining = HIT_FLASH_SECS,
+                Some(mut flash) => {
+                    flash.remaining = HIT_FLASH_SECS;
+                    flash.refreshed = true;
+                }
                 None => {
                     let Some(mut material) = materials.get_mut(&material_handle.0) else {
                         continue;
@@ -121,6 +114,7 @@ fn flash_on_hit(
                     commands.entity(visual).try_insert(HitFlash {
                         remaining: HIT_FLASH_SECS,
                         original: material.base_color,
+                        refreshed: true,
                     });
                     material.base_color = HIT_FLASH_COLOR;
                 }
@@ -136,6 +130,10 @@ fn expire_hit_flash(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (visual, material_handle, mut flash) in &mut visuals {
+        if flash.refreshed {
+            flash.refreshed = false;
+            continue;
+        }
         flash.remaining -= time.delta_secs();
         if flash.remaining > 0.0 {
             continue;
@@ -411,34 +409,6 @@ fn fade_screen_flash(
 }
 
 // ---------------------------------------------------------------------------
-// Hitstop
-// ---------------------------------------------------------------------------
-
-/// Remaining hitstop, counted in *real* seconds (virtual time is the thing
-/// being paused).
-#[derive(Resource, Default)]
-pub struct Hitstop(f32);
-
-fn hitstop_on_crit(mut impacts: MessageReader<HitImpactMessage>, mut hitstop: ResMut<Hitstop>) {
-    for impact in impacts.read() {
-        if impact.critical {
-            hitstop.0 = HITSTOP_SECS;
-        }
-    }
-}
-
-fn tick_hitstop(
-    real: Res<Time<Real>>,
-    mut hitstop: ResMut<Hitstop>,
-    mut virtual_time: ResMut<Time<Virtual>>,
-) {
-    if hitstop.0 > 0.0 {
-        hitstop.0 -= real.delta_secs();
-        virtual_time.set_relative_speed(if hitstop.0 > 0.0 { 0.0 } else { 1.0 });
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Bow juice: camera kick on release, crosshair contraction while charging
 // ---------------------------------------------------------------------------
 
@@ -446,7 +416,6 @@ fn bow_fire_feedback(
     mut fired: MessageReader<crate::combat::motors::aim::BowFiredMessage>,
     player: Query<Entity, With<Player>>,
     mut shake: ResMut<CameraShake>,
-    mut hitstop: ResMut<Hitstop>,
 ) {
     let Ok(player) = player.single() else {
         return;
@@ -459,9 +428,6 @@ fn bow_fire_feedback(
         let trauma =
             BOW_FIRE_TRAUMA_MIN + (BOW_FIRE_TRAUMA_MAX - BOW_FIRE_TRAUMA_MIN) * shot.charge;
         shake.add_trauma(trauma);
-        if shot.charge > 0.95 {
-            hitstop.0 = BOW_FULL_CHARGE_HITSTOP;
-        }
     }
 }
 

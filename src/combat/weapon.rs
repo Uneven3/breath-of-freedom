@@ -42,6 +42,10 @@ pub struct WeaponProfile {
 }
 
 impl WeaponProfile {
+    /// Every authored combat profile. Runtime sweep geometry is cached from
+    /// this registry before FixedUpdate begins.
+    pub const ALL: [Self; 3] = [Self::GRAYBOX_SWORD, Self::BOKOBO_CLUB, Self::MOUNTED_SWORD];
+
     /// Graybox one-handed sword: two quick cuts into a heavier finisher.
     /// Values are first-pass; they get tuned at the `combat-melee-combo`
     /// feeling checkpoint (Constitución §10/§11).

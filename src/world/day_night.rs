@@ -83,6 +83,32 @@ impl Default for TimeOfDay {
     }
 }
 
+/// External request to alter the world-owned simulation clock. Debug/UI may
+/// emit it, but only World mutates `TimeOfDay` (§7).
+#[derive(Message, Debug, Clone, Copy)]
+pub enum TimeOfDayRequest {
+    AdvanceHour,
+    ToggleSpeed,
+}
+
+pub(super) fn apply_time_requests(
+    mut requests: MessageReader<TimeOfDayRequest>,
+    mut time_of_day: ResMut<TimeOfDay>,
+) {
+    for request in requests.read() {
+        match request {
+            TimeOfDayRequest::AdvanceHour => {
+                time_of_day.hours = (time_of_day.hours + 1.0).rem_euclid(24.0);
+                info!("[debug] time jump: {:05.2}h", time_of_day.hours);
+            }
+            TimeOfDayRequest::ToggleSpeed => {
+                time_of_day.speed = if time_of_day.speed > 1.0 { 1.0 } else { 120.0 };
+                info!("[debug] time speed: x{}", time_of_day.speed);
+            }
+        }
+    }
+}
+
 /// Marker for the directional light the cycle drives.
 #[derive(Component)]
 pub struct Sun;

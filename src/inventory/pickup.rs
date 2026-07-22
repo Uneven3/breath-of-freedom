@@ -111,8 +111,8 @@ pub fn read_interact_pickups(
                 equip.write(EquipRequestMessage {
                     actor: interaction.actor,
                     item,
+                    world_item: Some(item_entity),
                 });
-                commands.entity(item_entity).despawn();
             }
             kind => {
                 if inventory.try_add(kind, world_item.stack.quantity).is_ok() {
@@ -232,7 +232,10 @@ mod tests {
 
         world.run_system_once(read_interact_pickups).unwrap();
 
-        assert!(world.get_entity(weapon_item).is_err(), "picked up");
+        assert!(
+            world.get_entity(weapon_item).is_ok(),
+            "the pickup remains until Inventory commits the swap"
+        );
         assert_eq!(
             world
                 .entity(player)
@@ -249,6 +252,75 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].actor, player);
         assert_eq!(requests[0].item, WeaponItem::LOOTABLE_CLUB);
+        assert_eq!(requests[0].world_item, Some(weapon_item));
+
+        world
+            .run_system_once(crate::inventory::equip::apply_equip_requests)
+            .unwrap();
+        assert!(
+            world.get_entity(weapon_item).is_err(),
+            "a committed equip consumes the pickup"
+        );
+    }
+
+    #[test]
+    fn rejected_weapon_swap_keeps_both_equipped_weapon_and_world_pickup() {
+        let mut world = World::new();
+        world.init_resource::<Messages<EquipRequestMessage>>();
+        world.init_resource::<Messages<InteractionRequest>>();
+
+        let mut inventory = Inventory::default();
+        for _ in 0..crate::inventory::data::INVENTORY_SLOTS {
+            inventory
+                .try_add(ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB), 1)
+                .unwrap();
+        }
+        let player = world
+            .spawn((
+                Player,
+                Transform::default(),
+                inventory,
+                crate::combat::weapon::WeaponProfile::GRAYBOX_SWORD,
+                crate::inventory::WeaponDurability::new(WeaponItem::GRAYBOX_SWORD),
+            ))
+            .id();
+        let pickup = world
+            .spawn(WorldItem {
+                stack: ItemStack {
+                    kind: ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB),
+                    quantity: 1,
+                },
+                mode: PickupMode::Interact,
+            })
+            .id();
+        world.write_message(InteractionRequest {
+            actor: player,
+            target: Some(pickup),
+            kind: InteractionKind::Pickup,
+        });
+
+        world.run_system_once(read_interact_pickups).unwrap();
+        world
+            .run_system_once(crate::inventory::equip::apply_equip_requests)
+            .unwrap();
+
+        assert!(world.get_entity(pickup).is_ok());
+        assert_eq!(
+            *world
+                .entity(player)
+                .get::<crate::combat::weapon::WeaponProfile>()
+                .unwrap(),
+            crate::combat::weapon::WeaponProfile::GRAYBOX_SWORD
+        );
+        assert_eq!(
+            world
+                .entity(player)
+                .get::<Inventory>()
+                .unwrap()
+                .iter()
+                .count(),
+            crate::inventory::data::INVENTORY_SLOTS
+        );
     }
 
     /// A decision aimed at another domain must not be acted on here.

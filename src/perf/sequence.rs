@@ -355,7 +355,10 @@ pub(super) fn advance_benchmark(
     match STEPS.get(run.index) {
         Some(step) => apply_step(&mut toggles, step),
         None => {
-            let run = benchmark.run.take().expect("checked above");
+            let Some(run) = benchmark.run.take() else {
+                error!("[bench] active run disappeared before completion");
+                return;
+            };
             toggles.vsync = run.restore_vsync;
             apply_step(&mut toggles, &STEPS[0]);
             let valid = run.results.iter().filter(|step| !step.invalid).count();

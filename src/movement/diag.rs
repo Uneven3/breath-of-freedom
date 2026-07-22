@@ -30,10 +30,21 @@ pub struct CastRecord {
 
 /// Per-fixed-tick log of sensor casts. Cleared at the start of `SenseWorld`,
 /// drawn by `debug.rs` every render frame until the next tick refills it.
-#[derive(Resource, Default)]
+const MAX_CAST_RECORDS: usize = 1024;
+
+#[derive(Resource)]
 pub struct CastTrace {
     pub enabled: bool,
     pub records: Vec<CastRecord>,
+}
+
+impl Default for CastTrace {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            records: Vec::with_capacity(MAX_CAST_RECORDS),
+        }
+    }
 }
 
 impl CastTrace {
@@ -47,7 +58,7 @@ impl CastTrace {
         max_dist: f32,
         hit: Option<(Vec3, Vec3)>,
     ) {
-        if self.enabled {
+        if self.enabled && self.records.len() < MAX_CAST_RECORDS {
             self.records.push(CastRecord {
                 entity,
                 kind: CastKind::Shape,
@@ -69,7 +80,7 @@ impl CastTrace {
         max_dist: f32,
         hit: Option<(Vec3, Vec3)>,
     ) {
-        if self.enabled {
+        if self.enabled && self.records.len() < MAX_CAST_RECORDS {
             self.records.push(CastRecord {
                 entity,
                 kind: CastKind::Ray,

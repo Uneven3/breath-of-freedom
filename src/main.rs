@@ -21,6 +21,7 @@ mod presentation;
 mod projectiles;
 mod proposal;
 mod sfx;
+mod time_control;
 mod visuals;
 mod world;
 
@@ -52,6 +53,10 @@ fn main() {
             sfx::SfxPlugin,
         ))
         // Separate call: `add_plugins` tuples cap at 15 elements.
-        .add_plugins((perf::PerfPlugin, interaction::InteractionPlugin))
+        .add_plugins((
+            perf::PerfPlugin,
+            interaction::InteractionPlugin,
+            time_control::TimeControlPlugin,
+        ))
         .run();
 }

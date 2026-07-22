@@ -1,9 +1,8 @@
-//! Toon material: the standard PBR material extended with banded lighting
-//! (`assets/shaders/toon.wgsl`). Applied to world geometry; actor visuals
-//! keep plain `StandardMaterial` for now (their tint/flash systems mutate
-//! it), which doubles as an in-game comparison of stepped vs continuous.
+//! Experimental toon material retained for future visual comparisons.
+//!
+//! The shipped baseline uses Bevy's `StandardMaterial`; this extension is not
+//! registered or instantiated during normal startup.
 
-use bevy::material::OpaqueRendererMethod;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
@@ -34,22 +33,5 @@ impl MaterialExtension for ToonExtension {
 
     fn deferred_fragment_shader() -> ShaderRef {
         "shaders/toon.wgsl".into()
-    }
-}
-
-/// A flat-color toon material for graybox geometry. Fully matte: the cel
-/// look dies if PBR's specular lobe survives (surfaces read "glassy"), so
-/// roughness is maxed and reflectance zeroed — banded diffuse only.
-pub fn toon_color(color: Color) -> ToonMaterial {
-    ExtendedMaterial {
-        base: StandardMaterial {
-            base_color: color,
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            reflectance: 0.0,
-            opaque_render_method: OpaqueRendererMethod::Auto,
-            ..default()
-        },
-        extension: ToonExtension::default(),
     }
 }

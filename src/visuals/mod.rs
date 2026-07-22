@@ -21,9 +21,11 @@ pub mod enemy;
 pub mod foliage;
 pub mod forest;
 pub mod horse;
+pub mod materials;
 pub mod outline;
 pub mod player;
 pub mod probe;
+#[cfg(feature = "experimental-toon")]
 pub mod toon;
 pub mod vfx;
 
@@ -32,6 +34,7 @@ pub use catalog::{
     AppearanceBinding, AppearanceKey, PLAYER_APPEARANCE, TreeSilhouette, VisualCatalog, VisualSlot,
 };
 pub use player::PlayerVisual;
+#[cfg(feature = "experimental-toon")]
 pub use toon::ToonMaterial;
 
 /// Exponential decay rate for visual smoothing, fed to
@@ -57,6 +60,9 @@ pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
+        // `ToonMaterial` remains available as an experiment, but the shipped
+        // runtime registers and instantiates only Bevy's standard PBR path.
+        #[cfg(feature = "experimental-toon")]
         app.add_plugins(MaterialPlugin::<ToonMaterial>::default());
         app.add_plugins(outline::OutlinePlugin);
         app.init_resource::<AnimationDebug>();

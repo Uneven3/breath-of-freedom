@@ -43,8 +43,8 @@ eliminado, `Perceivable`, test del veto ForbidSprint). 187 tests.
 ## Cierre de rendimiento (2026-07-21): 13 → 60 FPS estables
 
 En el peor punto del bosque (dentro, al ras del suelo) el frame pasó de ~72 ms
-(13 FPS) a **nunca bajar de 60 FPS**, con vsync. Sin sacar features: sombras de
-sol, bosque completo y outline siguen. El camino, medido con la secuencia:
+(13 FPS) a **nunca bajar de 60 FPS**, con vsync. El camino, medido con la
+secuencia:
 
 1. **Materiales de tronco a `OPAQUE`/single-sided** (`visuals/foliage.rs`): la
    corteza es 100% opaca pero venía `MASK`+`doubleSided`; restaurar early-Z
@@ -58,6 +58,13 @@ sol, bosque completo y outline siguen. El camino, medido con la secuencia:
    reemplazaron por **proxies procedurales** (cilindro+copa por familia, mallas
    compartidas e instanciadas) como default; el modelo detallado quedó como tier
    opt-in (`tree-detail`). Esto es lo que llevó el peor caso a 60 estables.
+4. **Baseline PBR nativo (2026-07-22):** mundo, pickups y proxies usan un perfil
+   mate de `StandardMaterial`; la atmósfera se construye con luz, paleta y
+   entorno. El toon corregido se conserva bajo `experimental-toon`, apagado por
+   default. Dos A/B midieron `strong outline` en +0.91/+1.68 ms; sigue opt-in.
+5. **Bruma atmosférica nativa:** `DistanceFog` lineal no toca los primeros 45 m,
+   transiciona hasta 240 m y mezcla como máximo 30%; sigue el color del cielo
+   día/noche. Da profundidad sin ocultar navegación ni sumar un pase fullscreen.
 
 Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
 
@@ -67,9 +74,9 @@ Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
 - **Watchdog de polígonos** (`visuals/budget.rs`): cuenta triángulos de cada
   malla al cargar y avisa sobre presupuesto. Agnóstico de asset — ya delató que
   el Ranger femenino es igual de pesado (pies: 9172 tris; ver deudas).
-- **La estilización va en el material, no en pasadas extra.** El outline cuesta
-  un prepass entero (~7 ms) sin importar la escena; es el próximo candidato si
-  se busca más techo, y además se ve más agresivo que BotW.
+- **La atmósfera parte del pipeline estándar.** El baseline comparte
+  `StandardMaterial` con actores/assets; toon y strong outline se conservan
+  solo como experimentos opt-in para comparar feeling y costo.
 
 Instrumentación clave que hizo esto medible: secuencia automática con
 precalentamiento de pipelines, dos modos de vantage ("aquí" para zonas lentas /
@@ -94,9 +101,8 @@ corregido a laplaciana (segunda derivada), que da cero en cualquier plano.
   instrumentado se mide por A/B.
 - **Pendientes de rendimiento** (no urgentes, hay margen): comprimir texturas
   del bosque a BCn/KTX2 (~88 MB RGBA8 hoy); LOD/impostores cuando la densidad
-  suba; el outline cuesta un prepass entero (~7 ms) — próximo candidato si se
-  busca techo, y además se ve más agresivo que BotW. Streaming por chunks para
-  el mundo grande: la costura ya existe en `world/layout.rs`.
+  suba; streaming por chunks para el mundo grande: la costura ya existe en
+  `world/layout.rs`.
 
 ## Cierre del graybox (decisión del usuario, 2026-07-17)
 
@@ -136,7 +142,7 @@ día/noche + inventario + bosque + Ranger; después conseguir locomoción normal
 compatible para reemplazar los fallbacks UAL2.
 
 Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
-Hit_Knockback); toon en actores; FXAA (MSAA quedó off por el outline).
+Hit_Knockback); checkpoint PBR de paleta/luz/niebla y evaluación de AA.
 
 ## Pipeline de assets y personaje — estado cerrado
 

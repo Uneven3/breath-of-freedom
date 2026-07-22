@@ -11,10 +11,9 @@
 use bevy::prelude::*;
 
 use super::foliage::{FoliageLeaf, FoliageMesh};
-use super::toon::toon_color;
+use super::materials::matte_color;
 use super::{
-    AppearanceBinding, AppearanceKey, ToonMaterial, TreeSilhouette, VisualCatalog, VisualOf,
-    VisualSlot,
+    AppearanceBinding, AppearanceKey, TreeSilhouette, VisualCatalog, VisualOf, VisualSlot,
 };
 use crate::perf::PerfToggles;
 use crate::world::TreeKind;
@@ -67,10 +66,10 @@ pub(super) struct TreeProxyAssets {
 
 struct ProxyParts {
     trunk_mesh: Handle<Mesh>,
-    trunk_material: Handle<ToonMaterial>,
+    trunk_material: Handle<StandardMaterial>,
     trunk_height: f32,
     canopy_mesh: Handle<Mesh>,
-    canopy_material: Handle<ToonMaterial>,
+    canopy_material: Handle<StandardMaterial>,
     /// Local height of the canopy centre above the tree base.
     canopy_y: f32,
 }
@@ -90,21 +89,21 @@ const BARK: Color = Color::srgb(0.33, 0.24, 0.15);
 pub(super) fn build_tree_proxy_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ToonMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // Trunk radii/heights track `world::forest::tree_collider` so the proxy
     // sits where the collider is — the graybox stays honest about its body.
     let trunk = |meshes: &mut Assets<Mesh>, radius: f32, height: f32| {
         meshes.add(Cylinder::new(radius, height))
     };
-    let bark = materials.add(toon_color(BARK));
+    let bark = materials.add(matte_color(BARK));
 
     let rounded = ProxyParts {
         trunk_mesh: trunk(&mut meshes, 0.35, 4.8),
         trunk_material: bark.clone(),
         trunk_height: 4.8,
         canopy_mesh: meshes.add(Sphere::new(2.0)),
-        canopy_material: materials.add(toon_color(Color::srgb(0.27, 0.5, 0.22))),
+        canopy_material: materials.add(matte_color(Color::srgb(0.27, 0.5, 0.22))),
         canopy_y: 5.4,
     };
     let conical = ProxyParts {
@@ -115,7 +114,7 @@ pub(super) fn build_tree_proxy_assets(
             radius: 1.8,
             height: 4.5,
         }),
-        canopy_material: materials.add(toon_color(Color::srgb(0.16, 0.4, 0.24))),
+        canopy_material: materials.add(matte_color(Color::srgb(0.16, 0.4, 0.24))),
         canopy_y: 5.2,
     };
     let gnarled = ProxyParts {
@@ -123,7 +122,7 @@ pub(super) fn build_tree_proxy_assets(
         trunk_material: bark,
         trunk_height: 6.2,
         canopy_mesh: meshes.add(Sphere::new(1.9)),
-        canopy_material: materials.add(toon_color(Color::srgb(0.36, 0.45, 0.2))),
+        canopy_material: materials.add(matte_color(Color::srgb(0.36, 0.45, 0.2))),
         canopy_y: 6.6,
     };
 

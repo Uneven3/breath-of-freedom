@@ -10,6 +10,7 @@ use crate::input::frame::ControlOrientation;
 use crate::movement::Player;
 use crate::movement::state::LocomotionState;
 use crate::visuals::PlayerVisual;
+use crate::world::day_night::{TimeOfDay, atmosphere_color};
 
 use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
@@ -39,6 +40,12 @@ const SPRING_PROBE_RADIUS: f32 = 0.2;
 /// Fade out the player model if the camera is closer than this to prevent clipping.
 const FIRST_PERSON_THRESHOLD: f32 = 0.8;
 
+// A light atmospheric veil, not weather: the playable course stays fully
+// readable and only distant geometry eases into the sky color.
+const FOG_START_METERS: f32 = 45.0;
+const FOG_END_METERS: f32 = 240.0;
+const FOG_MAX_ALPHA: f32 = 0.3;
+
 const SHAKE_DECAY_PER_SEC: f32 = 2.2;
 const SHAKE_MAX_OFFSET: f32 = 0.25;
 const SHAKE_MAX_ROLL: f32 = 0.03;
@@ -57,6 +64,7 @@ impl Plugin for CameraPlugin {
                 camera_landing_dip,
                 follow_player,
                 apply_camera_shake,
+                update_distance_fog,
                 // Last, so it overrides follow and shake for the duration.
                 park_camera_for_benchmark,
                 crosshair::toggle,
@@ -66,21 +74,37 @@ impl Plugin for CameraPlugin {
     }
 }
 
-fn spawn_camera(mut commands: Commands) {
+fn spawn_camera(mut commands: Commands, time_of_day: Res<TimeOfDay>) {
     commands.spawn((
         Name::new("CameraRig"),
         CameraRig::default(),
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
-        // Silhouette outlines: the post-process pass reads these prepasses;
-        // MSAA off because it binds single-sample textures.
-        (
-            crate::visuals::outline::OutlineSettings::default(),
-            bevy::core_pipeline::prepass::DepthPrepass,
-            bevy::core_pipeline::prepass::NormalPrepass,
-            Msaa::Off,
-        ),
+        soft_distance_fog(atmosphere_color(time_of_day.hours)),
+        // Keep this single-sample while the cheap AA checkpoint is pending.
+        // The optional strong-outline A/B also requires single-sample inputs.
+        Msaa::Off,
     ));
+}
+
+fn soft_distance_fog(color: Color) -> DistanceFog {
+    DistanceFog {
+        color: color.with_alpha(FOG_MAX_ALPHA),
+        falloff: FogFalloff::Linear {
+            start: FOG_START_METERS,
+            end: FOG_END_METERS,
+        },
+        ..default()
+    }
+}
+
+/// The fog meets the same horizon color as `ClearColor`, so dawn, dusk and
+/// night transition without a visible seam or a permanently blue veil.
+fn update_distance_fog(
+    time_of_day: Res<TimeOfDay>,
+    mut fog: Single<&mut DistanceFog, With<CameraRig>>,
+) {
+    fog.color = atmosphere_color(time_of_day.hours).with_alpha(FOG_MAX_ALPHA);
 }
 
 /// Add a downward dip when the player lands (Fall → Walk/Sprint).
@@ -247,4 +271,21 @@ fn apply_camera_shake(
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distance_fog_is_a_distant_translucent_veil() {
+        let fog = soft_distance_fog(Color::srgb(0.4, 0.6, 0.8));
+
+        let FogFalloff::Linear { start, end } = fog.falloff else {
+            panic!("soft atmosphere must use the predictable linear falloff");
+        };
+        assert!(start >= 40.0, "near gameplay must remain completely clear");
+        assert!(end - start >= 150.0, "fog transition must stay gradual");
+        assert!(fog.color.to_srgba().alpha <= 0.3);
+    }
 }

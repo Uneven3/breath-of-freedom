@@ -142,8 +142,8 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   el tier barato para no mentir sobre el costo: un placeholder caro que la
   versión final no shipeará invalida toda medición hecha contra él. El watchdog
   de triángulos (`visuals/budget.rs`) hace visible en el log cualquier malla que
-  exceda el presupuesto. La estilización va en el material (por-fragmento, que
-  escala), no en pasadas fullscreen extra (costo fijo sin importar la escena).
+  exceda el presupuesto. El baseline visual usa `StandardMaterial`; shaders
+  custom/fullscreen son experimentos opt-in, nunca costo fijo global default.
 - **Debug: un snapshot, dos sinks.** Consola y pantalla responden preguntas
   distintas y no pueden contradecirse: el jugador mira el HUD para juzgar
   *feeling*, y el log es lo único que sobrevive al playtest para armar la tabla

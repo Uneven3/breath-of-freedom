@@ -10,8 +10,7 @@ use bevy::prelude::*;
 
 use crate::interaction::{Interactable, InteractionKind, InteractionRequest};
 use crate::movement::Player;
-use crate::visuals::ToonMaterial;
-use crate::visuals::toon::toon_color;
+use crate::visuals::materials::matte_color;
 
 use super::data::{EquipRequestMessage, Inventory, ItemKind, ItemStack, PickupMode, WorldItem};
 
@@ -24,7 +23,7 @@ const INTERACT_PICKUP_RANGE: f32 = 2.5;
 pub fn spawn_world_item(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ToonMaterial>,
+    materials: &mut Assets<StandardMaterial>,
     name: &str,
     position: Vec3,
     stack: ItemStack,
@@ -39,7 +38,7 @@ pub fn spawn_world_item(
         Name::new(name.to_string()),
         WorldItem { stack, mode },
         Mesh3d(meshes.add(Cuboid::new(dims.x, dims.y, dims.z))),
-        MeshMaterial3d(materials.add(toon_color(color))),
+        MeshMaterial3d(materials.add(matte_color(color))),
         Transform::from_translation(position),
     ));
     // `Auto` items are swept up by proximity and never compete for the key.

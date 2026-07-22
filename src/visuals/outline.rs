@@ -1,14 +1,13 @@
-//! Post-process silhouette outlines (BotW-style): a fullscreen pass after
-//! the main render detects edges in the depth and normal prepasses and inks
-//! them, so shapes separate even when their fill colors match. Presentation
-//! only — the camera opts in with [`OutlineSettings`] plus depth/normal
-//! prepasses (and `Msaa::Off`, since the pass reads single-sample textures).
+//! Optional strong-ink A/B: a fullscreen pass detects edges in depth/normal
+//! prepasses. The shipped look stays on Bevy's standard PBR path; this mode is
+//! retained only for visual comparison and explicit quality experiments.
 
 use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::{Core3dSystems, FullscreenShader, schedule::Core3d};
 use bevy::prelude::*;
 use bevy::render::{
     RenderApp, RenderStartup,
+    diagnostic::RecordDiagnostics,
     extract_component::{
         ComponentUniforms, DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin,
         UniformComponentPlugin,
@@ -204,6 +203,8 @@ fn outline_system(
         }
     };
 
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
     let mut render_pass = ctx
         .command_encoder()
         .begin_render_pass(&RenderPassDescriptor {
@@ -220,7 +221,9 @@ fn outline_system(
             multiview_mask: None,
         });
 
+    let pass_span = diagnostics.pass_span(&mut render_pass, "outline_pass");
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[settings_index.index()]);
     render_pass.draw(0..3, 0..1);
+    pass_span.end(&mut render_pass);
 }

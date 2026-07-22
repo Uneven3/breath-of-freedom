@@ -3,6 +3,10 @@ name = "breath-of-freedom"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+experimental-toon = []
+
 [dependencies]
 avian3d = { workspace = true }
 bevy = { workspace = true }

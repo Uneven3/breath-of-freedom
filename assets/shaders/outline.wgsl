@@ -44,12 +44,16 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let color = textureSample(screen_texture, texture_sampler, in.uv);
 
     let dims = vec2<i32>(textureDimensions(depth_texture));
+    if dims.x < 3 || dims.y < 3 {
+        return color;
+    }
+    let max_t = max((min(dims.x, dims.y) - 1) / 2, 1);
+    let t = i32(clamp(settings.thickness, 1.0, f32(max_t)));
     let px = clamp(
         vec2<i32>(in.uv * vec2<f32>(dims)),
-        vec2<i32>(1, 1),
-        dims - vec2<i32>(2, 2),
+        vec2<i32>(t, t),
+        dims - vec2<i32>(t + 1, t + 1),
     );
-    let t = max(i32(settings.thickness), 1);
 
     // Laplacian of linearized depth, relative to the center distance so a
     // given break inks the same whether it is near or far.

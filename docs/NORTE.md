@@ -37,8 +37,8 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 
 ## Dirección visual y sonora
 
-- Cel-shaded con iluminación realista sobre shading estilizado; paleta
-  vibrante tipo BotW.
+- PBR estilizado sobre `StandardMaterial` de Bevy: materiales mate, iluminación,
+  atmósfera y paleta vibrante; toon/custom shaders quedan como experimentos.
 - Assets de prototipado reemplazables mediante catálogo de presentación:
   identidad de gameplay, visual y colisión permanecen independientes.
 - Objetivo de 60 FPS en el hardware de referencia con presupuestos medidos;

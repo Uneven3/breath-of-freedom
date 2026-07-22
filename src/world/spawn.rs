@@ -7,8 +7,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs, TreeKind};
-use crate::visuals::ToonMaterial;
-use crate::visuals::toon::toon_color;
+use crate::visuals::materials::matte_color;
 
 pub(super) struct BoxSpec {
     pub position: Vec3,
@@ -56,7 +55,7 @@ pub(super) fn spawn_tree(commands: &mut Commands, name: String, spec: TreeSpec) 
 pub(super) fn spawn_box(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ToonMaterial>,
+    materials: &mut Assets<StandardMaterial>,
     name: &str,
     pos: Vec3,
     dims: Vec3,
@@ -79,7 +78,7 @@ pub(super) fn spawn_box(
 pub(super) fn spawn_oriented_box(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ToonMaterial>,
+    materials: &mut Assets<StandardMaterial>,
     name: &str,
     spec: BoxSpec,
 ) -> Entity {
@@ -91,7 +90,7 @@ pub(super) fn spawn_oriented_box(
                 spec.dimensions.y,
                 spec.dimensions.z,
             ))),
-            MeshMaterial3d(materials.add(toon_color(spec.color))),
+            MeshMaterial3d(materials.add(matte_color(spec.color))),
             Transform::from_translation(spec.position).with_rotation(spec.rotation),
             RigidBody::Static,
             Collider::cuboid(spec.dimensions.x, spec.dimensions.y, spec.dimensions.z),
@@ -114,7 +113,6 @@ const PRACTICE_TARGET_DIMS: Vec3 = Vec3::new(0.15, 1.1, 1.1);
 pub(super) fn spawn_practice_target(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    toon: &mut Assets<ToonMaterial>,
     materials: &mut Assets<StandardMaterial>,
     name: &str,
     center: Vec3,
@@ -124,7 +122,7 @@ pub(super) fn spawn_practice_target(
     spawn_box(
         commands,
         meshes,
-        toon,
+        materials,
         &format!("{name}Post"),
         Vec3::new(center.x, post_height * 0.5, center.z),
         Vec3::new(0.12, post_height, 0.12),
@@ -160,7 +158,7 @@ pub(super) fn spawn_practice_target(
 pub(super) fn spawn_stair_segment(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ToonMaterial>,
+    materials: &mut Assets<StandardMaterial>,
     spec: StairSegmentSpec,
 ) {
     let axis = spec.axis.normalize_or_zero();

@@ -29,7 +29,7 @@ const SUN_NOON_LUX: f32 = 10_000.0;
 // flattening the much stronger daylight bands.
 const MOON_LUX: f32 = 400.0;
 // Ambient stays low on purpose: it fills shadowed faces, and too much of it
-// flattens the toon bands until every surface merges.
+// flattens the form and material response until every surface merges.
 const AMBIENT_DAY: f32 = 90.0;
 const AMBIENT_NIGHT: f32 = 40.0;
 
@@ -214,6 +214,13 @@ fn lighting_palette(hours: f32, elevation: f32) -> LightingPalette {
         ambient_color,
         sky_color,
     }
+}
+
+/// Environment color at a given time. Camera-owned effects read this instead
+/// of duplicating the day/night palette or reaching into world presentation
+/// entities.
+pub(crate) fn atmosphere_color(hours: f32) -> Color {
+    lighting_palette(hours, sun_direction(hours).y).sky_color
 }
 
 /// Presentation: place and tint the sun (or moon, when the sun is below the

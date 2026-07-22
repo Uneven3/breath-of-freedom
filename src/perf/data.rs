@@ -86,7 +86,7 @@ impl PerfKnob {
 /// the difference between 15 and 51 fps inside the forest. Leaving them off by
 /// default meant every launch started from the expensive case and made the sun
 /// look like something that had to be removed rather than budgeted.
-#[derive(Resource)]
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct PerfToggles {
     /// Indexes [`PerfKnob::ALL`].
     pub selected: usize,
@@ -124,7 +124,7 @@ impl Default for PerfToggles {
             forest_visible: true,
             sun_shadows: true,
             moon_shadows: true,
-            outline: true,
+            outline: false,
             cull_step: 0,
             shadow_range_step: 0,
             shadow_distance_step: 0,
@@ -252,7 +252,7 @@ mod tests {
         assert!(toggles.forest_visible);
         assert!(toggles.sun_shadows);
         assert!(toggles.moon_shadows);
-        assert!(toggles.outline);
+        assert!(!toggles.outline, "strong fullscreen ink is diagnostic-only");
         assert_eq!(toggles.cull_distance(), None);
         assert_eq!(
             toggles.shadow_caster_range(),

@@ -74,7 +74,7 @@ impl BenchmarkStep {
             forest_visible: true,
             sun_shadows: true,
             moon_shadows: true,
-            outline: true,
+            outline: false,
             cull_step: 0,
             shadow_range_step: 0,
         }
@@ -104,8 +104,8 @@ pub const STEPS: [BenchmarkStep; 8] = [
         ..BenchmarkStep::baseline("all shadows off")
     },
     BenchmarkStep {
-        outline: false,
-        ..BenchmarkStep::baseline("outline off")
+        outline: true,
+        ..BenchmarkStep::baseline("strong outline on")
     },
     BenchmarkStep {
         shadow_range_step: SHADOW_BUDGET_OFF,
@@ -151,7 +151,7 @@ pub struct RunState {
     results: Vec<StepResult>,
     /// Restored when the run finishes, so a benchmark never leaves the game in
     /// a configuration the operator did not choose.
-    restore_vsync: bool,
+    restore: PerfToggles,
     /// Where the camera stood when measuring began. Absolute frame times only
     /// mean something relative to a viewpoint — two runs from different spots
     /// see different amounts of forest and are not comparable, which is not
@@ -252,10 +252,11 @@ pub(super) fn start_requested_runs(
         VantageMode::Here => (camera.translation(), camera.forward().as_vec3()),
         VantageMode::Canonical => (VANTAGE_POSITION, VANTAGE_FACING),
     };
+    let restore = *toggles;
     benchmark.finished = None;
     benchmark.run = Some(RunState {
         warmup: Some(0),
-        restore_vsync: toggles.vsync,
+        restore,
         vantage: Some(pose),
         ..default()
     });
@@ -359,8 +360,7 @@ pub(super) fn advance_benchmark(
                 error!("[bench] active run disappeared before completion");
                 return;
             };
-            toggles.vsync = run.restore_vsync;
-            apply_step(&mut toggles, &STEPS[0]);
+            *toggles = run.restore;
             let valid = run.results.iter().filter(|step| !step.invalid).count();
             report(&run.results, run.vantage);
             benchmark.finished = Some(FinishedRun {
@@ -497,6 +497,12 @@ mod tests {
         assert_ne!(first.name, last.name, "the table must tell them apart");
     }
 
+    #[test]
+    fn shipped_default_and_benchmark_baseline_keep_strong_outline_off() {
+        assert!(!PerfToggles::default().outline);
+        assert!(!STEPS[0].outline);
+    }
+
     fn result(name: &'static str, frame_mean: f64, invalid: bool) -> StepResult {
         StepResult {
             name,
@@ -515,7 +521,7 @@ mod tests {
     /// deltas, not invent them.
     #[test]
     fn no_delta_is_reported_without_a_valid_baseline() {
-        let measured = result("outline off", 18.45, false);
+        let measured = result("strong outline on", 18.45, false);
         assert_eq!(delta_against(None, &measured), None);
 
         let usable = result("baseline", 24.23, false);

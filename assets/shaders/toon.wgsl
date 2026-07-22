@@ -42,14 +42,18 @@ fn fragment(
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
 
-    // Quantize the *luminance* of the lit color to band centers and rescale
-    // the color to match, so shadow edges and shading become hard steps
-    // while hue and saturation survive.
+    // Quantize illumination *relative to the albedo*. Quantizing absolute lit
+    // luminance made different materials collapse into the same global band,
+    // visually merging adjacent surfaces. The ratio keeps their base-color
+    // separation while still turning continuous light into hard steps.
     let lit = out.color.rgb;
-    let luma = dot(lit, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let bands = f32(toon.bands);
-    let stepped = (floor(luma * bands) + 0.5) / bands;
-    let factor = stepped / max(luma, 1e-5);
+    let luma_weights = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let albedo_luma = dot(pbr_input.material.base_color.rgb, luma_weights);
+    let lit_luma = dot(lit, luma_weights);
+    let illumination = lit_luma / max(albedo_luma, 1e-5);
+    let bands = max(f32(toon.bands), 1.0);
+    let stepped = (floor(max(illumination, 0.0) * bands) + 0.5) / bands;
+    let factor = stepped / max(illumination, 1e-5);
     var color = lit * factor;
 
     // Ink edge: darken grazing view angles so silhouettes separate from

@@ -204,63 +204,71 @@ compatible para reemplazar los fallbacks UAL2.
 Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
 Hit_Knockback); checkpoint PBR de paleta/luz/niebla y evaluación de AA.
 
-## Pipeline de assets y personaje — estado cerrado
+## Pipeline authored de assets — convención aceptada (2026-07-23)
 
-Recomendación investigada (2026-07-17, fuentes en git): Blender → glTF con
-custom properties leídas vía `GltfExtras` de primera parte (sin Blenvy, que
-está alpha/estancado); RON solo para datos no-espaciales; USD se ignora
-(pipelines AAA). El editor oficial de Bevy se construye sobre BSN (0.19
-solo código; archivos `.bsn` futuros) — la inversión Blender/glTF migra
-limpio. `world/layout.rs` es la costura donde se enchufa.
+Blender 5.2 LTS → GLB → import Bevy por convención, sin Blenvy. El importador
+escanea solo `assets/game/authored/`; los Ranger actuales siguen en
+`assets/game/characters/` como legacy vivo hasta tener reemplazo. Estructura:
 
-Assets Quaternius agregados por el usuario (2026-07-19): biblioteca
-intencional de **prototipado**, no arte final ni fuente automática de
-colisión. Nature trae glTF y Universal Animation trae GLB; Farm Animals y
-Medieval Weapons requieren conversión Blender/FBX→glTF. Los licenses
-incluidos de MegaKits/Nature/Universal Animation declaran CC0. Antes de
-versionar: recuperar license/procedencia de Farm Animals y Medieval Weapons
-(no quedó archivo en sus carpetas). Las dos carpetas Universal Animation son
-dos bibliotecas intencionales: **se preservan ambas** y el futuro import debe
-identificar su catálogo/version por separado, aunque compartan nombres.
+```text
+art/blender/<categoria>/              fuentes propias .blend
+art/vendor/<catalogo>/                fuentes/licencias de terceros
+assets/game/authored/<categoria>/     GLB propios, validación estricta
+assets/game/legacy/<catalogo>/        runtime vendor todavía necesario
+```
 
-También están `Universal Base Characters[Standard]` y `Modular Character
-Outfits - Fantasy[Standard]`. El README del outfit exige combinar Ranger solo
-con la cabeza del base (el cuerpo completo clippea). El script reproducible
-`tools/build_ranger_candidates.py` repara en memoria los URI `_png.png`
-erróneos del vendor, corta por pesos `Head`/`neck_01`, une un único rig y
-reduce texturas derivadas a 1024 px. Generó y se inspeccionaron visualmente
-`assets/game/characters/ranger_{female,male}.glb` (~16 MB cada uno). Ambos
-están registrados en `VisualCatalog`; femenino es el default provisional.
+No se mueve ni versiona masivamente el ~1 GB vendor sin trackear. Cada
+placeholder sale solo después de que su reemplazo compile, se juegue y se mida;
+la fuente/licencia se conserva fuera del runtime. Las dos carpetas Universal
+Animation son catálogos intencionalmente distintos aunque hoy sus GLB coincidan
+byte a byte: nunca se fusionan por nombre o contenido.
 
-`Prototype.glb` está obsoleto por decisión del usuario y ya no tiene clave,
-receta ni ruta en `src/`; no borrarlo sin pedido porque sigue siendo un asset
-del worktree. Sus rest poses difieren del Ranger en los 65 huesos (máximo
-medido 18 cm; además `head` vs `Head`), así que sus clips no se reutilizan.
-El script monta las mallas sobre `UAL2_Standard.glb`, cuyo rig coincide, y
-hornea sus 43 clips (combate, escudo, tala, slide, etc.) dentro de cada Ranger.
-El subset Standard no trae Walk/Sprint normales: locomoción usa provisionalmente
-`Idle_No_Loop` y `Walk_Carry_Loop` (acelerado en sprint). En este host Blender
-5.2 exporta pero queda colgado al cerrar por PipeWire; usar
-`timeout 120s blender -noaudio --background --factory-startup --python
-tools/build_ranger_candidates.py` hasta corregir el entorno.
+### Nombres y autoría
 
-Validación automática tras bosque/personajes: `cargo check`, `cargo build`,
-Clippy `--all-targets -D warnings` y 226 tests pasan usando el build-dir
-compartido. Smoke X11 del Ranger regenerado estable: Vulkan, 15 tipos de árbol
-y 43 clips cargan sin warning/error/panic. El modelo detallado quedó como tier
-opt-in (`tree-detail`); el default es el proxy graybox (ver cierre de rendimiento).
+- Archivo/clave: `<categoria>_<nombre>[_<variante>].glb`, `lower_snake_case`;
+  categorías: `char`, `creature`, `prop`, `structure`, `tree`, `weapon`.
+- Una raíz `ROOT_<clave>`; metros, escala/rotación aplicadas, pivote en
+  suelo/pies. Frente en Blender `-Y`, que exporta a frente Bevy `-Z`.
+- Render: `SM_<Parte>_LOD0/1/2` o `SK_<Parte>_LOD0/1/2`; `LOD0` obligatorio,
+  niveles contiguos. Un estático no exige animaciones; un skinned sí.
+- Material: `M_<ClavePaleta>`. La clave resuelve a **un** handle mate compartido;
+  color/roughness/metal no se toman del primer GLB que cargue.
+- Sockets: empties `SKT_<Slot>`. Animaciones: `AN_<Accion>[_<Variante>]`.
+- Colisión authored no renderizable: `UCX_` hull, `UBX_` box, `UCP_` capsule,
+  `USP_` sphere y extensión `UCY_` cylinder (troncos baratos). Nunca trimesh del
+  visual. Custom properties `bof_*` (`climbable`, `material_kind`, `profile`,
+  `license`, etc.) se leen mediante `GltfExtras`.
 
-`visuals/catalog.rs` introduce el binding entidad→asset sin invertir capas:
-la raíz visual combina `VisualOf(owner)` con `AppearanceBinding { key, slot }`;
-`VisualCatalog` resuelve scene + adapter de escala/orientación/pivot. La
-simulación conserva identidades semánticas (especie de árbol, tipo de arma,
-tipo de escudo), nunca `Handle` ni rutas. El catálogo ya posee recetas para el
-Ranger femenino/masculino y 15 árboles; el player consume la receta activa y
-dejó de derivar su
-escala desde `BodyDimensions`. Al integrar equipo, presentación observará el
-arma/escudo semántico equipado y creará raíces `MainHand`/`OffHand`; al
-integrar árboles, `TreeKind`/estado seleccionarán una raíz `World`. Cambiar
-receta, variante o biblioteca no cambia collider, hurtbox ni hitbox.
+`AppearanceKey` y `SpatialProfileKey` son identidades tipadas separadas, nunca
+rutas. El manifiesto generado al compilar es la única autoridad de
+colliders/sockets para simulación; runtime usa nombres/extras para presentación
+y para comprobar consistencia. Cambiar solo `AppearanceKey` conserva el perfil
+espacial y resultados de `FixedUpdate`.
+
+El loader conserva el proxy/visual anterior mientras el GLB carga: valida y
+hace swap atómico; error de carga o convención deja el fallback visible y
+loguea, nunca panica. Los requisitos se validan por rol, no globalmente.
+
+Export reproducible:
+
+```text
+timeout 120s blender -noaudio --background --factory-startup \
+  --python tools/export_blender_asset.py -- \
+  --source art/blender/<categoria>/<clave>.blend \
+  --output assets/game/authored/<categoria>/<clave>.glb
+```
+
+`tools/build_ranger_candidates.py` conserva su composición vendor (cabeza +
+outfit + rig UAL2, texturas 1024, 43 clips) pero compartirá el núcleo de export.
+Ranger femenino sigue default provisional; sus clips locomoción siguen siendo
+`Idle_No_Loop`/`Walk_Carry_Loop`. `Prototype.glb` sigue obsoleto y sin receta.
+
+Primera vertical aprobada: `tree_pine_a`, arte propio low-poly con tres LOD,
+paleta compartida, `UCY_Trunk`, tags y socket. Reemplaza solo `TreeKind::Pine1`;
+su perfil iguala el cilindro actual para no cambiar traversal. Quaternius
+`Pine_1` pierde su dependencia runtime únicamente tras checkpoint jugado +
+material breakdown/flythrough/watchdog. Dependencias directas `gltf` y
+`serde_json` aprobadas para el importador (§17).
 
 ### Decisión — colisiones e hitboxes para assets finales (2026-07-19)
 

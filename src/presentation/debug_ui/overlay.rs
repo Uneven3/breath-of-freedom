@@ -18,7 +18,7 @@
 
 use bevy::prelude::*;
 
-use crate::perf::{Benchmark, PerfToggles};
+use crate::perf::{Benchmark, Flythrough, PerfToggles};
 
 /// How long the completion notice stays up after a run ends.
 const NOTICE_SECS: f32 = 12.0;
@@ -143,11 +143,13 @@ type OverlayQuery = (
 
 pub(super) fn update_overlay(
     benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
     time: Res<Time<Real>>,
     overlay: Single<OverlayQuery, With<BenchmarkOverlay>>,
 ) {
     let (mut text, mut color, mut visibility) = overlay.into_inner();
 
+    // Running states first (they own the camera), then the lingering notices.
     if let Some(status) = benchmark.status() {
         let spoiled = benchmark.current_step_spoiled();
         text.0 = if spoiled {
@@ -156,6 +158,14 @@ pub(super) fn update_overlay(
             format!("BENCHMARK  {status}\nno te muevas")
         };
         *color = TextColor(if spoiled { SPOILED } else { RUNNING });
+        *visibility = Visibility::Inherited;
+        return;
+    }
+
+    // The flythrough moves the camera on purpose, so there is no "don't move".
+    if let Some(status) = flythrough.status() {
+        text.0 = format!("FLYTHROUGH  {status}");
+        *color = TextColor(RUNNING);
         *visibility = Visibility::Inherited;
         return;
     }
@@ -170,6 +180,23 @@ pub(super) fn update_overlay(
             text.0 = format!(
                 "BENCHMARK TERMINADO\n{}/{} pasos válidos — tabla en el log",
                 finished.valid, finished.total
+            );
+            *color = TextColor(DONE);
+        }
+        *visibility = Visibility::Inherited;
+        return;
+    }
+
+    if let Some(finished) = &flythrough.finished
+        && time.elapsed_secs() - finished.at < NOTICE_SECS
+    {
+        if let Some(reason) = finished.aborted {
+            text.0 = format!("FLYTHROUGH ABORTADO\n{reason} — configuración restaurada");
+            *color = TextColor(SPOILED);
+        } else {
+            text.0 = format!(
+                "FLYTHROUGH TERMINADO\n{} tramos medidos — tabla en el log",
+                finished.legs
             );
             *color = TextColor(DONE);
         }

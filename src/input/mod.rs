@@ -14,7 +14,8 @@ use frame::{ActiveActions, ControlOrientation, InputControlledBy, LOCAL_INPUT_SO
 
 pub use frame::InputConsumeCursor;
 
-const MOUSE_SENSITIVITY: f32 = 0.003;
+/// Shared with the debug freecam so its look feel matches the player's.
+pub(crate) const MOUSE_SENSITIVITY: f32 = 0.003;
 const PITCH_MIN: f32 = -1.2;
 const PITCH_MAX: f32 = 1.2;
 
@@ -71,6 +72,12 @@ pub enum ModalInputFocusRequest {
     Release(Entity),
 }
 
+/// Presentation asks Input to grab/release the pointer; Input stays the sole
+/// writer of `CursorOptions` (§7). The debug freecam uses this for hold-to-look
+/// instead of touching the cursor itself.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct SetCursorGrab(pub bool);
+
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputSet {
     UpdateOrientation,
@@ -84,6 +91,7 @@ impl Plugin for InputPlugin {
         app.insert_resource(PointerCaptured(true));
         app.init_resource::<ModalInputFocus>();
         app.add_message::<ModalInputFocusRequest>();
+        app.add_message::<SetCursorGrab>();
         app.add_systems(Startup, grab_cursor);
         // Everything the fixed-step simulation reads (actions AND orientation)
         // must resolve in PreUpdate: Bevy runs FixedUpdate *before* Update in
@@ -96,6 +104,9 @@ impl Plugin for InputPlugin {
                 resolve_local_actions,
                 cursor_control,
                 update_local_orientation,
+                // Last, so an explicit presentation grab request (freecam
+                // hold-to-look) overrides the click/escape cursor policy.
+                apply_cursor_grab_requests,
             )
                 .chain()
                 .in_set(InputSet::UpdateOrientation)
@@ -201,6 +212,18 @@ fn cursor_control(
         }
     } else if !captured.0 && mouse.just_pressed(MouseButton::Left) {
         set_cursor(&mut cursor, &mut captured, true);
+    }
+}
+
+/// Applies presentation's cursor-grab requests, keeping Input the single writer
+/// of `CursorOptions`. Only the last request in a frame matters.
+fn apply_cursor_grab_requests(
+    mut requests: MessageReader<SetCursorGrab>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    mut captured: ResMut<PointerCaptured>,
+) {
+    if let Some(SetCursorGrab(grab)) = requests.read().last().copied() {
+        set_cursor(&mut cursor, &mut captured, grab);
     }
 }
 

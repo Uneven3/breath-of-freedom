@@ -101,53 +101,68 @@ en pantalla.
   suba; streaming por chunks para el mundo grande: la costura ya existe en
   `world/layout.rs`.
 
-## Suite de rendimiento — TODO (2026-07-22)
+## Suite de rendimiento (2026-07-23)
 
 Antes de agrandar el juego: instrumentación que diga, siempre, si se aplican las
 técnicas correctas. Principio: **el medidor dice *cuándo* una técnica vale la
 pena; no se aplican todas siempre** (eso es cargo-culting y frena al dev, no al
 juego). Piso objetivo: **móvil gama media ~2021**; arte propio en **Blender**
-(low-poly, ver NORTE). Ya existe y no se rehace: FPS/frame-time, GPU por los
-passes instrumentados vía `gpu_pass_costs` (sombras quedan fuera), watchdog de
-tris por malla, frustum culling (default de Bevy), cull por distancia
-(`VisibilityRange`) y 12 perillas A/B.
+(low-poly, ver NORTE).
 
-- **Fase 1 — inventario de escena ✅ (2026-07-22):** sección `scene` del debug
-  (`debug/collect.rs::collect_scene`): mallas visibles, `tris` en cámara, `draws`
-  (pares malla+material distintos ≈ draw calls; verifica que el instancing/batching
-  funcione), `mats` distintos y `lod_cull` (range-culled/total). Todo volátil;
-  throttle a 4 Hz para no contaminar la medición. Off por default en el HUD (F2).
-  Se loguea en la cadencia periódica junto a `perf` (`debug/console.rs`), así que
-  aparece en los logs de la secuencia de benchmark, una vez por paso.
-- **Fase 2 — vistas de diagnóstico visual ✅ (2026-07-22):** `wireframe`
-  nativo y `overdraw` aditivo en F1, apagados por default y mutuamente
-  excluyentes. Overdraw acumula una dosis roja de 6% por superficie y muestra
-  leyenda persistente: 1-2 capas bien, 3-5 medio, 6-9 malo, 10+ crítico solo si
-  ocupa área grande. Tres materiales compartidos preservan el culling real
-  (front/back/double-sided); el intercambio en dos frames evita que el render
-  reutilice el pipeline PBR anterior. Restaura el handle exacto sin acoplar a
-  sus dueños y cubre spawn tardío/reemplazo/cleanup. La secuencia apaga ambas
-  vistas y restaura su snapshot en éxito/cancelación/cámara ausente/watchdog.
-  Checkpoint: gradiente confirmado visualmente, dos ciclos overdraw↔wireframe,
-  60 FPS, materiales restaurados y cierre sin error de validación GPU.
-- **Fase 3 — presupuestos móviles automáticos ✅ (2026-07-22):** guardrails
-  iniciales para gama media 2021: 100k tris visibles,
-  100 draws y 64 materiales; el peor eje clasifica `scene` como bien (≤70%),
-  medio (≤100%), malo (>100%) o crítico (>150%). Al cruzar el límite avisa una
-  vez en log y anuncia recuperación, sin spam. `BOF_PROFILE=mobile` inicializa
-  un preset atómico en `PerfToggles`: 2 cascadas, shadow map 512, MSAA 4x,
-  cull 70 m, caster range 30 m y shadow distance 40 m. Es de arranque porque
-  cambiar cascadas en vivo panica la visibilidad interna de Bevy; `BOF_CASCADES`
-  conserva precedencia para A/B aislados. Checkpoint móvil: 2 cascadas/512/4x
-  activos, escena `medio` (37.3k tris, 62 draws, 53 mats), 60 FPS; benchmark de
-  7 pasos terminó sin error y restauró todo el preset. Toon/outline se eliminaron
-  de todos los perfiles al confirmar que no pertenecen a la dirección visual.
-- **Cámara flythrough (estilo Assassin's Creed / Horizon Zero Dawn):** recorre
-  lugares del mundo para medir rendimiento repetible por zonas; se integra con la
-  secuencia de benchmark (`perf/sequence.rs`).
+Instrumentación cerrada (2026-07-22): FPS/frame-time y GPU por passes vía
+`gpu_pass_costs` (sombras fuera), watchdog de tris por malla, frustum culling
+(default de Bevy) y cull por distancia (`VisibilityRange`), 12 perillas A/B, la
+sección `scene` del debug (tris/draws/mats/lod_cull, `debug/collect.rs`), las
+vistas `wireframe`/`overdraw` en F1, y presupuestos móviles automáticos con
+`BOF_PROFILE=mobile` (2 cascadas / shadow 512 / MSAA 4x / cull 70 m). Último
+perfil móvil medido: **37.3k tris, 62 draws, 53 mats → "medio", por materiales.**
+
+### Modos de cámara (2026-07-23)
+
+Un solo `Camera3d`; los modos son comportamientos gateados por `CameraMode`
+(componente `CameraControl` **en la entidad cámara**, `camera/data.rs`), no
+entidades distintas — re-spawnear rompería los `Single<With<Camera3d>>` (discos
+sol/luna, park del benchmark, juice). Hechos y probados (`camera/freecam.rs`, 3 tests):
+
+- **Orbit** (gameplay, default): la follow-cam de 3ª persona de siempre; sus
+  sistemas corren sólo en este modo.
+- **Freecam** (debug, **F3**): vuela desacoplada del jugador (WASD + Space/Ctrl,
+  Shift boost, look con hold-RMB que agarra el cursor sólo mientras se sostiene).
+  Al entrar adquiere foco modal **multi-dueño** → congela al jugador y suelta el
+  cursor reusando la máquina de `input`, con el hub F1 operable encima; al salir
+  libera el foco y restaura el grab. **F4** loguea la pose actual como una línea
+  `Waypoint {..}` pegable — la mitad de autoría del flythrough.
+
+### Flythrough de perf por tramos (2026-07-23)
+
+Herramienta reproducible para medir *por zona* y trabajar con confianza: correr la
+misma ruta hoy y en un mes y comparar peras con peras (`perf/flythrough.rs`, 4 tests).
+
+- **Ruta como constantes** (`ROUTE`): se autorea volando la freecam y capturando
+  poses con **F4** (captura→constantes); vive en código, versionada, idéntica entre
+  sesiones/máquinas. Hoy sembrada con una ruta placeholder; falta autorear la real.
+- **Corre desde el hub** (F1 → "Correr flythrough", `FlythroughRequest`): lap de
+  warmup que prima pipelines de toda la ruta, luego lap medido que interpola la
+  cámara por cada tramo (`MEASURE_SECS_PER_LEG`) y **acumula por tramo** frame/gpu/
+  tris/draws/mats. Reusa el seam de pose (`park_scripted_camera`), `SceneInventory`
+  (fresco a 4 Hz) y `gpu_pass_costs`. Restaura toggles al terminar/abortar; guard
+  cruzado con el benchmark (uno scriptea la cámara a la vez); overlay muestra el
+  tramo en curso.
+- **Reporte**: tabla por tramo (frame mean/max, gpu, tris, draws, mats) clasificada
+  con el presupuesto móvil (`scene_budget_grade`) y el peor tramo marcado.
+
+Siguiente / diferido:
+
+- **Autorear la ruta canónica real** (jugando, con F4) — la placeholder solo prueba
+  el flujo.
+- **Modos de gameplay pendientes** (mismo `CameraMode`, reusan spring/boom/
+  proyección): 1ª persona, fija tipo Dota (zoom in/out), tipo WoW.
+- **Compartir handles de materiales / atacar el "medio"**: recién si el flythrough
+  confirma que mats/draws se acercan al presupuesto por zona.
 - **Diferido, solo si el profiler lo pide:** impostores (hoy fog+VisibilityRange
-  ya cullean lo lejano); occlusion culling (el de Bevy es experimental vía
-  meshlets, no mobile-friendly todavía).
+  ya cullean lo lejano); compresión de texturas a BCn/KTX2; streaming por chunks;
+  **occlusion culling** — el de Bevy es experimental vía **meshlets**, no
+  mobile-friendly; confirmado **no implementado** (2026-07-23).
 
 ## Cierre del graybox (decisión del usuario, 2026-07-17)
 

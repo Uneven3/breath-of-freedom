@@ -16,8 +16,9 @@ use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
 mod crosshair;
 mod data;
+mod freecam;
 
-pub use data::{CameraRig, CameraShake, Crosshair, CrosshairRing};
+pub use data::{CameraControl, CameraRig, CameraShake, Crosshair, CrosshairRing};
 
 const SPRING_LENGTH: f32 = 6.5;
 /// Free-orbit pivot height, camera feel only. While aiming the pivot blends
@@ -58,15 +59,22 @@ impl Plugin for CameraPlugin {
         app.add_systems(Startup, (spawn_camera, crosshair::spawn));
         // Orientation resolves in PreUpdate (see InputPlugin), so Update-time
         // camera systems always read the current frame's orientation.
+        //
+        // The orbit-follow systems and the freecam are gated by mode so exactly
+        // one writer owns the camera transform each frame; the benchmark park
+        // stays ungated and last, so it overrides whichever mode is active.
         app.add_systems(
             Update,
             (
-                camera_landing_dip,
-                follow_player,
-                apply_camera_shake,
+                freecam::toggle_camera_mode,
+                freecam::log_waypoint.run_if(freecam::in_freecam_mode),
+                camera_landing_dip.run_if(freecam::in_orbit_mode),
+                follow_player.run_if(freecam::in_orbit_mode),
+                apply_camera_shake.run_if(freecam::in_orbit_mode),
+                freecam::fly_freecam.run_if(freecam::in_freecam_mode),
                 update_distance_fog,
-                // Last, so it overrides follow and shake for the duration.
-                park_camera_for_benchmark,
+                // Last, so it overrides follow/freecam and shake for the duration.
+                park_scripted_camera,
                 crosshair::toggle,
             )
                 .chain(),
@@ -82,6 +90,9 @@ fn spawn_camera(
     commands.spawn((
         Name::new("CameraRig"),
         CameraRig::default(),
+        // Camera mode and freecam look angles live on the camera entity, next to
+        // the rest of its view state (`CameraRig`), not in a global resource.
+        CameraControl::default(),
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
         soft_distance_fog(atmosphere_color(time_of_day.hours)),
@@ -132,14 +143,15 @@ fn camera_landing_dip(
 
 type FollowFilter = (With<Player>, Without<CameraRig>);
 
-/// While a benchmark measures, the camera holds an authored pose instead of
-/// following. Hand-placing it was only reproducible to ~0.5 m, and that was
-/// worth about 1 ms of frame time — larger than the effects being measured.
-fn park_camera_for_benchmark(
-    benchmark: Res<crate::perf::Benchmark>,
+/// While a scripted measurement runs, the camera holds the pose `perf` publishes
+/// instead of following (a benchmark vantage or the flythrough's interpolated
+/// pose). The camera reads the one reconciled seam and stays ignorant of which
+/// run produced it, so new producers plug in without touching this (§2).
+fn park_scripted_camera(
+    pose: Res<crate::perf::ScriptedCameraPose>,
     mut cam: Single<&mut Transform, With<CameraRig>>,
 ) {
-    let Some((position, facing)) = benchmark.parked_pose() else {
+    let Some((position, facing)) = pose.0 else {
         return;
     };
     cam.translation = position;

@@ -15,6 +15,7 @@
 
 pub(crate) mod budget;
 pub mod data;
+pub mod flythrough;
 pub mod sequence;
 
 use bevy::diagnostic::DiagnosticsStore;
@@ -22,6 +23,7 @@ use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 
 pub use data::{PerfKnob, PerfProfile, PerfToggles};
+pub use flythrough::{Flythrough, FlythroughRequest};
 pub use sequence::{Benchmark, BenchmarkRequest};
 
 pub struct PerfPlugin;
@@ -30,9 +32,12 @@ impl Plugin for PerfPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(PerfToggles::configured());
         app.init_resource::<Benchmark>();
+        app.init_resource::<Flythrough>();
+        app.init_resource::<ScriptedCameraPose>();
         app.init_resource::<budget::SceneInventory>();
         app.init_resource::<budget::SceneBudgetWarningState>();
         app.add_message::<BenchmarkRequest>();
+        app.add_message::<FlythroughRequest>();
         app.add_message::<PerfKnobToggle>();
         app.add_plugins(RenderDiagnosticsPlugin);
         app.add_systems(
@@ -41,6 +46,11 @@ impl Plugin for PerfPlugin {
                 apply_knob_requests,
                 sequence::start_requested_runs,
                 sequence::advance_benchmark,
+                flythrough::start_requested_flythrough,
+                flythrough::advance_flythrough,
+                // Reconciles both runs into one pose after they advance, so the
+                // camera reads a single seam and never enumerates producers.
+                reconcile_scripted_camera_pose,
                 apply_present_mode,
                 budget::warn_scene_budget,
             )
@@ -79,6 +89,25 @@ fn apply_present_mode(
     if window.present_mode != wanted {
         window.present_mode = wanted;
     }
+}
+
+/// The single pose any scripted run wants the camera to hold this frame, or
+/// `None` when nothing is scripting it. The camera reads only this — it does not
+/// know how many producers exist, so a third one (a cinematic, a replay) plugs
+/// in here without editing the camera (§2). Reconciled by a single writer (§7).
+#[derive(Resource, Default)]
+pub struct ScriptedCameraPose(pub Option<(Vec3, Vec3)>);
+
+/// Benchmark wins over the flythrough if both somehow ran; the cross-guards
+/// mean only one runs at a time in practice.
+fn reconcile_scripted_camera_pose(
+    benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
+    mut pose: ResMut<ScriptedCameraPose>,
+) {
+    pose.0 = benchmark
+        .parked_pose()
+        .or_else(|| flythrough.desired_pose());
 }
 
 /// Presentation asks; `perf` owns the knobs and applies them (§7).

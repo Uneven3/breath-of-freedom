@@ -39,3 +39,34 @@ pub struct Crosshair;
 
 #[derive(Component)]
 pub struct CrosshairRing;
+
+/// Which behaviour drives the single shared `Camera3d` this frame.
+///
+/// One camera entity, many behaviours: re-spawning cameras would break the
+/// `Single<_, With<Camera3d>>` queries that assume exactly one (day/night sun
+/// disc in `world/day_night.rs`, the benchmark park in `perf/sequence.rs`,
+/// screen-space juice in `presentation/juice.rs`). The `Camera3d` — with its
+/// `DistanceFog` and profile MSAA — persists; only how its `Transform` is
+/// driven changes per mode. Future gameplay modes (first-person, a fixed
+/// Dota-style boom, a WoW-style orbit) join this enum.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CameraMode {
+    /// The third-person follow camera (gameplay default).
+    #[default]
+    Orbit,
+    /// Detached free-fly camera (debug tool). Freezes the player and releases
+    /// the cursor so the F1 hub is operable while flying; the eventual scripted
+    /// perf flythrough rides on this.
+    Freecam,
+}
+
+/// Runtime camera mode plus the freecam's own look angles. A **component on the
+/// camera entity** — this is view state that belongs with the camera, alongside
+/// `CameraRig`, not a global singleton resource. Kept apart from the player's
+/// `ControlOrientation` so flying never steers the character.
+#[derive(Component, Default)]
+pub struct CameraControl {
+    pub mode: CameraMode,
+    pub(super) freecam_yaw: f32,
+    pub(super) freecam_pitch: f32,
+}

@@ -18,7 +18,9 @@ use crate::debug::channel::{
     DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle, DebugConfigView,
 };
 use crate::input::ModalInputFocusRequest;
-use crate::perf::{Benchmark, BenchmarkRequest, PerfKnob, PerfKnobToggle, PerfToggles};
+use crate::perf::{
+    Benchmark, BenchmarkRequest, FlythroughRequest, PerfKnob, PerfKnobToggle, PerfToggles,
+};
 
 mod hud_menu;
 mod overlay;
@@ -47,6 +49,9 @@ struct BenchmarkButton(crate::perf::sequence::VantageMode);
 
 #[derive(Component)]
 struct BenchmarkText;
+
+#[derive(Component)]
+struct FlythroughButton;
 
 #[derive(Component)]
 struct ReadoutText;
@@ -152,6 +157,7 @@ fn handle_clicks(
     root: Single<Entity, With<DebugUiRoot>>,
     close: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
     bench: Query<(&Interaction, &BenchmarkButton), Changed<Interaction>>,
+    flythrough: Query<&Interaction, (Changed<Interaction>, With<FlythroughButton>)>,
     knobs: Query<(&Interaction, &KnobButton), Changed<Interaction>>,
     channels: Query<(&Interaction, &ChannelButton), Changed<Interaction>>,
     actions: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
@@ -160,6 +166,7 @@ fn handle_clicks(
     mut channel_writer: MessageWriter<DebugChannelToggle>,
     mut action_writer: MessageWriter<DebugActionRequest>,
     mut bench_writer: MessageWriter<BenchmarkRequest>,
+    mut flythrough_writer: MessageWriter<FlythroughRequest>,
 ) {
     if !state.open {
         return;
@@ -187,6 +194,11 @@ fn handle_clicks(
             // The panel would be measured along with the scene; close it first.
             set_open(&mut state, false, *root, &mut focus);
         }
+    }
+    if flythrough.iter().any(pressed) {
+        flythrough_writer.write(FlythroughRequest);
+        // Same reason as the benchmark: the modal must not enter the measurement.
+        set_open(&mut state, false, *root, &mut focus);
     }
     if close.iter().any(pressed) {
         set_open(&mut state, false, *root, &mut focus);

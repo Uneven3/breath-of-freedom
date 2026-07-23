@@ -9,7 +9,7 @@ use super::style::{
 };
 use super::{
     BenchmarkButton, BenchmarkText, ChannelButton, ChannelText, CloseButton, DebugUiRoot,
-    KnobButton, KnobText, ReadoutText, ScrollPanel,
+    FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel,
 };
 use crate::debug::channel::{DebugAction, DebugChannel};
 use crate::perf::PerfKnob;
@@ -131,6 +131,31 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
                 ));
             }
         });
+    section_title(
+        panel,
+        "Flythrough",
+        "Recorre la ruta autoreada (perf::flythrough::ROUTE) y reporta frame/gpu/tris/draws/mats \
+         por tramo, con grado de presupuesto móvil. Autorá la ruta volando la freecam (F3) y \
+         capturando poses con F4.",
+    );
+    panel
+        .spawn((
+            FlythroughButton,
+            Button,
+            Node {
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(ACCENT_DARK),
+        ))
+        .with_child((
+            Text::new("Correr flythrough"),
+            body_font(),
+            TextColor(TEXT_BRIGHT),
+        ));
     panel.spawn((
         ReadoutText,
         Text::new("—"),

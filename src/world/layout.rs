@@ -14,7 +14,7 @@ use super::spawn::{
     spawn_stair_segment,
 };
 use super::{Ladder, NonClimbable};
-use crate::asset_pipeline::MaterialPalette;
+use crate::asset_pipeline::{MaterialPalette, SpatialCatalog};
 
 // Graybox palette.
 const FLOOR_MATERIAL: &str = "GrayboxFloor";
@@ -219,6 +219,7 @@ pub(super) fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
+    spatial: Res<SpatialCatalog>,
 ) {
     let m = &mut meshes;
 
@@ -303,7 +304,7 @@ pub(super) fn setup_world(
             },
         );
     }
-    super::forest::spawn_forest(&mut commands);
+    super::forest::spawn_forest(&mut commands, &spatial);
 
     // --- Rock: sphere r=2 at (-10,1,-5) ---
     commands.spawn((

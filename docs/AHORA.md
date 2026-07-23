@@ -213,17 +213,19 @@ importados y graybox resueltos a una paleta de handles compartidos; manifiesto
 build-time como única autoridad espacial; carga visual con fallback y swap
 atómico.
 
-Primera vertical: `tree_pine_a`, arte propio low-poly con LOD0/1/2,
-`M_Bark`/`M_FoliagePine`, `UCY_Trunk`, tags y socket. Reemplaza solo
-`TreeKind::Pine1` y conserva las dimensiones actuales para no cambiar traversal.
-Quaternius `Pine_1` pierde su dependencia runtime únicamente tras checkpoint
-jugado + material breakdown/flythrough/watchdog.
+Primera vertical implementada: `tree_pine_a`, arte propio low-poly con
+LOD0/1/2, `M_Bark`/`M_FoliagePine`, `UCY_Trunk`, tags y socket. Reemplaza sólo
+`TreeKind::Pine1`; el collider authored conserva el radio/alto validados del
+graybox y la carga mantiene el proxy hasta un swap completo. Falta el checkpoint
+jugado + material breakdown/flythrough/watchdog antes de retirar físicamente
+Quaternius `Pine_1`.
 
-Los Ranger actuales siguen legacy vivos. `build_ranger_candidates.py` conserva
-cabeza + outfit + rig UAL2, texturas 1024 y 43 clips, pero compartirá el núcleo
-de export. Las dos carpetas Universal Animation siguen siendo catálogos
-distintos aunque sus GLB actuales coincidan byte a byte. `Prototype.glb` sigue
-obsoleto y sin receta.
+Decisión del usuario: el Ranger no será personaje final ni candidato de
+migración por su costo poligonal. Sigue legacy sólo como fallback temporal del
+player hasta tener un personaje propio liviano; su builder conserva
+reproducibilidad y comparte únicamente el núcleo genérico de export. Las dos
+carpetas Universal Animation siguen siendo catálogos distintos aunque sus GLB
+actuales coincidan byte a byte. `Prototype.glb` sigue obsoleto y sin receta.
 
 ### Decisión — colisiones e hitboxes para assets finales (2026-07-19)
 
@@ -273,12 +275,11 @@ mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
-- **Ranger femenino sobredimensionado para graybox:** el watchdog
+- **Ranger femenino descartado como personaje final:** el watchdog
   (`visuals/budget.rs`) reporta pies 9172 tris, brazos 3636/3000, cuerpo 2962,
-  capucha 2136 — cada pieza sobre el presupuesto de 2000. No es cuello hoy (hay
-  uno solo) pero es la misma deuda que tenían los árboles: asset descargado que
-  finge ser barato. Necesita LOD o proxy cuando el jugador deje de ser único
-  (NPCs con el mismo rig) o cuando se busque techo en móvil.
+  capucha 2136 — cada pieza sobre el presupuesto de 2000. Se mantiene sólo para
+  no dejar al player sin visual durante la migración; reemplazar por personaje
+  propio low-poly antes de retirarlo.
 
 - **Facciones:** `Perceivable` es un bit; reemplazar por facción cuando
   haya hostilidad entre no-jugadores (animales, aliados).

@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use super::spawn::{TreeSpec, spawn_tree};
+use crate::asset_pipeline::{SpatialCatalog, SpatialProfileKey};
 
 const CLEARING_RADIUS: f32 = 42.0;
 const GRID_STEP: f32 = 11.5;
@@ -133,8 +134,20 @@ fn forest_layout() -> Vec<ForestTreeRow> {
     rows
 }
 
-pub(super) fn spawn_forest(commands: &mut Commands) {
+fn authored_tree_collider(kind: TreeKind, spatial: &SpatialCatalog) -> Option<(f32, f32)> {
+    let profile = match kind {
+        TreeKind::Pine1 => SpatialProfileKey("tree_pine_trunk"),
+        _ => return None,
+    };
+    spatial
+        .cylinder(profile, "UCY_Trunk")
+        .map(|collider| (collider.radius, collider.height))
+}
+
+pub(super) fn spawn_forest(commands: &mut Commands, spatial: &SpatialCatalog) {
     for (index, row) in forest_layout().into_iter().enumerate() {
+        let (trunk_radius, trunk_height) = authored_tree_collider(row.kind, spatial)
+            .unwrap_or((row.trunk_radius, row.trunk_height));
         spawn_tree(
             commands,
             format!("ForestTree{index:03}"),
@@ -142,8 +155,8 @@ pub(super) fn spawn_forest(commands: &mut Commands) {
                 kind: row.kind,
                 position: row.position,
                 yaw: row.yaw,
-                trunk_radius: row.trunk_radius,
-                trunk_height: row.trunk_height,
+                trunk_radius,
+                trunk_height,
             },
         );
     }
@@ -167,5 +180,14 @@ mod tests {
             assert!(tree.trunk_radius > 0.0);
             assert!(tree.trunk_height > 0.0);
         }
+    }
+
+    #[test]
+    fn pine_one_uses_the_authored_spatial_profile() {
+        let spatial = SpatialCatalog::default();
+        let collider = authored_tree_collider(TreeKind::Pine1, &spatial).unwrap();
+        assert!((collider.0 - 0.44).abs() < 0.001);
+        assert!((collider.1 - 4.4).abs() < 0.001);
+        assert!(authored_tree_collider(TreeKind::Pine2, &spatial).is_none());
     }
 }

@@ -76,32 +76,45 @@ impl Plugin for VisualsPlugin {
         app.add_systems(
             Update,
             (
-                player::link_player_visual,
-                player::interpolate_visual,
-                player::animate_bow_visual,
-                probe::spawn_probe_visual,
-                probe::despawn_orphaned_probe_visual,
-                probe::interpolate_probe_visual,
-                enemy::spawn_enemy_visual,
-                enemy::despawn_orphaned_enemy_visual,
-                enemy::interpolate_enemy_visual,
-                enemy::tint_enemy_visual,
-                horse::spawn_horse_visual,
-                horse::despawn_orphaned_horse_visual,
-                horse::interpolate_horse_visual,
+                (
+                    player::link_player_visual,
+                    player::interpolate_visual,
+                    player::animate_bow_visual,
+                ),
+                (
+                    probe::spawn_probe_visual,
+                    probe::despawn_orphaned_probe_visual,
+                    probe::interpolate_probe_visual,
+                ),
+                (
+                    enemy::spawn_enemy_visual,
+                    enemy::despawn_orphaned_enemy_visual,
+                    enemy::interpolate_enemy_visual,
+                    enemy::tint_enemy_visual,
+                ),
+                (
+                    horse::spawn_horse_visual,
+                    horse::despawn_orphaned_horse_visual,
+                    horse::interpolate_horse_visual,
+                ),
                 (
                     forest::sync_tree_visuals,
+                    forest::finalize_tree_visual_swaps,
                     forest::apply_forest_perf,
+                )
+                    .chain(),
+                (
                     foliage::apply_foliage_material_policy,
                     foliage::apply_foliage_lod,
                     foliage::apply_shadow_caster_budget,
                 ),
                 budget::warn_on_heavy_meshes,
-                vfx::spawn_swing_vfx,
-                vfx::fade_swing_vfx,
-                animation::compile_animation_graph,
-                animation::init_player_animation_graph,
-                animation::animate_player,
+                (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),
+                (
+                    animation::compile_animation_graph,
+                    animation::init_player_animation_graph,
+                    animation::animate_player,
+                ),
             ),
         );
     }

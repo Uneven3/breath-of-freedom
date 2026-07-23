@@ -21,6 +21,7 @@ impl AppearanceKey {
     pub const PINE_3: Self = Self("legacy_tree_pine_3");
     pub const PINE_4: Self = Self("legacy_tree_pine_4");
     pub const PINE_5: Self = Self("legacy_tree_pine_5");
+    pub const TREE_PINE_A: Self = Self("tree_pine_a");
     pub const TWISTED_TREE_1: Self = Self("legacy_tree_twisted_1");
     pub const TWISTED_TREE_2: Self = Self("legacy_tree_twisted_2");
     pub const TWISTED_TREE_3: Self = Self("legacy_tree_twisted_3");
@@ -256,7 +257,8 @@ impl VisualCatalog {
             | AppearanceKey::PINE_2
             | AppearanceKey::PINE_3
             | AppearanceKey::PINE_4
-            | AppearanceKey::PINE_5 => TreeSilhouette::Conical,
+            | AppearanceKey::PINE_5
+            | AppearanceKey::TREE_PINE_A => TreeSilhouette::Conical,
             AppearanceKey::TWISTED_TREE_1
             | AppearanceKey::TWISTED_TREE_2
             | AppearanceKey::TWISTED_TREE_3
@@ -291,5 +293,9 @@ mod tests {
                 .is_some()
         );
         assert!(catalog.recipe(AppearanceKey::PLAYER_RANGER_MALE).is_some());
+        assert_eq!(
+            catalog.recipe(AppearanceKey::TREE_PINE_A).unwrap().scene,
+            "game/authored/trees/tree_pine_a.glb#Scene0"
+        );
     }
 }

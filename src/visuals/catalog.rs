@@ -6,26 +6,26 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AppearanceKey(pub u32);
+pub struct AppearanceKey(pub &'static str);
 
 impl AppearanceKey {
-    pub const PLAYER_RANGER_FEMALE: Self = Self(1);
-    pub const PLAYER_RANGER_MALE: Self = Self(2);
-    pub const COMMON_TREE_1: Self = Self(100);
-    pub const COMMON_TREE_2: Self = Self(101);
-    pub const COMMON_TREE_3: Self = Self(102);
-    pub const COMMON_TREE_4: Self = Self(103);
-    pub const COMMON_TREE_5: Self = Self(104);
-    pub const PINE_1: Self = Self(110);
-    pub const PINE_2: Self = Self(111);
-    pub const PINE_3: Self = Self(112);
-    pub const PINE_4: Self = Self(113);
-    pub const PINE_5: Self = Self(114);
-    pub const TWISTED_TREE_1: Self = Self(120);
-    pub const TWISTED_TREE_2: Self = Self(121);
-    pub const TWISTED_TREE_3: Self = Self(122);
-    pub const TWISTED_TREE_4: Self = Self(123);
-    pub const TWISTED_TREE_5: Self = Self(124);
+    pub const PLAYER_RANGER_FEMALE: Self = Self("legacy_char_ranger_female");
+    pub const PLAYER_RANGER_MALE: Self = Self("legacy_char_ranger_male");
+    pub const COMMON_TREE_1: Self = Self("legacy_tree_common_1");
+    pub const COMMON_TREE_2: Self = Self("legacy_tree_common_2");
+    pub const COMMON_TREE_3: Self = Self("legacy_tree_common_3");
+    pub const COMMON_TREE_4: Self = Self("legacy_tree_common_4");
+    pub const COMMON_TREE_5: Self = Self("legacy_tree_common_5");
+    pub const PINE_1: Self = Self("legacy_tree_pine_1");
+    pub const PINE_2: Self = Self("legacy_tree_pine_2");
+    pub const PINE_3: Self = Self("legacy_tree_pine_3");
+    pub const PINE_4: Self = Self("legacy_tree_pine_4");
+    pub const PINE_5: Self = Self("legacy_tree_pine_5");
+    pub const TWISTED_TREE_1: Self = Self("legacy_tree_twisted_1");
+    pub const TWISTED_TREE_2: Self = Self("legacy_tree_twisted_2");
+    pub const TWISTED_TREE_3: Self = Self("legacy_tree_twisted_3");
+    pub const TWISTED_TREE_4: Self = Self("legacy_tree_twisted_4");
+    pub const TWISTED_TREE_5: Self = Self("legacy_tree_twisted_5");
 }
 
 pub const PLAYER_APPEARANCE: AppearanceKey = AppearanceKey::PLAYER_RANGER_FEMALE;
@@ -50,9 +50,9 @@ pub struct AppearanceBinding {
 
 #[derive(Debug, Clone)]
 pub struct VisualRecipe {
-    pub label: &'static str,
-    pub scene: &'static str,
-    pub animation_source: Option<&'static str>,
+    pub label: String,
+    pub scene: String,
+    pub animation_source: Option<String>,
     /// Normalizes source-library scale, orientation, and pivot.
     pub root_transform: Transform,
 }
@@ -106,9 +106,9 @@ impl Default for VisualCatalog {
             recipes.insert(
                 key,
                 VisualRecipe {
-                    label,
-                    scene,
-                    animation_source: Some(animation_source),
+                    label: label.to_owned(),
+                    scene: scene.to_owned(),
+                    animation_source: Some(animation_source.to_owned()),
                     root_transform: Transform::from_xyz(0.0, -1.0, 0.0)
                         .with_rotation(Quat::from_rotation_y(std::f32::consts::PI))
                         .with_scale(Vec3::splat(2.0 / 1.79)),
@@ -118,8 +118,8 @@ impl Default for VisualCatalog {
         recipes.insert(
             AppearanceKey::COMMON_TREE_1,
             VisualRecipe {
-                label: "Quaternius common tree 1",
-                scene: "Stylized Nature MegaKit[Standard]/glTF/CommonTree_1.gltf#Scene0",
+                label: "Quaternius common tree 1".to_owned(),
+                scene: "Stylized Nature MegaKit[Standard]/glTF/CommonTree_1.gltf#Scene0".to_owned(),
                 animation_source: None,
                 root_transform: Transform::from_xyz(0.0, 0.24, 0.0),
             },
@@ -214,10 +214,21 @@ impl Default for VisualCatalog {
             recipes.insert(
                 key,
                 VisualRecipe {
-                    label,
-                    scene,
+                    label: label.to_owned(),
+                    scene: scene.to_owned(),
                     animation_source: None,
                     root_transform: Transform::from_xyz(0.0, ground_offset, 0.0),
+                },
+            );
+        }
+        for asset in crate::asset_pipeline::authored_assets() {
+            recipes.insert(
+                AppearanceKey(asset.key),
+                VisualRecipe {
+                    label: asset.key.to_owned(),
+                    scene: format!("{}#Scene0", asset.path),
+                    animation_source: None,
+                    root_transform: Transform::IDENTITY,
                 },
             );
         }
@@ -269,7 +280,11 @@ mod tests {
             catalog.recipe(AppearanceKey::COMMON_TREE_1).unwrap().label,
             "Quaternius common tree 1"
         );
-        assert!(catalog.recipe(AppearanceKey(u32::MAX)).is_none());
+        assert!(
+            catalog
+                .recipe(AppearanceKey("unknown_appearance"))
+                .is_none()
+        );
         assert!(
             catalog
                 .recipe(AppearanceKey::PLAYER_RANGER_FEMALE)

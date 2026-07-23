@@ -49,10 +49,10 @@ pub(super) fn spawn_visual(
         ))
         .with_children(|parent| {
             // The selected body and its compatible UAL2 clips share one GLB.
-            let player_scene = asset_server.load(recipe.scene);
+            let player_scene = asset_server.load(recipe.scene.clone());
 
             parent.spawn((
-                Name::new(recipe.label),
+                Name::new(recipe.label.clone()),
                 WorldAssetRoot(player_scene),
                 recipe.root_transform,
             ));

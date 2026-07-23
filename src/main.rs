@@ -5,6 +5,7 @@
 //! kinematic `move_and_slide` and spatial queries (see
 //! `docs/ARCHITECTURE.md`).
 
+mod asset_pipeline;
 mod camera;
 mod combat;
 mod debug;
@@ -35,6 +36,7 @@ fn main() {
         // Collider-wireframe rendering; starts disabled, toggled with F1
         // (see `debug.rs`).
         .add_plugins(PhysicsDebugPlugin)
+        .add_plugins(asset_pipeline::AssetPipelinePlugin)
         .add_plugins((
             world::WorldPlugin,
             input::InputPlugin,

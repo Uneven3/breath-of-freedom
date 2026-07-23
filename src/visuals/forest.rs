@@ -230,10 +230,10 @@ fn spawn_detailed(
         warn!("[visuals] no recipe for tree appearance {appearance:?}");
         return;
     };
-    let scene = asset_server.load(recipe.scene);
+    let scene = asset_server.load(recipe.scene.clone());
     commands.entity(owner).with_children(|tree| {
         tree.spawn((
-            Name::new(recipe.label),
+            Name::new(recipe.label.clone()),
             TreeVisual,
             VisualOf(owner),
             AppearanceBinding {

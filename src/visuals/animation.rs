@@ -47,12 +47,12 @@ pub(super) fn start_loading_animations(
 ) {
     let Some(source) = catalog
         .recipe(PLAYER_APPEARANCE)
-        .and_then(|recipe| recipe.animation_source)
+        .and_then(|recipe| recipe.animation_source.as_ref())
     else {
         error!("[visuals] active player appearance has no animation source");
         return;
     };
-    commands.insert_resource(AnimationLoader(asset_server.load(source)));
+    commands.insert_resource(AnimationLoader(asset_server.load(source.clone())));
 }
 
 pub(super) fn compile_animation_graph(

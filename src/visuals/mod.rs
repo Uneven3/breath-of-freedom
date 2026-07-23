@@ -22,7 +22,6 @@ pub mod enemy;
 pub mod foliage;
 pub mod forest;
 pub mod horse;
-pub mod materials;
 pub mod player;
 pub mod probe;
 pub mod vfx;

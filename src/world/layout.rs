@@ -14,18 +14,18 @@ use super::spawn::{
     spawn_stair_segment,
 };
 use super::{Ladder, NonClimbable};
-use crate::visuals::materials::matte_color;
+use crate::asset_pipeline::MaterialPalette;
 
 // Graybox palette.
-const FLOOR_COLOR: Color = Color::srgb(0.4, 0.45, 0.4);
-const PROP_COLOR: Color = Color::srgb(0.55, 0.5, 0.45);
-const VAULT_COLOR: Color = Color::srgb(0.7, 0.5, 0.3);
+const FLOOR_MATERIAL: &str = "GrayboxFloor";
+const PROP_MATERIAL: &str = "GrayboxProp";
+const VAULT_MATERIAL: &str = "GrayboxVault";
 
 struct BoxRow {
     name: &'static str,
     pos: Vec3,
     dims: Vec3,
-    color: Color,
+    material_key: &'static str,
     /// `NonClimbable` marker: ladder walls and containment perimeter.
     climbable: bool,
 }
@@ -43,84 +43,84 @@ const BOXES: &[BoxRow] = &[
         name: "Floor",
         pos: Vec3::new(0.0, -0.5, 0.0),
         dims: Vec3::new(WORLD_SIZE, 1.0, WORLD_SIZE),
-        color: FLOOR_COLOR,
+        material_key: FLOOR_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "NorthPerimeterWall",
         pos: Vec3::new(0.0, PERIMETER_HEIGHT * 0.5, -PERIMETER_HALF_EXTENT),
         dims: Vec3::new(WORLD_SIZE, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: false,
     },
     BoxRow {
         name: "SouthPerimeterWall",
         pos: Vec3::new(0.0, PERIMETER_HEIGHT * 0.5, PERIMETER_HALF_EXTENT),
         dims: Vec3::new(WORLD_SIZE, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: false,
     },
     BoxRow {
         name: "WestPerimeterWall",
         pos: Vec3::new(-PERIMETER_HALF_EXTENT, PERIMETER_HEIGHT * 0.5, 0.0),
         dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, WORLD_SIZE),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: false,
     },
     BoxRow {
         name: "EastPerimeterWall",
         pos: Vec3::new(PERIMETER_HALF_EXTENT, PERIMETER_HEIGHT * 0.5, 0.0),
         dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, WORLD_SIZE),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: false,
     },
     BoxRow {
         name: "Wall",
         pos: Vec3::new(0.0, 2.0, -10.0),
         dims: Vec3::new(10.0, 4.0, 1.0),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "AutoVaultSingleBlock",
         pos: Vec3::new(0.0, 0.5, 4.0),
         dims: Vec3::new(2.0, 1.0, 0.5),
-        color: VAULT_COLOR,
+        material_key: VAULT_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "AutoVaultWideRail",
         pos: Vec3::new(-3.0, 0.45, 7.0),
         dims: Vec3::new(3.5, 0.9, 0.5),
-        color: VAULT_COLOR,
+        material_key: VAULT_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "AutoVaultNarrowPost",
         pos: Vec3::new(3.0, 0.55, 7.0),
         dims: Vec3::new(0.8, 1.1, 0.5),
-        color: VAULT_COLOR,
+        material_key: VAULT_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "AutoVaultTallBlocker",
         pos: Vec3::new(0.0, 1.1, 10.5),
         dims: Vec3::new(2.5, 2.2, 0.5),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "Landing",
         pos: Vec3::new(-11.0, 1.0, 0.0),
         dims: Vec3::new(4.0, 2.0, 3.0),
-        color: FLOOR_COLOR,
+        material_key: FLOOR_MATERIAL,
         climbable: true,
     },
     BoxRow {
         name: "LadderWall",
         pos: Vec3::new(10.0, 2.0, -10.0),
         dims: Vec3::new(4.0, 4.0, 1.0),
-        color: PROP_COLOR,
+        material_key: PROP_MATERIAL,
         climbable: false,
     },
 ];
@@ -218,10 +218,9 @@ const STAIRS: &[StairRow] = &[
 pub(super) fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<MaterialPalette>,
 ) {
     let m = &mut meshes;
-    let mat = &mut materials;
 
     // --- Lighting: the day/night cycle drives this light every frame ---
     commands.spawn((
@@ -245,11 +244,7 @@ pub(super) fn setup_world(
         super::day_night::SunDisc,
         bevy::light::NotShadowCaster,
         Mesh3d(m.add(Sphere::new(14.0))),
-        MeshMaterial3d(mat.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.93, 0.75),
-            unlit: true,
-            ..default()
-        })),
+        MeshMaterial3d(palette.handle("Sun")),
         Transform::from_xyz(0.0, 400.0, 0.0),
     ));
     commands.spawn((
@@ -257,11 +252,7 @@ pub(super) fn setup_world(
         super::day_night::MoonDisc,
         bevy::light::NotShadowCaster,
         Mesh3d(m.add(Sphere::new(9.0))),
-        MeshMaterial3d(mat.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.9, 1.0),
-            unlit: true,
-            ..default()
-        })),
+        MeshMaterial3d(palette.handle("Moon")),
         Transform::from_xyz(0.0, -400.0, 0.0),
         Visibility::Hidden,
     ));
@@ -271,24 +262,24 @@ pub(super) fn setup_world(
         let entity = spawn_box(
             &mut commands,
             m,
-            mat,
+            &palette,
             row.name,
             row.pos,
             row.dims,
-            row.color,
+            row.material_key,
         );
         if !row.climbable {
             commands.entity(entity).insert(NonClimbable);
         }
     }
     for (name, center) in PRACTICE_TARGETS {
-        spawn_practice_target(&mut commands, m, mat, name, *center);
+        spawn_practice_target(&mut commands, m, &palette, name, *center);
     }
     for row in PICKUPS {
         crate::inventory::spawn_world_item(
             &mut commands,
             m,
-            mat,
+            &palette,
             row.name,
             row.pos,
             row.stack,
@@ -299,7 +290,7 @@ pub(super) fn setup_world(
         spawn_stair_segment(
             &mut commands,
             m,
-            mat,
+            &palette,
             StairSegmentSpec {
                 name: row.name,
                 base: row.base,
@@ -308,7 +299,7 @@ pub(super) fn setup_world(
                 step_depth: row.step_depth,
                 step_rise: row.step_rise,
                 width: row.width,
-                color: FLOOR_COLOR,
+                material_key: FLOOR_MATERIAL,
             },
         );
     }
@@ -318,7 +309,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Rock"),
         Mesh3d(m.add(Sphere::new(2.0))),
-        MeshMaterial3d(mat.add(matte_color(PROP_COLOR))),
+        MeshMaterial3d(palette.handle(PROP_MATERIAL)),
         Transform::from_xyz(-10.0, 1.0, -5.0),
         RigidBody::Static,
         Collider::sphere(2.0),
@@ -328,7 +319,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Tree"),
         Mesh3d(m.add(Cylinder::new(1.0, 10.0))),
-        MeshMaterial3d(mat.add(matte_color(Color::srgb(0.4, 0.3, 0.2)))),
+        MeshMaterial3d(palette.handle("TreeTrunk")),
         Transform::from_xyz(10.0, 5.0, -5.0),
         RigidBody::Static,
         Collider::cylinder(1.0, 10.0),
@@ -338,7 +329,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Slope"),
         Mesh3d(m.add(Cuboid::new(8.0, 0.3, 4.0))),
-        MeshMaterial3d(mat.add(matte_color(FLOOR_COLOR))),
+        MeshMaterial3d(palette.handle(FLOOR_MATERIAL)),
         Transform::from_xyz(10.0, 1.37, 0.0)
             .with_rotation(Quat::from_rotation_z(20.0_f32.to_radians())),
         RigidBody::Static,
@@ -359,13 +350,12 @@ pub(super) fn setup_world(
     spawn_oriented_box(
         &mut commands,
         m,
-        mat,
         "LongTreadExitSlope",
         BoxSpec {
             position: ramp_center,
             dimensions: Vec3::new(ramp_length, 0.3, 2.5),
             rotation: ramp_rotation,
-            color: FLOOR_COLOR,
+            material: palette.handle(FLOOR_MATERIAL),
         },
     );
 
@@ -388,7 +378,7 @@ pub(super) fn setup_world(
         spawn_stair_segment(
             &mut commands,
             m,
-            mat,
+            &palette,
             StairSegmentSpec {
                 name: &format!("CurvedStair{i}"),
                 base,
@@ -397,7 +387,7 @@ pub(super) fn setup_world(
                 step_depth: chord.length(),
                 step_rise: arc_step_rise,
                 width: 1.8,
-                color: FLOOR_COLOR,
+                material_key: FLOOR_MATERIAL,
             },
         );
     }
@@ -411,7 +401,7 @@ pub(super) fn setup_world(
     commands.spawn((
         Name::new("Ladder"),
         Mesh3d(m.add(Cuboid::new(0.8, 4.0, 0.1))),
-        MeshMaterial3d(mat.add(matte_color(Color::srgb(0.5, 0.35, 0.2)))),
+        MeshMaterial3d(palette.handle("Ladder")),
         Transform::from_xyz(ladder_x, 2.0, ladder_surface_z + 0.05),
         Ladder {
             bottom: Vec3::new(ladder_x, 0.0, ladder_body_z),

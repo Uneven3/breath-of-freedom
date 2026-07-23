@@ -8,9 +8,9 @@
 
 use bevy::prelude::*;
 
+use crate::asset_pipeline::MaterialPalette;
 use crate::interaction::{Interactable, InteractionKind, InteractionRequest};
 use crate::movement::Player;
-use crate::visuals::materials::matte_color;
 
 use super::data::{EquipRequestMessage, Inventory, ItemKind, ItemStack, PickupMode, WorldItem};
 
@@ -23,22 +23,22 @@ const INTERACT_PICKUP_RANGE: f32 = 2.5;
 pub fn spawn_world_item(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    palette: &MaterialPalette,
     name: &str,
     position: Vec3,
     stack: ItemStack,
     mode: PickupMode,
 ) -> Entity {
-    let (dims, color) = match stack.kind {
-        ItemKind::Weapon(_) => (Vec3::new(0.15, 0.7, 0.15), Color::srgb(0.6, 0.6, 0.65)),
-        ItemKind::Material(_) => (Vec3::new(0.3, 0.3, 0.3), Color::srgb(0.45, 0.3, 0.15)),
-        ItemKind::Food { .. } => (Vec3::new(0.25, 0.25, 0.25), Color::srgb(0.8, 0.2, 0.2)),
+    let (dims, material_key) = match stack.kind {
+        ItemKind::Weapon(_) => (Vec3::new(0.15, 0.7, 0.15), "PickupWeapon"),
+        ItemKind::Material(_) => (Vec3::new(0.3, 0.3, 0.3), "PickupMaterial"),
+        ItemKind::Food { .. } => (Vec3::new(0.25, 0.25, 0.25), "PickupFood"),
     };
     let mut item = commands.spawn((
         Name::new(name.to_string()),
         WorldItem { stack, mode },
         Mesh3d(meshes.add(Cuboid::new(dims.x, dims.y, dims.z))),
-        MeshMaterial3d(materials.add(matte_color(color))),
+        MeshMaterial3d(palette.handle(material_key)),
         Transform::from_translation(position),
     ));
     // `Auto` items are swept up by proximity and never compete for the key.

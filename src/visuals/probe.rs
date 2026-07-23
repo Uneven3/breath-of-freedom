@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, SNEAK_Y_OFFSET, VisualOf};
+use crate::asset_pipeline::MaterialPalette;
 use crate::movement::body::BodyDimensions;
 use crate::movement::probe_data::TraversalProbe;
 use crate::movement::state::LocomotionState;
@@ -21,7 +22,7 @@ pub(super) fn spawn_probe_visual(
     mut commands: Commands,
     probes: Query<(Entity, &Transform, &BodyDimensions), Added<TraversalProbe>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<MaterialPalette>,
 ) {
     for (actor, transform, body) in &probes {
         commands.spawn((
@@ -29,7 +30,7 @@ pub(super) fn spawn_probe_visual(
             VisualOf(actor),
             Name::new("TraversalProbeVisual"),
             Mesh3d(meshes.add(Capsule3d::new(body.radius, body.standing_capsule_length))),
-            MeshMaterial3d(materials.add(Color::srgb(0.85, 0.3, 0.25))),
+            MeshMaterial3d(palette.handle("Probe")),
             *transform,
         ));
     }

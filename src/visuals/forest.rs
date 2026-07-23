@@ -11,10 +11,10 @@
 use bevy::prelude::*;
 
 use super::foliage::{FoliageLeaf, FoliageMesh};
-use super::materials::matte_color;
 use super::{
     AppearanceBinding, AppearanceKey, TreeSilhouette, VisualCatalog, VisualOf, VisualSlot,
 };
+use crate::asset_pipeline::MaterialPalette;
 use crate::perf::PerfToggles;
 use crate::world::TreeKind;
 
@@ -84,26 +84,24 @@ impl TreeProxyAssets {
     }
 }
 
-const BARK: Color = Color::srgb(0.33, 0.24, 0.15);
-
 pub(super) fn build_tree_proxy_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<MaterialPalette>,
 ) {
     // Trunk radii/heights track `world::forest::tree_collider` so the proxy
     // sits where the collider is — the graybox stays honest about its body.
     let trunk = |meshes: &mut Assets<Mesh>, radius: f32, height: f32| {
         meshes.add(Cylinder::new(radius, height))
     };
-    let bark = materials.add(matte_color(BARK));
+    let bark = palette.handle("Bark");
 
     let rounded = ProxyParts {
         trunk_mesh: trunk(&mut meshes, 0.35, 4.8),
         trunk_material: bark.clone(),
         trunk_height: 4.8,
         canopy_mesh: meshes.add(Sphere::new(2.0)),
-        canopy_material: materials.add(matte_color(Color::srgb(0.27, 0.5, 0.22))),
+        canopy_material: palette.handle("FoliageCommon"),
         canopy_y: 5.4,
     };
     let conical = ProxyParts {
@@ -114,7 +112,7 @@ pub(super) fn build_tree_proxy_assets(
             radius: 1.8,
             height: 4.5,
         }),
-        canopy_material: materials.add(matte_color(Color::srgb(0.16, 0.4, 0.24))),
+        canopy_material: palette.handle("FoliagePine"),
         canopy_y: 5.2,
     };
     let gnarled = ProxyParts {
@@ -122,7 +120,7 @@ pub(super) fn build_tree_proxy_assets(
         trunk_material: bark,
         trunk_height: 6.2,
         canopy_mesh: meshes.add(Sphere::new(1.9)),
-        canopy_material: materials.add(matte_color(Color::srgb(0.36, 0.45, 0.2))),
+        canopy_material: palette.handle("FoliageGnarled"),
         canopy_y: 6.6,
     };
 

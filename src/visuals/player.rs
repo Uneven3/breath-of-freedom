@@ -11,6 +11,7 @@ use super::{
     AppearanceBinding, INTERPOLATION_SPEED, PLAYER_APPEARANCE, SNEAK_Y_OFFSET, VisualCatalog,
     VisualOf, VisualSlot,
 };
+use crate::asset_pipeline::MaterialPalette;
 use crate::combat::state::CombatState;
 use crate::movement::Player;
 use crate::movement::state::LocomotionState;
@@ -29,7 +30,7 @@ pub(super) fn spawn_visual(
     asset_server: Res<AssetServer>,
     catalog: Res<VisualCatalog>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<MaterialPalette>,
 ) {
     let appearance = PLAYER_APPEARANCE;
     let Some(recipe) = catalog.recipe(appearance) else {
@@ -68,25 +69,10 @@ pub(super) fn spawn_visual(
                         .with_rotation(Quat::from_rotation_y(0.12) * Quat::from_rotation_z(-0.18)),
                 ))
                 .with_children(|bow_parent| {
-                    let wood_material = materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.4, 0.25, 0.15), // Brown wood
-                        perceptual_roughness: 0.8,
-                        ..default()
-                    });
-                    let string_material = materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.9, 0.9, 0.95), // Off-white string
-                        unlit: true,
-                        ..default()
-                    });
-                    let steel_material = materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.7, 0.7, 0.75), // Steel arrow head
-                        perceptual_roughness: 0.1,
-                        ..default()
-                    });
-                    let fletch_material = materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.85, 0.15, 0.15), // Red fletching
-                        ..default()
-                    });
+                    let wood_material = palette.handle("Wood");
+                    let string_material = palette.handle("String");
+                    let steel_material = palette.handle("Steel");
+                    let fletch_material = palette.handle("Fletching");
 
                     // Bow limbs
                     // Handle (center vertical part)

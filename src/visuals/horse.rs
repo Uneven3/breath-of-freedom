@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, VisualOf};
+use crate::asset_pipeline::MaterialPalette;
 use crate::mounts::data::Horse;
 use crate::movement::body::BodyDimensions;
 
@@ -16,7 +17,7 @@ pub(super) fn spawn_horse_visual(
     mut commands: Commands,
     horses: Query<(Entity, &Transform, &BodyDimensions), Added<Horse>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<MaterialPalette>,
 ) {
     for (actor, transform, body) in &horses {
         commands.spawn((
@@ -24,7 +25,7 @@ pub(super) fn spawn_horse_visual(
             VisualOf(actor),
             Name::new("HorseVisual"),
             Mesh3d(meshes.add(Capsule3d::new(body.radius, body.standing_capsule_length))),
-            MeshMaterial3d(materials.add(Color::srgb(0.42, 0.23, 0.1))),
+            MeshMaterial3d(palette.handle("Horse")),
             transform.with_scale(Vec3::new(0.9, 0.9, 1.45)),
         ));
     }

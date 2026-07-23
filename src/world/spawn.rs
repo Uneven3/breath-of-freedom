@@ -7,13 +7,13 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs, TreeKind};
-use crate::visuals::materials::matte_color;
+use crate::asset_pipeline::MaterialPalette;
 
 pub(super) struct BoxSpec {
     pub position: Vec3,
     pub dimensions: Vec3,
     pub rotation: Quat,
-    pub color: Color,
+    pub material: Handle<StandardMaterial>,
 }
 
 pub(super) struct StairSegmentSpec<'a> {
@@ -24,7 +24,7 @@ pub(super) struct StairSegmentSpec<'a> {
     pub step_depth: f32,
     pub step_rise: f32,
     pub width: f32,
-    pub color: Color,
+    pub material_key: &'a str,
 }
 
 pub(super) struct TreeSpec {
@@ -55,22 +55,21 @@ pub(super) fn spawn_tree(commands: &mut Commands, name: String, spec: TreeSpec) 
 pub(super) fn spawn_box(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    palette: &MaterialPalette,
     name: &str,
     pos: Vec3,
     dims: Vec3,
-    color: Color,
+    material_key: &str,
 ) -> Entity {
     spawn_oriented_box(
         commands,
         meshes,
-        materials,
         name,
         BoxSpec {
             position: pos,
             dimensions: dims,
             rotation: Quat::IDENTITY,
-            color,
+            material: palette.handle(material_key),
         },
     )
 }
@@ -78,7 +77,6 @@ pub(super) fn spawn_box(
 pub(super) fn spawn_oriented_box(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     name: &str,
     spec: BoxSpec,
 ) -> Entity {
@@ -90,7 +88,7 @@ pub(super) fn spawn_oriented_box(
                 spec.dimensions.y,
                 spec.dimensions.z,
             ))),
-            MeshMaterial3d(materials.add(matte_color(spec.color))),
+            MeshMaterial3d(spec.material),
             Transform::from_translation(spec.position).with_rotation(spec.rotation),
             RigidBody::Static,
             Collider::cuboid(spec.dimensions.x, spec.dimensions.y, spec.dimensions.z),
@@ -113,7 +111,7 @@ const PRACTICE_TARGET_DIMS: Vec3 = Vec3::new(0.15, 1.1, 1.1);
 pub(super) fn spawn_practice_target(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    palette: &MaterialPalette,
     name: &str,
     center: Vec3,
 ) {
@@ -122,11 +120,11 @@ pub(super) fn spawn_practice_target(
     spawn_box(
         commands,
         meshes,
-        materials,
+        palette,
         &format!("{name}Post"),
         Vec3::new(center.x, post_height * 0.5, center.z),
         Vec3::new(0.12, post_height, 0.12),
-        Color::srgb(0.35, 0.3, 0.25),
+        "TargetPost",
     );
 
     let target = commands
@@ -139,7 +137,7 @@ pub(super) fn spawn_practice_target(
                 PRACTICE_TARGET_DIMS.y,
                 PRACTICE_TARGET_DIMS.z,
             ))),
-            MeshMaterial3d(materials.add(Color::srgb(0.85, 0.25, 0.2))),
+            MeshMaterial3d(palette.handle("Target")),
             Transform::from_translation(center),
             RigidBody::Static,
             Collider::cuboid(
@@ -158,7 +156,7 @@ pub(super) fn spawn_practice_target(
 pub(super) fn spawn_stair_segment(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    palette: &MaterialPalette,
     spec: StairSegmentSpec,
 ) {
     let axis = spec.axis.normalize_or_zero();
@@ -174,13 +172,12 @@ pub(super) fn spawn_stair_segment(
         spawn_oriented_box(
             commands,
             meshes,
-            materials,
             &format!("{}Step{i}", spec.name),
             BoxSpec {
                 position: center.with_y(spec.base.y + height * 0.5),
                 dimensions: Vec3::new(spec.step_depth, height, spec.width),
                 rotation,
-                color: spec.color,
+                material: palette.handle(spec.material_key),
             },
         );
     }

@@ -31,6 +31,13 @@ impl MaterialPalette {
     pub fn get(&self, key: &str) -> Option<&Handle<StandardMaterial>> {
         self.handles.get(key)
     }
+
+    pub fn handle(&self, key: &str) -> Handle<StandardMaterial> {
+        self.get(key).cloned().unwrap_or_else(|| {
+            error!("[assets] requested unknown palette key {key}");
+            Handle::default()
+        })
+    }
 }
 
 fn matte(color: Color) -> StandardMaterial {
@@ -45,7 +52,7 @@ fn matte(color: Color) -> StandardMaterial {
 
 fn palette_material(key: &str) -> StandardMaterial {
     let color = match key {
-        "Bark" => Color::srgb(0.30, 0.18, 0.09),
+        "Bark" => Color::srgb(0.33, 0.24, 0.15),
         "Fletching" => Color::srgb(0.85, 0.15, 0.15),
         "FoliageCommon" => Color::srgb(0.27, 0.50, 0.22),
         "FoliageGnarled" => Color::srgb(0.36, 0.45, 0.20),
@@ -53,18 +60,30 @@ fn palette_material(key: &str) -> StandardMaterial {
         "GrayboxFloor" => Color::srgb(0.40, 0.45, 0.40),
         "GrayboxProp" => Color::srgb(0.55, 0.50, 0.45),
         "GrayboxVault" => Color::srgb(0.70, 0.50, 0.30),
+        "Horse" => Color::srgb(0.42, 0.23, 0.10),
+        "Ladder" => Color::srgb(0.50, 0.35, 0.20),
         "Moon" => Color::srgb(0.85, 0.90, 1.00),
+        "PickupFood" => Color::srgb(0.80, 0.20, 0.20),
+        "PickupMaterial" => Color::srgb(0.45, 0.30, 0.15),
+        "PickupWeapon" => Color::srgb(0.60, 0.60, 0.65),
+        "Probe" => Color::srgb(0.85, 0.30, 0.25),
         "Steel" => Color::srgb(0.70, 0.70, 0.75),
         "String" => Color::srgb(0.90, 0.90, 0.95),
         "Sun" => Color::srgb(1.00, 0.93, 0.75),
         "Target" => Color::srgb(0.85, 0.25, 0.20),
+        "TargetPost" => Color::srgb(0.35, 0.30, 0.25),
+        "TreeTrunk" => Color::srgb(0.40, 0.30, 0.20),
         "Wood" => Color::srgb(0.40, 0.25, 0.15),
         unknown => {
             error!("[assets] palette schema has no color for {unknown}");
             Color::srgb(1.0, 0.0, 1.0)
         }
     };
-    matte(color)
+    let mut material = matte(color);
+    if matches!(key, "Sun" | "Moon" | "String") {
+        material.unlit = true;
+    }
+    material
 }
 
 #[derive(Component)]

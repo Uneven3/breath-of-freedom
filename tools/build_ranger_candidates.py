@@ -10,6 +10,11 @@ import sys
 import bmesh
 import bpy
 
+TOOLS_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS_ROOT))
+
+from blender_export import export_selected_glb
+
 
 REPO = Path(__file__).resolve().parents[1]
 BASE_ROOT = (
@@ -173,14 +178,7 @@ def build_candidate(gender: str) -> Path:
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     output = OUTPUT_ROOT / f"ranger_{gender.lower()}.glb"
-    bpy.ops.export_scene.gltf(
-        filepath=str(output),
-        export_format="GLB",
-        use_selection=True,
-        export_animations=True,
-        export_animation_mode="ACTIONS",
-        export_yup=True,
-    )
+    export_selected_glb(output, export_animations=True)
     print(f"Built {output.relative_to(REPO)}")
     return output
 

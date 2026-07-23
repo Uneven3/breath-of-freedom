@@ -18,6 +18,7 @@
 
 use bevy::prelude::*;
 
+use crate::debug::MaterialReportNotice;
 use crate::perf::{Benchmark, Flythrough, PerfToggles};
 
 /// How long the completion notice stays up after a run ends.
@@ -144,6 +145,7 @@ type OverlayQuery = (
 pub(super) fn update_overlay(
     benchmark: Res<Benchmark>,
     flythrough: Res<Flythrough>,
+    materials: Res<MaterialReportNotice>,
     time: Res<Time<Real>>,
     overlay: Single<OverlayQuery, With<BenchmarkOverlay>>,
 ) {
@@ -166,6 +168,17 @@ pub(super) fn update_overlay(
     if let Some(status) = flythrough.status() {
         text.0 = format!("FLYTHROUGH  {status}");
         *color = TextColor(RUNNING);
+        *visibility = Visibility::Inherited;
+        return;
+    }
+
+    // The material breakdown is instantaneous, so its only feedback is this
+    // notice; shown above the run-finished ones as the most recent action.
+    if let Some(summary) = &materials.summary
+        && time.elapsed_secs() - materials.at < NOTICE_SECS
+    {
+        text.0 = summary.clone();
+        *color = TextColor(DONE);
         *visibility = Visibility::Inherited;
         return;
     }

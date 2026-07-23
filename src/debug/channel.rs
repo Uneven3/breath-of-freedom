@@ -94,15 +94,17 @@ pub enum DebugAction {
     ToggleTimeSpeed,
     ToggleBokobos,
     ToggleHorse,
+    MaterialBreakdown,
 }
 
 impl DebugAction {
-    pub const ALL: [DebugAction; 5] = [
+    pub const ALL: [DebugAction; 6] = [
         DebugAction::ToggleProbe,
         DebugAction::AdvanceHour,
         DebugAction::ToggleTimeSpeed,
         DebugAction::ToggleBokobos,
         DebugAction::ToggleHorse,
+        DebugAction::MaterialBreakdown,
     ];
 
     pub fn label(self) -> &'static str {
@@ -112,6 +114,7 @@ impl DebugAction {
             DebugAction::ToggleTimeSpeed => "Fast-forward time",
             DebugAction::ToggleBokobos => "Bokobos on/off",
             DebugAction::ToggleHorse => "Horse on/off",
+            DebugAction::MaterialBreakdown => "Material breakdown → log",
         }
     }
 }

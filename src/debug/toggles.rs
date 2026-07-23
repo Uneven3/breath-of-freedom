@@ -102,6 +102,8 @@ pub(super) fn apply_debug_actions(
             DebugAction::ToggleHorse => {
                 horse.write(MountDebugRequest::ToggleHorse);
             }
+            // Self-contained diagnostic; owns its own scan in `material_report`.
+            DebugAction::MaterialBreakdown => {}
         }
     }
 }

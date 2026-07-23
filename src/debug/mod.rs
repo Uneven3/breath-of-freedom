@@ -28,9 +28,12 @@ mod collect;
 mod console;
 mod gizmos;
 mod hud;
+mod material_report;
 pub mod snapshot;
 mod toggles;
 mod trace;
+
+pub use material_report::MaterialReportNotice;
 
 use std::time::Duration;
 
@@ -69,6 +72,7 @@ impl Plugin for DebugPlugin {
         app.init_resource::<SimTick>();
         app.init_resource::<snapshot::DebugSnapshot>();
         app.init_resource::<snapshot::HudVisibility>();
+        app.init_resource::<material_report::MaterialReportNotice>();
         // FPS / frame-time source for the perf section.
         app.add_plugins(FrameTimeDiagnosticsPlugin::default());
 
@@ -115,6 +119,7 @@ impl Plugin for DebugPlugin {
                 toggles::apply_debug_actions,
                 toggles::apply_hud_section_toggles,
                 toggles::cycle_animation_clips,
+                material_report::log_material_breakdown,
                 gizmos::draw_sensor_gizmos,
             ),
         );

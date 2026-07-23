@@ -204,71 +204,26 @@ compatible para reemplazar los fallbacks UAL2.
 Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
 Hit_Knockback); checkpoint PBR de paleta/luz/niebla y evaluación de AA.
 
-## Pipeline authored de assets — convención aceptada (2026-07-23)
+## Pipeline authored de assets — trabajo activo (2026-07-23)
 
-Blender 5.2 LTS → GLB → import Bevy por convención, sin Blenvy. El importador
-escanea solo `assets/game/authored/`; los Ranger actuales siguen en
-`assets/game/characters/` como legacy vivo hasta tener reemplazo. Estructura:
+El contrato permanente Blender→GLB→Bevy vive en `ASSET_PIPELINE.md`. Decisiones
+aprobadas para esta implementación: scanner estricto limitado a
+`assets/game/authored/`; `gltf` + `serde_json` directos (§17); materiales
+importados y graybox resueltos a una paleta de handles compartidos; manifiesto
+build-time como única autoridad espacial; carga visual con fallback y swap
+atómico.
 
-```text
-art/blender/<categoria>/              fuentes propias .blend
-art/vendor/<catalogo>/                fuentes/licencias de terceros
-assets/game/authored/<categoria>/     GLB propios, validación estricta
-assets/game/legacy/<catalogo>/        runtime vendor todavía necesario
-```
+Primera vertical: `tree_pine_a`, arte propio low-poly con LOD0/1/2,
+`M_Bark`/`M_FoliagePine`, `UCY_Trunk`, tags y socket. Reemplaza solo
+`TreeKind::Pine1` y conserva las dimensiones actuales para no cambiar traversal.
+Quaternius `Pine_1` pierde su dependencia runtime únicamente tras checkpoint
+jugado + material breakdown/flythrough/watchdog.
 
-No se mueve ni versiona masivamente el ~1 GB vendor sin trackear. Cada
-placeholder sale solo después de que su reemplazo compile, se juegue y se mida;
-la fuente/licencia se conserva fuera del runtime. Las dos carpetas Universal
-Animation son catálogos intencionalmente distintos aunque hoy sus GLB coincidan
-byte a byte: nunca se fusionan por nombre o contenido.
-
-### Nombres y autoría
-
-- Archivo/clave: `<categoria>_<nombre>[_<variante>].glb`, `lower_snake_case`;
-  categorías: `char`, `creature`, `prop`, `structure`, `tree`, `weapon`.
-- Una raíz `ROOT_<clave>`; metros, escala/rotación aplicadas, pivote en
-  suelo/pies. Frente en Blender `-Y`, que exporta a frente Bevy `-Z`.
-- Render: `SM_<Parte>_LOD0/1/2` o `SK_<Parte>_LOD0/1/2`; `LOD0` obligatorio,
-  niveles contiguos. Un estático no exige animaciones; un skinned sí.
-- Material: `M_<ClavePaleta>`. La clave resuelve a **un** handle mate compartido;
-  color/roughness/metal no se toman del primer GLB que cargue.
-- Sockets: empties `SKT_<Slot>`. Animaciones: `AN_<Accion>[_<Variante>]`.
-- Colisión authored no renderizable: `UCX_` hull, `UBX_` box, `UCP_` capsule,
-  `USP_` sphere y extensión `UCY_` cylinder (troncos baratos). Nunca trimesh del
-  visual. Custom properties `bof_*` (`climbable`, `material_kind`, `profile`,
-  `license`, etc.) se leen mediante `GltfExtras`.
-
-`AppearanceKey` y `SpatialProfileKey` son identidades tipadas separadas, nunca
-rutas. El manifiesto generado al compilar es la única autoridad de
-colliders/sockets para simulación; runtime usa nombres/extras para presentación
-y para comprobar consistencia. Cambiar solo `AppearanceKey` conserva el perfil
-espacial y resultados de `FixedUpdate`.
-
-El loader conserva el proxy/visual anterior mientras el GLB carga: valida y
-hace swap atómico; error de carga o convención deja el fallback visible y
-loguea, nunca panica. Los requisitos se validan por rol, no globalmente.
-
-Export reproducible:
-
-```text
-timeout 120s blender -noaudio --background --factory-startup \
-  --python tools/export_blender_asset.py -- \
-  --source art/blender/<categoria>/<clave>.blend \
-  --output assets/game/authored/<categoria>/<clave>.glb
-```
-
-`tools/build_ranger_candidates.py` conserva su composición vendor (cabeza +
-outfit + rig UAL2, texturas 1024, 43 clips) pero compartirá el núcleo de export.
-Ranger femenino sigue default provisional; sus clips locomoción siguen siendo
-`Idle_No_Loop`/`Walk_Carry_Loop`. `Prototype.glb` sigue obsoleto y sin receta.
-
-Primera vertical aprobada: `tree_pine_a`, arte propio low-poly con tres LOD,
-paleta compartida, `UCY_Trunk`, tags y socket. Reemplaza solo `TreeKind::Pine1`;
-su perfil iguala el cilindro actual para no cambiar traversal. Quaternius
-`Pine_1` pierde su dependencia runtime únicamente tras checkpoint jugado +
-material breakdown/flythrough/watchdog. Dependencias directas `gltf` y
-`serde_json` aprobadas para el importador (§17).
+Los Ranger actuales siguen legacy vivos. `build_ranger_candidates.py` conserva
+cabeza + outfit + rig UAL2, texturas 1024 y 43 clips, pero compartirá el núcleo
+de export. Las dos carpetas Universal Animation siguen siendo catálogos
+distintos aunque sus GLB actuales coincidan byte a byte. `Prototype.glb` sigue
+obsoleto y sin receta.
 
 ### Decisión — colisiones e hitboxes para assets finales (2026-07-19)
 

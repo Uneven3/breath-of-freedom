@@ -338,23 +338,34 @@ type DirectionalLightFilter = Or<(With<Sun>, With<MoonLight>)>;
 /// `BOF_CASCADES=2 cargo run --release`.
 const CASCADE_ENV: &str = "BOF_CASCADES";
 
-/// Reads the cascade count once at startup. Deliberately *not* a runtime knob:
+/// Reads an explicit override or the launch profile once at startup.
+/// Deliberately *not* a runtime knob:
 /// changing the count while the app runs desynchronises Bevy's per-cascade
 /// visibility bookkeeping (`check_dir_light_mesh_visibility` sizes its queues
 /// from the frusta) and panics with an out-of-bounds index. A debug affordance
 /// that can crash the game is worse than no affordance (§9), so this costs one
 /// relaunch per value instead.
-fn configured_cascades() -> usize {
-    match std::env::var(CASCADE_ENV)
-        .ok()
-        .and_then(|raw| raw.parse().ok())
-    {
-        Some(count @ 1..=4) => count,
-        Some(invalid) => {
-            warn!("[world] ignoring {CASCADE_ENV}={invalid}: expected 1..=4");
-            4
+fn configured_cascades(profile: crate::perf::PerfProfile) -> (usize, &'static str) {
+    match std::env::var(CASCADE_ENV) {
+        Ok(raw) => match parse_cascade_count(&raw) {
+            Ok(count) => (count, CASCADE_ENV),
+            Err(expected) => {
+                warn!("[world] ignoring {CASCADE_ENV}={raw}: expected {expected}");
+                (profile.cascade_count(), "launch profile")
+            }
+        },
+        Err(std::env::VarError::NotPresent) => (profile.cascade_count(), "launch profile"),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            warn!("[world] ignoring non-Unicode {CASCADE_ENV}: expected 1..=4");
+            (profile.cascade_count(), "launch profile")
         }
-        None => 4,
+    }
+}
+
+fn parse_cascade_count(raw: &str) -> Result<usize, &'static str> {
+    match raw.parse::<usize>() {
+        Ok(count @ 1..=4) => Ok(count),
+        Ok(_) | Err(_) => Err("an integer from 1 to 4"),
     }
 }
 
@@ -376,7 +387,7 @@ pub(super) fn apply_cascade_config(
     }
     let first_run = applied.is_none();
     *applied = Some(distance);
-    let count = configured_cascades();
+    let (count, cascade_source) = configured_cascades(perf.profile);
     // Bevy defaults to 150 m, which spends cascade texels on ground no tree
     // casts onto any more (`visuals::foliage` budgets casters by distance).
     // Shrinking the covered area concentrates the same shadow map on what is
@@ -391,7 +402,7 @@ pub(super) fn apply_cascade_config(
         commands.entity(light).try_insert(config.clone());
     }
     if first_run {
-        info!("[world] directional shadow cascades: {count} ({CASCADE_ENV})");
+        info!("[world] directional shadow cascades: {count} ({cascade_source})");
     }
     info!("[world] shadow distance: {distance:.0}m");
 }
@@ -400,6 +411,13 @@ pub(super) fn apply_cascade_config(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn cascade_parser_rejects_malformed_and_out_of_range_values() {
+        assert_eq!(parse_cascade_count("2"), Ok(2));
+        assert_eq!(parse_cascade_count("0"), Err("an integer from 1 to 4"));
+        assert_eq!(parse_cascade_count("five"), Err("an integer from 1 to 4"));
+    }
 
     /// The light below the horizon contributes nothing, so it must not render
     /// cascades. Bevy gates shadow maps on `shadow_maps_enabled` alone, so this

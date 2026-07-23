@@ -92,6 +92,7 @@ impl Plugin for DebugUiPlugin {
                 // when a run starts, and that is exactly when the overlay has
                 // something to say.
                 overlay::update_overlay,
+                overlay::update_overdraw_legend,
             )
                 .chain(),
         );
@@ -248,8 +249,11 @@ fn sync_labels(
     }
     // Button labels are static; only the readout reflects progress.
     for mut text in &mut texts.p2() {
-        text.0 = benchmark
-            .status()
-            .unwrap_or_else(|| "Resultados al log al terminar".to_string());
+        text.0 = benchmark.status().unwrap_or_else(|| {
+            format!(
+                "Perfil de arranque: {} · resultados al log al terminar",
+                perf.profile.label()
+            )
+        });
     }
 }

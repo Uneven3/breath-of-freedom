@@ -18,7 +18,7 @@
 
 use bevy::prelude::*;
 
-use crate::perf::Benchmark;
+use crate::perf::{Benchmark, PerfToggles};
 
 /// How long the completion notice stays up after a run ends.
 const NOTICE_SECS: f32 = 12.0;
@@ -29,6 +29,9 @@ const DONE: Color = Color::srgb(0.75, 0.85, 0.95);
 
 #[derive(Component)]
 pub(super) struct BenchmarkOverlay;
+
+#[derive(Component)]
+pub(super) struct OverdrawLegend;
 
 pub(super) fn spawn_overlay(mut commands: Commands) {
     commands.spawn((
@@ -50,6 +53,86 @@ pub(super) fn spawn_overlay(mut commands: Commands) {
         GlobalZIndex(110),
         Visibility::Hidden,
     ));
+
+    commands
+        .spawn((
+            OverdrawLegend,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(16.0),
+                bottom: Val::Px(16.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.025, 0.01, 0.01, 0.9)),
+            GlobalZIndex(110),
+            Visibility::Hidden,
+        ))
+        .with_children(|legend| {
+            legend.spawn((
+                Text::new("OVERDRAW · capas por píxel"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.82, 0.78)),
+            ));
+            legend.spawn((
+                Text::new("Mira áreas grandes y persistentes, no puntos pequeños."),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.82, 0.68, 0.66)),
+            ));
+            legend
+                .spawn(Node {
+                    column_gap: Val::Px(5.0),
+                    ..default()
+                })
+                .with_children(|scale| {
+                    for (label, color) in [
+                        ("BIEN  1-2", Color::srgb(0.18, 0.018, 0.01)),
+                        ("MEDIO  3-5", Color::srgb(0.42, 0.025, 0.012)),
+                        ("MALO  6-9", Color::srgb(0.72, 0.035, 0.015)),
+                        ("CRÍTICO  10+", Color::srgb(1.0, 0.06, 0.025)),
+                    ] {
+                        scale
+                            .spawn((
+                                Node {
+                                    padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(color),
+                            ))
+                            .with_child((
+                                Text::new(label),
+                                TextFont {
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                    }
+                });
+        });
+}
+
+pub(super) fn update_overdraw_legend(
+    perf: Res<PerfToggles>,
+    mut legend: Single<&mut Visibility, With<OverdrawLegend>>,
+) {
+    if perf.is_changed() {
+        **legend = if perf.overdraw {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
 }
 
 type OverlayQuery = (
@@ -80,11 +163,16 @@ pub(super) fn update_overlay(
     if let Some(finished) = &benchmark.finished
         && time.elapsed_secs() - finished.at < NOTICE_SECS
     {
-        text.0 = format!(
-            "BENCHMARK TERMINADO\n{}/{} pasos válidos — tabla en el log",
-            finished.valid, finished.total
-        );
-        *color = TextColor(DONE);
+        if let Some(reason) = finished.aborted {
+            text.0 = format!("BENCHMARK ABORTADO\n{reason} — configuración restaurada");
+            *color = TextColor(SPOILED);
+        } else {
+            text.0 = format!(
+                "BENCHMARK TERMINADO\n{}/{} pasos válidos — tabla en el log",
+                finished.valid, finished.total
+            );
+            *color = TextColor(DONE);
+        }
         *visibility = Visibility::Inherited;
         return;
     }

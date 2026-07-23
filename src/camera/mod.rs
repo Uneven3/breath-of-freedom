@@ -74,16 +74,18 @@ impl Plugin for CameraPlugin {
     }
 }
 
-fn spawn_camera(mut commands: Commands, time_of_day: Res<TimeOfDay>) {
+fn spawn_camera(
+    mut commands: Commands,
+    time_of_day: Res<TimeOfDay>,
+    perf: Res<crate::perf::PerfToggles>,
+) {
     commands.spawn((
         Name::new("CameraRig"),
         CameraRig::default(),
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
         soft_distance_fog(atmosphere_color(time_of_day.hours)),
-        // Keep this single-sample while the cheap AA checkpoint is pending.
-        // The optional strong-outline A/B also requires single-sample inputs.
-        Msaa::Off,
+        perf.profile.msaa(),
     ));
 }
 

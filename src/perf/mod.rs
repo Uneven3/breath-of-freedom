@@ -10,9 +10,10 @@
 //! Knobs are driven from the debug hub, not from keys — see
 //! `presentation::debug_ui`. This module owns only the resources and the
 //! sequence; applying a knob is the job of whoever owns the affected entity
-//! (§7): `world::day_night` for the sun/moon, `visuals::forest` for tree
-//! visuals, `visuals::outline` for the post-process pass.
+//! (§7): `world::day_night` for the sun/moon and `visuals::forest` for tree
+//! visuals.
 
+pub(crate) mod budget;
 pub mod data;
 pub mod sequence;
 
@@ -20,15 +21,17 @@ use bevy::diagnostic::DiagnosticsStore;
 use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 
-pub use data::{PerfKnob, PerfToggles};
+pub use data::{PerfKnob, PerfProfile, PerfToggles};
 pub use sequence::{Benchmark, BenchmarkRequest};
 
 pub struct PerfPlugin;
 
 impl Plugin for PerfPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PerfToggles>();
+        app.insert_resource(PerfToggles::configured());
         app.init_resource::<Benchmark>();
+        app.init_resource::<budget::SceneInventory>();
+        app.init_resource::<budget::SceneBudgetWarningState>();
         app.add_message::<BenchmarkRequest>();
         app.add_message::<PerfKnobToggle>();
         app.add_plugins(RenderDiagnosticsPlugin);
@@ -39,10 +42,21 @@ impl Plugin for PerfPlugin {
                 sequence::start_requested_runs,
                 sequence::advance_benchmark,
                 apply_present_mode,
+                budget::warn_scene_budget,
             )
                 .chain(),
         );
+        app.add_systems(Startup, log_active_profile);
     }
+}
+
+fn log_active_profile(perf: Res<PerfToggles>) {
+    info!(
+        "[perf] launch profile={} shadow-map={} msaa={}",
+        perf.profile.label(),
+        perf.shadow_map_size(),
+        perf.profile.msaa_label(),
+    );
 }
 
 /// Lifts the refresh-rate ceiling for attribution runs. Nothing else writes the

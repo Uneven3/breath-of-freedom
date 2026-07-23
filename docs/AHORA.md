@@ -60,8 +60,8 @@ secuencia:
    opt-in (`tree-detail`). Esto es lo que llevó el peor caso a 60 estables.
 4. **Baseline PBR nativo (2026-07-22):** mundo, pickups y proxies usan un perfil
    mate de `StandardMaterial`; la atmósfera se construye con luz, paleta y
-   entorno. El toon corregido se conserva bajo `experimental-toon`, apagado por
-   default. Dos A/B midieron `strong outline` en +0.91/+1.68 ms; sigue opt-in.
+   entorno. Toon y outline fullscreen se descartaron también en desktop: no son
+   la dirección visual y el outline era incompatible con el MSAA del perfil móvil.
 5. **Bruma atmosférica nativa:** `DistanceFog` lineal no toca los primeros 45 m,
    transiciona hasta 240 m y mezcla como máximo 30%; sigue el color del cielo
    día/noche. Da profundidad sin ocultar navegación ni sumar un pase fullscreen.
@@ -75,15 +75,12 @@ Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
   malla al cargar y avisa sobre presupuesto. Agnóstico de asset — ya delató que
   el Ranger femenino es igual de pesado (pies: 9172 tris; ver deudas).
 - **La atmósfera parte del pipeline estándar.** El baseline comparte
-  `StandardMaterial` con actores/assets; toon y strong outline se conservan
-  solo como experimentos opt-in para comparar feeling y costo.
+  `StandardMaterial` con actores/assets; no hay pipeline toon ni outline global.
 
 Instrumentación clave que hizo esto medible: secuencia automática con
 precalentamiento de pipelines, dos modos de vantage ("aquí" para zonas lentas /
 canónico para comparar), detección de movimiento que invalida pasos, y overlay
-en pantalla. El domo que "seguía" al jugador era el shader de outline
-detectando el suelo lejano como borde (primera derivada de profundidad);
-corregido a laplaciana (segunda derivada), que da cero en cualquier plano.
+en pantalla.
 
 ## Referencia de rendimiento (cerrado 2026-07-21)
 
@@ -110,9 +107,10 @@ Antes de agrandar el juego: instrumentación que diga, siempre, si se aplican la
 técnicas correctas. Principio: **el medidor dice *cuándo* una técnica vale la
 pena; no se aplican todas siempre** (eso es cargo-culting y frena al dev, no al
 juego). Piso objetivo: **móvil gama media ~2021**; arte propio en **Blender**
-(low-poly, ver NORTE). Ya existe y no se rehace: FPS/frame-time, GPU por pass
-(incl. sombras) vía `gpu_pass_costs`, watchdog de tris por malla, frustum culling
-(default de Bevy), cull por distancia (`VisibilityRange`) y ~11 perillas A/B.
+(low-poly, ver NORTE). Ya existe y no se rehace: FPS/frame-time, GPU por los
+passes instrumentados vía `gpu_pass_costs` (sombras quedan fuera), watchdog de
+tris por malla, frustum culling (default de Bevy), cull por distancia
+(`VisibilityRange`) y 12 perillas A/B.
 
 - **Fase 1 — inventario de escena ✅ (2026-07-22):** sección `scene` del debug
   (`debug/collect.rs::collect_scene`): mallas visibles, `tris` en cámara, `draws`
@@ -121,13 +119,29 @@ juego). Piso objetivo: **móvil gama media ~2021**; arte propio en **Blender**
   throttle a 4 Hz para no contaminar la medición. Off por default en el HUD (F2).
   Se loguea en la cadencia periódica junto a `perf` (`debug/console.rs`), así que
   aparece en los logs de la secuencia de benchmark, una vez por paso.
-- **Fase 2 — vistas de diagnóstico visual:** wireframe (`WireframePlugin`) y modo
-  overdraw (material aditivo semitransparente) — el fill-rate/overdraw es el
-  asesino #1 en GPU móvil y hoy no se visualiza.
-- **Fase 3 — presupuestos móviles automáticos:** umbrales gama-media (tris,
-  draws, materiales) que avisan en log como el watchdog de mallas; perfil "móvil"
-  en `PerfToggles` (2 cascadas, mapa chico, MSAA 4x — casi gratis en TBDR móvil,
-  al revés que en escritorio).
+- **Fase 2 — vistas de diagnóstico visual ✅ (2026-07-22):** `wireframe`
+  nativo y `overdraw` aditivo en F1, apagados por default y mutuamente
+  excluyentes. Overdraw acumula una dosis roja de 6% por superficie y muestra
+  leyenda persistente: 1-2 capas bien, 3-5 medio, 6-9 malo, 10+ crítico solo si
+  ocupa área grande. Tres materiales compartidos preservan el culling real
+  (front/back/double-sided); el intercambio en dos frames evita que el render
+  reutilice el pipeline PBR anterior. Restaura el handle exacto sin acoplar a
+  sus dueños y cubre spawn tardío/reemplazo/cleanup. La secuencia apaga ambas
+  vistas y restaura su snapshot en éxito/cancelación/cámara ausente/watchdog.
+  Checkpoint: gradiente confirmado visualmente, dos ciclos overdraw↔wireframe,
+  60 FPS, materiales restaurados y cierre sin error de validación GPU.
+- **Fase 3 — presupuestos móviles automáticos ✅ (2026-07-22):** guardrails
+  iniciales para gama media 2021: 100k tris visibles,
+  100 draws y 64 materiales; el peor eje clasifica `scene` como bien (≤70%),
+  medio (≤100%), malo (>100%) o crítico (>150%). Al cruzar el límite avisa una
+  vez en log y anuncia recuperación, sin spam. `BOF_PROFILE=mobile` inicializa
+  un preset atómico en `PerfToggles`: 2 cascadas, shadow map 512, MSAA 4x,
+  cull 70 m, caster range 30 m y shadow distance 40 m. Es de arranque porque
+  cambiar cascadas en vivo panica la visibilidad interna de Bevy; `BOF_CASCADES`
+  conserva precedencia para A/B aislados. Checkpoint móvil: 2 cascadas/512/4x
+  activos, escena `medio` (37.3k tris, 62 draws, 53 mats), 60 FPS; benchmark de
+  7 pasos terminó sin error y restauró todo el preset. Toon/outline se eliminaron
+  de todos los perfiles al confirmar que no pertenecen a la dirección visual.
 - **Cámara flythrough (estilo Assassin's Creed / Horizon Zero Dawn):** recorre
   lugares del mundo para medir rendimiento repetible por zonas; se integra con la
   secuencia de benchmark (`perf/sequence.rs`).

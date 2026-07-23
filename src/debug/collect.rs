@@ -23,8 +23,9 @@ use crate::movement::probe_data::TraversalProbe;
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
+use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
-use crate::visuals::{AnimationDebug, PlayerAnimations};
+use crate::visuals::{AnimationDebug, DiagnosticViewState, PlayerAnimations};
 use crate::world::day_night::TimeOfDay;
 
 // Each section has its own focused producer (§1): a system reads exactly the
@@ -212,8 +213,16 @@ pub(super) fn collect_scene(
     meshes: Query<SceneMesh>,
     ranged: Query<&ViewVisibility, With<VisibilityRange>>,
     mesh_assets: Res<Assets<Mesh>>,
+    perf: Res<PerfToggles>,
+    diagnostic: Res<DiagnosticViewState>,
+    mut inventory: ResMut<SceneInventory>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
+    // The diagnostic replaces StandardMaterial handles, so its temporary
+    // render representation is not a valid production budget sample.
+    if perf.overdraw || diagnostic.overdraw_material_override {
+        return;
+    }
     let mut visible_meshes = 0u32;
     let mut triangles = 0usize;
     let mut batches: HashSet<(AssetId<Mesh>, AssetId<StandardMaterial>)> = HashSet::default();
@@ -246,14 +255,30 @@ pub(super) fn collect_scene(
         }
     }
 
+    let scene = SceneInventory {
+        visible_meshes,
+        triangles,
+        draws: batches.len(),
+        materials: materials.len(),
+        ranged_culled,
+        ranged_total,
+    };
+    if *inventory != scene {
+        *inventory = scene;
+    }
+
     snapshot.set(
         SectionId::Scene,
         vec![
-            Field::volatile("meshes", visible_meshes.to_string()),
-            Field::volatile("tris", kilo(triangles)),
-            Field::volatile("draws", batches.len().to_string()),
-            Field::volatile("mats", materials.len().to_string()),
-            Field::volatile("lod_cull", format!("{ranged_culled}/{ranged_total}")),
+            Field::volatile("meshes", scene.visible_meshes.to_string()),
+            Field::volatile("tris", kilo(scene.triangles)),
+            Field::volatile("draws", scene.draws.to_string()),
+            Field::volatile("mats", scene.materials.to_string()),
+            Field::volatile("budget", scene_budget_grade(&scene).label()),
+            Field::volatile(
+                "lod_cull",
+                format!("{}/{}", scene.ranged_culled, scene.ranged_total),
+            ),
         ],
     );
 }
@@ -299,6 +324,7 @@ pub(super) fn collect_perf(
     let mut fields = vec![
         Field::volatile("fps", format!("{fps:.1}")),
         Field::volatile("frame", format!("{frame_ms:.2}ms")),
+        Field::new("profile", perf.profile.label()),
         Field::new("present", format!("{:?}", window.present_mode)),
         Field::volatile("tick", format!("{:06}", tick.0)),
         Field::volatile("time", clock),

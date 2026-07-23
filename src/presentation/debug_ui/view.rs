@@ -143,7 +143,7 @@ fn knob_section(panel: &mut ChildSpawnerCommands) {
     section_title(
         panel,
         "Render",
-        "Solo presentación: los colliders y la simulación no cambian.",
+        "Solo presentación. Overdraw respeta el culling del material: 1-2 capas bien, 3-5 medio, 6-9 malo, 10+ crítico si cubre un área grande. La secuencia apaga ambas vistas al medir.",
     );
     for knob in PerfKnob::ALL {
         panel

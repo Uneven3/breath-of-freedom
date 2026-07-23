@@ -17,16 +17,14 @@ use bevy::prelude::*;
 pub mod animation;
 pub mod budget;
 pub mod catalog;
+mod diagnostic;
 pub mod enemy;
 pub mod foliage;
 pub mod forest;
 pub mod horse;
 pub mod materials;
-pub mod outline;
 pub mod player;
 pub mod probe;
-#[cfg(feature = "experimental-toon")]
-pub mod toon;
 pub mod vfx;
 
 pub use animation::{AnimationDebug, PlayerAnimations};
@@ -34,8 +32,6 @@ pub use catalog::{
     AppearanceBinding, AppearanceKey, PLAYER_APPEARANCE, TreeSilhouette, VisualCatalog, VisualSlot,
 };
 pub use player::PlayerVisual;
-#[cfg(feature = "experimental-toon")]
-pub use toon::ToonMaterial;
 
 /// Exponential decay rate for visual smoothing, fed to
 /// [`StableInterpolate::smooth_nudge`](bevy::math::StableInterpolate::smooth_nudge).
@@ -56,15 +52,18 @@ pub(crate) const SNEAK_Y_OFFSET: f32 = -0.4;
 #[derive(Component, Clone, Copy)]
 pub struct VisualOf(pub Entity);
 
+/// Minimal public contract for tools that must ignore the temporary material
+/// representation while the diagnostic view enters or leaves overdraw.
+#[derive(Resource, Default)]
+pub(crate) struct DiagnosticViewState {
+    pub overdraw_material_override: bool,
+}
+
 pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
-        // `ToonMaterial` remains available as an experiment, but the shipped
-        // runtime registers and instantiates only Bevy's standard PBR path.
-        #[cfg(feature = "experimental-toon")]
-        app.add_plugins(MaterialPlugin::<ToonMaterial>::default());
-        app.add_plugins(outline::OutlinePlugin);
+        app.add_plugins(diagnostic::DiagnosticViewsPlugin);
         app.init_resource::<AnimationDebug>();
         app.init_resource::<VisualCatalog>();
         app.add_systems(

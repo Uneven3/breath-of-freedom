@@ -32,6 +32,9 @@ const MEASURE_SECS: f32 = 4.0;
 /// run taken right after launch reads slower than the same run on a warm
 /// process — which is exactly how two otherwise identical runs disagreed.
 const WARMUP_SECS: f32 = 0.5;
+/// Hard stop for lifecycle failures. The normal matrix takes 42 seconds;
+/// fifteen seconds of slack tolerates long frames without stranding toggles.
+const MAX_RUN_SECS: f32 = (WARMUP_SECS + SETTLE_SECS + MEASURE_SECS) * STEPS.len() as f32 + 15.0;
 
 /// Where the camera stands while a run measures.
 ///
@@ -62,7 +65,6 @@ pub struct BenchmarkStep {
     pub forest_visible: bool,
     pub sun_shadows: bool,
     pub moon_shadows: bool,
-    pub outline: bool,
     pub cull_step: usize,
     pub shadow_range_step: usize,
 }
@@ -74,7 +76,6 @@ impl BenchmarkStep {
             forest_visible: true,
             sun_shadows: true,
             moon_shadows: true,
-            outline: false,
             cull_step: 0,
             shadow_range_step: 0,
         }
@@ -92,7 +93,7 @@ const CULL_MID: usize = 2;
 /// The matrix. Ordered so each step changes exactly one thing from the
 /// baseline — a step that changed two would make its delta unattributable.
 /// The trailing baseline repeat is the drift check.
-pub const STEPS: [BenchmarkStep; 8] = [
+pub const STEPS: [BenchmarkStep; 7] = [
     BenchmarkStep::baseline("baseline"),
     BenchmarkStep {
         moon_shadows: false,
@@ -102,10 +103,6 @@ pub const STEPS: [BenchmarkStep; 8] = [
         sun_shadows: false,
         moon_shadows: false,
         ..BenchmarkStep::baseline("all shadows off")
-    },
-    BenchmarkStep {
-        outline: true,
-        ..BenchmarkStep::baseline("strong outline on")
     },
     BenchmarkStep {
         shadow_range_step: SHADOW_BUDGET_OFF,
@@ -146,6 +143,7 @@ pub struct RunState {
     warmup: Option<usize>,
     index: usize,
     elapsed: f32,
+    total_elapsed: f32,
     anchor: Option<(Vec3, Quat)>,
     current: StepSamples,
     results: Vec<StepResult>,
@@ -167,6 +165,7 @@ pub struct FinishedRun {
     pub at: f32,
     pub valid: usize,
     pub total: usize,
+    pub aborted: Option<&'static str>,
 }
 
 #[derive(Resource, Default)]
@@ -237,15 +236,23 @@ pub(super) fn start_requested_runs(
     mut requests: MessageReader<BenchmarkRequest>,
     mut benchmark: ResMut<Benchmark>,
     mut toggles: ResMut<PerfToggles>,
+    time: Res<Time<Real>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
 ) {
     let Some(mode) = requests.read().map(|request| request.0).next() else {
         return;
     };
     if benchmark.is_running() {
+        finalize_benchmark(
+            &mut benchmark,
+            &mut toggles,
+            time.elapsed_secs(),
+            FinishReason::Aborted("cancelled by operator"),
+        );
         return;
     }
     let Some(camera) = camera else {
+        warn!("[bench] cannot start — camera missing or ambiguous");
         return;
     };
     let pose = match mode {
@@ -272,12 +279,51 @@ pub(super) fn start_requested_runs(
 }
 
 fn apply_step(toggles: &mut PerfToggles, step: &BenchmarkStep) {
+    // Visual diagnostics add/replace render passes. They are useful for
+    // inspection but would invalidate every timing in an attribution run.
+    toggles.wireframe = false;
+    toggles.overdraw = false;
     toggles.forest_visible = step.forest_visible;
     toggles.sun_shadows = step.sun_shadows;
     toggles.moon_shadows = step.moon_shadows;
-    toggles.outline = step.outline;
     toggles.cull_step = step.cull_step;
     toggles.shadow_range_step = step.shadow_range_step;
+}
+
+#[derive(Clone, Copy)]
+enum FinishReason {
+    Completed,
+    Aborted(&'static str),
+}
+
+fn finalize_benchmark(
+    benchmark: &mut Benchmark,
+    toggles: &mut PerfToggles,
+    at: f32,
+    reason: FinishReason,
+) {
+    let Some(run) = benchmark.run.take() else {
+        error!("[bench] finalization requested without an active run");
+        return;
+    };
+    *toggles = run.restore;
+    let valid = run.results.iter().filter(|step| !step.invalid).count();
+    let aborted = match reason {
+        FinishReason::Completed => {
+            report(&run.results, run.vantage);
+            None
+        }
+        FinishReason::Aborted(reason) => {
+            warn!("[bench] aborted: {reason} — render configuration restored");
+            Some(reason)
+        }
+    };
+    benchmark.finished = Some(FinishedRun {
+        at,
+        valid,
+        total: run.results.len(),
+        aborted,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,14 +334,33 @@ pub(super) fn advance_benchmark(
     mut benchmark: ResMut<Benchmark>,
     mut toggles: ResMut<PerfToggles>,
 ) {
-    let Some(run) = benchmark.run.as_mut() else {
+    if benchmark.run.is_none() {
+        return;
+    }
+    let Some(camera) = camera else {
+        finalize_benchmark(
+            &mut benchmark,
+            &mut toggles,
+            time.elapsed_secs(),
+            FinishReason::Aborted("camera missing or ambiguous"),
+        );
         return;
     };
-    let Some(camera) = camera else {
+    let Some(run) = benchmark.run.as_mut() else {
         return;
     };
 
     run.elapsed += time.delta_secs();
+    run.total_elapsed += time.delta_secs();
+    if run.total_elapsed > MAX_RUN_SECS {
+        finalize_benchmark(
+            &mut benchmark,
+            &mut toggles,
+            time.elapsed_secs(),
+            FinishReason::Aborted("maximum duration exceeded"),
+        );
+        return;
+    }
 
     // Prime every configuration before the first measurement, so no step pays
     // another step's pipeline compilation.
@@ -356,18 +421,12 @@ pub(super) fn advance_benchmark(
     match STEPS.get(run.index) {
         Some(step) => apply_step(&mut toggles, step),
         None => {
-            let Some(run) = benchmark.run.take() else {
-                error!("[bench] active run disappeared before completion");
-                return;
-            };
-            *toggles = run.restore;
-            let valid = run.results.iter().filter(|step| !step.invalid).count();
-            report(&run.results, run.vantage);
-            benchmark.finished = Some(FinishedRun {
-                at: time.elapsed_secs(),
-                valid,
-                total: run.results.len(),
-            });
+            finalize_benchmark(
+                &mut benchmark,
+                &mut toggles,
+                time.elapsed_secs(),
+                FinishReason::Completed,
+            );
         }
     }
 }
@@ -468,7 +527,6 @@ mod tests {
         for step in &STEPS[1..STEPS.len() - 1] {
             let changed = [
                 step.forest_visible != base.forest_visible,
-                step.outline != base.outline,
                 step.cull_step != base.cull_step,
                 step.shadow_range_step != base.shadow_range_step,
                 // Shadows count as one axis: "all shadows off" deliberately
@@ -491,16 +549,96 @@ mod tests {
         assert_eq!(first.forest_visible, last.forest_visible);
         assert_eq!(first.sun_shadows, last.sun_shadows);
         assert_eq!(first.moon_shadows, last.moon_shadows);
-        assert_eq!(first.outline, last.outline);
         assert_eq!(first.cull_step, last.cull_step);
         assert_eq!(first.shadow_range_step, last.shadow_range_step);
         assert_ne!(first.name, last.name, "the table must tell them apart");
     }
 
     #[test]
-    fn shipped_default_and_benchmark_baseline_keep_strong_outline_off() {
-        assert!(!PerfToggles::default().outline);
-        assert!(!STEPS[0].outline);
+    fn benchmark_steps_disable_visual_diagnostics() {
+        let mut toggles = PerfToggles {
+            wireframe: true,
+            overdraw: true,
+            ..default()
+        };
+
+        apply_step(&mut toggles, &STEPS[0]);
+
+        assert!(!toggles.wireframe);
+        assert!(!toggles.overdraw);
+    }
+
+    #[test]
+    fn every_finalization_path_restores_the_exact_render_configuration() {
+        let restore = PerfToggles {
+            vsync: true,
+            wireframe: true,
+            overdraw: false,
+            tree_detail: true,
+            ..default()
+        };
+        let mut benchmark = Benchmark {
+            run: Some(RunState {
+                restore,
+                ..default()
+            }),
+            ..default()
+        };
+        let mut active = PerfToggles {
+            vsync: false,
+            wireframe: false,
+            overdraw: false,
+            ..default()
+        };
+
+        finalize_benchmark(
+            &mut benchmark,
+            &mut active,
+            12.0,
+            FinishReason::Aborted("test abort"),
+        );
+
+        assert_eq!(active, restore);
+        assert!(!benchmark.is_running());
+        assert_eq!(
+            benchmark.finished.as_ref().and_then(|run| run.aborted),
+            Some("test abort")
+        );
+    }
+
+    #[test]
+    fn losing_the_camera_aborts_instead_of_stranding_the_run() {
+        let restore = PerfToggles {
+            vsync: true,
+            overdraw: true,
+            ..default()
+        };
+        let mut app = App::new();
+        app.insert_resource(Time::<Real>::default())
+            .init_resource::<bevy::diagnostic::DiagnosticsStore>()
+            .insert_resource(Benchmark {
+                run: Some(RunState {
+                    restore,
+                    ..default()
+                }),
+                ..default()
+            })
+            .insert_resource(PerfToggles {
+                vsync: false,
+                overdraw: false,
+                ..default()
+            })
+            .add_systems(Update, advance_benchmark);
+
+        app.update();
+
+        assert_eq!(*app.world().resource::<PerfToggles>(), restore);
+        let benchmark = app.world().resource::<Benchmark>();
+        assert!(!benchmark.is_running());
+        assert_eq!(
+            benchmark.finished.as_ref().and_then(|run| run.aborted),
+            Some("camera missing or ambiguous")
+        );
     }
 
     fn result(name: &'static str, frame_mean: f64, invalid: bool) -> StepResult {
@@ -521,7 +659,7 @@ mod tests {
     /// deltas, not invent them.
     #[test]
     fn no_delta_is_reported_without_a_valid_baseline() {
-        let measured = result("strong outline on", 18.45, false);
+        let measured = result("cull 70m", 18.45, false);
         assert_eq!(delta_against(None, &measured), None);
 
         let usable = result("baseline", 24.23, false);

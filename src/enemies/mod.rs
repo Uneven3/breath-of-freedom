@@ -62,6 +62,7 @@ pub struct EnemiesPlugin;
 impl Plugin for EnemiesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<perception::DirectThreatMessage>();
+        app.add_message::<SpawnBokobosRequest>();
         app.add_systems(Update, toggle_spawn);
         app.add_systems(
             FixedUpdate,
@@ -82,14 +83,19 @@ impl Plugin for EnemiesPlugin {
     }
 }
 
-/// F7 toggle: spawns or despawns the graybox pair — a melee bokobo and an
-/// archer bokobo — at their authored homes.
+/// Debug: spawns or despawns the graybox pair — a melee bokobo and an archer
+/// bokobo — at their authored homes. Owned by enemies; the debug hub writes
+/// [`SpawnBokobosRequest`], which replaced a bare F7 key (one owner, one
+/// message, and it shows up in the F1 panel).
+#[derive(Message, Debug, Clone, Copy)]
+pub struct SpawnBokobosRequest;
+
 fn toggle_spawn(
+    mut requests: MessageReader<SpawnBokobosRequest>,
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
     existing: Query<Entity, With<Enemy>>,
 ) {
-    if !keys.just_pressed(KeyCode::F7) {
+    if requests.read().count() == 0 {
         return;
     }
 
@@ -97,7 +103,7 @@ fn toggle_spawn(
         for entity in &existing {
             commands.entity(entity).despawn();
         }
-        info!("[debug] Bokobos despawned (F7)");
+        info!("[debug] Bokobos despawned");
         return;
     }
 
@@ -124,7 +130,7 @@ fn toggle_spawn(
             crate::input::frame::ControlOrientation::default(),
         ),
     );
-    info!("[debug] Bokobo pair spawned: melee + archer (F7)");
+    info!("[debug] Bokobo pair spawned: melee + archer");
 }
 
 /// The shared bokobo chassis; `loadout` is the combat archetype (club combo

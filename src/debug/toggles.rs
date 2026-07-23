@@ -12,7 +12,12 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::DebugConfig;
-use super::channel::{DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle};
+use super::channel::{
+    DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle, HudSectionToggle,
+};
+use super::snapshot::HudVisibility;
+use crate::enemies::SpawnBokobosRequest;
+use crate::mounts::data::MountDebugRequest;
 use crate::movement::diag::CastTrace;
 use crate::visuals::{AnimationDebug, PlayerAnimations};
 use crate::world::day_night::TimeOfDayRequest;
@@ -75,11 +80,13 @@ pub(super) fn apply_debug_actions(
     mut requests: MessageReader<DebugActionRequest>,
     mut time_of_day: MessageWriter<TimeOfDayRequest>,
     mut probe: MessageWriter<crate::movement::probe_data::ProbeToggleRequest>,
+    mut bokobos: MessageWriter<SpawnBokobosRequest>,
+    mut horse: MessageWriter<MountDebugRequest>,
 ) {
     for DebugActionRequest(action) in requests.read().copied() {
         match action {
-            // Movement owns the probe entity and its request type; debug only
-            // translates the hub click into it.
+            // Each owning module holds the entity and its request type; debug
+            // only translates the hub click into the message it already reads.
             DebugAction::ToggleProbe => {
                 probe.write(crate::movement::probe_data::ProbeToggleRequest);
             }
@@ -89,7 +96,29 @@ pub(super) fn apply_debug_actions(
             DebugAction::ToggleTimeSpeed => {
                 time_of_day.write(TimeOfDayRequest::ToggleSpeed);
             }
+            DebugAction::ToggleBokobos => {
+                bokobos.write(SpawnBokobosRequest);
+            }
+            DebugAction::ToggleHorse => {
+                horse.write(MountDebugRequest::ToggleHorse);
+            }
         }
+    }
+}
+
+/// Applies the F2 readout menu's per-section toggles. The only writer of
+/// [`HudVisibility`]; presentation just asks (§7).
+pub(super) fn apply_hud_section_toggles(
+    mut requests: MessageReader<HudSectionToggle>,
+    mut visibility: ResMut<HudVisibility>,
+) {
+    for HudSectionToggle(section) in requests.read().copied() {
+        let now = visibility.toggle(section);
+        info!(
+            "[debug] hud {}: {}",
+            section.title(),
+            if now { "shown" } else { "hidden" }
+        );
     }
 }
 

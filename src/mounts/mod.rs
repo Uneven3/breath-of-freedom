@@ -34,7 +34,6 @@ impl Plugin for MountsPlugin {
         app.add_message::<MountTransitionRequest>();
         app.init_resource::<charge_data::ChargeHitLedger>();
         app.init_resource::<charge_data::ChargeShape>();
-        app.add_systems(Update, debug::capture_toggle_request);
         app.configure_sets(
             FixedUpdate,
             (MountsSet::Request, MountsSet::Lifecycle)

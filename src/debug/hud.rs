@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use super::snapshot::DebugSnapshot;
+use super::snapshot::{DebugSnapshot, HudVisibility};
 
 #[derive(Component)]
 pub(super) struct DebugText;
@@ -28,7 +28,8 @@ pub(super) fn spawn_debug_text(mut commands: Commands) {
 
 pub(super) fn render_hud(
     snapshot: Res<DebugSnapshot>,
+    visibility: Res<HudVisibility>,
     mut text: Single<&mut Text, With<DebugText>>,
 ) {
-    text.0 = snapshot.lines().join("\n");
+    text.0 = snapshot.visible_lines(&visibility).join("\n");
 }

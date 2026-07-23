@@ -13,13 +13,15 @@
 //! flips, casts), not a snapshot of the present, so it goes straight to the
 //! log without passing through the snapshot.
 //!
-//! Everything is reached from the hub (**F1**, see
-//! `presentation::debug_ui`): channels, render knobs, one-shot actions and the
-//! scripted benchmark. Twelve unlabelled function keys were not a design, and
-//! they had run out of room. The two keys that remain are the ones a menu
-//! cannot serve: **[** / **]** cycle animation clips while the browser is
-//! open, and **P** dumps the current snapshot to the log so a moment can be
-//! marked without opening a modal over the thing being observed.
+//! Everything is reached from two panels (see `presentation::debug_ui`): the
+//! **F1** hub (channels, render knobs, one-shot actions — including the bokobo
+//! and horse spawns that used to be bare F7/F8 keys — and the scripted
+//! benchmark) and the **F2** readout menu (which real-time groups the overlay
+//! draws). Twelve unlabelled function keys were not a design, and they had run
+//! out of room. The keys that remain are the ones a menu cannot serve:
+//! **[** / **]** cycle animation clips while the browser is open, and **P**
+//! dumps the current snapshot to the log so a moment can be marked without
+//! opening a modal over the thing being observed.
 
 pub mod channel;
 mod collect;
@@ -63,6 +65,7 @@ impl Plugin for DebugPlugin {
         app.init_resource::<DebugConfig>();
         app.init_resource::<SimTick>();
         app.init_resource::<snapshot::DebugSnapshot>();
+        app.init_resource::<snapshot::HudVisibility>();
         // FPS / frame-time source for the perf section.
         app.add_plugins(FrameTimeDiagnosticsPlugin::default());
 
@@ -77,7 +80,11 @@ impl Plugin for DebugPlugin {
             Update,
             (
                 (
-                    collect::collect_player,
+                    collect::collect_vitals,
+                    collect::collect_locomotion,
+                    collect::collect_contact,
+                    collect::collect_combat,
+                    collect::collect_mount,
                     collect::collect_perf,
                     collect::collect_toggles,
                 ),
@@ -93,11 +100,13 @@ impl Plugin for DebugPlugin {
 
         app.add_message::<channel::DebugChannelToggle>();
         app.add_message::<channel::DebugActionRequest>();
+        app.add_message::<channel::HudSectionToggle>();
         app.add_systems(
             Update,
             (
                 toggles::apply_channel_toggles,
                 toggles::apply_debug_actions,
+                toggles::apply_hud_section_toggles,
                 toggles::cycle_animation_clips,
                 gizmos::draw_sensor_gizmos,
             ),

@@ -8,15 +8,6 @@ use super::lifecycle::spawn_horse_bundle;
 type ToggleHorseQuery<'w, 's> =
     Query<'w, 's, (Entity, &'static RiddenBy), (With<Horse>, Without<PendingHorseDespawn>)>;
 
-pub fn capture_toggle_request(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut requests: MessageWriter<MountDebugRequest>,
-) {
-    if keys.just_pressed(KeyCode::F8) {
-        requests.write(MountDebugRequest::ToggleHorse);
-    }
-}
-
 pub fn process_toggle_requests(
     mut commands: Commands,
     mut requests: MessageReader<MountDebugRequest>,

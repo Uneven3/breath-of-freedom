@@ -10,7 +10,9 @@ use super::snapshot::{DebugSnapshot, Field, SectionId};
 use super::{DebugConfig, SimTick};
 use crate::combat::motors::aim::DrawStrength;
 use crate::combat::state::CombatState;
+use crate::health::Health;
 use crate::inventory::{Inventory, ItemKind, WeaponDurability};
+use crate::mounts::data::{Horse, HorseCharge, RiddenBy};
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use crate::movement::probe_data::TraversalProbe;
 use crate::movement::stamina::Stamina;
@@ -20,42 +22,24 @@ use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
 use crate::visuals::{AnimationDebug, PlayerAnimations};
 use crate::world::day_night::TimeOfDay;
 
-type PlayerReport<'a> = (
-    &'a LocomotionState,
-    &'a CombatState,
+// Each section has its own focused producer (§1): a system reads exactly the
+// components its slot needs and writes only that slot (§7). Adding a debug datum
+// is one more `Field` or one small system — never a change to a shared monolith.
+// The player-focused producers deliberately do not reach for the horse: it is a
+// separate actor with its own producer (`collect_mount`).
+
+type VitalsReport<'a> = (
     &'a Stamina,
-    &'a BodyVelocity,
-    &'a GroundFacts,
-    &'a BodyContact,
-    &'a StairsFacts,
-    &'a LadderFacts,
-    &'a LedgeFacts,
-    &'a DrawStrength,
-    &'a crate::health::Health,
+    &'a Health,
     &'a Inventory,
     Option<&'a WeaponDurability>,
 );
 
-pub(super) fn collect_player(
-    player: Single<PlayerReport, With<Player>>,
+pub(super) fn collect_vitals(
+    player: Single<VitalsReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (
-        state,
-        combat,
-        stamina,
-        vel,
-        ground,
-        contact,
-        stairs,
-        ladder,
-        ledge,
-        draw,
-        hp,
-        inventory,
-        weapon,
-    ) = *player;
-
+    let (stamina, hp, inventory, weapon) = *player;
     let weapon_status = match weapon {
         Some(durability) => format!(
             "{} {}/{}",
@@ -89,7 +73,15 @@ pub(super) fn collect_player(
             Field::new("food", food.to_string()),
         ],
     );
+}
 
+type LocomotionReport<'a> = (&'a LocomotionState, &'a BodyVelocity, &'a GroundFacts);
+
+pub(super) fn collect_locomotion(
+    player: Single<LocomotionReport, With<Player>>,
+    mut snapshot: ResMut<DebugSnapshot>,
+) {
+    let (state, vel, ground) = *player;
     let v = vel.0;
     snapshot.set(
         SectionId::Locomotion,
@@ -103,7 +95,20 @@ pub(super) fn collect_player(
             Field::volatile("ascend_dot", format!("{:.3}", ground.ascend_dot)),
         ],
     );
+}
 
+type ContactReport<'a> = (
+    &'a BodyContact,
+    &'a StairsFacts,
+    &'a LadderFacts,
+    &'a LedgeFacts,
+);
+
+pub(super) fn collect_contact(
+    player: Single<ContactReport, With<Player>>,
+    mut snapshot: ResMut<DebugSnapshot>,
+) {
+    let (contact, stairs, ladder, ledge) = *player;
     let n = ledge.climb_normal.unwrap_or(Vec3::ZERO);
     snapshot.set(
         SectionId::Contact,
@@ -123,12 +128,63 @@ pub(super) fn collect_player(
             Field::flag("vault", ledge.is_vaultable),
         ],
     );
+}
 
+type CombatReport<'a> = (&'a CombatState, &'a DrawStrength);
+
+pub(super) fn collect_combat(
+    player: Single<CombatReport, With<Player>>,
+    mut snapshot: ResMut<DebugSnapshot>,
+) {
+    let (combat, draw) = *player;
     snapshot.set(
         SectionId::Combat,
         vec![
             Field::new("state", format!("{combat:?}")),
             Field::volatile("draw", format!("{:.0}%", draw.factor * 100.0)),
+        ],
+    );
+}
+
+type HorseReport<'a> = (
+    &'a LocomotionState,
+    &'a BodyVelocity,
+    &'a HorseCharge,
+    &'a Health,
+    &'a Stamina,
+    &'a RiddenBy,
+);
+
+/// The mount is a separate actor, so the player-focused producers never saw it —
+/// the blind spot this section closes. Reports the ridden horse (or the first
+/// spawned) and clears the slot when no horse exists, so it never lingers stale
+/// after a despawn.
+pub(super) fn collect_mount(
+    horses: Query<HorseReport, With<Horse>>,
+    mut snapshot: ResMut<DebugSnapshot>,
+) {
+    let report = horses
+        .iter()
+        .find(|(.., ridden)| ridden.0.is_some())
+        .or_else(|| horses.iter().next());
+    let Some((state, vel, charge, hp, stamina, ridden)) = report else {
+        snapshot.clear(SectionId::Mount);
+        return;
+    };
+    let v = vel.0;
+    snapshot.set(
+        SectionId::Mount,
+        vec![
+            Field::flag("ridden", ridden.0.is_some()),
+            Field::new("state", format!("{state:?}")),
+            Field::volatile("speed", format!("{:.2}", Vec3::new(v.x, 0.0, v.z).length())),
+            Field::flag("charge", charge.active),
+            Field::new("charge_gen", charge.generation.to_string()),
+            Field::volatile("hp", format!("{:.0}/{:.0}", hp.current(), hp.max())),
+            Field::volatile(
+                "stamina",
+                format!("{:.0}/{:.0}", stamina.current(), stamina.max()),
+            ),
         ],
     );
 }
@@ -187,7 +243,6 @@ pub(super) fn collect_perf(
     for knob in PerfKnob::ALL {
         fields.push(Field::new(knob.label(), perf.knob_value(knob)));
     }
-    fields.push(Field::new("F11 selected", perf.selected_label()));
 
     snapshot.set(SectionId::Perf, fields);
 }

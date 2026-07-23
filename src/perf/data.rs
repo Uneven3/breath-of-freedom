@@ -199,10 +199,6 @@ impl PerfToggles {
         }
     }
 
-    pub fn selected_label(&self) -> &'static str {
-        self.selected_knob().label()
-    }
-
     /// A knob's value with no decoration. Single definition — the HUD, the
     /// console and the keypress log all render from this.
     pub fn knob_value(&self, knob: PerfKnob) -> String {

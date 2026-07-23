@@ -3,6 +3,10 @@
 
 use bevy::prelude::*;
 
+use super::style::{
+    ACCENT, ACCENT_DARK, BORDER, PANEL, PANEL_INSET, ROW, TEXT_BRIGHT, TEXT_MUTED, body_font,
+    heading_font, row_node, section_title,
+};
 use super::{
     BenchmarkButton, BenchmarkText, ChannelButton, ChannelText, CloseButton, DebugUiRoot,
     KnobButton, KnobText, ReadoutText, ScrollPanel,
@@ -12,41 +16,6 @@ use crate::perf::PerfKnob;
 use crate::perf::sequence::VantageMode;
 
 use super::ActionButton;
-
-const PANEL: Color = Color::srgba(0.055, 0.065, 0.07, 0.98);
-const PANEL_INSET: Color = Color::srgb(0.09, 0.105, 0.11);
-const ROW: Color = Color::srgb(0.115, 0.13, 0.135);
-const ACCENT: Color = Color::srgb(0.25, 0.82, 0.67);
-const ACCENT_DARK: Color = Color::srgb(0.08, 0.34, 0.29);
-const BORDER: Color = Color::srgb(0.25, 0.28, 0.29);
-const TEXT_BRIGHT: Color = Color::srgb(0.94, 0.96, 0.93);
-const TEXT_MUTED: Color = Color::srgb(0.62, 0.67, 0.65);
-
-fn body_font() -> TextFont {
-    TextFont {
-        font_size: FontSize::Px(15.0),
-        ..default()
-    }
-}
-
-fn heading_font() -> TextFont {
-    TextFont {
-        font_size: FontSize::Px(18.0),
-        ..default()
-    }
-}
-
-fn row_node() -> Node {
-    Node {
-        width: Val::Percent(100.0),
-        padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
-        justify_content: JustifyContent::SpaceBetween,
-        align_items: AlignItems::Center,
-        column_gap: Val::Px(12.0),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
-        ..default()
-    }
-}
 
 pub(super) fn spawn_debug_ui(mut commands: Commands) {
     commands
@@ -121,19 +90,6 @@ fn header(panel: &mut ChildSpawnerCommands) {
                 TextColor(TEXT_MUTED),
             ));
         });
-}
-
-fn section_title(panel: &mut ChildSpawnerCommands, title: &str, subtitle: &str) {
-    panel.spawn((
-        Text::new(title),
-        heading_font(),
-        TextColor(ACCENT),
-        Node {
-            margin: UiRect::top(Val::Px(6.0)),
-            ..default()
-        },
-    ));
-    panel.spawn((Text::new(subtitle), body_font(), TextColor(TEXT_MUTED)));
 }
 
 fn measurement_section(panel: &mut ChildSpawnerCommands) {

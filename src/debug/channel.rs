@@ -10,6 +10,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::DebugConfig;
+use super::snapshot::SectionId;
 use crate::visuals::AnimationDebug;
 
 /// Read-only view of which channels are on, so presentation can render state
@@ -83,19 +84,25 @@ impl DebugChannel {
 #[derive(Message, Debug, Clone, Copy)]
 pub struct DebugChannelToggle(pub DebugChannel);
 
-/// One-shot debug actions that are not a persistent switch.
+/// One-shot debug actions that are not a persistent switch. The two spawn
+/// toggles replaced bare F7/F8 keys: debug translates the click into the
+/// owning module's request message (same pattern as `ToggleProbe`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DebugAction {
     ToggleProbe,
     AdvanceHour,
     ToggleTimeSpeed,
+    ToggleBokobos,
+    ToggleHorse,
 }
 
 impl DebugAction {
-    pub const ALL: [DebugAction; 3] = [
+    pub const ALL: [DebugAction; 5] = [
         DebugAction::ToggleProbe,
         DebugAction::AdvanceHour,
         DebugAction::ToggleTimeSpeed,
+        DebugAction::ToggleBokobos,
+        DebugAction::ToggleHorse,
     ];
 
     pub fn label(self) -> &'static str {
@@ -103,9 +110,16 @@ impl DebugAction {
             DebugAction::ToggleProbe => "Probe dummy",
             DebugAction::AdvanceHour => "Advance 1 hour",
             DebugAction::ToggleTimeSpeed => "Fast-forward time",
+            DebugAction::ToggleBokobos => "Bokobos on/off",
+            DebugAction::ToggleHorse => "Horse on/off",
         }
     }
 }
 
 #[derive(Message, Debug, Clone, Copy)]
 pub struct DebugActionRequest(pub DebugAction);
+
+/// Presentation asks; `debug` owns [`HudVisibility`](super::snapshot::HudVisibility)
+/// and applies the toggle (§7). Carries which readout group the F2 menu flipped.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct HudSectionToggle(pub SectionId);

@@ -56,17 +56,19 @@ pub enum SectionId {
     Locomotion,
     Contact,
     Combat,
+    Mount,
     Toggles,
 }
 
 impl SectionId {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
     pub const ALL: [SectionId; Self::COUNT] = [
         SectionId::Perf,
         SectionId::Vitals,
         SectionId::Locomotion,
         SectionId::Contact,
         SectionId::Combat,
+        SectionId::Mount,
         SectionId::Toggles,
     ];
 
@@ -77,6 +79,7 @@ impl SectionId {
             SectionId::Locomotion => "locomotion",
             SectionId::Contact => "contact",
             SectionId::Combat => "combat",
+            SectionId::Mount => "mount",
             SectionId::Toggles => "toggles",
         }
     }
@@ -88,7 +91,8 @@ impl SectionId {
             SectionId::Locomotion => 2,
             SectionId::Contact => 3,
             SectionId::Combat => 4,
-            SectionId::Toggles => 5,
+            SectionId::Mount => 5,
+            SectionId::Toggles => 6,
         }
     }
 }
@@ -113,6 +117,13 @@ impl DebugSnapshot {
 
     pub fn get(&self, id: SectionId) -> Option<&Section> {
         self.sections[id.index()].as_ref()
+    }
+
+    /// Drops a section so it stops rendering — for a producer whose subject is
+    /// absent this frame (no horse spawned), so it never lingers stale. The
+    /// mirror of `set`: "nothing to report" rather than reporting the last value.
+    pub fn clear(&mut self, id: SectionId) {
+        self.sections[id.index()] = None;
     }
 
     /// One section rendered as `title: label=value  label=value`.
@@ -146,6 +157,52 @@ impl DebugSnapshot {
             .filter_map(|id| self.line(id))
             .collect()
     }
+
+    /// HUD lines for the sections the readout menu currently shows. The console
+    /// and the full `P` dump ignore visibility — this only trims the always-on
+    /// on-screen overlay so it stops being a wall of text (see [`HudVisibility`]).
+    pub fn visible_lines(&self, visibility: &HudVisibility) -> Vec<String> {
+        SectionId::ALL
+            .into_iter()
+            .filter(|id| visibility.is_visible(*id))
+            .filter_map(|id| self.line(id))
+            .collect()
+    }
+}
+
+/// Which HUD sections the on-screen overlay draws. Toggled from the F2 readout
+/// menu; `debug` owns it and applies the toggles (§7). The console and full
+/// dumps stay complete — the log remains the whole record regardless of what
+/// the screen is trimmed to.
+#[derive(Resource)]
+pub struct HudVisibility {
+    visible: [bool; SectionId::COUNT],
+}
+
+impl Default for HudVisibility {
+    fn default() -> Self {
+        // Lean default: only locomotion and the health/stamina readout (Vitals).
+        // Everything else — perf, contact, combat, mount, the toggle mirror — is
+        // opt-in from the F2 menu.
+        let mut visible = [false; SectionId::COUNT];
+        for id in [SectionId::Vitals, SectionId::Locomotion] {
+            visible[id.index()] = true;
+        }
+        Self { visible }
+    }
+}
+
+impl HudVisibility {
+    pub fn is_visible(&self, id: SectionId) -> bool {
+        self.visible[id.index()]
+    }
+
+    /// Flips one section and returns its new state, for the log line.
+    pub fn toggle(&mut self, id: SectionId) -> bool {
+        let slot = &mut self.visible[id.index()];
+        *slot = !*slot;
+        *slot
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +214,26 @@ mod tests {
         snapshot.set(SectionId::Vitals, vec![Field::new("hp", "30/30")]);
         snapshot.set(SectionId::Perf, vec![Field::new("fps", "28.4")]);
         snapshot
+    }
+
+    /// `index()` and `ALL` are hand-kept in sync (the whole slot scheme relies
+    /// on it); this fails the moment a new `SectionId` breaks either.
+    #[test]
+    fn section_ids_index_uniquely_and_cover_all() {
+        assert_eq!(SectionId::ALL.len(), SectionId::COUNT);
+        for (position, id) in SectionId::ALL.into_iter().enumerate() {
+            assert_eq!(id.index(), position, "{id:?} index must match ALL order");
+        }
+    }
+
+    /// A producer with no subject this frame clears its slot; the section then
+    /// stops rendering instead of showing the last value it had.
+    #[test]
+    fn clearing_a_section_stops_it_rendering() {
+        let mut snapshot = sample();
+        assert!(snapshot.line(SectionId::Vitals).is_some());
+        snapshot.clear(SectionId::Vitals);
+        assert!(snapshot.line(SectionId::Vitals).is_none());
     }
 
     /// The reason the snapshot exists: HUD and console must never be able to
@@ -228,6 +305,30 @@ mod tests {
         let before = snapshot.stable_line(SectionId::Locomotion);
         snapshot.set(SectionId::Locomotion, vec![Field::new("state", "Fall")]);
         assert_ne!(before, snapshot.stable_line(SectionId::Locomotion));
+    }
+
+    /// The declutter contract: the overlay only shows the sections the readout
+    /// menu left on, while the full `lines()` dump (and the console) keep them all.
+    #[test]
+    fn hud_visibility_trims_the_overlay_but_not_the_full_dump() {
+        let snapshot = sample(); // Perf + Vitals populated.
+        let mut visibility = HudVisibility::default();
+        // Default shows Vitals but not Perf (Locomotion has no data here).
+        assert_eq!(
+            snapshot.visible_lines(&visibility),
+            vec!["vitals: hp=30/30"]
+        );
+
+        visibility.toggle(SectionId::Perf); // opt Perf in
+        assert_eq!(
+            snapshot.visible_lines(&visibility),
+            vec!["perf: fps=28.4", "vitals: hp=30/30"]
+        );
+        assert_eq!(
+            snapshot.lines().len(),
+            2,
+            "hiding a section on screen must not touch the full dump"
+        );
     }
 
     /// A section made only of continuous values must stay silent, not emit a

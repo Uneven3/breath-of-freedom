@@ -1,9 +1,12 @@
-//! The debug hub: one key opens it, everything else is a click.
+//! The debug panels: **F1** opens the tools hub, **F2** the readout menu.
+//! Everything else is a click.
 //!
-//! Read-only over gameplay and over `debug`/`perf` state — it renders what it
+//! Read-only over gameplay and over `debug`/`perf` state — each renders what it
 //! finds and turns clicks into messages the owning modules validate and apply
-//! (§20). It replaces twelve function keys that had no hierarchy, no
-//! discoverability, and no room left to grow.
+//! (§20). Together they replace twelve function keys that had no hierarchy, no
+//! discoverability, and no room left to grow. The hub holds channels, render
+//! knobs, one-shot actions and the benchmark; the readout menu (`hud_menu`)
+//! picks which real-time groups the on-screen overlay draws.
 //!
 //! The panel deliberately closes itself before a benchmark run starts: a modal
 //! overlay is extra UI draw work and holds the pointer, and neither belongs in
@@ -17,7 +20,9 @@ use crate::debug::channel::{
 use crate::input::ModalInputFocusRequest;
 use crate::perf::{Benchmark, BenchmarkRequest, PerfKnob, PerfKnobToggle, PerfToggles};
 
+mod hud_menu;
 mod overlay;
+mod style;
 mod view;
 
 #[derive(Resource, Default)]
@@ -66,7 +71,15 @@ pub struct DebugUiPlugin;
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugUiState>();
-        app.add_systems(Startup, (view::spawn_debug_ui, overlay::spawn_overlay));
+        app.init_resource::<hud_menu::HudMenuState>();
+        app.add_systems(
+            Startup,
+            (
+                view::spawn_debug_ui,
+                overlay::spawn_overlay,
+                hud_menu::spawn_hud_menu,
+            ),
+        );
         app.add_systems(
             Update,
             (
@@ -79,6 +92,18 @@ impl Plugin for DebugUiPlugin {
                 // when a run starts, and that is exactly when the overlay has
                 // something to say.
                 overlay::update_overlay,
+            )
+                .chain(),
+        );
+        // The F2 readout menu is an independent modal, so its systems form their
+        // own chain rather than joining the hub's.
+        app.add_systems(
+            Update,
+            (
+                hud_menu::toggle_hud_menu,
+                hud_menu::handle_hud_menu_clicks,
+                hud_menu::sync_hud_menu_visibility,
+                hud_menu::sync_hud_menu_labels.run_if(hud_menu::menu_is_open),
             )
                 .chain(),
         );

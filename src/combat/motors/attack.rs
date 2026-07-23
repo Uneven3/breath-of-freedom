@@ -179,11 +179,15 @@ pub fn sweep_active_swings(
             continue;
         };
         let center = transform.translation + forward * radius;
-        let filter =
-            SpatialQueryFilter::from_mask(GameLayer::Actor).with_excluded_entities([attacker]);
+        // Mask-only filter: excluding the attacker with `with_excluded_entities`
+        // would allocate an `EntityHashSet` every Active tick (§18). The
+        // attacker is already in scope, so it is skipped in the callback
+        // instead — the same way the arrow pool reuses one filter to avoid
+        // this exact per-tick allocation.
+        let filter = SpatialQueryFilter::from_mask(GameLayer::Actor);
 
         spatial.shape_intersections_callback(shape, center, Quat::IDENTITY, &filter, |candidate| {
-            if swing.contains(candidate) {
+            if candidate == attacker || swing.contains(candidate) {
                 return true;
             }
             let Ok(target_tf) = targets.get(candidate) else {

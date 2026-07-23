@@ -247,8 +247,11 @@ pub fn shoot_drawn_arrow(
             let right = right.normalize();
             let up = right.cross(direction).normalize();
 
-            // Pseudo-random LCG based on time
-            let mut seed = (time.elapsed_secs_f64().fract() * 100000.0) as u32;
+            // Pseudo-random LCG seeded from time, mixed with the shooter so two
+            // actors firing on the same fixed tick get independent spread
+            // (the tick's `elapsed_secs` is shared across all of them).
+            let mut seed =
+                ((time.elapsed_secs_f64().fract() * 100000.0) as u32) ^ (shooter.to_bits() as u32);
             let r1 = next_random(&mut seed) * 2.0 - 1.0;
             let r2 = next_random(&mut seed) * 2.0 - 1.0;
 

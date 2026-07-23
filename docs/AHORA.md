@@ -104,6 +104,37 @@ corregido a laplaciana (segunda derivada), que da cero en cualquier plano.
   suba; streaming por chunks para el mundo grande: la costura ya existe en
   `world/layout.rs`.
 
+## Suite de rendimiento — TODO (2026-07-22)
+
+Antes de agrandar el juego: instrumentación que diga, siempre, si se aplican las
+técnicas correctas. Principio: **el medidor dice *cuándo* una técnica vale la
+pena; no se aplican todas siempre** (eso es cargo-culting y frena al dev, no al
+juego). Piso objetivo: **móvil gama media ~2021**; arte propio en **Blender**
+(low-poly, ver NORTE). Ya existe y no se rehace: FPS/frame-time, GPU por pass
+(incl. sombras) vía `gpu_pass_costs`, watchdog de tris por malla, frustum culling
+(default de Bevy), cull por distancia (`VisibilityRange`) y ~11 perillas A/B.
+
+- **Fase 1 — inventario de escena ✅ (2026-07-22):** sección `scene` del debug
+  (`debug/collect.rs::collect_scene`): mallas visibles, `tris` en cámara, `draws`
+  (pares malla+material distintos ≈ draw calls; verifica que el instancing/batching
+  funcione), `mats` distintos y `lod_cull` (range-culled/total). Todo volátil;
+  throttle a 4 Hz para no contaminar la medición. Off por default en el HUD (F2).
+  Se loguea en la cadencia periódica junto a `perf` (`debug/console.rs`), así que
+  aparece en los logs de la secuencia de benchmark, una vez por paso.
+- **Fase 2 — vistas de diagnóstico visual:** wireframe (`WireframePlugin`) y modo
+  overdraw (material aditivo semitransparente) — el fill-rate/overdraw es el
+  asesino #1 en GPU móvil y hoy no se visualiza.
+- **Fase 3 — presupuestos móviles automáticos:** umbrales gama-media (tris,
+  draws, materiales) que avisan en log como el watchdog de mallas; perfil "móvil"
+  en `PerfToggles` (2 cascadas, mapa chico, MSAA 4x — casi gratis en TBDR móvil,
+  al revés que en escritorio).
+- **Cámara flythrough (estilo Assassin's Creed / Horizon Zero Dawn):** recorre
+  lugares del mundo para medir rendimiento repetible por zonas; se integra con la
+  secuencia de benchmark (`perf/sequence.rs`).
+- **Diferido, solo si el profiler lo pide:** impostores (hoy fog+VisibilityRange
+  ya cullean lo lejano); occlusion culling (el de Bevy es experimental vía
+  meshlets, no mobile-friendly todavía).
+
 ## Cierre del graybox (decisión del usuario, 2026-07-17)
 
 Hecho, probado en conjunto y con rendimiento cerrado (2026-07-21):

@@ -37,12 +37,27 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 
 ## Dirección visual y sonora
 
-- PBR estilizado sobre `StandardMaterial` de Bevy: materiales mate, iluminación,
-  atmósfera y paleta vibrante; toon/custom shaders quedan como experimentos.
+- **Low-poly por elección, no por defecto.** Sin artista dedicado, low-poly es
+  lo único cost-efficient de autorear, y a la vez es lo que corre en el piso
+  objetivo: **móvil de gama media (~2021)**. La restricción de autoría y la meta
+  de rendimiento coinciden. Los assets actuales (Quaternius, MegaKits, Modular
+  Dungeon) son de prueba, reemplazables.
+- **Dirección artística por sobre fidelidad.** La belleza es *luz + color +
+  atmósfera*, no detalle geométrico ni texturas complejas; silueta legible y
+  paleta coherente antes que polígonos. Referencias: Journey (norte
+  aspiracional), art of rally, Gedonia, The Bloodline, BattleBit, Halo 1,
+  WoW Classic, Super Mario 64.
+- **PBR estilizado sobre `StandardMaterial`**, inclinado a lo plano: materiales
+  mate (roughness alto, cero metal), color e iluminación mandando. Para arte
+  propio: vertex-color / material plano apoyado en la luz, antes que sets PBR
+  texturizados. Toon/custom shaders y el outline fullscreen quedan como
+  experimentos (el outline fullscreen no va a móvil: es peaje de ancho de banda).
 - Assets de prototipado reemplazables mediante catálogo de presentación:
   identidad de gameplay, visual y colisión permanecen independientes.
-- Objetivo de 60 FPS en el hardware de referencia con presupuestos medidos;
-  más mundo no justifica degradar la respuesta del movimiento.
+- **Rendimiento:** 60 FPS en hardware de referencia con presupuestos medidos; en
+  el piso móvil el costo real no son los polígonos sino fill-rate/overdraw,
+  passes fullscreen, sombras y draw calls. Más mundo no justifica degradar la
+  respuesta del movimiento.
 - Música ambiental minimalista; SFX estilizados. Hasta tener audio real,
   cada punto sonoro emite un *cue* de debug (`[audio] cue: …`).
 
@@ -94,4 +109,6 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 - Diseño concreto de monturas (criaturas, domado/vínculo).
 - Árbol de crafteo/recetas.
 - Tamaño del mundo y modelo de persistencia.
-- Pipeline de assets (¿solo CC0? ¿arte propio?).
+- Pipeline concreto de arte propio low-poly en **Blender** (LOD, compresión de
+  texturas para móvil). *Decidido:* arte propio low-poly en Blender, no
+  dependencia de CC0.

@@ -40,6 +40,68 @@ Categorías y directorios runtime:
 `assets/game/authored/` es la única frontera autodescubierta. Legacy no se
 valida contra esta convención y conserva receta explícita hasta ser reemplazado.
 
+## Tutorial recomendado: primero el contrato, después el detalle
+
+No empezar esculpiendo. Primero construir en Blender una versión gris que
+demuestre escala, pivote y colisión; probarla en Bevy; recién después agregar
+silueta, materiales y LODs. Para `prop_barrel`:
+
+1. **Elegir identidad y carpeta.** Crear
+   `art/blender/props/prop_barrel.blend`. El nombre define la clave estable; no
+   es una ruta de gameplay.
+2. **Fijar metros, frente y pivote.** Usar unidades Metric/1, apoyar el origen
+   en el suelo y verificar el tamaño junto a una referencia humana.
+3. **Crear la colisión primero.** Agregar una primitiva Blender separada
+   (Cube, UV Sphere, Cylinder o Capsule), ajustarla al volumen jugable, aplicar
+   escala/rotación y nombrar objeto **y mesh datablock** según lo que Bevy debe
+   construir: `UBX_Body`, `USP_Body`, `UCY_Body` o `UCP_Body`.
+4. **Crear el render alrededor del collider.** El primer mesh es
+   `SM_Barrel_LOD0`; nunca reutilizarlo como colisión. El helper puede verse en
+   Blender, pero el loader le quita su render al instanciar el GLB.
+5. **Asignar paleta.** Reusar `M_Wood`, `M_Steel`, etc. Si el look ya existe,
+   no crear otra clave. Un look realmente nuevo se aprueba y agrega a la
+   paleta antes de exportar.
+6. **Agregar raíz y ficha.** Parentar todo bajo `ROOT_prop_barrel` y declarar
+   `bof_license`, `bof_profile`, `bof_material_kind` y `bof_climbable`.
+7. **Agregar lo opcional al final.** Primero sockets `SKT_*`; después
+   `LOD1/LOD2`; animaciones sólo para `SK_*`. Validar cada incremento.
+8. **Guardar, exportar y compilar** con los comandos de “Export reproducible”.
+   Un fallo debe corregirse en Blender, no parchearse con escala, collider o
+   material bespoke en Rust.
+
+Árbol mínimo esperado:
+
+```text
+ROOT_prop_barrel
+├── SM_Barrel_LOD0   [M_Wood, M_Steel]
+├── UBX_Body
+└── SKT_Top
+```
+
+La primitiva de Blender pierde su historial de “fui creada como Cube” al
+convertirse en glTF: queda como geometría. Por eso el prefijo es el contrato
+autoritativo. `UBX_` significa “Bevy construirá un box desde estos bounds”,
+aunque alguien deforme el helper; `UCY_` significa cylinder, etc. Para que “sea
+lo que dice ser”, partir de la primitiva correspondiente, no editar su
+topología y aplicar transforms. `UCX_` es la excepción: sus vértices authored
+sí definen el convex hull.
+
+Hay tres controles, con responsabilidades distintas:
+
+1. **Exportador Blender:** rechaza nombres, transforms, jerarquía, materiales o
+   LODs inválidos antes de escribir el GLB.
+2. **Bevy al compilar:** `build.rs` abre el GLB real; si ruta, extras, helper,
+   material o geometría contradicen el contrato, `cargo check` falla nombrando
+   asset y regla. También hornea sockets/colliders a datos puros.
+3. **Bevy al instanciar:** remapea la paleta, aplica LOD, oculta helpers y
+   comprueba `GltfExtras`. Si la escena no carga conserva el proxy y loguea el
+   error. Verla bien en pantalla completa la validación.
+
+Registro automático no significa spawn automático. Soltar el GLB lo incorpora
+al catálogo; todavía se elige explícitamente qué identidad de gameplay lo usa y
+dónde aparece en `world/layout.rs`. Ese binding menciona claves semánticas
+(`prop_barrel`, `prop_barrel_body`), nunca paths, meshes ni handles.
+
 ## Sistema de coordenadas y escena Blender
 
 - Unidades `Metric`, `Unit Scale = 1`; una unidad equivale a un metro.

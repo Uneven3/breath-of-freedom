@@ -32,8 +32,11 @@ pub mod snapshot;
 mod toggles;
 mod trace;
 
+use std::time::Duration;
+
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_timer;
 
 use crate::movement::MovementSet;
 use crate::movement::proposal::ProposalBuffer;
@@ -85,6 +88,10 @@ impl Plugin for DebugPlugin {
                     collect::collect_contact,
                     collect::collect_combat,
                     collect::collect_mount,
+                    // A full-scene scan is heavier than the single-actor
+                    // collectors; throttling to 4 Hz keeps the measurement tool
+                    // from showing up in the frame time it exists to measure.
+                    collect::collect_scene.run_if(on_timer(Duration::from_millis(250))),
                     collect::collect_perf,
                     collect::collect_toggles,
                 ),

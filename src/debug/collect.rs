@@ -2,8 +2,13 @@
 //! only place that turns values into strings; the HUD and the console sinks
 //! only arrange what they find here.
 
+use bevy::asset::AssetId;
+use bevy::camera::visibility::{ViewVisibility, VisibilityRange};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::pbr::MeshMaterial3d;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use bevy::render::mesh::Mesh3d;
 use bevy::window::PrimaryWindow;
 
 use super::snapshot::{DebugSnapshot, Field, SectionId};
@@ -189,6 +194,80 @@ pub(super) fn collect_mount(
     );
 }
 
+type SceneMesh<'a> = (
+    &'a ViewVisibility,
+    &'a Mesh3d,
+    &'a MeshMaterial3d<StandardMaterial>,
+);
+
+/// Static scene inventory — the numbers a mobile budget is actually spent on,
+/// distinct from the frame cost in `perf`. `draws` counts distinct
+/// `(mesh, material)` pairs among visible entities: Bevy batches by exactly
+/// that, so it approximates the draw-call count without a private wgpu hook and
+/// drops the moment shared handles let the batcher instance. Covers the shipped
+/// `StandardMaterial` path (world, foliage, imported glTF); experimental custom
+/// materials are out of frame. All fields are volatile — they drift as the
+/// camera moves, so change-triggered console output ignores them.
+pub(super) fn collect_scene(
+    meshes: Query<SceneMesh>,
+    ranged: Query<&ViewVisibility, With<VisibilityRange>>,
+    mesh_assets: Res<Assets<Mesh>>,
+    mut snapshot: ResMut<DebugSnapshot>,
+) {
+    let mut visible_meshes = 0u32;
+    let mut triangles = 0usize;
+    let mut batches: HashSet<(AssetId<Mesh>, AssetId<StandardMaterial>)> = HashSet::default();
+    let mut materials: HashSet<AssetId<StandardMaterial>> = HashSet::default();
+
+    for (visibility, mesh3d, material) in &meshes {
+        if !visibility.get() {
+            continue; // Frustum-, hierarchy- or range-culled: never submitted.
+        }
+        visible_meshes += 1;
+        batches.insert((mesh3d.0.id(), material.0.id()));
+        materials.insert(material.0.id());
+        if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
+            triangles += match mesh.indices() {
+                Some(indices) => indices.len() / 3,
+                // Non-indexed meshes list every vertex per triangle.
+                None => mesh.count_vertices() / 3,
+            };
+        }
+    }
+
+    // The distance-LOD ledger: how many range-gated meshes the camera dropped
+    // this frame, so the cull can be trusted to be working rather than assumed.
+    let mut ranged_total = 0u32;
+    let mut ranged_culled = 0u32;
+    for visibility in &ranged {
+        ranged_total += 1;
+        if !visibility.get() {
+            ranged_culled += 1;
+        }
+    }
+
+    snapshot.set(
+        SectionId::Scene,
+        vec![
+            Field::volatile("meshes", visible_meshes.to_string()),
+            Field::volatile("tris", kilo(triangles)),
+            Field::volatile("draws", batches.len().to_string()),
+            Field::volatile("mats", materials.len().to_string()),
+            Field::volatile("lod_cull", format!("{ranged_culled}/{ranged_total}")),
+        ],
+    );
+}
+
+/// Raw triangle digits are unreadable at scene scale; abbreviate over 10k so
+/// the overlay stays glanceable (`142.3k`) while small counts stay exact.
+fn kilo(n: usize) -> String {
+    if n >= 10_000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 /// Frame cost plus the benchmark knobs. Kept in one section so a console line
 /// is self-describing: the numbers and the configuration that produced them
 /// never get separated.
@@ -283,4 +362,17 @@ pub(super) fn collect_toggles(
             Field::new("anim", anim_status),
         ],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kilo;
+
+    #[test]
+    fn kilo_keeps_small_counts_exact_and_abbreviates_large_ones() {
+        assert_eq!(kilo(0), "0");
+        assert_eq!(kilo(9_999), "9999"); // still exact just under the threshold
+        assert_eq!(kilo(10_000), "10.0k"); // first abbreviated value
+        assert_eq!(kilo(142_300), "142.3k");
+    }
 }

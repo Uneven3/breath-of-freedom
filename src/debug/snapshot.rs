@@ -52,6 +52,7 @@ impl Field {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SectionId {
     Perf,
+    Scene,
     Vitals,
     Locomotion,
     Contact,
@@ -61,9 +62,10 @@ pub enum SectionId {
 }
 
 impl SectionId {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
     pub const ALL: [SectionId; Self::COUNT] = [
         SectionId::Perf,
+        SectionId::Scene,
         SectionId::Vitals,
         SectionId::Locomotion,
         SectionId::Contact,
@@ -75,6 +77,7 @@ impl SectionId {
     pub fn title(self) -> &'static str {
         match self {
             SectionId::Perf => "perf",
+            SectionId::Scene => "scene",
             SectionId::Vitals => "vitals",
             SectionId::Locomotion => "locomotion",
             SectionId::Contact => "contact",
@@ -87,12 +90,13 @@ impl SectionId {
     fn index(self) -> usize {
         match self {
             SectionId::Perf => 0,
-            SectionId::Vitals => 1,
-            SectionId::Locomotion => 2,
-            SectionId::Contact => 3,
-            SectionId::Combat => 4,
-            SectionId::Mount => 5,
-            SectionId::Toggles => 6,
+            SectionId::Scene => 1,
+            SectionId::Vitals => 2,
+            SectionId::Locomotion => 3,
+            SectionId::Contact => 4,
+            SectionId::Combat => 5,
+            SectionId::Mount => 6,
+            SectionId::Toggles => 7,
         }
     }
 }

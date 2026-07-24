@@ -4,20 +4,12 @@
 
 use bevy::prelude::*;
 
-pub(super) const PANEL: Color = Color::srgba(0.055, 0.065, 0.07, 0.98);
-pub(super) const PANEL_INSET: Color = Color::srgb(0.09, 0.105, 0.11);
-pub(super) const ROW: Color = Color::srgb(0.115, 0.13, 0.135);
-pub(super) const ACCENT: Color = Color::srgb(0.25, 0.82, 0.67);
-pub(super) const ACCENT_DARK: Color = Color::srgb(0.08, 0.34, 0.29);
-pub(super) const BORDER: Color = Color::srgb(0.25, 0.28, 0.29);
-pub(super) const TEXT_BRIGHT: Color = Color::srgb(0.94, 0.96, 0.93);
-pub(super) const TEXT_MUTED: Color = Color::srgb(0.62, 0.67, 0.65);
+pub(super) use crate::presentation::theme::{
+    ACCENT, ACCENT_DARK, BORDER, PANEL, PANEL_INSET, ROW_OR_SLOT_BG as ROW, TEXT_BRIGHT, TEXT_MUTED,
+};
 
 pub(super) fn body_font() -> TextFont {
-    TextFont {
-        font_size: FontSize::Px(15.0),
-        ..default()
-    }
+    crate::presentation::theme::body_font(15.0)
 }
 
 pub(super) fn heading_font() -> TextFont {

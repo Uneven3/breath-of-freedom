@@ -30,12 +30,14 @@ type GroundFlipQuery<'a> = (
 pub(super) fn log_ground_flips(
     config: Res<DebugConfig>,
     tick: Res<SimTick>,
+    entities: &bevy::ecs::entity::Entities,
     q: Query<GroundFlipQuery, With<Actor>>,
     mut prev: Local<HashMap<Entity, bool>>,
 ) {
     if !config.log_transitions {
         return;
     }
+    prev.retain(|e, _| entities.contains(*e));
     for (entity, ground, vel, sensing, name) in &q {
         let was = prev.insert(entity, ground.grounded);
         if was == Some(ground.grounded) {
@@ -153,6 +155,7 @@ pub(super) fn capture_proposals(
 pub(super) fn log_transitions(
     config: Res<DebugConfig>,
     tick: Res<SimTick>,
+    entities: &bevy::ecs::entity::Entities,
     q: Query<
         (
             Entity,
@@ -169,6 +172,7 @@ pub(super) fn log_transitions(
     if !config.log_transitions {
         return;
     }
+    prev.retain(|e, _| entities.contains(*e));
     for (entity, state, proposals, ground, contact, name) in &q {
         let old = prev.insert(entity, *state);
         if old == Some(*state) {
@@ -297,6 +301,7 @@ pub(super) struct ContextFlags {
 pub(super) fn log_context_fact_flips(
     config: Res<DebugConfig>,
     tick: Res<SimTick>,
+    entities: &bevy::ecs::entity::Entities,
     q: Query<
         (
             Entity,
@@ -312,6 +317,7 @@ pub(super) fn log_context_fact_flips(
     if !config.log_fact_flips {
         return;
     }
+    previous.retain(|e, _| entities.contains(*e));
 
     for (entity, stairs, ladder, ledge, name) in &q {
         let current = ContextFlags {

@@ -6,6 +6,7 @@ pub mod cues;
 pub mod debug_ui;
 pub mod inventory_ui;
 pub mod juice;
+pub mod theme;
 
 /// Registers the presentation-cue message so producers (Movement, Combat) and
 /// consumers (SFX, VFX) share one channel, plus the game-feel feedback layer

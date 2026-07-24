@@ -224,7 +224,8 @@ encara limpio; climb/ladder mantienen facing de pared).
   el objetivo con blend suave al entrar/salir.
 - **Animación direccional** (`animation.rs::directional_role`): `StrafeDir` elige
   `AN_Walk/Run/SneakStrafeL/R|Bwd`; sin clips en el placeholder cae a la base
-  (walk), listo para cuando existan.
+  (walk), listo para cuando existan. El back-pedal reproduce el clip base en
+  reversa (`strafe_playback_speed`) para no moonwalkear; L/R esperan clips.
 
 **Arco + lock-on** (`combat/motors/aim.rs`): estando lockeado, el disparo usa una
 orientación efectiva que apunta al objetivo (`lock_aim_orientation`), no el mouse

@@ -103,6 +103,22 @@ fn directional_role(base: AnimationRole, strafe: StrafeDir) -> AnimationRole {
     }
 }
 
+/// Playback speed for a grounded planar clip. A back-pedal that had no dedicated
+/// `AN_*Bwd` clip and borrowed its forward base clip (`role_node == base_node`)
+/// plays in reverse, so the legs cycle backward instead of moonwalking. Once the
+/// authored back clip exists the nodes differ and it plays forward.
+fn strafe_playback_speed(
+    strafe: StrafeDir,
+    role_node: petgraph::graph::NodeIndex,
+    base_node: petgraph::graph::NodeIndex,
+) -> f32 {
+    if strafe == StrafeDir::Back && role_node == base_node {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
 /// One row of the clip-resolution contract. A role binds to the first name in
 /// `vendor_aliases` present in the GLB — after the canonical name is tried — and
 /// otherwise borrows the clip resolved for `fallback`, so partial rigs degrade
@@ -513,21 +529,34 @@ pub(super) fn animate_player(
                 }
                 other => role_for_state(other),
             };
-            // Refine the grounded planar roles into their facing-relative variant
-            // (strafe/back), a no-op under free movement where the move is always
-            // forward. Resolves to the base clip until strafe clips are authored.
-            let role = match *state {
+            // Only the grounded planar roles carry a facing-relative variant.
+            let planar = matches!(
+                *state,
                 LocomotionState::Walk
-                | LocomotionState::Sprint
-                | LocomotionState::Sneak
-                | LocomotionState::Stairs => directional_role(base, intents.planar.strafe_dir()),
-                _ => base,
+                    | LocomotionState::Sprint
+                    | LocomotionState::Sneak
+                    | LocomotionState::Stairs
+            );
+            let strafe = intents.planar.strafe_dir();
+            // Refine into the strafe/back variant (a no-op under free movement,
+            // where the move is always forward). Resolves to the base clip until
+            // strafe clips are authored.
+            let role = if planar {
+                directional_role(base, strafe)
+            } else {
+                base
             };
-
-            // UAL1 provides real Walk/Jog/Sprint/Crouch clips, so each role
-            // plays at its authored speed. Matching clip speed to actual
-            // movement speed (foot-slide fix) is a later tuning knob.
-            (anims.node(role), 1.0)
+            // UAL1 clips play at authored speed, except a back-pedal that fell
+            // back to its forward base clip, which plays in reverse so the legs
+            // cycle backward instead of moonwalking. (Foot-slide vs actual speed
+            // is a separate later knob.)
+            let node = anims.node(role);
+            let speed = if planar {
+                strafe_playback_speed(strafe, node, anims.node(base))
+            } else {
+                1.0
+            };
+            (node, speed)
         };
 
         if !player.is_playing_animation(target_node) {
@@ -582,6 +611,20 @@ mod tests {
         assert_eq!(directional_role(Run, StrafeDir::Idle), Run);
         // Non-planar roles are never refined.
         assert_eq!(directional_role(Jump, StrafeDir::Left), Jump);
+    }
+
+    #[test]
+    fn back_pedal_reverses_only_a_borrowed_forward_clip() {
+        use petgraph::graph::NodeIndex;
+        let walk = NodeIndex::new(0);
+        let walk_bwd = NodeIndex::new(1);
+        // No dedicated back clip: the role resolved to the forward base → reverse.
+        assert_eq!(strafe_playback_speed(StrafeDir::Back, walk, walk), -1.0);
+        // A dedicated AN_WalkBwd clip resolves to its own node → play forward.
+        assert_eq!(strafe_playback_speed(StrafeDir::Back, walk_bwd, walk), 1.0);
+        // Strafing sideways or forward never reverses.
+        assert_eq!(strafe_playback_speed(StrafeDir::Left, walk, walk), 1.0);
+        assert_eq!(strafe_playback_speed(StrafeDir::Forward, walk, walk), 1.0);
     }
 
     #[test]

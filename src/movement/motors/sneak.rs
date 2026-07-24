@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use crate::movement::Actor;
 use crate::movement::abilities::{SneakMovement, SprintMovement};
 use crate::movement::body::BodyDimensions;
+use crate::movement::facing::faces_movement;
 use crate::movement::facts::GroundFacts;
 use crate::movement::intents::Intents;
 use crate::movement::lod::SensingLod;
@@ -167,6 +168,7 @@ pub fn tick_body(
                 contact: &mut row.contact,
                 ground: row.ground,
                 state: *row.state,
+                face_move: faces_movement(row.facing),
             },
             LocomotionState::Sneak,
             &mas,

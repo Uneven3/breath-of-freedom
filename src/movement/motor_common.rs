@@ -189,6 +189,9 @@ pub struct GroundDriveStep<'a> {
     pub contact: &'a mut BodyContact,
     pub ground: &'a GroundFacts,
     pub state: LocomotionState,
+    /// Whether the body rotates toward its move direction. `false` under
+    /// lock-on/aim, where `resolve_facing` owns the yaw.
+    pub face_move: bool,
 }
 
 pub fn ground_drive_step(
@@ -217,7 +220,7 @@ pub fn ground_drive_step(
         dt,
         params,
     );
-    if move_dir != Vec3::ZERO {
+    if move_dir != Vec3::ZERO && step.face_move {
         apply_locomotion_rotation(step.transform, step.intents.planar.direction, dt, turn_rate);
     }
     // Flat-ground motors own velocity.y: bookkeeping stays planar…

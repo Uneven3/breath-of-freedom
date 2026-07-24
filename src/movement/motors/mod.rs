@@ -22,6 +22,7 @@ pub mod wall_jump;
 
 use crate::movement::BodyVelocity;
 use crate::movement::body::BodyDimensions;
+use crate::movement::facing::FacingSource;
 use crate::movement::facts::{BodyContact, GroundFacts};
 use crate::movement::intents::Intents;
 use crate::movement::state::LocomotionState;
@@ -40,4 +41,8 @@ pub struct MotorCore {
     pub state: &'static LocomotionState,
     pub body: &'static BodyDimensions,
     pub ground: &'static GroundFacts,
+    /// Facing modality — `None` for AI actors (rotate toward movement); on the
+    /// player, lock-on/aim hand rotation to `resolve_facing`, so the motor skips
+    /// its own turn (see [`crate::movement::facing::faces_movement`]).
+    pub facing: Option<&'static FacingSource>,
 }

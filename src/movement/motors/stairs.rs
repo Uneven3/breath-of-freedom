@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use crate::movement::GRAVITY;
 use crate::movement::abilities::{GroundMovement, SprintMovement, StairsMovement};
+use crate::movement::facing::faces_movement;
 use crate::movement::facts::{GroundFacts, StairsFacts};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
 use crate::movement::motors::MotorCore;
@@ -124,12 +125,14 @@ pub fn tick_body(
         } else {
             row.body.standing_half_height()
         };
-        apply_locomotion_rotation(
-            &mut row.transform,
-            row.intents.planar.direction,
-            dt,
-            profile.rotation_speed,
-        );
+        if faces_movement(row.facing) {
+            apply_locomotion_rotation(
+                &mut row.transform,
+                row.intents.planar.direction,
+                dt,
+                profile.rotation_speed,
+            );
+        }
 
         let horiz_axis = stair_axis(effective_stairs);
         let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();

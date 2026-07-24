@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use crate::movement::GRAVITY;
 use crate::movement::abilities::GlideMovement;
+use crate::movement::facing::faces_movement;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{GlideIntent, Intents};
 use crate::movement::motor_common::{apply_locomotion_rotation, body_move_and_slide, move_toward};
@@ -100,12 +101,14 @@ pub fn tick_body(
         }
         let dt = time.delta_secs();
 
-        apply_locomotion_rotation(
-            &mut row.transform,
-            row.intents.planar.direction,
-            dt,
-            movement.rotation_speed,
-        );
+        if faces_movement(row.facing) {
+            apply_locomotion_rotation(
+                &mut row.transform,
+                row.intents.planar.direction,
+                dt,
+                movement.rotation_speed,
+            );
+        }
 
         let mut v = row.velocity.0;
         v.y -= GRAVITY * movement.gravity_multiplier * dt;

@@ -231,11 +231,14 @@ encara limpio; climb/ladder mantienen facing de pared).
 orientación efectiva que apunta al objetivo (`lock_aim_orientation`), no el mouse
 —que la cámara ya desacopló—, así el arco auto-apunta al enemigo lockeado.
 
+El facing lockeado es un **giro suave** (`resolve_facing` slerp a
+`DECOUPLED_TURN_RATE`): los motores no rotan el cuerpo cuando el facing está
+desacoplado (`MotorCore.facing` + `faces_movement`), así `resolve_facing` es el
+único dueño y no hay pelea. `Free` intacto.
+
 Falta: **clips de strafe** propios; motores swim/dive; clips de combate. Bug
-conocido resuelto: teleport por caída (era realimentación de `body_yaw`). Fase 3c
-usa snap de facing (giro instantáneo al lockear); suavizar requiere gatear la
-rotación de los motores. La preview de aim mientras cargás (no el disparo) aún
-puede no seguir al objetivo.
+conocido resuelto: teleport por caída (era realimentación de `body_yaw`). La
+preview de aim mientras cargás (no el disparo) aún puede no seguir al objetivo.
 
 ## Pipeline authored de assets — trabajo activo (2026-07-23)
 

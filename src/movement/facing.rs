@@ -28,19 +28,31 @@ pub enum FacingSource {
     LockOn(Entity),
 }
 
+/// Whether an actor's body should self-rotate toward its movement direction
+/// this step. `Free` (or no `FacingSource`, e.g. AI) rotates in the motor;
+/// `Look`/`LockOn` hand facing entirely to [`resolve_facing`], so the motor
+/// must not fight it.
+pub fn faces_movement(facing: Option<&FacingSource>) -> bool {
+    facing.is_none_or(|source| *source == FacingSource::Free)
+}
+
+/// Slerp rate toward the decoupled facing target — a brisk but smooth turn to
+/// face the enemy on lock-on, not an instant snap.
+const DECOUPLED_TURN_RATE: f32 = 16.0;
+
 /// Yaw that points the body's forward (`-Z`) along the planar `dir`.
 fn planar_yaw(dir: Vec2) -> Option<f32> {
     (dir.length_squared() > 1e-4).then(|| (-dir.x).atan2(-dir.y))
 }
 
-/// Runs after `TickActiveMotor`: the sole writer of body yaw when facing is
-/// decoupled (`Look`/`LockOn`). It sets the yaw straight to the target, fully
-/// overriding the toward-movement rotation the motor applied this step (which is
-/// never rendered — the frame draws this post-motor transform), so the body
-/// faces the target cleanly instead of settling between the two. `Free` and the
-/// wall-forced climb/ladder states are left to the motor, so with the default
-/// `FacingSource::Free` this is a no-op.
+/// Runs after `TickActiveMotor`: the sole owner of body yaw when facing is
+/// decoupled (`Look`/`LockOn`). The motors skip their toward-movement rotation
+/// for these actors ([`faces_movement`]), so this can slerp smoothly toward the
+/// target without a tug-of-war. `Free` and the wall-forced climb/ladder states
+/// are left to the motor, so with the default `FacingSource::Free` this is a
+/// no-op.
 pub fn resolve_facing(
+    time: Res<Time>,
     // Lock-on targets never carry `FacingSource` themselves, keeping this query
     // disjoint from the mutable one below.
     targets: Query<&Transform, Without<FacingSource>>,
@@ -51,6 +63,7 @@ pub fn resolve_facing(
         &ControlOrientation,
     )>,
 ) {
+    let t = (DECOUPLED_TURN_RATE * time.delta_secs()).clamp(0.0, 1.0);
     for (mut transform, facing, state, orientation) in &mut actors {
         if matches!(state, LocomotionState::Climb | LocomotionState::Ladder) {
             continue;
@@ -69,7 +82,8 @@ pub fn resolve_facing(
                 yaw
             }
         };
-        transform.rotation = Quat::from_rotation_y(target_yaw);
+        let goal = Quat::from_rotation_y(target_yaw);
+        transform.rotation = transform.rotation.slerp(goal, t);
     }
 }
 
@@ -88,9 +102,17 @@ mod tests {
             .0
     }
 
+    fn world_with_time() -> World {
+        let mut world = World::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f32(1.0));
+        world.insert_resource(time);
+        world
+    }
+
     #[test]
     fn free_and_wall_states_leave_rotation_untouched() {
-        let mut world = World::new();
+        let mut world = world_with_time();
         for state in [
             LocomotionState::Walk,
             LocomotionState::Climb,
@@ -119,7 +141,7 @@ mod tests {
 
     #[test]
     fn lock_on_turns_the_body_toward_the_target() {
-        let mut world = World::new();
+        let mut world = world_with_time();
         let target = world.spawn(Transform::from_xyz(0.0, 0.0, -10.0)).id();
         let actor = world
             .spawn((

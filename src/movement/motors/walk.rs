@@ -11,6 +11,7 @@ use bevy::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::abilities::GroundMovement;
+use crate::movement::facing::faces_movement;
 use crate::movement::facts::GroundFacts;
 use crate::movement::motor_common::{GroundDriveStep, ground_drive_step};
 use crate::movement::motors::MotorCore;
@@ -59,6 +60,7 @@ pub fn tick_body(
                 contact: &mut row.contact,
                 ground: row.ground,
                 state: *row.state,
+                face_move: faces_movement(row.facing),
             },
             LocomotionState::Walk,
             &mas,

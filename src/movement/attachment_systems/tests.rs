@@ -88,6 +88,7 @@ fn app_schedule_attaches_redirects_and_releases_without_rider_motor_tick() {
         planar: PlanarMoveIntent {
             direction: Vec2::X,
             strength: 0.75,
+            local: Vec2::ZERO,
         },
         wants_sprint: true,
         wants_sneak: true,

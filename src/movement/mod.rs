@@ -20,6 +20,7 @@ pub mod bundles;
 pub mod constraints;
 pub mod control;
 pub mod diag;
+pub mod facing;
 pub mod facts;
 pub mod intents;
 pub mod link;
@@ -224,6 +225,14 @@ impl Plugin for MovementPlugin {
         app.add_systems(
             FixedUpdate,
             attachment_systems::sync_attachments.in_set(MovementSet::SyncAttachments),
+        );
+        // Decoupled facing (aim/lock-on) resolves after the active motor has
+        // moved the body, before attachments sync to the final transform.
+        app.add_systems(
+            FixedUpdate,
+            facing::resolve_facing
+                .after(MovementSet::TickActiveMotor)
+                .before(MovementSet::SyncAttachments),
         );
 
         // Declarative crouch-capsule swap (orthogonal to the active state, so it

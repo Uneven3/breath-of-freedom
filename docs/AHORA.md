@@ -32,8 +32,8 @@ Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/
 jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
 percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
 F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
-fases con carga Bannerlord, Ranger Quaternius femenino + UAL2 (43 clips,
-navegador F7), mundo 320×320 con graybox central y bosque. Rendimiento cerrado
+fases con carga Bannerlord, maniquí UAL1 como player (mesh + locomoción neutra
+en un GLB, navegador F7), mundo 320×320 con graybox central y bosque. Rendimiento cerrado
 2026-07-21 (60 FPS estables, ver arriba).
 
 Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
@@ -72,8 +72,8 @@ Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
   resuelve a dos tiers en `VisualCatalog` (proxy barato / escena detallada);
   impostores e instancing se enchufan ahí sin tocar simulación.
 - **Watchdog de polígonos** (`visuals/budget.rs`): cuenta triángulos de cada
-  malla al cargar y avisa sobre presupuesto. Agnóstico de asset — ya delató que
-  el Ranger femenino es igual de pesado (pies: 9172 tris; ver deudas).
+  malla al cargar y avisa sobre presupuesto. Agnóstico de asset — delató que el
+  Ranger femenino era pesado (pies: 9172 tris) y motivó su retiro por el maniquí.
 - **La atmósfera parte del pipeline estándar.** El baseline comparte
   `StandardMaterial` con actores/assets; no hay pipeline toon ni outline global.
 
@@ -198,11 +198,43 @@ emite `WeaponBrokeMessage`; tecla 4 cicla arma y C usa comida. Pickups
 graybox: `SpareClub`, `WoodPile` y `Apple` cerca del spawn.
 
 Queda: repetir el checkpoint tras la optimización y revisar el feeling de
-día/noche + inventario + bosque + Ranger; después conseguir locomoción normal
-compatible para reemplazar los fallbacks UAL2.
+día/noche + inventario + bosque + maniquí; después modelar un personaje propio
+low-poly que herede el rig UAL1/UAL2 y sustituya al maniquí neutro.
 
-Pendiente sin fecha: mapear clips restantes del player (Jump_*, Sword_*,
-Hit_Knockback); checkpoint PBR de paleta/luz/niebla y evaluación de AA.
+Contrato de animación con SoT única (`schema.rs::PLAYER_CLIP_CONTRACT`,
+compartida por `build.rs` y el resolvedor). Runtime: `AnimationRole`+`ROLE_TABLE`
+resuelven `AN_<Rol>` → alias vendor → fallback, con `debug!` nombrando el rol sin
+clip propio. Compile-time: un GLB con `bof_animset="player"` falla el build si le
+falta un clip `required`. El placeholder fusiona UAL1+UAL2 (85 clips): locomoción
+de UAL1, climb/slide/ninja de UAL2 — los 13 roles ligan a clip real. Roles
+planeados en el contrato (swim/dive, eje direccional aim+lock-on) esperan motor.
+
+Facing unificado (roadmap 3): `FacingSource { Free, Look, LockOn(Entity) }`
+(`movement/facing.rs`) + `resolve_facing` tras `TickActiveMotor`, dueño único del
+facing desacoplado (fija el yaw al objetivo, sobrescribe el giro del motor →
+encara limpio; climb/ladder mantienen facing de pared).
+- **3b Lock-on** (`player/lock_on.rs`): toggle `IntentAction::LockOn` (middle-mouse
+  o `T`), adquiere el enemigo más centrado al crosshair (rango 30 m, cono ~60°),
+  rompe por despawn o >40 m.
+- **Intención facing-relativa explícita** (`intents.planar.local` + `StrafeDir`,
+  en `brain.rs`): con facing desacoplado, el stick se lee en el marco del objetivo
+  — "izquierda" es un strafe explícito, y el movimiento es circle-strafe relativo
+  al objetivo. En `Free` siempre es forward. Visible en debug (`strafe=`).
+- **3c Cámara lock-on** (`camera/mod.rs`, `CameraRig::lock_blend`): encuadra hacia
+  el objetivo con blend suave al entrar/salir.
+- **Animación direccional** (`animation.rs::directional_role`): `StrafeDir` elige
+  `AN_Walk/Run/SneakStrafeL/R|Bwd`; sin clips en el placeholder cae a la base
+  (walk), listo para cuando existan.
+
+**Arco + lock-on** (`combat/motors/aim.rs`): estando lockeado, el disparo usa una
+orientación efectiva que apunta al objetivo (`lock_aim_orientation`), no el mouse
+—que la cámara ya desacopló—, así el arco auto-apunta al enemigo lockeado.
+
+Falta: **clips de strafe** propios; motores swim/dive; clips de combate. Bug
+conocido resuelto: teleport por caída (era realimentación de `body_yaw`). Fase 3c
+usa snap de facing (giro instantáneo al lockear); suavizar requiere gatear la
+rotación de los motores. La preview de aim mientras cargás (no el disparo) aún
+puede no seguir al objetivo.
 
 ## Pipeline authored de assets — trabajo activo (2026-07-23)
 
@@ -220,12 +252,15 @@ graybox y la carga mantiene el proxy hasta un swap completo. Falta el checkpoint
 jugado + material breakdown/flythrough/watchdog antes de retirar físicamente
 Quaternius `Pine_1`.
 
-Decisión del usuario: el Ranger no será personaje final ni candidato de
-migración por su costo poligonal. Sigue legacy sólo como fallback temporal del
-player hasta tener un personaje propio liviano; su builder conserva
-reproducibilidad y comparte únicamente el núcleo genérico de export. Las dos
-carpetas Universal Animation siguen siendo catálogos distintos aunque sus GLB
-actuales coincidan byte a byte. `Prototype.glb` sigue obsoleto y sin receta.
+Decisión del usuario: el Ranger fue retirado por su costo poligonal. El player
+es ahora el maniquí neutro (`AppearanceKey::PLAYER_MANNEQUIN`): mesh+rig de UAL1,
+referenciado directo desde vendor como los árboles Quaternius, sin paso Blender.
+Se borraron `ranger_female/male.glb`, la carpeta `game/characters/` y
+`tools/build_ranger_candidates.py`; el exporter genérico (`blender_export.py`)
+queda intacto. **UAL1** = locomoción neutra (Walk/Jog/Sprint/Crouch/Jump);
+**UAL2** = acciones (sword/farm/climb/ninja). El player **fusiona ambas**
+(`animation_sources`), catálogos separados que comparten rig. `Prototype.glb`
+(obsoleto) se borró al migrar la animación del maniquí.
 
 ### Decisión — colisiones e hitboxes para assets finales (2026-07-19)
 
@@ -275,11 +310,11 @@ mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
-- **Ranger femenino descartado como personaje final:** el watchdog
-  (`visuals/budget.rs`) reporta pies 9172 tris, brazos 3636/3000, cuerpo 2962,
-  capucha 2136 — cada pieza sobre el presupuesto de 2000. Se mantiene sólo para
-  no dejar al player sin visual durante la migración; reemplazar por personaje
-  propio low-poly antes de retirarlo.
+- **Player sin personaje propio:** el maniquí neutro UAL1 (~13.7k tris, 2
+  materiales; las esferas `M_Joints` pesan 8012 tris, más que el cuerpo) es un
+  placeholder. Falta modelar un personaje low-poly propio que herede el rig
+  UAL1/UAL2 y lo sustituya; el Ranger quedó descartado por costo poligonal (pies
+  9172 tris) y ya fue retirado.
 
 - **Facciones:** `Perceivable` es un bit; reemplazar por facción cuando
   haya hostilidad entre no-jugadores (animales, aliados).

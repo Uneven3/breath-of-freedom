@@ -327,6 +327,7 @@ mod tests {
                 planar: crate::movement::intents::PlanarMoveIntent {
                     direction: Vec2::new(1.0, 0.0),
                     strength: 1.0,
+                    local: Vec2::ZERO,
                 },
                 ..default()
             },

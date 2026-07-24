@@ -202,12 +202,28 @@ fn inspect_asset(manifest_dir: &Path, path: &Path) -> Result<AssetRecord, Box<dy
     if !has_skinned && !animations.is_empty() {
         return Err(format!("{key}: static asset unexpectedly contains animations").into());
     }
+    let mut animation_names: Vec<&str> = Vec::new();
     for animation in animations {
         let Some(name) = animation.name() else {
             return Err(format!("{key}: every animation must be named").into());
         };
         if !schema::valid_animation_name(name) {
             return Err(format!("{key}: invalid animation name {name}").into());
+        }
+        animation_names.push(name);
+    }
+
+    // Compile-time guardrail: a character that declares itself the player rig
+    // must ship every required locomotion clip, named exactly. Missing one
+    // fails the build listing precisely what to author — no silent runtime gap.
+    if string_property(&root_extras, "bof_animset") == Some("player") {
+        let missing = schema::missing_required_player_clips(&animation_names);
+        if !missing.is_empty() {
+            return Err(format!(
+                "{key}: bof_animset=player is missing required clips: {}",
+                missing.join(", ")
+            )
+            .into());
         }
     }
 

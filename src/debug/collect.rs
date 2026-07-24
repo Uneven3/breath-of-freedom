@@ -18,7 +18,9 @@ use crate::combat::state::CombatState;
 use crate::health::Health;
 use crate::inventory::{Inventory, ItemKind, WeaponDurability};
 use crate::mounts::data::{Horse, HorseCharge, RiddenBy};
+use crate::movement::facing::FacingSource;
 use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
+use crate::movement::intents::Intents;
 use crate::movement::probe_data::TraversalProbe;
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
@@ -81,18 +83,31 @@ pub(super) fn collect_vitals(
     );
 }
 
-type LocomotionReport<'a> = (&'a LocomotionState, &'a BodyVelocity, &'a GroundFacts);
+type LocomotionReport<'a> = (
+    &'a LocomotionState,
+    &'a BodyVelocity,
+    &'a GroundFacts,
+    &'a FacingSource,
+    &'a Intents,
+);
 
 pub(super) fn collect_locomotion(
     player: Single<LocomotionReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (state, vel, ground) = *player;
+    let (state, vel, ground, facing, intents) = *player;
     let v = vel.0;
+    let facing = match facing {
+        FacingSource::Free => "free".to_owned(),
+        FacingSource::Look => "look".to_owned(),
+        FacingSource::LockOn(target) => format!("lockon({target})"),
+    };
     snapshot.set(
         SectionId::Locomotion,
         vec![
             Field::new("state", format!("{state:?}")),
+            Field::new("facing", facing),
+            Field::new("strafe", format!("{:?}", intents.planar.strafe_dir())),
             Field::volatile("vel", format!("({:.2},{:.2},{:.2})", v.x, v.y, v.z)),
             Field::volatile("speed", format!("{:.2}", v.length())),
             Field::flag("grounded", ground.grounded),

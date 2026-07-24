@@ -8,6 +8,8 @@
 
 use bevy::prelude::*;
 
+mod lock_on;
+
 use crate::health::{DeathMessage, Health, HealthSet};
 use crate::movement::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
@@ -35,6 +37,13 @@ impl Plugin for PlayerPlugin {
         // Death consequences belong to the actor's owner (`docs/ARCHITECTURE.md`): the
         // graybox player respawns at the authored spawn with full health.
         app.add_systems(FixedUpdate, respawn_on_death.after(HealthSet::Apply));
+        // Choose the lock-on target after actors move, before facing resolves it.
+        app.add_systems(
+            FixedUpdate,
+            lock_on::update_lock_on
+                .after(crate::movement::MovementSet::TickActiveMotor)
+                .before(crate::movement::facing::resolve_facing),
+        );
     }
 }
 
@@ -48,6 +57,8 @@ fn spawn_player(mut commands: Commands) {
         crate::enemies::perception::Perceivable,
         crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
         crate::input::frame::ControlOrientation::default(),
+        crate::movement::facing::FacingSource::default(),
+        lock_on::LockOnInputCursor::default(),
         Name::new("Player"),
         KinematicActorBundle::new(
             Transform::from_translation(PLAYER_SPAWN),

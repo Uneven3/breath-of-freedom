@@ -230,6 +230,7 @@ fn despawned_rider_clears_inverse_relation_and_neutralizes_horse() {
         planar: crate::movement::intents::PlanarMoveIntent {
             direction: Vec2::X,
             strength: 1.0,
+            local: Vec2::ZERO,
         },
         wants_sprint: true,
         ..default()

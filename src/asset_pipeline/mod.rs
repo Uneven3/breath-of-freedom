@@ -5,7 +5,7 @@
 
 mod generated;
 pub mod materials;
-mod schema;
+pub mod schema;
 
 use std::collections::HashMap;
 

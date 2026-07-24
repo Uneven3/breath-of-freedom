@@ -79,15 +79,170 @@ pub fn valid_animation_name(name: &str) -> bool {
         })
 }
 
+/// One clip in the player animation contract: the canonical name a
+/// rig-compatible authored character ships for a locomotion capability.
+/// `required` clips must exist — the build fails without them once an asset
+/// opts in via `bof_animset = "player"`. Non-required clips are planned
+/// motors/directions (swim/dive, the facing-locked directional axis) validated
+/// only if present. Single source of truth shared by the build script and the
+/// runtime resolver so the two can never drift.
+#[allow(dead_code)]
+pub struct ClipSpec {
+    pub name: &'static str,
+    pub required: bool,
+}
+
+#[allow(dead_code)]
+pub const PLAYER_CLIP_CONTRACT: &[ClipSpec] = &[
+    // Required: one per shipping locomotion motor (see src/movement/motors/).
+    ClipSpec {
+        name: "AN_Idle",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Walk",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Run",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Sneak",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Jump",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Fall",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Glide",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Climb",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Ladder",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Mantle",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_Vault",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_WallJump",
+        required: true,
+    },
+    ClipSpec {
+        name: "AN_EdgeLeap",
+        required: true,
+    },
+    // Planned (roadmap step 3): swim/dive motors and the facing-locked
+    // directional axis shared by aim and Zelda-style lock-on.
+    ClipSpec {
+        name: "AN_Swim",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_Dive",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_WalkBwd",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_WalkStrafeL",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_WalkStrafeR",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_RunBwd",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_RunStrafeL",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_RunStrafeR",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_SneakBwd",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_SneakStrafeL",
+        required: false,
+    },
+    ClipSpec {
+        name: "AN_SneakStrafeR",
+        required: false,
+    },
+];
+
+/// Required contract clips absent from `present`. The build script's hard
+/// guardrail for a `bof_animset = "player"` character: a non-empty result fails
+/// the build, naming exactly which `AN_<Rol>` clips are missing.
+#[allow(dead_code)]
+pub fn missing_required_player_clips(present: &[&str]) -> Vec<&'static str> {
+    PLAYER_CLIP_CONTRACT
+        .iter()
+        .filter(|spec| spec.required && !present.contains(&spec.name))
+        .map(|spec| spec.name)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn player_contract_flags_missing_required_clips() {
+        let complete: Vec<&str> = PLAYER_CLIP_CONTRACT
+            .iter()
+            .filter(|spec| spec.required)
+            .map(|spec| spec.name)
+            .collect();
+        assert!(missing_required_player_clips(&complete).is_empty());
+
+        // Planned-only clips do not satisfy the required set.
+        assert_eq!(
+            missing_required_player_clips(&["AN_Swim", "AN_WalkBwd"]).len(),
+            PLAYER_CLIP_CONTRACT.iter().filter(|s| s.required).count()
+        );
+
+        let mut short = complete.clone();
+        short.retain(|name| *name != "AN_Glide");
+        assert_eq!(missing_required_player_clips(&short), vec!["AN_Glide"]);
+    }
+
+    #[test]
+    fn every_contract_clip_is_a_well_formed_animation_name() {
+        for spec in PLAYER_CLIP_CONTRACT {
+            assert!(valid_animation_name(spec.name), "{}", spec.name);
+        }
+    }
+
+    #[test]
     fn asset_keys_have_a_known_category_and_canonical_case() {
         assert!(valid_asset_key("tree_pine_a"));
-        assert!(valid_asset_key("char_ranger_female"));
-        assert!(!valid_asset_key("ranger_female"));
+        assert!(valid_asset_key("char_mannequin"));
+        assert!(!valid_asset_key("mannequin"));
         assert!(!valid_asset_key("tree_Pine"));
         assert!(!valid_asset_key("tree__pine"));
     }

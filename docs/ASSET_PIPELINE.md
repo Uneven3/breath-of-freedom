@@ -113,13 +113,30 @@ dónde aparece en `world/layout.rs`. Ese binding menciona claves semánticas
   extensión. Ejemplo: `ROOT_tree_pine_a`.
 - Nombres ASCII, únicos y sin sufijos automáticos `.001`.
 
+## Tamaños de referencia (metros)
+
+Escala común para juzgar proporciones nuevas contra lo ya integrado. 1 unidad =
+1 m; la altura de los assets authored sale de los bounds del manifiesto
+build-time, la de los proxies de las primitivas en `visuals/forest.rs`.
+
+| Asset | Tipo | Alto | Ancho / copa ⌀ | Notas |
+| --- | --- | --- | --- | --- |
+| Player (maniquí UAL1) | personaje | ~2.0 | ~0.5 hombros | mesh nativo 1.829 m, escalado ×1.093 |
+| `tree_pine_a` | pino authored | 7.6 | copa ~3.5 | tronco `UCY_Trunk`; primera vertical propia |
+| Proxy común (esfera) | graybox árbol | ~7.4 | copa 4.0 | `TreeSilhouette::Rounded` |
+| Proxy pino (cono) | graybox árbol | ~7.5 | copa 3.6 | `TreeSilhouette::Conical` |
+| Proxy retorcido | graybox árbol | ~8.5 | copa 3.8 | `TreeSilhouette::Gnarled` |
+
+Referencia humana: el player mide ~2 m, así que un pino de 7.6 m es ~3.8×
+su altura. Assets nuevos se dimensionan contra esta columna antes de exportar.
+
 ## Nomenclatura
 
 ### Archivos
 
 `<categoria>_<nombre>[_<variante>].glb`, todo `lower_snake_case`.
 
-Ejemplos: `char_ranger_female`, `tree_pine_a`, `prop_barrel`,
+Ejemplos: `char_villager`, `tree_pine_a`, `prop_barrel`,
 `weapon_sword_short`.
 
 ### Render y LOD
@@ -167,6 +184,52 @@ nunca deriva un hull/trimesh del `SM_`/`SK_`.
 - Un asset puramente `SM_` no exige ni admite clips. Un asset `SK_` requiere
   clips nombrados; los catálogos de animación conservan identidad propia.
 
+#### Contrato de animación del player (plug and play + guardrail)
+
+Los nombres de clip son un **contrato rígido con una sola fuente de verdad**:
+`asset_pipeline/schema.rs::PLAYER_CLIP_CONTRACT`, compartido por el validador de
+`build.rs` y el resolvedor de runtime, así no pueden desincronizarse. Cada rol
+del contrato deriva de un motor de `movement/motors/`. El vocabulario es
+`AN_<Rol>`.
+
+Dos niveles de enforcement:
+
+- **Runtime (placeholder vendor, blando):** la máquina de estados pide un **rol**
+  y el resolvedor (`visuals/animation.rs`, `ROLE_TABLE`) prueba en orden (1)
+  nombre canónico `AN_<Rol>`, (2) alias vendor, (3) clip del rol de *fallback*.
+  Un rol sin clip propio degrada en cadena hacia Idle y se **loguea a `debug!`**
+  nombrando qué falta. Nunca se congela.
+- **Compile-time (personaje authored, duro):** un GLB con extra raíz
+  `bof_animset = "player"` **falla el build** si le falta cualquier clip
+  `required`, listando exactamente cuáles. Ahí está el guardrail medible.
+
+| Rol | Clip canónico | Estado(s) | Fallback | Placeholder hoy |
+| --- | --- | --- | --- | --- |
+| Idle | `AN_Idle` | quieto (requerido) | — | `Idle_Loop` |
+| Walk | `AN_Walk` | Walk, Stairs | Idle | `Walk_Loop` |
+| Run | `AN_Run` | Sprint | Walk | `Sprint_Loop` |
+| Sneak | `AN_Sneak` | Sneak | Walk | `Crouch_Fwd_Loop` |
+| Jump | `AN_Jump` | Jump | Idle | `Jump_Start` |
+| Fall | `AN_Fall` | Fall | Jump | `Jump_Loop` |
+| Glide | `AN_Glide` | Glide | Fall | `NinjaJump_Idle_Loop` |
+| Climb | `AN_Climb` | Climb | Idle | `ClimbUp_1m` |
+| Ladder | `AN_Ladder` | Ladder | Climb | `ClimbUp_1m` |
+| Mantle | `AN_Mantle` | Mantle | Climb | `ClimbUp_1m` |
+| Vault | `AN_Vault` | AutoVault | Jump | `ClimbUp_1m` |
+| WallJump | `AN_WallJump` | WallJump | Jump | `NinjaJump_Start` |
+| EdgeLeap | `AN_EdgeLeap` | EdgeLeap | Jump | `NinjaJump_Start` |
+
+El placeholder **fusiona ambas librerías** (`animation_sources` = UAL1 + UAL2,
+85 clips): UAL1 aporta locomoción neutra (Walk/Sprint/Crouch/Jump), UAL2 aporta
+climb/slide/ninja; comparten rig, así los clips de una retargetean sobre la otra.
+En colisión de nombre gana la primera fuente (UAL1).
+
+**Roles planeados** (en el contrato como `required: false`, validados si existen,
+sin lógica de selección aún — roadmap paso 3): `AN_Swim`, `AN_Dive`, y el eje
+direccional del modo facing-bloqueado (aim + lock-on) `AN_{Walk,Run,Sneak}Bwd`
+/ `…StrafeL` / `…StrafeR`. Cuando el motor y los clips existan, se activan sin
+reescribir el contrato.
+
 ## Custom properties
 
 Blender exporta propiedades `bof_*` a `extras`; Bevy las observa mediante
@@ -176,6 +239,9 @@ Blender exporta propiedades `bof_*` a `extras`; Bevy las observa mediante
 - `bof_profile`: clave espacial estable si hay sockets o colisión.
 - `bof_material_kind`: superficie semántica (`wood`, `stone`, etc.).
 - `bof_climbable`: booleano; default `true` para geometría de mundo.
+- `bof_animset`: opta al contrato de animación. Con `"player"`, el build exige
+  todos los clips `required` de `PLAYER_CLIP_CONTRACT` o falla nombrando los que
+  falten. Sin el extra, un `SK_` sólo exige que sus clips tengan forma `AN_*`.
 
 El import build-time es la autoridad para simulación. La lectura runtime de
 `GltfExtras` verifica consistencia y alimenta presentación/debug; nunca modifica

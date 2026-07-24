@@ -9,6 +9,12 @@ pub struct CameraRig {
     /// 0 = orbit camera, 1 = aim camera; eased toward the player's
     /// `CombatState::Aiming`.
     pub aim_blend: f32,
+    /// 0 = orientation-driven orbit, 1 = framed on the lock-on target; eased
+    /// toward `FacingSource::LockOn`.
+    pub lock_blend: f32,
+    /// Last yaw toward the lock-on target, held so releasing the lock can ease
+    /// back out of the framing instead of snapping.
+    pub lock_yaw: f32,
 }
 
 impl Default for CameraRig {
@@ -17,6 +23,8 @@ impl Default for CameraRig {
             current_dip: 0.0,
             smoothed_y: f32::NAN,
             aim_blend: 0.0,
+            lock_blend: 0.0,
+            lock_yaw: 0.0,
         }
     }
 }

@@ -1,4 +1,4 @@
-pub const ACTION_COUNT: usize = 20;
+pub const ACTION_COUNT: usize = 21;
 
 /// Domain-neutral actions resolved from hardware before gameplay reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +24,8 @@ pub enum IntentAction {
     Interact,
     UseItem,
     CycleWeapon,
+    /// Toggle Zelda-style lock-on onto the nearest enemy near the crosshair.
+    LockOn,
 }
 
 impl IntentAction {

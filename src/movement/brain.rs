@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use super::Actor;
+use super::facing::FacingSource;
 use super::intents::{
     ClimbLateralIntent, ClimbVerticalIntent, GlideIntent, Intents, JumpIntent, LadderIntent,
     TraversalActionIntent,
@@ -24,13 +25,19 @@ type BrainQuery<'a> = (
     &'a mut Intents,
     &'a mut ClimbInputState,
     &'a mut InputConsumeCursor,
+    &'a FacingSource,
+    &'a Transform,
 );
 
 /// `MovementSet::ReadIntents`: resolved actions -> `Intents` for each
 /// input-controlled actor. AI actors omit `InputControlledBy` and own their
 /// intents through their own Brain.
-pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<Actor>>) {
-    for (source, orientation, mut intents, mut climb, mut cursor) in &mut q {
+pub fn read_intents(
+    actions: Res<ActiveActions>,
+    transforms: Query<&Transform>,
+    mut q: Query<BrainQuery, With<Actor>>,
+) {
+    for (source, orientation, mut intents, mut climb, mut cursor, facing, transform) in &mut q {
         let Some(frame) = actions.frame(source.0) else {
             continue;
         };
@@ -70,10 +77,44 @@ pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<A
         };
 
         if input != Vec2::ZERO {
-            let yaw_rot = Quat::from_rotation_y(orientation.yaw);
-            let world =
-                (yaw_rot * Vec3::X * input.x - yaw_rot * Vec3::NEG_Z * input.y).normalize_or_zero();
+            // FacingSource decides both the frame the stick is read in and
+            // whether the move is a strafe — the explicit "I'm moving laterally
+            // because I'm locked on" the emergent camera-relative path hid.
+            let (world, local) = match facing {
+                FacingSource::Free => {
+                    // Face-where-you-move: camera-relative translation, and
+                    // always forward relative to facing (the body turns to it).
+                    let yaw = Quat::from_rotation_y(orientation.yaw);
+                    let world =
+                        (yaw * Vec3::X * input.x - yaw * Vec3::NEG_Z * input.y).normalize_or_zero();
+                    (world, Vec2::new(0.0, -input.length()))
+                }
+                FacingSource::Look | FacingSource::LockOn(_) => {
+                    // Facing decoupled: the stick IS the facing-relative intent
+                    // (x strafe, -y toward the faced target), translated in that
+                    // frame — circle-strafe around the target. The frame is the
+                    // *intended* facing (look yaw or direction to the target),
+                    // NOT the body's current yaw: the body is mid-rotation toward
+                    // it, and feeding that in-progress yaw back into the movement
+                    // direction spiralled the player off the map.
+                    let basis_yaw = match facing {
+                        FacingSource::LockOn(target) => transforms
+                            .get(*target)
+                            .map(|target_tf| {
+                                let to = target_tf.translation - transform.translation;
+                                (-to.x).atan2(-to.z)
+                            })
+                            .unwrap_or(orientation.yaw),
+                        _ => orientation.yaw,
+                    };
+                    let yaw = Quat::from_rotation_y(basis_yaw);
+                    let world =
+                        (yaw * Vec3::X * input.x - yaw * Vec3::NEG_Z * input.y).normalize_or_zero();
+                    (world, input)
+                }
+            };
             intents.planar.direction = Vec2::new(world.x, world.z);
+            intents.planar.local = local;
         }
 
         if cursor.consume(frame, IntentAction::ClimbToggle) {
@@ -204,6 +245,8 @@ mod tests {
                 Intents::default(),
                 ClimbInputState::default(),
                 InputConsumeCursor::default(),
+                FacingSource::default(),
+                Transform::default(),
             ))
             .id();
         let ai_intents = Intents {
@@ -211,6 +254,7 @@ mod tests {
             planar: crate::movement::intents::PlanarMoveIntent {
                 direction: Vec2::X,
                 strength: 1.0,
+                local: Vec2::ZERO,
             },
             ..default()
         };
@@ -242,6 +286,8 @@ mod tests {
                 Intents::default(),
                 ClimbInputState::default(),
                 InputConsumeCursor::default(),
+                FacingSource::default(),
+                Transform::default(),
             ))
             .id();
         world.run_system_once(read_intents).unwrap();
@@ -275,6 +321,8 @@ mod tests {
                 Intents::default(),
                 ClimbInputState::default(),
                 InputConsumeCursor::default(),
+                FacingSource::default(),
+                Transform::default(),
             ))
             .id();
         world.run_system_once(read_intents).unwrap();
@@ -288,5 +336,38 @@ mod tests {
         assert!(intents.climb.requested);
         assert_eq!(intents.traversal, TraversalActionIntent::Mantle);
         assert_eq!(intents.glide, GlideIntent::Requested);
+    }
+
+    #[test]
+    fn decoupled_facing_reads_lateral_input_as_an_explicit_strafe() {
+        use crate::movement::intents::StrafeDir;
+
+        let mut world = World::new();
+        let mut actions = ActiveActions::default();
+        actions.set_pressed(LOCAL_INPUT_SOURCE, IntentAction::MoveLeft, true);
+        world.insert_resource(actions);
+
+        let actor = world
+            .spawn((
+                Actor,
+                InputControlledBy(LOCAL_INPUT_SOURCE),
+                ControlOrientation::default(),
+                Intents::default(),
+                ClimbInputState::default(),
+                InputConsumeCursor::default(),
+                // Facing decoupled from movement (aim/lock-on).
+                FacingSource::Look,
+                Transform::from_rotation(Quat::from_rotation_y(0.0)), // faces -Z
+            ))
+            .id();
+        world.run_system_once(read_intents).unwrap();
+
+        let intents = world.entity(actor).get::<Intents>().unwrap();
+        // The stick is understood in the facing frame: "left" is an explicit
+        // strafe, not an emergent camera-relative move.
+        assert_eq!(intents.planar.strafe_dir(), StrafeDir::Left);
+        assert!(intents.planar.local.x < 0.0);
+        // Translation is left relative to the body's facing (-Z forward → -X).
+        assert!(intents.planar.direction.x < 0.0);
     }
 }

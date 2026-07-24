@@ -198,6 +198,7 @@ fn stage_intents(stage: ProbeStage, state: LocomotionState) -> Intents {
             planar: PlanarMoveIntent {
                 direction: Vec2::Y,
                 strength: 1.0,
+                local: Vec2::ZERO,
             },
             jump: JumpIntent {
                 held: true,
@@ -223,6 +224,7 @@ fn moving(direction: Vec2) -> Intents {
         planar: PlanarMoveIntent {
             direction,
             strength: 1.0,
+            local: Vec2::ZERO,
         },
         ..default()
     }

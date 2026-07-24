@@ -167,12 +167,29 @@ type ShootQuery<'a> = (
     Option<&'a crate::movement::stamina::Stamina>,
     Option<&'a CombatContext>,
     Option<&'a MountedCombatProfile>,
+    Option<&'a crate::movement::facing::FacingSource>,
 );
+
+/// Height above the target's origin the lock-on aim points at (torso, not feet).
+const LOCK_AIM_TARGET_HEIGHT: f32 = 0.9;
+
+/// A control orientation that points the aim from the shooter straight at the
+/// locked target, so a locked bow auto-aims instead of following the (now
+/// camera-decoupled) mouse look.
+fn lock_aim_orientation(shooter: Vec3, target: Vec3) -> ControlOrientation {
+    let to = (target + Vec3::Y * LOCK_AIM_TARGET_HEIGHT) - (shooter + Vec3::Y * AIM_PIVOT_HEIGHT);
+    let len = to.length().max(1e-4);
+    ControlOrientation {
+        yaw: (-to.x).atan2(-to.z),
+        pitch: (to.y / len).asin().clamp(-1.2, 1.2),
+    }
+}
 
 /// While `Aiming`, releasing the attack button (held last tick but not this
 /// tick, with charge > 0) fires the arrow.
 pub fn shoot_drawn_arrow(
     mut q: Query<ShootQuery, With<Actor>>,
+    targets: Query<&Transform>,
     mut spawns: MessageWriter<SpawnProjectileMessage>,
     mut fired: MessageWriter<BowFiredMessage>,
     time: Res<Time>,
@@ -188,6 +205,7 @@ pub fn shoot_drawn_arrow(
         stamina,
         context,
         mounted_profile,
+        facing,
     ) in &mut q
     {
         if *state != CombatState::Aiming {
@@ -221,6 +239,18 @@ pub fn shoot_drawn_arrow(
         let speed = lerp(profile.speed_min, profile.speed_max, factor);
         let damage = lerp(profile.damage_min, profile.damage_max, factor);
 
+        // When locked on, the bow aims at the target, not the mouse look (which
+        // the lock-on camera has decoupled from the view). Orientation points at
+        // the target so the socket/aim line are consistent.
+        let locked_target = match facing {
+            Some(crate::movement::facing::FacingSource::LockOn(target)) => {
+                targets.get(*target).ok().map(|t| t.translation)
+            }
+            _ => None,
+        };
+        let locked_aim = locked_target.map(|p| lock_aim_orientation(transform.translation, p));
+        let orientation = locked_aim.as_ref().unwrap_or(orientation);
+
         let aim_dir = aim_direction(orientation);
 
         // Two-phase aim: the crosshair ray (from the camera-aligned pivot)
@@ -230,7 +260,12 @@ pub fn shoot_drawn_arrow(
         // aim line itself — if the player can see it, they can shoot it.
         let pivot = aim_pivot(transform, orientation);
         let socket = bow_socket(transform, orientation);
-        let target = aim_target(&spatial, shooter, pivot, aim_dir);
+        // Locked: converge straight on the target torso so the shoulder-offset
+        // socket does not bias the shot sideways. Free: raycast the crosshair.
+        let target = match locked_target {
+            Some(p) => p + Vec3::Y * LOCK_AIM_TARGET_HEIGHT,
+            None => aim_target(&spatial, shooter, pivot, aim_dir),
+        };
         let blocked = bow_line_blocked(&spatial, shooter, socket, target, aim_dir);
         let (launch_origin, direction) = launch_pose(pivot, socket, target, aim_dir, blocked);
 

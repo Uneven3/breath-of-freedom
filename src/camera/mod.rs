@@ -29,6 +29,9 @@ const LENS_HEIGHT: f32 = 1.5;
 /// (see `LENS_HEIGHT`), and how fast the camera blends in/out of it.
 const AIM_SPRING_LENGTH: f32 = 3.6;
 const AIM_BLEND_PER_SEC: f32 = 10.0;
+/// Height over the lock-on target the camera looks at (torso). Matches Combat's
+/// `LOCK_AIM_TARGET_HEIGHT` so the crosshair and the arrow converge on one point.
+const LOCK_LOOK_HEIGHT: f32 = 0.9;
 /// FOV eases toward its aim/draw target so firing (draw factor snapping to
 /// zero) doesn't pop the lens.
 const FOV_LERP_PER_SEC: f32 = 12.0;
@@ -168,15 +171,20 @@ fn follow_player(
             &ControlOrientation,
             Option<&crate::combat::state::CombatState>,
             Option<&crate::combat::motors::aim::DrawStrength>,
+            Option<&crate::movement::facing::FacingSource>,
         ),
         FollowFilter,
     >,
+    // Lock-on target positions. `Without<CameraRig>` keeps this read disjoint
+    // from the camera's `&mut Transform` below.
+    targets: Query<&Transform, Without<CameraRig>>,
     mut cam: Single<(&mut Transform, &mut CameraRig, &mut Projection)>,
     spatial: SpatialQuery,
     time: Res<Time>,
     mut player_vis: Query<&mut Visibility, With<PlayerVisual>>,
 ) {
-    let (player_entity, player_transform, orientation, combat_state, draw_strength) = *player;
+    let (player_entity, player_transform, orientation, combat_state, draw_strength, facing) =
+        *player;
     let (cam_transform, rig, proj) = &mut *cam;
     let body = player_transform.translation;
     let dt = time.delta_secs();
@@ -220,7 +228,29 @@ fn follow_player(
     } else {
         rig.smoothed_y.smooth_nudge(&target_y, FOLLOW_LERP_Y, dt);
     }
-    let rot = Quat::from_rotation_y(orientation.yaw) * Quat::from_rotation_x(orientation.pitch);
+    // Lock-on framing: when the player is locked on, ease the camera yaw onto
+    // the direction to the target so it stays framed. `lock_yaw` is remembered
+    // so releasing eases back out instead of snapping to wherever the mouse
+    // drifted. Pitch stays player-controlled.
+    let lock_target_pos = match facing {
+        Some(crate::movement::facing::FacingSource::LockOn(target)) => {
+            targets.get(*target).ok().map(|t| t.translation)
+        }
+        _ => None,
+    };
+    if let Some(target_pos) = lock_target_pos {
+        let to = target_pos - body;
+        rig.lock_yaw = (-to.x).atan2(-to.z);
+    }
+    rig.lock_blend.smooth_nudge(
+        &(if lock_target_pos.is_some() { 1.0 } else { 0.0 }),
+        AIM_BLEND_PER_SEC,
+        dt,
+    );
+    let free_rot =
+        Quat::from_rotation_y(orientation.yaw) * Quat::from_rotation_x(orientation.pitch);
+    let lock_rot = Quat::from_rotation_y(rig.lock_yaw) * Quat::from_rotation_x(orientation.pitch);
+    let rot = free_rot.slerp(lock_rot, rig.lock_blend);
     let dir = rot * Vec3::Z;
 
     // Aim mode: shift the pivot over the right shoulder so the body doesn't
@@ -257,6 +287,19 @@ fn follow_player(
     // Set camera rotation directly to ControlOrientation rot. This is mathematically
     // identical to look_at(pivot) but avoids NaN / freeze singularities when length == 0.0.
     cam_transform.rotation = rot;
+
+    // Lock-on: point the camera straight at the target from its final position,
+    // so the enemy sits under the screen-center crosshair. Yaw-only framing
+    // leaves the target off-center — the boom sits behind, above, and offset
+    // from the body, so `body -> target` is not `camera -> target` (parallax).
+    if let Some(target_pos) = lock_target_pos
+        && rig.lock_blend > 0.001
+        && let Ok(look_dir) =
+            Dir3::new(target_pos + Vec3::Y * LOCK_LOOK_HEIGHT - cam_transform.translation)
+    {
+        let look_rot = Transform::IDENTITY.looking_to(look_dir, Dir3::Y).rotation;
+        cam_transform.rotation = rot.slerp(look_rot, rig.lock_blend);
+    }
 }
 
 /// Runs after `follow_player` (which fully rewrites the camera transform each

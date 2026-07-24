@@ -249,6 +249,7 @@ fn walk_toward(pos: Vec3, target: Vec3, stop_radius: f32, wants_sprint: bool) ->
         planar: PlanarMoveIntent {
             direction: planar.normalize_or_zero(),
             strength: 1.0,
+            local: Vec2::ZERO,
         },
         wants_sprint,
         ..default()

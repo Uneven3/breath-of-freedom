@@ -16,6 +16,7 @@ fn redirect_transfers_only_supported_controls_and_neutralizes_controller() {
                 planar: intents::PlanarMoveIntent {
                     direction: Vec2::X,
                     strength: 1.0,
+                    local: Vec2::ZERO,
                 },
                 wants_sneak: true,
                 jump: intents::JumpIntent {

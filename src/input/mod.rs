@@ -37,6 +37,24 @@ impl ModalInputFocus {
         self.len != 0
     }
 
+    pub fn purge_despawned(&mut self, entities: &bevy::ecs::entity::Entities) -> bool {
+        let mut changed = false;
+        let mut i = 0;
+        while i < self.len {
+            if let Some(owner) = self.owners[i]
+                && !entities.contains(owner)
+            {
+                self.len -= 1;
+                self.owners[i] = self.owners[self.len];
+                self.owners[self.len] = None;
+                changed = true;
+                continue;
+            }
+            i += 1;
+        }
+        changed
+    }
+
     fn acquire(&mut self, owner: Entity) -> bool {
         if self.owners[..self.len].contains(&Some(owner)) {
             return false;
@@ -169,6 +187,11 @@ fn resolve_local_actions(
     if keys.just_pressed(KeyCode::Digit4) {
         actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::CycleWeapon);
     }
+    // Lock-on toggle: middle mouse (PC standard) or T alternate. Mouse gated on
+    // capture like Attack/Aim so the recapturing click never also locks on.
+    if (captured.0 && mouse.just_pressed(MouseButton::Middle)) || keys.just_pressed(KeyCode::KeyT) {
+        actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::LockOn);
+    }
 }
 
 const LOCAL_HELD_BINDINGS: [(IntentAction, KeyCode); 12] = [
@@ -246,15 +269,16 @@ fn set_cursor(
 fn apply_modal_focus_requests(
     mut requests: MessageReader<ModalInputFocusRequest>,
     mut focus: ResMut<ModalInputFocus>,
+    entities: &bevy::ecs::entity::Entities,
     mut actions: ResMut<ActiveActions>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut captured: ResMut<PointerCaptured>,
 ) {
-    let mut changed = false;
+    let mut changed = focus.purge_despawned(entities);
     for request in requests.read() {
         match *request {
             ModalInputFocusRequest::Acquire(owner) => {
-                if focus.acquire(owner) {
+                if entities.contains(owner) && focus.acquire(owner) {
                     actions.clear_pressed(LOCAL_INPUT_SOURCE);
                     actions.discard_pending(LOCAL_INPUT_SOURCE);
                     changed = true;
@@ -335,6 +359,20 @@ mod modal_focus_tests {
         assert!(focus.release(second));
         assert!(focus.is_active());
         assert!(focus.release(first));
+        assert!(!focus.is_active());
+    }
+
+    #[test]
+    fn modal_focus_purges_despawned_owner_and_releases_active_state() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut focus = ModalInputFocus::default();
+        assert!(focus.acquire(entity));
+        assert!(focus.is_active());
+
+        world.despawn(entity);
+
+        assert!(focus.purge_despawned(world.entities()));
         assert!(!focus.is_active());
     }
 }

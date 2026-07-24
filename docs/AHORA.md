@@ -26,19 +26,26 @@ cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`.
   vuelca el snapshot al log sin abrir un modal sobre lo observado.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
-## Estado (2026-07-19)
+## Estado (2026-07-24)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/
 jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
 percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
 F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
 fases con carga Bannerlord, maniquí UAL1 como player (mesh + locomoción neutra
-en un GLB, navegador F7), mundo 320×320 con graybox central y bosque. Rendimiento cerrado
+en un GLB, navegador F7), mundo 320×320 con graybox central y bosque, audio de
+pasos por superficie del suelo (§20, graybox validado). Rendimiento cerrado
 2026-07-21 (60 FPS estables, ver arriba).
 
 Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
 corregidos el mismo día (input a PreUpdate, patrón CapacityPending
-eliminado, `Perceivable`, test del veto ForbidSprint). 187 tests.
+eliminado, `Perceivable`, test del veto ForbidSprint).
+
+Audit de calidad (2026-07-24): sin errores ECS, panics en runtime ni
+referencias huérfanas; la única redundancia real (tres `despawn_orphaned_*_visual`
+idénticas) unificada en un sistema genérico sobre `VisualOf`, acotado a las
+familias graybox con un `Or` para no tocar catálogo ni flechas pooled. Capas
+datos/simulación/presentación limpias (§20). 313 tests.
 
 ## Cierre de rendimiento (2026-07-21): 13 → 60 FPS estables
 

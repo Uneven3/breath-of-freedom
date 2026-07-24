@@ -101,14 +101,6 @@ pub(super) fn apply_foliage_material_policy(
         trunks += 1;
     }
 
-    // This whole fix depends on assumptions about someone else's asset — that
-    // the loader attaches material names, and that the meshes land under the
-    // tree root. If either is wrong the system finds nothing and silently
-    // changes nothing, which is indistinguishable from "the fix did not help".
-    //
-    // The running total is reported, not the first batch: glTF scenes finish
-    // loading over many frames, so a one-shot report announces whatever
-    // happened to be ready that frame and reads as "only 45 of 179 were fixed".
     *seen = (trunks, leaves);
     if *seen != before {
         info!("[visuals] foliage policy applied: {trunks} trunk meshes, {leaves} leaf meshes");
@@ -120,8 +112,6 @@ fn descends_from_tree(
     parents: &Query<&ChildOf>,
     trees: &Query<(), With<TreeVisual>>,
 ) -> bool {
-    // Scene roots nest a few levels; walking up is bounded and only happens
-    // once per mesh, on the frame its scene finishes loading.
     parents
         .iter_ancestors(entity)
         .any(|ancestor| trees.contains(ancestor))

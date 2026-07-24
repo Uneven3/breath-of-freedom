@@ -57,7 +57,7 @@ fn palette_material(key: &str) -> StandardMaterial {
         "FoliageCommon" => Color::srgb(0.27, 0.50, 0.22),
         "FoliageGnarled" => Color::srgb(0.36, 0.45, 0.20),
         "FoliagePine" => Color::srgb(0.16, 0.40, 0.24),
-        "GrayboxFloor" => Color::srgb(0.40, 0.45, 0.40),
+        "GrayboxFloor" => Color::srgb(0.22, 0.40, 0.18),
         "GrayboxProp" => Color::srgb(0.55, 0.50, 0.45),
         "GrayboxVault" => Color::srgb(0.70, 0.50, 0.30),
         "Horse" => Color::srgb(0.42, 0.23, 0.10),

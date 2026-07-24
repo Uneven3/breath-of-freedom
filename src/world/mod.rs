@@ -95,6 +95,7 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<day_night::TimeOfDay>();
+        app.init_resource::<layout::GrassStressState>();
         app.add_message::<day_night::TimeOfDayRequest>();
         app.add_systems(Startup, (layout::setup_world, day_night::setup_moon_light));
         app.add_systems(
@@ -108,6 +109,8 @@ impl Plugin for WorldPlugin {
                 day_night::place_sky_discs,
                 day_night::apply_cascade_config,
                 day_night::apply_shadow_map_size,
+                layout::handle_grass_stress_toggle,
+                layout::animate_grass_wind,
             ),
         );
         app.add_systems(

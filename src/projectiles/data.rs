@@ -51,13 +51,19 @@ impl Arrow {
         self.stuck = false;
         self.trail_timer = 0.0;
     }
+
+    /// Whether this pooled slot is a live arrow. The only bit presentation
+    /// needs to decide between showing, moving and hiding its visual.
+    pub fn active(&self) -> bool {
+        self.active
+    }
 }
 
 #[derive(Component)]
 pub(super) struct ArrowPoolSlot(pub u8);
 
 #[derive(Message, Clone, Copy)]
-pub(super) struct ArrowTrailMessage(pub Vec3);
+pub struct ArrowTrailMessage(pub Vec3);
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProjectilesSet {

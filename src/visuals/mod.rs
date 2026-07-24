@@ -15,6 +15,7 @@
 use bevy::prelude::*;
 
 pub mod animation;
+mod arrows;
 pub mod budget;
 pub mod catalog;
 mod diagnostic;
@@ -71,6 +72,7 @@ impl Plugin for VisualsPlugin {
                 player::spawn_visual,
                 animation::start_loading_animations,
                 forest::build_tree_proxy_assets,
+                arrows::init_assets,
             ),
         );
         app.add_systems(
@@ -110,6 +112,12 @@ impl Plugin for VisualsPlugin {
                 ),
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),
+                (
+                    arrows::sync_visuals,
+                    arrows::spawn_trails,
+                    arrows::tick_trails,
+                )
+                    .chain(),
                 (
                     animation::compile_animation_graph,
                     animation::init_player_animation_graph,

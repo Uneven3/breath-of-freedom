@@ -1,9 +1,11 @@
-//! Disposable arrow meshes and trail particles. Simulation is read-only here.
+//! Disposable arrow meshes and trail particles. Reads projectile simulation
+//! read-only; presentation lives here so `projectiles` never depends on
+//! `visuals` (§20).
 
 use bevy::prelude::*;
 
-use super::data::{Arrow, ArrowTrailMessage};
-use crate::visuals::VisualOf;
+use super::VisualOf;
+use crate::projectiles::{Arrow, ArrowTrailMessage};
 
 const TRAIL_TTL_SECS: f32 = 0.28;
 const TRAIL_PARTICLE_SIZE: f32 = 0.04;
@@ -52,7 +54,7 @@ pub(super) fn sync_visuals(
         let existing = visuals
             .iter_mut()
             .find(|(_, owner, _)| owner.0 == arrow_entity);
-        match (arrow.active, existing) {
+        match (arrow.active(), existing) {
             (true, Some((_, _, mut visual_transform))) => {
                 *visual_transform = *arrow_transform;
             }

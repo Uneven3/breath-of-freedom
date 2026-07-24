@@ -83,22 +83,16 @@ impl Plugin for VisualsPlugin {
                     player::interpolate_visual,
                     player::animate_bow_visual,
                 ),
-                (
-                    probe::spawn_probe_visual,
-                    probe::despawn_orphaned_probe_visual,
-                    probe::interpolate_probe_visual,
-                ),
+                (probe::spawn_probe_visual, probe::interpolate_probe_visual),
                 (
                     enemy::spawn_enemy_visual,
-                    enemy::despawn_orphaned_enemy_visual,
                     enemy::interpolate_enemy_visual,
                     enemy::tint_enemy_visual,
                 ),
-                (
-                    horse::spawn_horse_visual,
-                    horse::despawn_orphaned_horse_visual,
-                    horse::interpolate_horse_visual,
-                ),
+                (horse::spawn_horse_visual, horse::interpolate_horse_visual),
+                // One generic orphan-despawn over VisualOf replaces the three
+                // per-family copies (enemy/horse/probe).
+                despawn_orphaned_visuals,
                 (
                     forest::sync_tree_visuals,
                     forest::finalize_tree_visual_swaps,
@@ -125,5 +119,29 @@ impl Plugin for VisualsPlugin {
                 ),
             ),
         );
+    }
+}
+
+/// The disposable graybox family visuals that follow an actor and must vanish
+/// with it. Catalog-driven visuals (player, trees) and pooled arrow visuals own
+/// their own lifetime and are deliberately excluded.
+type GrayboxFamilyVisual = Or<(
+    With<enemy::EnemyVisual>,
+    With<horse::HorseVisual>,
+    With<probe::TraversalProbeVisual>,
+)>;
+
+/// Despawn any disposable graybox family visual (enemy / horse / probe) whose
+/// owning actor entity is gone. One system over the shared `VisualOf` link
+/// replaces three byte-identical per-family copies.
+fn despawn_orphaned_visuals(
+    mut commands: Commands,
+    visuals: Query<(Entity, &VisualOf), GrayboxFamilyVisual>,
+    entities: Query<Entity>,
+) {
+    for (visual, owner) in &visuals {
+        if !entities.contains(owner.0) {
+            commands.entity(visual).despawn();
+        }
     }
 }

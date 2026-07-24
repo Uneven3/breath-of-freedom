@@ -31,18 +31,6 @@ pub(super) fn spawn_horse_visual(
     }
 }
 
-pub(super) fn despawn_orphaned_horse_visual(
-    mut commands: Commands,
-    visuals: Query<(Entity, &HorseVisual)>,
-    actors: Query<(), With<Horse>>,
-) {
-    for (visual, horse) in &visuals {
-        if actors.get(horse.actor).is_err() {
-            commands.entity(visual).despawn();
-        }
-    }
-}
-
 type HorseActorFilter = (With<Horse>, Without<HorseVisual>);
 type HorseVisualFilter = (With<HorseVisual>, Without<Horse>);
 
@@ -88,7 +76,7 @@ mod tests {
             .id();
 
         world
-            .run_system_once(despawn_orphaned_horse_visual)
+            .run_system_once(super::super::despawn_orphaned_visuals)
             .unwrap();
         world.flush();
 

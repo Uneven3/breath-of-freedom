@@ -36,19 +36,6 @@ pub(super) fn spawn_probe_visual(
     }
 }
 
-/// Despawn orphaned probe visuals when their actor entity is gone.
-pub(super) fn despawn_orphaned_probe_visual(
-    mut commands: Commands,
-    visuals: Query<(Entity, &TraversalProbeVisual)>,
-    actors: Query<(), With<TraversalProbe>>,
-) {
-    for (vis_entity, probe_vis) in &visuals {
-        if actors.get(probe_vis.actor).is_err() {
-            commands.entity(vis_entity).despawn();
-        }
-    }
-}
-
 pub(super) fn interpolate_probe_visual(
     actors: Query<ProbeActorQuery, ProbeActorFilter>,
     mut visuals: Query<ProbeVisualQuery, ProbeVisualFilter>,

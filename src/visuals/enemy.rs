@@ -67,18 +67,6 @@ pub(super) fn tint_enemy_visual(
     }
 }
 
-pub(super) fn despawn_orphaned_enemy_visual(
-    mut commands: Commands,
-    visuals: Query<(Entity, &EnemyVisual)>,
-    actors: Query<(), With<Enemy>>,
-) {
-    for (vis_entity, enemy_vis) in &visuals {
-        if actors.get(enemy_vis.actor).is_err() {
-            commands.entity(vis_entity).despawn();
-        }
-    }
-}
-
 type EnemyActorQuery<'a> = &'a Transform;
 type EnemyActorFilter = (With<Enemy>, Without<EnemyVisual>);
 type EnemyVisualQuery<'a> = (&'a mut Transform, &'a EnemyVisual);

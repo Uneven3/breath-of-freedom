@@ -349,6 +349,22 @@ hasta que el contrato de animación emita eventos de pisada — roadmap paso 3).
 
 - **Facciones:** `Perceivable` es un bit; reemplazar por facción cuando
   haya hostilidad entre no-jugadores (animales, aliados).
+- **Escalar a N enemigos = dato, no código** (audit 2026-07-24: la
+  arquitectura pasa el test — capacidad + Intents + dato, no código-por-tipo).
+  El spawn hoy es hardcodeado (`spawn_bokobos` crea 2 entidades con nombre).
+  Antes de poblar el mundo, dos costuras gemelas *andamiaje-graybox→dato*:
+  (a) **roster como tabla de arquetipos** (set de capacidades + Brain + stats +
+  `AppearanceKey`) — patrón-hermano: la tabla `world/layout.rs`;
+  (b) **visuales de enemigo al `VisualCatalog`** (hoy: cápsula hardcodeada en
+  `visuals/enemy.rs`) — patrón-hermano ya probado: el catálogo de árboles (~15
+  variantes por dato con un solo `visuals/forest.rs`). Con ambas, agregar un
+  enemigo = filas de dato, cero módulos nuevos. La señal de que se está
+  torciendo: tentación de copiar un cuarto `visuals/enemyN.rs`.
+- **Monturas voladoras = un motor, no una clase:** reutilizan todo el montado
+  (ActorLink); lo nuevo es un motor `Fly` que suspende el contrato de suelo —
+  primo directo de swim/dive (roadmap paso 3). Verificado: nada fuera del core
+  de movimiento ramifica el gameplay sobre `grounded`, así que es aditivo
+  (nuevo `LocomotionState` + su motor, §2).
 - **Cortar árboles → madera real:** `Inventory`/`ItemKind::Material` ya
   existen; falta la mecánica de tala en sí (el patrón destructible ya
   existe: `PracticeTarget` + `Health` + reacción del dueño en `world/`).

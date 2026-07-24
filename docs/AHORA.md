@@ -312,6 +312,33 @@ Tests obligatorios: swap visual no cambia simulación; múltiples hurtboxes dan
 un solo hit por ataque; self-hit imposible; sensores no bloquean locomoción;
 mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
 
+## Costura superficie→sonido (checkpoint jugado 2026-07-24)
+
+Primera costura para *recibir* assets mientras se autora en Blender: el juego
+sabe qué superficie se pisa y emite el sonido correcto, sin que la simulación
+dependa del audio (§20). Cuatro capas, la flecha siempre baja hacia datos:
+
+- **Datos** (`asset_pipeline/schema.rs`): `SurfaceKind {Grass, Stone, Wood}` +
+  `surface_from_material()` — la forma tipada del `material_kind` de Blender (o
+  la key de paleta graybox). Comparte archivo con `build.rs` (`#[path]`), por eso
+  lleva `#[allow(dead_code)]` (runtime-only, el build valida assets no superficies).
+- **Mundo** (`world::Surface`): cada box/tread lo recibe en `spawn_box` desde su
+  `material_key` (`GrayboxFloor→Grass`, `GrayboxProp/Vault→Stone`).
+- **Simulación** (`movement::GroundFacts::surface`): el probe de suelo lo lee del
+  `hit.entity` (gratis, sin casts nuevos). La sim lo registra, nunca ramifica en él.
+- **Presentación** (`sfx`): `CueMessage` gana `source: Entity`; `emit_step_cues`
+  emite un paso por `STRIDE_LEN` (2 m) de avance con suelo; `play_audio_cues` mapea
+  superficie→sonido. El mapeo vive **solo** aquí.
+
+Validado jugándolo: **92× `[audio] step on Grass`**, cadencia de caminata, exit 0,
+sin panics. De paso se invirtió la única flecha que subía: la presentación de
+flechas pasó de `projectiles/presentation.rs` a `visuals/arrows.rs` (§20).
+
+Pendiente de esta costura: **audio real** (un `HashMap<SurfaceKind, Vec<Handle<
+AudioSource>>>` y `AudioPlayer` en `play_audio_cues`, hoy es un `debug!`); y
+**timing por foot-plant** de animación (el acumulador de zancada es un stopgap
+hasta que el contrato de animación emita eventos de pisada — roadmap paso 3).
+
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
 - **Player sin personaje propio:** el maniquí neutro UAL1 (~13.7k tris, 2

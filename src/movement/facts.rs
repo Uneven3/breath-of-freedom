@@ -4,6 +4,8 @@
 
 use bevy::prelude::*;
 
+use crate::asset_pipeline::schema::SurfaceKind;
+
 /// Wall-contact snapshot captured by the active motor's `move_and_slide` call
 /// this frame. Read by `snap_to_ground`'s riser guard and by the wall-jump /
 /// edge-leap launch-normal fallbacks. (Grounded state comes from
@@ -30,6 +32,11 @@ pub struct GroundFacts {
     /// `velocity · floor_normal` — how fast the body moves *away from* the
     /// surface (only meaningful when `probe_hit && slope_ok`).
     pub ascend_dot: f32,
+    /// The surface under the probe this tick, read off the hit entity's
+    /// `world::Surface`. Defaults to `Grass` when the hit carries none.
+    /// Presentation-only consumer today (`sfx` footsteps); simulation records
+    /// it but never branches on it (§20).
+    pub surface: SurfaceKind,
 }
 
 /// Published by `LedgeService` — wall/ledge sensor state (`can_climb`,

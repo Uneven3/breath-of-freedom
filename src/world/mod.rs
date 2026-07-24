@@ -52,6 +52,13 @@ pub struct Ladder {
 #[derive(Component)]
 pub struct NonClimbable;
 
+/// The ground surface a piece of world geometry presents to whoever stands on
+/// it. World owns it because it is a property of the substrate; `movement`'s
+/// ground probe reads it off the hit entity into `GroundFacts`, and `sfx`
+/// turns the recorded surface into a footstep sound (§20).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Surface(pub crate::asset_pipeline::schema::SurfaceKind);
+
 /// Game-wide physics layers. Static world geometry spawns without a
 /// `CollisionLayers` component, which leaves it on `Default` (layer 0);
 /// movement actors declare membership in `Actor` (see

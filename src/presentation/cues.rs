@@ -19,6 +19,10 @@ pub enum CueKind {
 /// A message indicating that a discrete presentation cue has occurred.
 #[derive(Message, Clone, Debug)]
 pub struct CueMessage {
+    /// The actor the cue fired on. Lets the consumer read that actor's
+    /// simulation facts — a footstep reads `GroundFacts::surface` to pick the
+    /// right sound.
+    pub source: Entity,
     pub id: CueId,
     pub kind: CueKind,
 }

@@ -6,8 +6,9 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs, TreeKind};
+use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs, Surface, TreeKind};
 use crate::asset_pipeline::MaterialPalette;
+use crate::asset_pipeline::schema::surface_from_material;
 
 pub(super) struct BoxSpec {
     pub position: Vec3,
@@ -61,7 +62,7 @@ pub(super) fn spawn_box(
     dims: Vec3,
     material_key: &str,
 ) -> Entity {
-    spawn_oriented_box(
+    let entity = spawn_oriented_box(
         commands,
         meshes,
         name,
@@ -71,7 +72,15 @@ pub(super) fn spawn_box(
             rotation: Quat::IDENTITY,
             material: palette.handle(material_key),
         },
-    )
+    );
+    // The material key names the surface an actor stands on (footstep audio):
+    // `GrayboxFloor → Grass`, `GrayboxProp/Vault → Stone`. Attached here so
+    // every standable box — floor, props, stair treads — is covered in one
+    // place.
+    commands
+        .entity(entity)
+        .insert(Surface(surface_from_material(Some(material_key))));
+    entity
 }
 
 pub(super) fn spawn_oriented_box(
@@ -169,7 +178,7 @@ pub(super) fn spawn_stair_segment(
     for i in 0..spec.step_count {
         let height = spec.step_rise * (i + 1) as f32;
         let center = spec.base + axis * (spec.step_depth * (i as f32 + 0.5));
-        spawn_oriented_box(
+        let step = spawn_oriented_box(
             commands,
             meshes,
             &format!("{}Step{i}", spec.name),
@@ -180,6 +189,12 @@ pub(super) fn spawn_stair_segment(
                 material: palette.handle(spec.material_key),
             },
         );
+        // Stair treads carry their surface too, so a footstep on stairs no
+        // longer falls back to Grass (spawn_oriented_box has only the resolved
+        // handle, not the material key, so it can't do this itself).
+        commands
+            .entity(step)
+            .insert(Surface(surface_from_material(Some(spec.material_key))));
     }
 
     let total_run = spec.step_count as f32 * spec.step_depth;

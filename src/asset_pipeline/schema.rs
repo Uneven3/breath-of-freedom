@@ -66,6 +66,38 @@ pub fn valid_socket_name(name: &str) -> bool {
     name.strip_prefix("SKT_").is_some_and(valid_pascal_token)
 }
 
+/// The ground material an actor stands on, as pure data. The typed form of a
+/// collider's authored `material_kind` string (or a graybox palette key). The
+/// simulation records *which* surface (`movement::GroundFacts`); the mapping
+/// from surface to a footstep sound lives only in presentation (`sfx`), so
+/// changing an asset's audio never touches gameplay (§20).
+// Runtime-only: the build script shares this file (`#[path]` in build.rs) but
+// validates assets, not surfaces, so this type is dead in that compilation.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum SurfaceKind {
+    #[default]
+    Grass,
+    Stone,
+    Wood,
+}
+
+/// Map an authored `material_kind` (or graybox palette key) to a surface.
+/// Unknown or absent → `Grass`, the default ground of the graybox course.
+#[allow(dead_code)] // Runtime-only; the build script shares this file (see `SurfaceKind`).
+pub fn surface_from_material(name: Option<&str>) -> SurfaceKind {
+    match name {
+        Some("Wood" | "Ladder" | "String" | "Fletching" | "TreeTrunk" | "Bark") => {
+            SurfaceKind::Wood
+        }
+        Some("GrayboxProp" | "GrayboxVault" | "Steel" | "TargetPost" | "Target") => {
+            SurfaceKind::Stone
+        }
+        Some("GrayboxFloor") => SurfaceKind::Grass,
+        _ => SurfaceKind::default(),
+    }
+}
+
 #[allow(dead_code)] // The build script validates clips; runtime stores no animation names.
 pub fn valid_animation_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("AN_") else {
@@ -261,5 +293,21 @@ mod tests {
         assert!(valid_socket_name("SKT_MainHand"));
         assert!(valid_animation_name("AN_AttackLight_01"));
         assert!(!valid_animation_name("Idle"));
+    }
+
+    #[test]
+    fn surface_maps_known_materials_and_defaults_to_grass() {
+        assert_eq!(
+            surface_from_material(Some("GrayboxFloor")),
+            SurfaceKind::Grass
+        );
+        assert_eq!(surface_from_material(Some("Wood")), SurfaceKind::Wood);
+        assert_eq!(
+            surface_from_material(Some("GrayboxProp")),
+            SurfaceKind::Stone
+        );
+        // Unknown and absent both fall back to the graybox ground.
+        assert_eq!(surface_from_material(Some("Nonsense")), SurfaceKind::Grass);
+        assert_eq!(surface_from_material(None), SurfaceKind::Grass);
     }
 }

@@ -20,7 +20,7 @@ use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::GroundSensing;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
-use crate::world::GameLayer;
+use crate::world::{GameLayer, Surface};
 
 /// Suppress grounding only while *genuinely launching off* the floor (m/s).
 /// During a jump's first ticks the body is still within probe range of the
@@ -67,6 +67,7 @@ pub fn ground_service(
         ),
     >,
     spatial: SpatialQuery,
+    surfaces: Query<&Surface>,
     mut trace: ResMut<CastTrace>,
 ) {
     for (entity, transform, collider, velocity, sensing, mut facts, state, lod) in &mut q {
@@ -107,6 +108,12 @@ pub fn ground_service(
         facts.grounded =
             floor_normal.is_some() && !is_ascending(velocity.0, normal, sensing.ascend_epsilon);
         facts.floor_normal = normal;
+        // The surface the probe stands on, for presentation (footstep audio).
+        // Reads the hit entity's authored `Surface`; `None` → default Grass.
+        facts.surface = hit
+            .and_then(|h| surfaces.get(h.entity).ok())
+            .map(|surface| surface.0)
+            .unwrap_or_default();
         // Diagnostic decomposition for the debug HUD/logs.
         facts.probe_hit = hit.is_some();
         facts.slope_ok = floor_normal.is_some();

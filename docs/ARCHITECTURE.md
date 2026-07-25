@@ -33,6 +33,12 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§19** Datos separados de sistemas (`state.rs`/`intents.rs` vs `mod.rs`/motores).
 - **§20** Simulación nunca depende de visuales; cámara/HUD/interpolación/cues
   viven en `Update` y solo **leen**.
+- **§21** **No construir lo que el motor va a dar.** `bevy_scene` 0.19 trae BSN
+  (`bsn!`, parches por campo, assets por string): la dirección es migrar hacia
+  BSN, no ampliar andamiaje propio que lo duplique. `world/layout.rs` (tablas +
+  `spawn_box`/`spawn_stair_segment`) **es** un BSN artesanal: candidato #1.
+  Fuera de alcance de BSN y por tanto nuestro: estados de app y ciclo de vida,
+  contenido procedural (bosque, pradera), y datos numéricos como el heightfield.
 
 ## El pipeline seleccionado
 
@@ -59,14 +65,13 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 
 ## Por qué (rationale destilado)
 
-- **Multi-actor por `Actor` + `Intents`.** Todo cuerpo (player, enemigo,
-  horse, probe, futuro jugador remoto) es una entidad `Actor`; IA y red se
-  mueven **solo** escribiendo `Intents`/`CombatIntents` — nunca `Transform`,
-  `BodyVelocity`, `LocomotionState`, facts ni estado privado de motores.
-  Esto es lo que hace barato agregar animales/NPCs/co-op: un Brain nuevo,
-  cero motores nuevos. Los motores despachan por capacidad
-  (`GroundMovement`, `JumpMovement`, …), no por identidad: el horse es "un
-  actor con otro set de capacidades", no un caso especial.
+- **Multi-actor por `Actor` + `Intents`.** Todo cuerpo (player, enemigo, horse,
+  futuro jugador remoto) es un `Actor`; IA y red se mueven **solo** escribiendo
+  `Intents`/`CombatIntents` — nunca `Transform`, `BodyVelocity`,
+  `LocomotionState` ni estado privado de motores. Por eso agregar animales/NPCs/
+  co-op es un Brain nuevo y cero motores. Los motores despachan por **capacidad**
+  (`GroundMovement`, `JumpMovement`, …), no por identidad: el horse es un actor
+  con otro set de capacidades, no un caso especial.
 - **Árbitro central por sistema.** Motores *proponen* transiciones a un
   `ProposalBuffer` de capacidad fija (núcleo compartido `src/proposal.rs`,
   prioridad → peso → orden); un solo sistema arbitra y es el único escritor
@@ -79,14 +84,12 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   silencio: el emisor re-emite cada tick mientras la condición dure. El veto
   `ForbidSprint` llega 1 tick tarde por el orden Movement→Combat — aceptado
   y fijado con test de regresión.
-- **Mounts vía ActorLink transaccional.** Mounts pide
-  `Attach`/`Detach`/`Neutralize` por mensaje; Movement instala/retira
-  atómicamente attachment, redirect de control, collider y gate, y responde
-  con ack. Mounts solo confirma su relación (`MountedOn`/`RiddenBy`) desde
-  un ack aceptado. Los requests aplican el mismo tick (el workspace se
-  dimensiona en `PreUpdate` — no existe allocation en `FixedUpdate`). Detach
-  sin pose segura = collider off + suspensión hasta que Movement encuentre
-  pose válida (`PendingSafeRecovery`, candidatos fijos por tick).
+- **Mounts vía ActorLink transaccional.** Mounts pide `Attach`/`Detach`/
+  `Neutralize` por mensaje; Movement instala/retira atómicamente attachment,
+  redirect de control, collider y gate, y responde con ack. Mounts confirma su
+  relación solo desde un ack aceptado. Aplican el mismo tick (workspace
+  dimensionado en `PreUpdate`, sin allocation en `FixedUpdate`). Detach sin pose
+  segura = collider off + suspensión (`PendingSafeRecovery`).
 - **Salud y hostilidad.** Combat/Projectiles/Charge consultan
   `HostileInteractionImmunity` antes de toda consecuencia y emiten
   `DamageRequestMessage`; Health re-valida, aplica y emite `DeathMessage`.
@@ -101,13 +104,11 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   transversales). La simulación no porta meshes ni handles. Sistemas de
   presentación que tocan entidades despawneables el mismo frame usan
   comandos tolerantes (`try_insert`). `AppearanceBinding` vive en esa raíz
-  visual y selecciona por clave+slot una receta de `VisualCatalog` (scene,
-  escala, orientación, pivot); la identidad de gameplay jamás es una ruta de
-  asset. Body/MainHand/OffHand/World permiten cuerpo, espada, escudo y props
-  separados por dueño. Catálogos de animación distintos se conservan como
-  fuentes distintas y se adaptan en presentación. LOD, culling e instancing
-  solo cambian entidades/recetas visuales: nunca eliminan el collider ni
-  alteran identidad o estado de simulación. La UI de inventario solo lee
+  visual y selecciona por clave+slot una receta de `VisualCatalog`; la identidad
+  de gameplay jamás es una ruta de asset. Body/MainHand/OffHand/World separan
+  cuerpo, espada, escudo y props por dueño. LOD, culling e instancing solo
+  cambian entidades/recetas visuales: nunca el collider ni el estado de
+  simulación. La UI de inventario solo lee
   `Inventory` en `Update` y emite comandos por slot; Inventory valida y aplica
   en `FixedUpdate`. El foco modal pertenece a Input.
 - **Combate apuntado en dos fases.** El rayo del crosshair nace del pivote a
@@ -185,7 +186,7 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 | `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |
 | `projectiles` | Pool fijo de flechas: vuelo/impacto | Simulación sin visuales; Update sincroniza representación |
 | `health` | `Health`, inmunidad, aplicación autoritativa de daño | Único que resta HP; muerte por mensaje |
-| `inventory` | `Inventory`, equipo/durabilidad, pickups del mundo | Equipar inserta/retira `WeaponProfile` de Combat; lee `HitImpactMessage` (filtro `melee`); pide heal a Health |
+| `inventory` | `Inventory`, equipo/durabilidad, pickups | Equipar inserta/retira `WeaponProfile`; lee `HitImpactMessage` (melee); pide heal a Health |
 | `enemies` | Percepción, `Awareness`, brains melee/arquero | Escribe solo sus `*Intents`/`ControlOrientation` |
 | `interaction` | Árbitro de `Interact`, `Interactable`, prioridad | Único consumidor de la tecla; emite la decisión por mensaje |
 | `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
@@ -193,8 +194,8 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 | `world` | Geometría, capas, nivel, targets | Sustrato: no lee a nadie |
 | `visuals`, `camera`, `presentation`, `sfx` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20) |
 | `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
-| `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las lee y las aplica a lo suyo |
+| `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las aplica a lo suyo |
 | `time_control` | Hitstop y `Time<Virtual>` | Único escritor del reloj virtual de simulación |
 
-Sistemas futuros (crafteo, swim, snowboard, clima, NPCs, multiplayer,
-persistencia) se diseñan al tocar como consumidores aditivos; borradores en git.
+Sistemas futuros (crafteo, swim, clima, NPCs, multiplayer, persistencia) se
+diseñan al tocar, como consumidores aditivos; borradores en git.

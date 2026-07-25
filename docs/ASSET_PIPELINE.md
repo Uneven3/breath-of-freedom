@@ -7,15 +7,13 @@ Visión visual: `NORTE.md`; leyes de capas: `ARCHITECTURE.md`; migración activa
 ## Principios
 
 - Blender 5.2 LTS es la fuente de autoría; runtime usa glTF 2.0 binario (`.glb`).
-- Soltar un GLB válido y recompilar lo registra sin agregar una ruta o receta
-  Rust por asset.
-- Identidad de gameplay, apariencia y perfil espacial son claves tipadas
-  distintas. Ninguna es una ruta ni un `Handle`.
-- Mesh renderizado nunca es collider. Colisiones y sockets authored se importan
-  como datos puros antes de `Startup`; `FixedUpdate` nunca lee escenas, huesos o
-  `AnimationPlayer`.
-- Pocos `StandardMaterial` mate compartidos. La belleza proviene de paleta, luz
-  y atmósfera, no de multiplicar materiales o polígonos.
+- Soltar un GLB válido y recompilar lo registra sin agregar una ruta o receta Rust por asset.
+- Identidad de gameplay, apariencia y perfil espacial son claves tipadas distintas. Ninguna es una ruta ni un `Handle`.
+- **Desacoplamiento Estricto de Capas (§20):**
+  - **Presentación (`Update`):** Mallas `SM_` / `SK_`, coordenadas UV y texturas de material (`M_`).
+  - **Simulación (`FixedUpdate`):** Lógica pura en Rust (`Cuttable`, `Burnable`, `Health`, `RigidBody`). Mallas renderizadas NUNCA son colliders; `UBX_`, `USP_`, `UCY_` se convierten a datos puros en compilación y se elimina su render. `FixedUpdate` jamás lee escenas GLB.
+- **Protección Compile-Time (`build.rs`):** `cargo check` escanea y rechaza en compilación cualquier asset en Blender con nomenclatura inválida, nodos sin prefijo `SM_/SK_/UBX_/USP_/UCY_/SKT_`, LODs discontinuos o falta de licencia.
+- Pocos `StandardMaterial` mate compartidos. La belleza proviene de paleta, luz y atmósfera, no de multiplicar materiales o polígonos.
 
 ## Carpetas
 
@@ -24,6 +22,7 @@ art/blender/<categoria>/              fuentes propias .blend
 art/vendor/<catalogo>/                fuentes y licencias de terceros
 assets/game/authored/<categoria>/     GLB propios; scanner estricto
 assets/game/legacy/<catalogo>/        runtime vendor aún necesario
+assets/textures/<categoria>/          texturas de terreno y albedo/normales (.png)
 ```
 
 Categorías y directorios runtime:
@@ -287,3 +286,23 @@ El usuario hace el checkpoint Wayland. Para assets visuales ejecuta además F1 �
 material breakdown, flythrough y watchdog de triángulos. Sólo entonces se
 retira la dependencia runtime placeholder reemplazada; fuente, licencia y
 catálogo de procedencia permanecen.
+
+## Técnicas de Presentación de Vegetación (Follaje y Praderas)
+
+Contrato visual y técnico de población para praderas estilo *Breath of the Wild*:
+
+1. **Geometría Pura sin Alpha (Blade Geometry vs. Alpha Overdraw):**
+   - La hierba se modela como vértices 3D puros de bajo poligonaje teñidos con la paleta mate (`M_FoliageCommon`), **evitando texturas con transparencia Alpha**. Elimina el costo de *Overdraw* en GPU y garantiza bordes limpios estilo cel-shading a 60 FPS.
+
+2. **Transición por Crecimiento Vertical ($Scale_Y: 0 \to 1$ - Anti-Popping):**
+   - En lugar de aparecer bruscamente al cruzar el radio de visibilidad, la vegetación **nace del suelo aumentando dinámicamente su escala vertical ($Scale_Y: 0 \to 1$)** conforme la cámara se acerca. Evita líneas duras de corte.
+
+3. **Inclinación Adaptativa hacia la Cámara (Camera-Facing Billboarding):**
+   - El pasto aplica un leve ajuste dinámico de rotación hacia el ángulo del vector de la cámara cuando esta se eleva o gira en picado. Evita que la vegetación parezca "hojas de papel invisibles" vista desde arriba.
+
+4. **Iluminación Translúcida / Subsurface Scattering (SSS):**
+   - El material/shader de la vegetación simula translucidez vegetal: cuando la luz del sol da desde atrás (contraluz), las puntas de la hierba se iluminan en un tono verde claro brillante/casi blanco, dando sensación de frescura y vida.
+
+5. **Multiplicación Procedural por Frustum & Presupuesto de Sombras:**
+   - La densidad se escala dinámicamente según el cono de visión directo de la cámara.
+   - Las briznas de hierba fina llevan `NotShadowCaster` en las cascadas del sol. El volumen y anclaje proceden de la oclusión PBR e integración con el color del suelo (`Color::srgb(0.22, 0.40, 0.18)`).

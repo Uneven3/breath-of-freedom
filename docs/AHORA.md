@@ -32,10 +32,10 @@ Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/
 jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
 percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
 F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
-fases con carga Bannerlord, maniquí UAL1 como player (mesh + locomoción neutra
-en un GLB, navegador F7), mundo 320×320 con graybox central y bosque, audio de
-pasos por superficie del suelo (§20, graybox validado). Rendimiento cerrado
-2026-07-21 (60 FPS estables, ver arriba).
+fases con carga Bannerlord, pradera densa de hierba estilo BOTW (1,500 matojos
+authored prop_grass_a/b/c en 12m con GPU Instancing, viento rotacional mundial,
+LODs autores 0..30m/20..58m/50..70m y suelo verde pradera a 60 FPS estables),
+maniquí UAL1 como player, mundo 320×320 con bosque, audio de pasos por superficie.
 
 Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
 corregidos el mismo día (input a PreUpdate, patrón CapacityPending
@@ -46,6 +46,54 @@ referencias huérfanas; la única redundancia real (tres `despawn_orphaned_*_vis
 idénticas) unificada en un sistema genérico sobre `VisualOf`, acotado a las
 familias graybox con un `Or` para no tocar catálogo ni flechas pooled. Capas
 datos/simulación/presentación limpias (§20). 313 tests.
+
+## Herramienta de terreno — relieve (en construcción, 2026-07-24)
+
+El mundo pasa de piso plano a **datos**: el relieve nace de un heightfield
+(grilla de alturas) que es la fuente única de verdad, en `world` (§datos-en-el-
+mundo). De esa grilla se derivan dos representaciones: el `Collider::heightfield`
+(simulación, barato) y una malla flat-shaded (presentación), sincronizadas por
+change detection. La navegación (caminar/galopar/trepar/saltar/**morir por
+caída**) **no se hornea**: emerge de la forma + la física existente. Solo lo
+**no geométrico** se pintará como dato después (superficie, pasto largo,
+quemable/cortable) — esa es la *próxima* herramienta, no esta.
+
+Ubicación acordada: dato en `world/terrain.rs`, malla en `visuals/terrain.rs`,
+y el editor de esculpir en un módulo `editor/` propio (casa de toda autoría
+futura: relieve → semántica → instancias).
+
+Rebanadas (cada una un consumidor real; se juega antes de seguir):
+1. **[HECHO]** `Terrain` plano + heightfield collider + malla flat-shaded,
+   reemplazando el box `Floor`. Jugado 2026-07-25: se pisa sin caerse.
+2. **[HECHO]** Modo esculpir en `editor/` (F5): pick del cursor por raycast,
+   gizmo de anillo, LMB sube / RMB baja; muta `Terrain` y `Changed<Terrain>`
+   regenera collider y malla. Jugado: esculpe sin crashear.
+3. **[HECHO]** Suavizado (MMB, relaja hacia el promedio de vecinos) + radio con
+   la rueda. Fuerza subida y `brush()` traversal compartida.
+4. **[PENDIENTE]** Guardar/cargar la grilla a `.ron` (el archivo **es** el nivel).
+
+Aprendido jugando (2026-07-25):
+- **Resolución** subida 64→128 celdas (2.5m/vértice): con 64 el pincel cubría
+  1-2 vértices y salían carpas puntiagudas. `TerrainVisual` ahora 32768 tris.
+- **Collider "a veces no colisionaba" era timing, no polígonos:** avian
+  sincroniza en `FixedPostUpdate`, el rebuild estaba en `Update` (≥1 frame de
+  retraso). Movido a `FixedUpdate` → colisiona en el mismo tick.
+- **[DEUDA] El pincel sigue muy agresivo** (feedback del usuario). Próximo tuning:
+  bajar más `RAISE_RATE`, o limitar la altura acumulada por trazo (mantener el
+  botón acumula muy rápido), o subir el suavizado. Empezar por acá la próxima.
+- **[DEUDA] Colisión: el cuerpo a veces penetra el terreno.** Causa: el
+  heightfield es una superficie delgada de una cara (el piso box viejo era
+  sólido y grueso). Aplicado `CollisionMargin(0.1)` al terreno (remedio avian
+  para shapes delgados) — **verificar la próxima** si elimina el clipping.
+- **[NO ES BUG] "El pasto no suena":** el audio de pasos nunca fue sonido, es un
+  `debug!("[audio] step on ...")` stopgap — y `debug` está apagado en `cargo run`
+  (0 líneas DEBUG). Para que suene de verdad: cargar `.ogg` y reproducirlo en el
+  cue `Step`. Tarea real pendiente (`sfx/mod.rs::play_audio_cues`), no un arreglo.
+
+Stop-line (fuera, diferido a propósito): capas semánticas, chunks/LOD/streaming,
+malla adaptativa, texture splatting, cuevas/instancias, undo/redo, ruido
+procedural, y el tuning de wall-climb para pendientes orgánicas (tarea de
+*movimiento*, aparte). Cuevas = mallas colocadas como instancias, no heightfield.
 
 ## Cierre de rendimiento (2026-07-21): 13 → 60 FPS estables
 

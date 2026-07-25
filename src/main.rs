@@ -9,6 +9,7 @@ mod asset_pipeline;
 mod camera;
 mod combat;
 mod debug;
+mod editor;
 mod enemies;
 mod health;
 mod input;
@@ -59,6 +60,7 @@ fn main() {
             perf::PerfPlugin,
             interaction::InteractionPlugin,
             time_control::TimeControlPlugin,
+            editor::EditorPlugin,
         ))
         .run();
 }

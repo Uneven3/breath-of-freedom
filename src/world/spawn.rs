@@ -89,14 +89,28 @@ pub(super) fn spawn_oriented_box(
     name: &str,
     spec: BoxSpec,
 ) -> Entity {
+    let mut mesh = Mesh::from(Cuboid::new(
+        spec.dimensions.x,
+        spec.dimensions.y,
+        spec.dimensions.z,
+    ));
+    // Scale UVs so terrain textures tile sharply every 4 meters instead of stretching
+    if spec.dimensions.x > 4.0 || spec.dimensions.z > 4.0 {
+        if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0)
+        {
+            let repeat_x = (spec.dimensions.x / 4.0).max(1.0);
+            let repeat_z = (spec.dimensions.z / 4.0).max(1.0);
+            for uv in uvs.iter_mut() {
+                uv[0] *= repeat_x;
+                uv[1] *= repeat_z;
+            }
+        }
+    }
     commands
         .spawn((
             Name::new(name.to_string()),
-            Mesh3d(meshes.add(Cuboid::new(
-                spec.dimensions.x,
-                spec.dimensions.y,
-                spec.dimensions.z,
-            ))),
+            Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(spec.material),
             Transform::from_translation(spec.position).with_rotation(spec.rotation),
             RigidBody::Static,
@@ -120,6 +134,7 @@ const PRACTICE_TARGET_DIMS: Vec3 = Vec3::new(0.15, 1.1, 1.1);
 pub(super) fn spawn_practice_target(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
     palette: &MaterialPalette,
     name: &str,
     center: Vec3,
@@ -146,7 +161,10 @@ pub(super) fn spawn_practice_target(
                 PRACTICE_TARGET_DIMS.y,
                 PRACTICE_TARGET_DIMS.z,
             ))),
-            MeshMaterial3d(palette.handle("Target")),
+            // A unique instance: the hit flash recolors this material in place,
+            // so it must not be the shared palette handle (else all targets
+            // flash together).
+            MeshMaterial3d(palette.instance("Target", materials)),
             Transform::from_translation(center),
             RigidBody::Static,
             Collider::cuboid(

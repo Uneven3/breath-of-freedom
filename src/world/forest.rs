@@ -41,7 +41,8 @@ struct ForestTreeRow {
     trunk_height: f32,
 }
 
-pub(super) fn hash_u32(mut value: u32) -> u32 {
+/// Deterministic scatter hash, shared with the grass meadow in `visuals::grass`.
+pub(crate) fn hash_u32(mut value: u32) -> u32 {
     value ^= value >> 16;
     value = value.wrapping_mul(0x7feb_352d);
     value ^= value >> 15;
@@ -49,7 +50,8 @@ pub(super) fn hash_u32(mut value: u32) -> u32 {
     value ^ (value >> 16)
 }
 
-pub(super) fn hash_unit(value: u32) -> f32 {
+/// Deterministic scatter hash in `[0, 1]`, shared with `visuals::grass`.
+pub(crate) fn hash_unit(value: u32) -> f32 {
     hash_u32(value) as f32 / u32::MAX as f32
 }
 

@@ -17,8 +17,10 @@ pub mod day_night;
 pub mod forest;
 pub mod layout;
 mod spawn;
+pub mod terrain;
 
 pub use forest::TreeKind;
+pub use terrain::Terrain;
 
 /// Authored uniform straight stair segment. Curved stairs are composed from
 /// adjacent one-step segments with independently oriented trigger volumes.
@@ -95,9 +97,15 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<day_night::TimeOfDay>();
-        app.init_resource::<layout::GrassStressState>();
         app.add_message::<day_night::TimeOfDayRequest>();
-        app.add_systems(Startup, (layout::setup_world, day_night::setup_moon_light));
+        app.add_systems(
+            Startup,
+            (
+                layout::setup_world,
+                terrain::setup_terrain,
+                day_night::setup_moon_light,
+            ),
+        );
         app.add_systems(
             FixedUpdate,
             (day_night::apply_time_requests, day_night::advance_time).chain(),
@@ -109,10 +117,14 @@ impl Plugin for WorldPlugin {
                 day_night::place_sky_discs,
                 day_night::apply_cascade_config,
                 day_night::apply_shadow_map_size,
-                layout::handle_grass_stress_toggle,
-                layout::animate_grass_wind,
             ),
         );
+        // In `FixedUpdate`, not `Update`: avian syncs collider AABBs and the
+        // query pipeline in `FixedPostUpdate`, so rebuilding here (earlier in the
+        // same fixed tick) lands the new shape in that tick's physics instead of
+        // trailing it by a frame or more — which is why sculpted ground used to
+        // sometimes not collide.
+        app.add_systems(FixedUpdate, terrain::rebuild_terrain_collider);
         app.add_systems(
             FixedUpdate,
             despawn_dead_targets.after(crate::health::HealthSet::Apply),

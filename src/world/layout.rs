@@ -17,7 +17,7 @@ use super::{Ladder, NonClimbable};
 use crate::asset_pipeline::{MaterialPalette, SpatialCatalog};
 
 // Graybox palette.
-const FLOOR_MATERIAL: &str = "GrayboxFloor";
+const FLOOR_MATERIAL: &str = "GroundGrass";
 const PROP_MATERIAL: &str = "GrayboxProp";
 const VAULT_MATERIAL: &str = "GrayboxVault";
 
@@ -39,13 +39,6 @@ const PERIMETER_THICKNESS: f32 = 1.0;
 /// non-climbable and taller than the ledge traversal range, so autonomous
 /// graybox actors stay in course.
 const BOXES: &[BoxRow] = &[
-    BoxRow {
-        name: "Floor",
-        pos: Vec3::new(0.0, -0.5, 0.0),
-        dims: Vec3::new(WORLD_SIZE, 1.0, WORLD_SIZE),
-        material_key: FLOOR_MATERIAL,
-        climbable: true,
-    },
     BoxRow {
         name: "NorthPerimeterWall",
         pos: Vec3::new(0.0, PERIMETER_HEIGHT * 0.5, -PERIMETER_HALF_EXTENT),
@@ -218,9 +211,9 @@ const STAIRS: &[StairRow] = &[
 pub(super) fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<MaterialPalette>,
     spatial: Res<SpatialCatalog>,
-    asset_server: Res<AssetServer>,
 ) {
     let m = &mut meshes;
 
@@ -275,7 +268,7 @@ pub(super) fn setup_world(
         }
     }
     for (name, center) in PRACTICE_TARGETS {
-        spawn_practice_target(&mut commands, m, &palette, name, *center);
+        spawn_practice_target(&mut commands, m, &mut materials, &palette, name, *center);
     }
     for row in PICKUPS {
         crate::inventory::spawn_world_item(
@@ -306,9 +299,6 @@ pub(super) fn setup_world(
         );
     }
     super::forest::spawn_forest(&mut commands, &spatial);
-
-    // --- Dense BOTW Grass Carpet: 1,500 tufts in 12m radius ---
-    spawn_grass_density(&mut commands, &asset_server, 1500, 12.0);
 
     // --- Rock: sphere r=2 at (-10,1,-5) ---
     commands.spawn((
@@ -417,110 +407,6 @@ pub(super) fn setup_world(
             trigger_half_extents: Vec3::new(0.7, 2.0, 0.65),
         },
     ));
-}
-
-#[derive(Resource, Default)]
-pub struct GrassStressState {
-    pub tier: u8,
-}
-
-#[derive(Component)]
-pub struct GrassTuft;
-
-#[derive(Component, Clone, Copy)]
-pub struct GrassTuftBaseRotation(pub Quat);
-
-pub fn spawn_grass_density(
-    commands: &mut Commands,
-    asset_server: &AssetServer,
-    count: usize,
-    radius: f32,
-) {
-    let grass_scenes = [
-        asset_server.load("game/authored/props/prop_grass_a.glb#Scene0"),
-        asset_server.load("game/authored/props/prop_grass_b.glb#Scene0"),
-        asset_server.load("game/authored/props/prop_grass_c.glb#Scene0"),
-    ];
-    for i in 0..count {
-        let hash = super::forest::hash_u32(i as u32 ^ 0x6472_6173);
-        let u1 = super::forest::hash_unit(hash);
-        let u2 = super::forest::hash_unit(hash ^ 0x1234_5678);
-        let u3 = super::forest::hash_unit(hash ^ 0x8765_4321);
-        let variant = (hash % 3) as usize;
-
-        let angle = u1 * std::f32::consts::TAU;
-        let r = u2.sqrt() * radius;
-        let x = r * angle.cos();
-        let z = 6.0 + r * angle.sin();
-        let yaw = u3 * std::f32::consts::TAU;
-        let scale = 0.85 + u1 * 0.35;
-        let base_rotation = Quat::from_rotation_y(yaw);
-
-        commands.spawn((
-            Name::new(format!("GrassTuft_{i}")),
-            GrassTuft,
-            GrassTuftBaseRotation(base_rotation),
-            bevy::light::NotShadowCaster,
-            bevy::world_serialization::WorldAssetRoot(grass_scenes[variant].clone()),
-            crate::asset_pipeline::materials::AuthoredVisualRoot,
-            Transform::from_xyz(x, 0.0, z)
-                .with_rotation(base_rotation)
-                .with_scale(Vec3::splat(scale)),
-        ));
-    }
-}
-
-pub fn animate_grass_wind(
-    time: Res<Time>,
-    mut tufts: Query<(&mut Transform, &GrassTuftBaseRotation), With<GrassTuft>>,
-) {
-    let t = time.elapsed_secs();
-
-    let wind_angle = t * 0.05;
-    let wind_dir = Vec2::new(wind_angle.cos(), wind_angle.sin());
-
-    let gust_cycle = (t * 0.12).sin() * 0.5 + 0.5;
-    let gust_intensity = gust_cycle.powf(2.5);
-
-    let micro = (t * 1.2).sin() * 0.015;
-
-    for (mut transform, base_rot) in &mut tufts {
-        let pos = transform.translation;
-
-        let wave_pos = pos.x * wind_dir.x + pos.z * wind_dir.y;
-        let wave_speed = 3.0 + gust_intensity * 2.0;
-        let wave_raw = (wave_pos * 0.20 + t * wave_speed).sin();
-
-        let bend = micro + (wave_raw * 0.85 + (wave_raw * 2.0).sin() * 0.15) * gust_intensity * 0.18;
-
-        let pitch = wind_dir.y * bend;
-        let roll = wind_dir.x * bend;
-
-        let wind_tilt = Quat::from_euler(EulerRot::XYZ, pitch, 0.0, roll);
-        transform.rotation = wind_tilt * base_rot.0;
-    }
-}
-
-pub fn handle_grass_stress_toggle(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    asset_server: Res<AssetServer>,
-    mut state: ResMut<GrassStressState>,
-    tufts: Query<Entity, With<GrassTuft>>,
-) {
-    if keys.just_pressed(KeyCode::F8) {
-        for entity in &tufts {
-            commands.entity(entity).despawn();
-        }
-        state.tier = (state.tier + 1) % 3;
-        let (count, radius, label) = match state.tier {
-            0 => (180, 4.5, "180 matojos (Normal)"),
-            1 => (1500, 25.0, "1,500 matojos (Pradera Densa)"),
-            _ => (5000, 60.0, "5,000 matojos (Océano BOTW)"),
-        };
-        info!("[grass-stress] Swapped density to: {label} (count: {count}, radius: {radius}m)");
-        spawn_grass_density(&mut commands, &asset_server, count, radius);
-    }
 }
 
 #[cfg(test)]

@@ -13,9 +13,10 @@ pub struct MaterialPalette {
 
 impl FromWorld for MaterialPalette {
     fn from_world(world: &mut World) -> Self {
+        let asset_server = world.resource::<AssetServer>().clone();
         let mut entries = Vec::with_capacity(PALETTE_KEYS.len());
         for key in PALETTE_KEYS {
-            let material = palette_material(key);
+            let material = palette_material(key, &asset_server);
             let handle = world
                 .resource_mut::<Assets<StandardMaterial>>()
                 .add(material);
@@ -38,6 +39,29 @@ impl MaterialPalette {
             Handle::default()
         })
     }
+
+    /// A fresh, independently-mutable copy of a palette material.
+    ///
+    /// [`handle`](Self::handle) shares one asset across every user of a key,
+    /// which is the point for static geometry (fewer materials, fewer draws).
+    /// But anything whose material is mutated *per instance* — the hit flash
+    /// recolors a struck target's own material — must own its copy, or the
+    /// mutation bleeds across every sibling sharing the handle. Use this there.
+    pub fn instance(
+        &self,
+        key: &str,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Handle<StandardMaterial> {
+        let base = self
+            .get(key)
+            .and_then(|handle| materials.get(handle))
+            .cloned()
+            .unwrap_or_else(|| {
+                error!("[assets] requested unknown palette key {key} for a unique instance");
+                StandardMaterial::default()
+            });
+        materials.add(base)
+    }
 }
 
 fn matte(color: Color) -> StandardMaterial {
@@ -50,16 +74,22 @@ fn matte(color: Color) -> StandardMaterial {
     }
 }
 
-fn palette_material(key: &str) -> StandardMaterial {
+fn palette_material(key: &str, asset_server: &AssetServer) -> StandardMaterial {
     let color = match key {
         "Bark" => Color::srgb(0.33, 0.24, 0.15),
         "Fletching" => Color::srgb(0.85, 0.15, 0.15),
         "FoliageCommon" => Color::srgb(0.27, 0.50, 0.22),
+        "FoliageDry" => Color::srgb(0.58, 0.52, 0.28),
         "FoliageGnarled" => Color::srgb(0.36, 0.45, 0.20),
         "FoliagePine" => Color::srgb(0.16, 0.40, 0.24),
+        "FoliageWildflowers" => Color::srgb(0.35, 0.55, 0.25),
         "GrayboxFloor" => Color::srgb(0.22, 0.40, 0.18),
         "GrayboxProp" => Color::srgb(0.55, 0.50, 0.45),
         "GrayboxVault" => Color::srgb(0.70, 0.50, 0.30),
+        "GroundDirt" => Color::srgb(0.30, 0.22, 0.14),
+        "GroundGrass" => Color::srgb(0.24, 0.44, 0.18),
+        "GroundLeaves" => Color::srgb(0.38, 0.28, 0.16),
+        "GroundPath" => Color::srgb(0.48, 0.38, 0.26),
         "Horse" => Color::srgb(0.42, 0.23, 0.10),
         "Ladder" => Color::srgb(0.50, 0.35, 0.20),
         "Moon" => Color::srgb(0.85, 0.90, 1.00),
@@ -82,6 +112,29 @@ fn palette_material(key: &str) -> StandardMaterial {
     let mut material = matte(color);
     if matches!(key, "Sun" | "Moon" | "String") {
         material.unlit = true;
+    }
+    match key {
+        "GroundGrass" => {
+            material.base_color = Color::WHITE;
+            material.base_color_texture =
+                Some(asset_server.load("textures/terrain/T_GroundGrass_Albedo.png"));
+        }
+        "GroundDirt" => {
+            material.base_color = Color::WHITE;
+            material.base_color_texture =
+                Some(asset_server.load("textures/terrain/T_GroundDirt_Albedo.png"));
+        }
+        "GroundPath" => {
+            material.base_color = Color::WHITE;
+            material.base_color_texture =
+                Some(asset_server.load("textures/terrain/T_GroundPath_Albedo.png"));
+        }
+        "GroundLeaves" => {
+            material.base_color = Color::WHITE;
+            material.base_color_texture =
+                Some(asset_server.load("textures/terrain/T_GroundLeaves_Albedo.png"));
+        }
+        _ => {}
     }
     material
 }
@@ -221,14 +274,48 @@ pub(super) fn validate_authored_extras(
     }
 }
 
+pub(super) fn configure_terrain_texture_samplers(
+    mut events: MessageReader<AssetEvent<bevy::image::Image>>,
+    mut images: ResMut<Assets<bevy::image::Image>>,
+) {
+    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+    for event in events.read() {
+        let id = match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => id,
+            _ => continue,
+        };
+        if let Some(mut image) = images.get_mut(*id) {
+            image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                ..default()
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn asset_test_app() -> App {
+        use bevy::asset::AssetApp;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        // `palette_material` loads terrain albedo textures, which allocates
+        // `Image` handles — the asset type must be registered or that panics.
+        app.init_asset::<bevy::image::Image>();
+        app.finish();
+        app
+    }
+
     #[test]
     fn every_palette_material_is_matte_and_non_metallic() {
+        let app = asset_test_app();
+        let asset_server = app.world().resource::<AssetServer>().clone();
         for key in PALETTE_KEYS {
-            let material = palette_material(key);
+            let material = palette_material(key, &asset_server);
             assert!(material.perceptual_roughness >= 0.8, "{key}");
             assert_eq!(material.metallic, 0.0, "{key}");
         }
@@ -236,10 +323,10 @@ mod tests {
 
     #[test]
     fn duplicate_palette_requests_return_the_same_handle() {
-        let mut world = World::new();
-        world.init_resource::<Assets<StandardMaterial>>();
-        world.init_resource::<MaterialPalette>();
-        let palette = world.resource::<MaterialPalette>();
+        let mut app = asset_test_app();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.init_resource::<MaterialPalette>();
+        let palette = app.world().resource::<MaterialPalette>();
         assert_eq!(palette.get("Bark"), palette.get("Bark"));
     }
 }

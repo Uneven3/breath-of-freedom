@@ -8,6 +8,7 @@
 //! - [`animation`] — the player `AnimationGraph`, state→clip mapping and the
 //!   F7 debug clip browser.
 //! - [`enemy`] — enemy capsules + awareness tint.
+//! - [`grass`] — the decorative meadow: authored tufts swaying in a wind field.
 //! - [`horse`] — horse graybox capsule.
 //! - [`probe`] — the TraversalProbe dummy's capsule.
 //! - [`vfx`] — transient effects (swing arc placeholder).
@@ -22,9 +23,11 @@ mod diagnostic;
 pub mod enemy;
 pub mod foliage;
 pub mod forest;
+mod grass;
 pub mod horse;
 pub mod player;
 pub mod probe;
+mod terrain;
 pub mod vfx;
 
 pub use animation::{AnimationDebug, PlayerAnimations};
@@ -66,6 +69,7 @@ impl Plugin for VisualsPlugin {
         app.add_plugins(diagnostic::DiagnosticViewsPlugin);
         app.init_resource::<AnimationDebug>();
         app.init_resource::<VisualCatalog>();
+        app.init_resource::<grass::GrassStressState>();
         app.add_systems(
             Startup,
             (
@@ -73,6 +77,7 @@ impl Plugin for VisualsPlugin {
                 animation::start_loading_animations,
                 forest::build_tree_proxy_assets,
                 arrows::init_assets,
+                grass::spawn_meadow,
             ),
         );
         app.add_systems(
@@ -104,6 +109,12 @@ impl Plugin for VisualsPlugin {
                     foliage::apply_foliage_lod,
                     foliage::apply_shadow_caster_budget,
                 ),
+                (
+                    grass::handle_grass_stress_toggle,
+                    grass::animate_grass_wind,
+                    grass::update_grass_dynamic_lod,
+                ),
+                terrain::sync_terrain_visual,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),
                 (

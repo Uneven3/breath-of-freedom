@@ -25,15 +25,30 @@ use crate::movement::bundles::{
 use crate::movement::sensing::{GroundSensing, LedgeCastShape, LedgeSensing};
 use crate::movement::{BodyVelocity, Player};
 
-/// Authored spawn point; death teleports back here (graybox respawn).
-const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 1.5, 0.0);
+/// Authored spawn point in world XZ; death teleports back here (graybox
+/// respawn). **Only the horizontal position is authored** — the height comes
+/// from the terrain, because the ground is sculpted data now. A constant `y`
+/// here put the player 6.6 m *under* a hill someone sculpted over the spawn,
+/// and since a heightfield is one-sided it does not catch you from below: you
+/// fall forever.
+const PLAYER_SPAWN_XZ: Vec2 = Vec2::ZERO;
+/// How far above the ground the body's origin starts, enough to clear the
+/// capsule and settle rather than start intersecting.
+const PLAYER_SPAWN_CLEARANCE: f32 = 1.5;
 const PLAYER_HP: f32 = 100.0;
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player);
+        // Scene content: a player is built when a scene is entered and dies
+        // with it (`crate::scene`).
+        for id in crate::scene::SceneId::ALL {
+            app.add_systems(
+                OnEnter(crate::scene::AppState::Scene(id)),
+                spawn_player.in_set(crate::scene::SceneBuild::Actors),
+            );
+        }
         // Death consequences belong to the actor's owner (`docs/ARCHITECTURE.md`): the
         // graybox player respawns at the authored spawn with full health.
         app.add_systems(FixedUpdate, respawn_on_death.after(HealthSet::Apply));
@@ -47,12 +62,29 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-fn spawn_player(mut commands: Commands) {
+/// Where the player's body starts: authored XZ, terrain height plus clearance.
+/// Falls back to the old flat-floor height when there is no terrain, so this
+/// stays correct for a scene that has none.
+fn spawn_position(terrain: Option<&crate::world::Terrain>) -> Vec3 {
+    let ground = terrain.map_or(0.0, |terrain| terrain.height_at(PLAYER_SPAWN_XZ));
+    Vec3::new(
+        PLAYER_SPAWN_XZ.x,
+        ground + PLAYER_SPAWN_CLEARANCE,
+        PLAYER_SPAWN_XZ.y,
+    )
+}
+
+fn spawn_player(
+    mut commands: Commands,
+    state: Res<State<crate::scene::AppState>>,
+    terrain: Query<&crate::world::Terrain>,
+) {
     // The Player is an invisible kinematic collider; the mesh lives on a separate
     // PlayerVisual entity that interpolates toward this body (see `visuals.rs`).
     // Capsule dimensions live in `body` (shared with services and motors).
     let body_dimensions = BodyDimensions::PLAYER;
     commands.spawn((
+        DespawnOnExit(*state.get()),
         Player,
         crate::enemies::perception::Perceivable,
         crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
@@ -61,7 +93,7 @@ fn spawn_player(mut commands: Commands) {
         lock_on::LockOnInputCursor::default(),
         Name::new("Player"),
         KinematicActorBundle::new(
-            Transform::from_translation(PLAYER_SPAWN),
+            Transform::from_translation(spawn_position(terrain.single().ok())),
             body_dimensions,
             GroundSensing::PLAYER,
         ),
@@ -121,14 +153,46 @@ type RespawnQuery<'a> = (&'a mut Transform, &'a mut BodyVelocity, &'a mut Health
 fn respawn_on_death(
     mut deaths: MessageReader<DeathMessage>,
     mut player: Query<RespawnQuery, With<Player>>,
+    terrain: Query<&crate::world::Terrain>,
 ) {
     for death in deaths.read() {
         let Ok((mut transform, mut velocity, mut health)) = player.get_mut(death.entity) else {
             continue;
         };
-        transform.translation = PLAYER_SPAWN;
+        transform.translation = spawn_position(terrain.single().ok());
         velocity.0 = Vec3::ZERO;
         health.heal_full();
         info!("[player] died — respawning at the authored spawn");
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+    use crate::world::Terrain;
+
+    #[test]
+    fn the_spawn_sits_on_top_of_sculpted_ground() {
+        // The bug this pins: with a constant spawn height, sculpting a hill over
+        // the spawn buried the player 6.6 m underground — and a heightfield does
+        // not catch you from below, so the fall never ends.
+        let mut terrain = Terrain::flat_for_test();
+        terrain.raise_area(PLAYER_SPAWN_XZ, 30.0, 8.0);
+        let ground = terrain.height_at(PLAYER_SPAWN_XZ);
+        assert!(ground > 5.0, "the test hill should be tall: {ground}");
+
+        let spawn = spawn_position(Some(&terrain));
+        assert!(
+            spawn.y > ground,
+            "spawn {} must be above the ground {ground}",
+            spawn.y
+        );
+        assert_eq!(spawn.xz(), PLAYER_SPAWN_XZ, "XZ stays authored");
+    }
+
+    #[test]
+    fn a_scene_without_terrain_still_spawns_at_the_authored_height() {
+        let spawn = spawn_position(None);
+        assert_eq!(spawn, Vec3::new(0.0, PLAYER_SPAWN_CLEARANCE, 0.0));
     }
 }

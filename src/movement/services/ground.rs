@@ -210,3 +210,109 @@ mod tests {
         ));
     }
 }
+
+/// Actors under their own locomotion — mounted riders are placed by their mount,
+/// so they are not ours to correct.
+type WalkingActors<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Transform, &'static Collider),
+    (
+        With<Actor>,
+        With<crate::movement::attachment::LocomotionEnabled>,
+    ),
+>;
+
+/// How deep the body may sit inside the terrain before it is lifted out, in
+/// metres. Not zero: the probe and the motors legitimately keep the capsule a
+/// hair inside the surface, and correcting that every tick would fight them.
+const MAX_TERRAIN_PENETRATION: f32 = 0.05;
+
+/// Lift an actor that ended up **inside** the terrain back onto its surface.
+///
+/// A heightfield is a one-sided surface with a thin collision margin, so a body
+/// can end up under it — sculpted up beneath its feet, dropped in fast, or
+/// spawned into a hill loaded from disk. Nothing rescued it once that happened:
+/// the downward probe finds surface right there and reports `grounded=ON` with
+/// `slope_ok=ON`, so from the simulation's point of view the actor is standing
+/// comfortably, several centimetres below the ground it is standing on. That is
+/// exactly the state the screenshot caught.
+///
+/// Runs after the motors move the body, so it corrects the position they
+/// produced rather than the one they started from. Reads the collider's own
+/// scaled shape, so it is right whether the capsule is standing or crouched.
+pub fn lift_actors_out_of_terrain(
+    terrain: Query<&crate::world::Terrain>,
+    mut actors: WalkingActors,
+) {
+    let Ok(terrain) = terrain.single() else {
+        return;
+    };
+    for (mut transform, collider) in &mut actors {
+        let local_aabb = collider.shape_scaled().compute_local_aabb();
+        let feet = transform.translation.y + local_aabb.mins.y;
+        let ground = terrain.height_at(transform.translation.xz());
+        let penetration = ground - feet;
+        if penetration > MAX_TERRAIN_PENETRATION {
+            transform.translation.y += penetration;
+        }
+    }
+}
+
+#[cfg(test)]
+mod terrain_clearance_tests {
+    use super::*;
+    use crate::movement::attachment::LocomotionEnabled;
+    use crate::world::Terrain;
+
+    /// Runs the lift system once over a world holding one terrain and one actor.
+    fn settle(body_y: f32, sculpt: Option<f32>) -> f32 {
+        let mut app = App::new();
+        let mut terrain = Terrain::flat_for_test();
+        if let Some(height) = sculpt {
+            terrain.raise_area(Vec2::ZERO, 30.0, height);
+        }
+        app.world_mut().spawn(terrain);
+        let actor = app
+            .world_mut()
+            .spawn((
+                Actor,
+                LocomotionEnabled,
+                Transform::from_xyz(0.0, body_y, 0.0),
+                Collider::capsule(0.5, 1.0),
+            ))
+            .id();
+        app.add_systems(Update, lift_actors_out_of_terrain);
+        app.update();
+        app.world().get::<Transform>(actor).unwrap().translation.y
+    }
+
+    #[test]
+    fn a_body_buried_in_a_hill_is_lifted_onto_it() {
+        // The screenshot's state: standing inside the ground, probe reporting
+        // grounded, nothing rescuing the body.
+        let ground = 8.0;
+        let settled = settle(1.5, Some(ground));
+        assert!(
+            settled > ground,
+            "body at {settled} should be lifted above ground {ground}"
+        );
+    }
+
+    #[test]
+    fn a_body_standing_on_flat_ground_is_not_nudged() {
+        // Capsule half-height is 1.0 (0.5 radius + 0.5 half-length), so a body
+        // at y = 1.0 rests exactly on a flat floor and must be left alone.
+        let settled = settle(1.0, None);
+        assert!(
+            (settled - 1.0).abs() < 0.001,
+            "a resting body moved to {settled}"
+        );
+    }
+
+    #[test]
+    fn a_body_in_the_air_is_not_pulled_down() {
+        let settled = settle(20.0, None);
+        assert!((settled - 20.0).abs() < 0.001, "airborne body moved");
+    }
+}

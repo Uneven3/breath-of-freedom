@@ -222,6 +222,16 @@ impl Plugin for MovementPlugin {
                 .chain()
                 .in_set(MovementSet::TickActiveMotor),
         );
+        // After the motors move the body, before attachments follow it: an actor
+        // that ended up inside the terrain is lifted back onto the surface. The
+        // downward probe cannot catch this — it finds ground right there and
+        // reports the body comfortably grounded while it sits under the floor.
+        app.add_systems(
+            FixedUpdate,
+            services::ground::lift_actors_out_of_terrain
+                .after(MovementSet::TickActiveMotor)
+                .before(MovementSet::SyncAttachments),
+        );
         app.add_systems(
             FixedUpdate,
             attachment_systems::sync_attachments.in_set(MovementSet::SyncAttachments),

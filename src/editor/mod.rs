@@ -1,42 +1,65 @@
-//! In-engine authoring tools. First up: the terrain sculpt brush; future tools
+//! In-engine authoring tools. First up: the terrain sculpt brushes; future tools
 //! (semantic paint, instance placement) join here.
 //!
 //! Dev-only, gated behind **F5**. While active the tool holds modal input focus,
 //! which by itself frees and shows the cursor, stops the camera, and suppresses
 //! gameplay input — so the mouse becomes a brush without any per-system gating.
-//! The tool reads input and mutates [`Terrain`] (the data); the collider
-//! (`world::terrain`) and the mesh (`visuals::terrain`) regenerate from
-//! `Changed<Terrain>`. The editor never decides *how* the grid changes — that
-//! lives on `Terrain` — only *where and when*.
+//!
+//! The split that keeps this small: the editor decides **where and when** a
+//! brush fires; [`Terrain`](crate::world::Terrain) owns **how** the grid
+//! changes. Adding a brush is a method there plus a row in [`BrushKind`] — never
+//! a new system. The collider (`world::terrain`) and the mesh
+//! (`visuals::terrain`) regenerate from `Changed<Terrain>`, so nothing here
+//! touches physics or rendering.
+//!
+//! - `brush` — the brush vocabulary and the stroke that applies it.
+//! - `history` — undo/redo, one entry per stroke.
+//! - `persist` — the level on disk.
+//! - `hud` — what is on screen while sculpting.
 
-use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
-use bevy::color::palettes::css;
+mod brush;
+mod history;
+mod hud;
+mod persist;
+
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 
 use crate::input::ModalInputFocusRequest;
-use crate::world::{GameLayer, Terrain};
+use crate::scene::AppState;
+use brush::BrushKind;
+use history::SculptHistory;
 
-/// Metres of height change per second at the brush center while raising/lowering.
-const RAISE_RATE: f32 = 4.0;
-/// How fast the smooth brush relaxes toward the neighbour average, per second.
-const SMOOTH_RATE: f32 = 8.0;
 /// Brush radius bounds (metres) for the scroll-wheel resize.
 const MIN_RADIUS: f32 = 2.0;
 const MAX_RADIUS: f32 = 40.0;
 /// Radius change per scroll notch.
 const RADIUS_STEP: f32 = 1.5;
-/// How far the pick ray reaches into the world.
-const PICK_DISTANCE: f32 = 1_000.0;
-/// Lift the brush ring just off the surface so it does not z-fight the ground.
-const GIZMO_LIFT: f32 = 0.05;
+/// Strength bounds and step. Strength scales every brush's per-second rate, so
+/// one knob covers "shape a mountain" and "nudge a footpath".
+const MIN_STRENGTH: f32 = 0.1;
+const MAX_STRENGTH: f32 = 3.0;
+const STRENGTH_STEP: f32 = 0.1;
 
-/// Terrain sculpt tool state. Off until F5; radius is scroll-adjustable.
+/// Terrain sculpt tool state: which brush, how wide, how hard, and the anchor of
+/// the stroke in progress.
 #[derive(Resource)]
-struct SculptTool {
-    active: bool,
-    radius: f32,
+pub(crate) struct SculptTool {
+    pub active: bool,
+    pub radius: f32,
+    pub strength: f32,
+    pub kind: BrushKind,
+    /// Where the current stroke started, in world XZ plus the ground height
+    /// there at press time. `Flatten` levels to that height and `Ramp` runs from
+    /// it — both need the value *before* the stroke starts changing it.
+    pub anchor: Option<StrokeAnchor>,
+}
+
+/// The frozen start of a stroke.
+#[derive(Clone, Copy)]
+pub(crate) struct StrokeAnchor {
+    pub xz: Vec2,
+    pub height: f32,
 }
 
 impl Default for SculptTool {
@@ -44,6 +67,9 @@ impl Default for SculptTool {
         Self {
             active: false,
             radius: 6.0,
+            strength: 1.0,
+            kind: BrushKind::Sculpt,
+            anchor: None,
         }
     }
 }
@@ -57,16 +83,53 @@ pub struct EditorPlugin;
 impl Plugin for EditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SculptTool>();
-        app.add_systems(Startup, spawn_focus_owner);
+        app.init_resource::<SculptHistory>();
+        // The tool itself is infrastructure — its focus owner and HUD outlive any
+        // scene (`crate::scene`); only the terrain it edits is scene content.
+        app.add_systems(Startup, (spawn_focus_owner, hud::spawn_hud));
         app.add_systems(
             Update,
             (
+                // Ordered: the toggle decides whether this frame sculpts at all,
+                // and the knobs must settle before the stroke reads them.
                 toggle_sculpt,
+                select_brush,
                 adjust_brush,
-                sculpt_terrain,
-                draw_brush_gizmo,
-            ),
+                brush::sculpt_terrain,
+                history::undo_redo,
+                persist::save_or_reload,
+                brush::draw_brush_gizmo,
+                hud::update_hud,
+            )
+                .chain()
+                // No sculpting from the menu: there is no terrain to bite, and
+                // the menu owns the cursor.
+                .run_if(not(in_state(AppState::MainMenu))),
         );
+        for id in crate::scene::SceneId::ALL {
+            app.add_systems(OnExit(AppState::Scene(id)), leave_sculpting);
+        }
+    }
+}
+
+/// Leaving a scene ends sculpting. Without this the tool would stay "on" across
+/// the transition while its focus owner — infrastructure, so it does not
+/// despawn — kept holding modal input, freezing the next scene's controls
+/// against a terrain that no longer exists.
+fn leave_sculpting(
+    mut tool: ResMut<SculptTool>,
+    mut history: ResMut<SculptHistory>,
+    owner: Query<Entity, With<SculptFocus>>,
+    mut focus: MessageWriter<ModalInputFocusRequest>,
+) {
+    history.clear();
+    if !tool.active {
+        return;
+    }
+    tool.active = false;
+    tool.anchor = None;
+    if let Ok(owner) = owner.single() {
+        focus.write(ModalInputFocusRequest::Release(owner));
     }
 }
 
@@ -89,6 +152,7 @@ fn toggle_sculpt(
         return;
     };
     tool.active = !tool.active;
+    tool.anchor = None;
     focus.write(if tool.active {
         ModalInputFocusRequest::Acquire(owner)
     } else {
@@ -96,101 +160,49 @@ fn toggle_sculpt(
     });
     info!(
         "[editor] terrain sculpt: {}",
-        if tool.active {
-            "ON (LMB raise / RMB lower / MMB smooth / scroll = size)"
-        } else {
-            "OFF"
+        if tool.active { "ON" } else { "OFF" }
+    );
+}
+
+/// Number keys pick the brush; the HUD spells out what each one does.
+fn select_brush(keys: Res<ButtonInput<KeyCode>>, mut tool: ResMut<SculptTool>) {
+    if !tool.active {
+        return;
+    }
+    for kind in BrushKind::ALL {
+        if keys.just_pressed(kind.key()) {
+            tool.kind = kind;
         }
-    );
-}
-
-/// Scroll to resize the brush while sculpting.
-fn adjust_brush(mut tool: ResMut<SculptTool>, scroll: Res<AccumulatedMouseScroll>) {
-    if !tool.active || scroll.delta.y == 0.0 {
-        return;
     }
-    tool.radius = (tool.radius + scroll.delta.y * RADIUS_STEP).clamp(MIN_RADIUS, MAX_RADIUS);
 }
 
-/// The world point under the cursor, but only when the ray lands on the terrain
-/// (not on a prop in front of it).
-fn cursor_terrain_hit(
-    spatial: &SpatialQuery,
-    window: &Window,
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-    terrain: Entity,
-) -> Option<Vec3> {
-    let cursor = window.cursor_position()?;
-    let ray = camera.viewport_to_world(camera_transform, cursor).ok()?;
-    let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
-    let hit = spatial.cast_ray(ray.origin, ray.direction, PICK_DISTANCE, true, &filter)?;
-    if hit.entity != terrain {
-        return None;
-    }
-    Some(ray.origin + ray.direction * hit.distance)
-}
-
-/// While held: LMB raises, RMB lowers, MMB smooths the terrain under the cursor.
-fn sculpt_terrain(
-    tool: Res<SculptTool>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    time: Res<Time>,
-    spatial: SpatialQuery,
-    window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    mut terrain: Query<(Entity, &mut Terrain)>,
+/// Scroll resizes the brush; Shift+scroll (or `[` / `]`) changes its strength.
+fn adjust_brush(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut tool: ResMut<SculptTool>,
+    scroll: Res<AccumulatedMouseScroll>,
 ) {
     if !tool.active {
         return;
     }
-    let raise = buttons.pressed(MouseButton::Left);
-    let lower = buttons.pressed(MouseButton::Right);
-    let smooth = buttons.pressed(MouseButton::Middle);
-    if !(raise || lower || smooth) {
-        return;
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let mut strength_notches = 0.0;
+    if keys.just_pressed(KeyCode::BracketRight) {
+        strength_notches += 1.0;
     }
-    let (Ok(window), Ok((camera, camera_transform)), Ok((entity, mut terrain))) =
-        (window.single(), camera.single(), terrain.single_mut())
-    else {
-        return;
-    };
-    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, entity) else {
-        return;
-    };
-    let center = Vec2::new(hit.x, hit.z);
-    let dt = time.delta_secs();
-    if smooth {
-        terrain.smooth_area(center, tool.radius, (SMOOTH_RATE * dt).min(1.0));
-    } else if raise ^ lower {
-        let direction = if raise { 1.0 } else { -1.0 };
-        terrain.raise_area(center, tool.radius, direction * RAISE_RATE * dt);
+    if keys.just_pressed(KeyCode::BracketLeft) {
+        strength_notches -= 1.0;
     }
-}
-
-/// A flat ring on the ground showing where and how wide the brush bites.
-fn draw_brush_gizmo(
-    tool: Res<SculptTool>,
-    spatial: SpatialQuery,
-    window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    terrain: Query<Entity, With<Terrain>>,
-    mut gizmos: Gizmos,
-) {
-    if !tool.active {
-        return;
+    if scroll.delta.y != 0.0 {
+        if shift {
+            strength_notches += scroll.delta.y;
+        } else {
+            tool.radius =
+                (tool.radius + scroll.delta.y * RADIUS_STEP).clamp(MIN_RADIUS, MAX_RADIUS);
+        }
     }
-    let (Ok(window), Ok((camera, camera_transform)), Ok(entity)) =
-        (window.single(), camera.single(), terrain.single())
-    else {
-        return;
-    };
-    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, entity) else {
-        return;
-    };
-    let isometry = Isometry3d::new(
-        hit + Vec3::Y * GIZMO_LIFT,
-        Quat::from_rotation_arc(Vec3::Z, Vec3::Y),
-    );
-    gizmos.circle(isometry, tool.radius, css::YELLOW);
+    if strength_notches != 0.0 {
+        tool.strength =
+            (tool.strength + strength_notches * STRENGTH_STEP).clamp(MIN_STRENGTH, MAX_STRENGTH);
+    }
 }

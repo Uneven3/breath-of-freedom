@@ -1,0 +1,235 @@
+//! Undo/redo for sculpting, one entry per **stroke**.
+//!
+//! Per stroke, not per frame: a two-second drag is one thing you did, so it
+//! should be one thing you can take back. The unit of history is a full grid
+//! snapshot — 129² floats is 66 KB, and at [`MAX_STEPS`] that is ~2 MB for the
+//! whole history, which is cheaper than the bookkeeping a diff would need.
+//!
+//! This exists because the destructive brushes (flatten, terrace) make
+//! experimenting expensive without it: you stop trying things when a mistake
+//! costs you the hillside.
+
+use bevy::prelude::*;
+
+use super::SculptTool;
+use crate::world::Terrain;
+
+/// How many strokes back you can go before the oldest is dropped.
+const MAX_STEPS: usize = 32;
+
+#[derive(Resource, Default)]
+pub(crate) struct SculptHistory {
+    /// Grids to go back to, oldest first.
+    undo: Vec<Vec<f32>>,
+    /// Grids undone, ready to be redone. Cleared by any new stroke.
+    redo: Vec<Vec<f32>>,
+    /// The grid as it was when the current stroke started, if one is running.
+    pending: Option<Vec<f32>>,
+}
+
+impl SculptHistory {
+    /// Freeze the grid at the start of a stroke. Idempotent: called every frame
+    /// the stroke runs, it only takes the first snapshot.
+    pub fn begin_stroke(&mut self, terrain: &Terrain) {
+        if self.pending.is_none() {
+            self.pending = Some(terrain.snapshot());
+        }
+    }
+
+    /// Close the stroke and file it. A stroke that changed nothing (button
+    /// pressed and released without moving dirt) leaves no entry, so undo never
+    /// spends a step doing nothing visible.
+    pub fn end_stroke(&mut self, terrain: &Terrain) {
+        let Some(before) = self.pending.take() else {
+            return;
+        };
+        if before == terrain.snapshot() {
+            return;
+        }
+        self.push_undo(before);
+        self.redo.clear();
+    }
+
+    /// Record a grid to come back to, for edits that are not strokes (loading a
+    /// file over your work is the one that would otherwise be unrecoverable).
+    pub fn record(&mut self, terrain: &Terrain) {
+        self.push_undo(terrain.snapshot());
+        self.redo.clear();
+    }
+
+    fn push_undo(&mut self, grid: Vec<f32>) {
+        if self.undo.len() == MAX_STEPS {
+            self.undo.remove(0);
+        }
+        self.undo.push(grid);
+    }
+
+    pub fn undo(&mut self, terrain: &mut Terrain) -> bool {
+        let Some(previous) = self.undo.pop() else {
+            return false;
+        };
+        let current = terrain.snapshot();
+        if !terrain.restore(&previous) {
+            return false;
+        }
+        self.redo.push(current);
+        true
+    }
+
+    pub fn redo(&mut self, terrain: &mut Terrain) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        let current = terrain.snapshot();
+        if !terrain.restore(&next) {
+            return false;
+        }
+        self.push_undo(current);
+        true
+    }
+
+    pub fn depth(&self) -> (usize, usize) {
+        (self.undo.len(), self.redo.len())
+    }
+
+    /// Forget everything. Called when a scene ends: these snapshots describe a
+    /// terrain that no longer exists, and since every scene's grid has the same
+    /// dimensions, [`Terrain::restore`] would happily accept one — undo in the
+    /// next scene would silently paste in the previous scene's ground.
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.pending = None;
+    }
+}
+
+/// Ctrl+Z steps back, Ctrl+Y (or Ctrl+Shift+Z) steps forward.
+pub(super) fn undo_redo(
+    tool: Res<SculptTool>,
+    mut history: ResMut<SculptHistory>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut terrain: Query<&mut Terrain>,
+) {
+    if !tool.active {
+        return;
+    }
+    let control = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if !control {
+        return;
+    }
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let undo = keys.just_pressed(KeyCode::KeyZ) && !shift;
+    let redo = keys.just_pressed(KeyCode::KeyY) || (keys.just_pressed(KeyCode::KeyZ) && shift);
+    if !(undo || redo) {
+        return;
+    }
+    let Ok(mut terrain) = terrain.single_mut() else {
+        return;
+    };
+    // Only reborrow mutably when the step actually lands, so a no-op undo does
+    // not flag `Changed<Terrain>` and rebuild the collider and mesh for nothing.
+    let applied = if undo {
+        history.undo(terrain.bypass_change_detection())
+    } else {
+        history.redo(terrain.bypass_change_detection())
+    };
+    if applied {
+        terrain.set_changed();
+    }
+    info!(
+        "[editor] {} {}",
+        if undo { "undo" } else { "redo" },
+        if applied {
+            "aplicado"
+        } else {
+            "sin nada que hacer"
+        }
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::Terrain;
+
+    fn hill() -> Terrain {
+        Terrain::flat_for_test()
+    }
+
+    #[test]
+    fn a_stroke_becomes_one_undo_step() {
+        let mut terrain = hill();
+        let mut history = SculptHistory::default();
+        let flat = terrain.snapshot();
+        // Many frames, one stroke.
+        history.begin_stroke(&terrain);
+        for _ in 0..10 {
+            terrain.raise_area(Vec2::ZERO, 10.0, 0.1);
+            history.begin_stroke(&terrain);
+        }
+        history.end_stroke(&terrain);
+        assert_eq!(history.depth(), (1, 0));
+        assert!(history.undo(&mut terrain));
+        assert_eq!(terrain.snapshot(), flat);
+    }
+
+    #[test]
+    fn an_empty_stroke_files_nothing() {
+        let terrain = hill();
+        let mut history = SculptHistory::default();
+        history.begin_stroke(&terrain);
+        history.end_stroke(&terrain);
+        assert_eq!(history.depth(), (0, 0));
+    }
+
+    #[test]
+    fn redo_replays_what_undo_took_back() {
+        let mut terrain = hill();
+        let mut history = SculptHistory::default();
+        history.begin_stroke(&terrain);
+        terrain.raise_area(Vec2::ZERO, 10.0, 3.0);
+        history.end_stroke(&terrain);
+        let sculpted = terrain.snapshot();
+
+        assert!(history.undo(&mut terrain));
+        assert_ne!(terrain.snapshot(), sculpted);
+        assert!(history.redo(&mut terrain));
+        assert_eq!(terrain.snapshot(), sculpted);
+    }
+
+    #[test]
+    fn a_new_stroke_drops_the_redo_branch() {
+        let mut terrain = hill();
+        let mut history = SculptHistory::default();
+        history.begin_stroke(&terrain);
+        terrain.raise_area(Vec2::ZERO, 10.0, 3.0);
+        history.end_stroke(&terrain);
+        history.undo(&mut terrain);
+        assert_eq!(history.depth(), (0, 1));
+
+        history.begin_stroke(&terrain);
+        terrain.raise_area(Vec2::new(20.0, 0.0), 10.0, 3.0);
+        history.end_stroke(&terrain);
+        assert_eq!(history.depth(), (1, 0));
+    }
+
+    #[test]
+    fn undoing_an_empty_history_is_harmless() {
+        let mut terrain = hill();
+        let mut history = SculptHistory::default();
+        assert!(!history.undo(&mut terrain));
+        assert!(!history.redo(&mut terrain));
+    }
+
+    #[test]
+    fn the_history_stops_growing_at_the_cap() {
+        let mut terrain = hill();
+        let mut history = SculptHistory::default();
+        for i in 0..MAX_STEPS + 10 {
+            history.begin_stroke(&terrain);
+            terrain.raise_area(Vec2::new(i as f32, 0.0), 6.0, 1.0);
+            history.end_stroke(&terrain);
+        }
+        assert_eq!(history.depth().0, MAX_STEPS);
+    }
+}

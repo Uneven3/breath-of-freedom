@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use super::spawn::{TreeSpec, spawn_tree};
 use crate::asset_pipeline::{SpatialCatalog, SpatialProfileKey};
+use crate::scene::AppState;
 
 const CLEARING_RADIUS: f32 = 42.0;
 const GRID_STEP: f32 = 11.5;
@@ -146,7 +147,7 @@ fn authored_tree_collider(kind: TreeKind, spatial: &SpatialCatalog) -> Option<(f
         .map(|collider| (collider.radius, collider.height))
 }
 
-pub(super) fn spawn_forest(commands: &mut Commands, spatial: &SpatialCatalog) {
+pub(super) fn spawn_forest(commands: &mut Commands, spatial: &SpatialCatalog, scene: AppState) {
     for (index, row) in forest_layout().into_iter().enumerate() {
         let (trunk_radius, trunk_height) = authored_tree_collider(row.kind, spatial)
             .unwrap_or((row.trunk_radius, row.trunk_height));
@@ -160,6 +161,7 @@ pub(super) fn spawn_forest(commands: &mut Commands, spatial: &SpatialCatalog) {
                 trunk_radius,
                 trunk_height,
             },
+            scene,
         );
     }
 }

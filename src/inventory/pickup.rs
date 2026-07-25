@@ -20,6 +20,7 @@ const INTERACT_PICKUP_RANGE: f32 = 2.5;
 /// No `Collider`/`RigidBody`: a solid pickup would shove the player before
 /// the auto-pickup radius ever triggers. Deliberate graybox simplification
 /// — a collider lands if the feeling asks for it.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_world_item(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -28,6 +29,7 @@ pub fn spawn_world_item(
     position: Vec3,
     stack: ItemStack,
     mode: PickupMode,
+    scene: crate::scene::AppState,
 ) -> Entity {
     let (dims, material_key) = match stack.kind {
         ItemKind::Weapon(_) => (Vec3::new(0.15, 0.7, 0.15), "PickupWeapon"),
@@ -35,6 +37,7 @@ pub fn spawn_world_item(
         ItemKind::Food { .. } => (Vec3::new(0.25, 0.25, 0.25), "PickupFood"),
     };
     let mut item = commands.spawn((
+        DespawnOnExit(scene),
         Name::new(name.to_string()),
         WorldItem { stack, mode },
         Mesh3d(meshes.add(Cuboid::new(dims.x, dims.y, dims.z))),

@@ -132,8 +132,9 @@ pub(super) fn advance_time(time: Res<Time>, mut tod: ResMut<TimeOfDay>) {
         (tod.hours + time.delta_secs() * game_hours_per_real_second * tod.speed).rem_euclid(24.0);
 }
 
-pub(super) fn setup_moon_light(mut commands: Commands) {
+pub(super) fn setup_moon_light(mut commands: Commands, state: Res<State<crate::scene::AppState>>) {
     commands.spawn((
+        DespawnOnExit(*state.get()),
         Name::new("MoonLight"),
         MoonLight,
         DirectionalLight {

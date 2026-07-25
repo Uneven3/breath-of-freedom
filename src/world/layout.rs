@@ -15,6 +15,7 @@ use super::spawn::{
 };
 use super::{Ladder, NonClimbable};
 use crate::asset_pipeline::{MaterialPalette, SpatialCatalog};
+use crate::scene::AppState;
 
 // Graybox palette.
 const FLOOR_MATERIAL: &str = "GroundGrass";
@@ -208,17 +209,21 @@ const STAIRS: &[StairRow] = &[
     },
 ];
 
-pub(super) fn setup_world(
+/// The sky every walkable scene needs: sun, moon discs and ambient light. Split
+/// from [`setup_graybox`] so the editor scene can have light to read shapes by
+/// without inheriting a forest.
+pub(super) fn setup_sky(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<MaterialPalette>,
-    spatial: Res<SpatialCatalog>,
+    state: Res<State<AppState>>,
 ) {
     let m = &mut meshes;
+    let scene = *state.get();
 
     // --- Lighting: the day/night cycle drives this light every frame ---
     commands.spawn((
+        DespawnOnExit(scene),
         Name::new("Sun"),
         super::day_night::Sun,
         DirectionalLight {
@@ -235,6 +240,7 @@ pub(super) fn setup_world(
     // Visible sun/moon discs: unlit spheres the cycle moves along their
     // arcs, so the light source reads as a body in the sky.
     commands.spawn((
+        DespawnOnExit(scene),
         Name::new("SunDisc"),
         super::day_night::SunDisc,
         bevy::light::NotShadowCaster,
@@ -243,6 +249,7 @@ pub(super) fn setup_world(
         Transform::from_xyz(0.0, 400.0, 0.0),
     ));
     commands.spawn((
+        DespawnOnExit(scene),
         Name::new("MoonDisc"),
         super::day_night::MoonDisc,
         bevy::light::NotShadowCaster,
@@ -251,6 +258,20 @@ pub(super) fn setup_world(
         Transform::from_xyz(0.0, -400.0, 0.0),
         Visibility::Hidden,
     ));
+}
+
+/// The locomotion course: boxes, walls, stairs (straight, curved and derived),
+/// the ladder and the ramps. One of the pieces a scene row can ask for
+/// (`crate::scene`), so the traversal box can have it without the forest and
+/// the sandbox can have none of it.
+pub(super) fn setup_course(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    palette: Res<MaterialPalette>,
+    state: Res<State<AppState>>,
+) {
+    let m = &mut meshes;
+    let scene = *state.get();
 
     // --- Declarative tables ---
     for row in BOXES {
@@ -262,25 +283,81 @@ pub(super) fn setup_world(
             row.pos,
             row.dims,
             row.material_key,
+            scene,
         );
         if !row.climbable {
             commands.entity(entity).insert(NonClimbable);
         }
     }
-    for (name, center) in PRACTICE_TARGETS {
-        spawn_practice_target(&mut commands, m, &mut materials, &palette, name, *center);
-    }
-    for row in PICKUPS {
-        crate::inventory::spawn_world_item(
-            &mut commands,
-            m,
-            &palette,
-            row.name,
-            row.pos,
-            row.stack,
-            row.mode,
-        );
-    }
+    // --- Rock: sphere r=2 at (-10,1,-5) ---
+    commands.spawn((
+        DespawnOnExit(scene),
+        Name::new("Rock"),
+        Mesh3d(m.add(Sphere::new(2.0))),
+        MeshMaterial3d(palette.handle(PROP_MATERIAL)),
+        Transform::from_xyz(-10.0, 1.0, -5.0),
+        RigidBody::Static,
+        Collider::sphere(2.0),
+    ));
+
+    // --- Tree: cylinder r=1 h=10 at (10,5,-5) ---
+    commands.spawn((
+        DespawnOnExit(scene),
+        Name::new("Tree"),
+        Mesh3d(m.add(Cylinder::new(1.0, 10.0))),
+        MeshMaterial3d(palette.handle("TreeTrunk")),
+        Transform::from_xyz(10.0, 5.0, -5.0),
+        RigidBody::Static,
+        Collider::cylinder(1.0, 10.0),
+    ));
+
+    // --- Slope: 8×0.3×4 at (10,1.37,0), rotated 20° about Z ---
+    commands.spawn((
+        DespawnOnExit(scene),
+        Name::new("Slope"),
+        Mesh3d(m.add(Cuboid::new(8.0, 0.3, 4.0))),
+        MeshMaterial3d(palette.handle(FLOOR_MATERIAL)),
+        Transform::from_xyz(10.0, 1.37, 0.0)
+            .with_rotation(Quat::from_rotation_z(20.0_f32.to_radians())),
+        RigidBody::Static,
+        Collider::cuboid(8.0, 0.3, 4.0),
+    ));
+
+    // --- Ladder on its (non-climbable) wall — the wall is a `BOXES` row. ---
+    let ladder_x = 10.0;
+    let ladder_wall_z = -10.0;
+    let ladder_surface_z = ladder_wall_z + 0.5;
+    // Authored body centerline: surface + capsule radius + a small skin gap.
+    let ladder_body_z = ladder_surface_z + 0.55;
+    commands.spawn((
+        DespawnOnExit(scene),
+        Name::new("Ladder"),
+        Mesh3d(m.add(Cuboid::new(0.8, 4.0, 0.1))),
+        MeshMaterial3d(palette.handle("Ladder")),
+        Transform::from_xyz(ladder_x, 2.0, ladder_surface_z + 0.05),
+        Ladder {
+            bottom: Vec3::new(ladder_x, 0.0, ladder_body_z),
+            top: Vec3::new(ladder_x, 4.0, ladder_body_z),
+            body_anchor: Vec3::new(ladder_x, 0.0, ladder_body_z),
+            outward_normal: Vec3::Z,
+            trigger_center: Vec3::new(ladder_x, 2.0, ladder_body_z),
+            trigger_half_extents: Vec3::new(0.7, 2.0, 0.65),
+        },
+    ));
+}
+
+/// Stairs: the straight tables, the curved castle arc, and the ramp derived from
+/// the long-tread flight. Its own piece so a box can test stair traversal
+/// without the rest of the course around it.
+pub(super) fn setup_stairs(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    palette: Res<MaterialPalette>,
+    state: Res<State<AppState>>,
+) {
+    let m = &mut meshes;
+    let scene = *state.get();
+
     for row in STAIRS {
         spawn_stair_segment(
             &mut commands,
@@ -296,40 +373,9 @@ pub(super) fn setup_world(
                 width: row.width,
                 material_key: FLOOR_MATERIAL,
             },
+            scene,
         );
     }
-    super::forest::spawn_forest(&mut commands, &spatial);
-
-    // --- Rock: sphere r=2 at (-10,1,-5) ---
-    commands.spawn((
-        Name::new("Rock"),
-        Mesh3d(m.add(Sphere::new(2.0))),
-        MeshMaterial3d(palette.handle(PROP_MATERIAL)),
-        Transform::from_xyz(-10.0, 1.0, -5.0),
-        RigidBody::Static,
-        Collider::sphere(2.0),
-    ));
-
-    // --- Tree: cylinder r=1 h=10 at (10,5,-5) ---
-    commands.spawn((
-        Name::new("Tree"),
-        Mesh3d(m.add(Cylinder::new(1.0, 10.0))),
-        MeshMaterial3d(palette.handle("TreeTrunk")),
-        Transform::from_xyz(10.0, 5.0, -5.0),
-        RigidBody::Static,
-        Collider::cylinder(1.0, 10.0),
-    ));
-
-    // --- Slope: 8×0.3×4 at (10,1.37,0), rotated 20° about Z ---
-    commands.spawn((
-        Name::new("Slope"),
-        Mesh3d(m.add(Cuboid::new(8.0, 0.3, 4.0))),
-        MeshMaterial3d(palette.handle(FLOOR_MATERIAL)),
-        Transform::from_xyz(10.0, 1.37, 0.0)
-            .with_rotation(Quat::from_rotation_z(20.0_f32.to_radians())),
-        RigidBody::Static,
-        Collider::cuboid(8.0, 0.3, 4.0),
-    ));
 
     // --- Derived geometry: exit ramp continuing the long-tread stairs ---
     let long = &STAIRS[1];
@@ -352,6 +398,7 @@ pub(super) fn setup_world(
             rotation: ramp_rotation,
             material: palette.handle(FLOOR_MATERIAL),
         },
+        scene,
     );
 
     // --- Derived geometry: curved castle stair — twelve independently
@@ -384,29 +431,63 @@ pub(super) fn setup_world(
                 width: 1.8,
                 material_key: FLOOR_MATERIAL,
             },
+            scene,
         );
     }
+}
 
-    // --- Ladder on its (non-climbable) wall — the wall is a `BOXES` row. ---
-    let ladder_x = 10.0;
-    let ladder_wall_z = -10.0;
-    let ladder_surface_z = ladder_wall_z + 0.5;
-    // Authored body centerline: surface + capsule radius + a small skin gap.
-    let ladder_body_z = ladder_surface_z + 0.55;
-    commands.spawn((
-        Name::new("Ladder"),
-        Mesh3d(m.add(Cuboid::new(0.8, 4.0, 0.1))),
-        MeshMaterial3d(palette.handle("Ladder")),
-        Transform::from_xyz(ladder_x, 2.0, ladder_surface_z + 0.05),
-        Ladder {
-            bottom: Vec3::new(ladder_x, 0.0, ladder_body_z),
-            top: Vec3::new(ladder_x, 4.0, ladder_body_z),
-            body_anchor: Vec3::new(ladder_x, 0.0, ladder_body_z),
-            outward_normal: Vec3::Z,
-            trigger_center: Vec3::new(ladder_x, 2.0, ladder_body_z),
-            trigger_half_extents: Vec3::new(0.7, 2.0, 0.65),
-        },
-    ));
+/// Practice targets: the destructible things combat is judged against.
+pub(super) fn setup_targets(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<MaterialPalette>,
+    state: Res<State<AppState>>,
+) {
+    let scene = *state.get();
+    for (name, center) in PRACTICE_TARGETS {
+        spawn_practice_target(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &palette,
+            name,
+            *center,
+            scene,
+        );
+    }
+}
+
+/// Ground items near spawn: a lootable weapon plus auto-collected stacks.
+pub(super) fn setup_pickups(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    palette: Res<MaterialPalette>,
+    state: Res<State<AppState>>,
+) {
+    let scene = *state.get();
+    for row in PICKUPS {
+        crate::inventory::spawn_world_item(
+            &mut commands,
+            &mut meshes,
+            &palette,
+            row.name,
+            row.pos,
+            row.stack,
+            row.mode,
+            scene,
+        );
+    }
+}
+
+/// The deterministic forest. Its own piece, so the world scene can have trees
+/// while the traversal box stays readable.
+pub(super) fn setup_forest(
+    mut commands: Commands,
+    spatial: Res<SpatialCatalog>,
+    state: Res<State<AppState>>,
+) {
+    super::forest::spawn_forest(&mut commands, &spatial, *state.get());
 }
 
 #[cfg(test)]

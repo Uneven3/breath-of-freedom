@@ -70,16 +70,27 @@ impl Plugin for VisualsPlugin {
         app.init_resource::<AnimationDebug>();
         app.init_resource::<VisualCatalog>();
         app.init_resource::<grass::GrassStressState>();
+        // Startup keeps only what outlives a scene: loaded assets and shared
+        // meshes. The player's visual and the meadow are scene content
+        // (`crate::scene`), so they are built on entry and die on exit.
         app.add_systems(
             Startup,
             (
-                player::spawn_visual,
                 animation::start_loading_animations,
                 forest::build_tree_proxy_assets,
                 arrows::init_assets,
-                grass::spawn_meadow,
             ),
         );
+        for id in crate::scene::SceneId::ALL {
+            app.add_systems(
+                OnEnter(crate::scene::AppState::Scene(id)),
+                player::spawn_visual,
+            );
+            app.add_systems(
+                OnEnter(crate::scene::AppState::Scene(id)),
+                grass::spawn_meadow.run_if(crate::scene::scene_has(|c| c.meadow)),
+            );
+        }
         app.add_systems(
             Update,
             (

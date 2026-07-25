@@ -31,6 +31,7 @@ pub(super) fn spawn_visual(
     catalog: Res<VisualCatalog>,
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
+    state: Res<State<crate::scene::AppState>>,
 ) {
     let appearance = PLAYER_APPEARANCE;
     let Some(recipe) = catalog.recipe(appearance) else {
@@ -39,6 +40,7 @@ pub(super) fn spawn_visual(
     };
     commands
         .spawn((
+            DespawnOnExit(*state.get()),
             PlayerVisual,
             AppearanceBinding {
                 key: appearance,

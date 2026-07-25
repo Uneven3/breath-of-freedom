@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use super::{GameLayer, PRACTICE_TARGET_HP, PracticeTarget, Stairs, Surface, TreeKind};
 use crate::asset_pipeline::MaterialPalette;
 use crate::asset_pipeline::schema::surface_from_material;
+use crate::scene::AppState;
 
 pub(super) struct BoxSpec {
     pub position: Vec3,
@@ -36,9 +37,10 @@ pub(super) struct TreeSpec {
     pub trunk_height: f32,
 }
 
-pub(super) fn spawn_tree(commands: &mut Commands, name: String, spec: TreeSpec) {
+pub(super) fn spawn_tree(commands: &mut Commands, name: String, spec: TreeSpec, scene: AppState) {
     commands
         .spawn((
+            DespawnOnExit(scene),
             Name::new(name),
             spec.kind,
             Transform::from_translation(spec.position)
@@ -53,6 +55,7 @@ pub(super) fn spawn_tree(commands: &mut Commands, name: String, spec: TreeSpec) 
 }
 
 /// Spawn a static axis-aligned box with full-size `dims` centred at `pos`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_box(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -61,6 +64,7 @@ pub(super) fn spawn_box(
     pos: Vec3,
     dims: Vec3,
     material_key: &str,
+    scene: AppState,
 ) -> Entity {
     let entity = spawn_oriented_box(
         commands,
@@ -72,6 +76,7 @@ pub(super) fn spawn_box(
             rotation: Quat::IDENTITY,
             material: palette.handle(material_key),
         },
+        scene,
     );
     // The material key names the surface an actor stands on (footstep audio):
     // `GrayboxFloor → Grass`, `GrayboxProp/Vault → Stone`. Attached here so
@@ -88,6 +93,7 @@ pub(super) fn spawn_oriented_box(
     meshes: &mut Assets<Mesh>,
     name: &str,
     spec: BoxSpec,
+    scene: AppState,
 ) -> Entity {
     let mut mesh = Mesh::from(Cuboid::new(
         spec.dimensions.x,
@@ -95,20 +101,20 @@ pub(super) fn spawn_oriented_box(
         spec.dimensions.z,
     ));
     // Scale UVs so terrain textures tile sharply every 4 meters instead of stretching
-    if spec.dimensions.x > 4.0 || spec.dimensions.z > 4.0 {
-        if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+    if (spec.dimensions.x > 4.0 || spec.dimensions.z > 4.0)
+        && let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
             mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0)
-        {
-            let repeat_x = (spec.dimensions.x / 4.0).max(1.0);
-            let repeat_z = (spec.dimensions.z / 4.0).max(1.0);
-            for uv in uvs.iter_mut() {
-                uv[0] *= repeat_x;
-                uv[1] *= repeat_z;
-            }
+    {
+        let repeat_x = (spec.dimensions.x / 4.0).max(1.0);
+        let repeat_z = (spec.dimensions.z / 4.0).max(1.0);
+        for uv in uvs.iter_mut() {
+            uv[0] *= repeat_x;
+            uv[1] *= repeat_z;
         }
     }
     commands
         .spawn((
+            DespawnOnExit(scene),
             Name::new(name.to_string()),
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(spec.material),
@@ -138,6 +144,7 @@ pub(super) fn spawn_practice_target(
     palette: &MaterialPalette,
     name: &str,
     center: Vec3,
+    scene: AppState,
 ) {
     // Supporting post: ordinary world geometry (Default layer).
     let post_height = (center.y - PRACTICE_TARGET_DIMS.y * 0.5).max(0.1);
@@ -149,10 +156,12 @@ pub(super) fn spawn_practice_target(
         Vec3::new(center.x, post_height * 0.5, center.z),
         Vec3::new(0.12, post_height, 0.12),
         "TargetPost",
+        scene,
     );
 
     let target = commands
         .spawn((
+            DespawnOnExit(scene),
             Name::new(name.to_string()),
             PracticeTarget,
             crate::health::Health::new(PRACTICE_TARGET_HP),
@@ -185,6 +194,7 @@ pub(super) fn spawn_stair_segment(
     meshes: &mut Assets<Mesh>,
     palette: &MaterialPalette,
     spec: StairSegmentSpec,
+    scene: AppState,
 ) {
     let axis = spec.axis.normalize_or_zero();
     if axis == Vec3::ZERO || spec.step_count <= 0 || spec.step_depth <= 0.0 || spec.step_rise <= 0.0
@@ -206,6 +216,7 @@ pub(super) fn spawn_stair_segment(
                 rotation,
                 material: palette.handle(spec.material_key),
             },
+            scene,
         );
         // Stair treads carry their surface too, so a footstep on stairs no
         // longer falls back to Grass (spawn_oriented_box has only the resolved
@@ -218,6 +229,7 @@ pub(super) fn spawn_stair_segment(
     let total_run = spec.step_count as f32 * spec.step_depth;
     let total_rise = spec.step_count as f32 * spec.step_rise;
     commands.spawn((
+        DespawnOnExit(scene),
         Name::new(spec.name.to_string()),
         Stairs {
             base: spec.base,

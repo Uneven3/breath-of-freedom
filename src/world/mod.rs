@@ -20,7 +20,9 @@ mod spawn;
 pub mod terrain;
 
 pub use forest::TreeKind;
-pub use terrain::Terrain;
+pub use terrain::{Terrain, terrain_file};
+
+use crate::scene::AppState;
 
 /// Authored uniform straight stair segment. Curved stairs are composed from
 /// adjacent one-step segments with independently oriented trigger volumes.
@@ -98,14 +100,36 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<day_night::TimeOfDay>();
         app.add_message::<day_night::TimeOfDayRequest>();
-        app.add_systems(
-            Startup,
-            (
-                layout::setup_world,
-                terrain::setup_terrain,
-                day_night::setup_moon_light,
-            ),
-        );
+        // Scene content, not startup content (`crate::scene`): the sky and the
+        // ground belong to every walkable scene, the graybox layout only to
+        // `Playing`. Everything spawned here carries `DespawnOnExit`, so leaving
+        // the state tears it down with no cleanup system to keep in sync.
+        // One registration per scene, all driven by the same table
+        // (`crate::scene::SCENES`): the sky and the ground are in every scene,
+        // and each optional piece is gated by what that scene's row declares.
+        // Adding a scene is a row there, not a branch here.
+        for id in crate::scene::SceneId::ALL {
+            app.add_systems(
+                OnEnter(AppState::Scene(id)),
+                (
+                    layout::setup_sky,
+                    terrain::setup_terrain,
+                    day_night::setup_moon_light,
+                )
+                    .in_set(crate::scene::SceneBuild::Ground),
+            );
+            app.add_systems(
+                OnEnter(AppState::Scene(id)),
+                (
+                    layout::setup_course.run_if(crate::scene::scene_has(|c| c.course)),
+                    layout::setup_stairs.run_if(crate::scene::scene_has(|c| c.stairs)),
+                    layout::setup_targets.run_if(crate::scene::scene_has(|c| c.targets)),
+                    layout::setup_pickups.run_if(crate::scene::scene_has(|c| c.pickups)),
+                    layout::setup_forest.run_if(crate::scene::scene_has(|c| c.forest)),
+                )
+                    .in_set(crate::scene::SceneBuild::Ground),
+            );
+        }
         app.add_systems(
             FixedUpdate,
             (day_night::apply_time_requests, day_night::advance_time).chain(),

@@ -64,6 +64,16 @@ impl Plugin for EnemiesPlugin {
         app.add_message::<perception::DirectThreatMessage>();
         app.add_message::<SpawnBokobosRequest>();
         app.add_systems(Update, toggle_spawn);
+        // Scenes that declare enemies get the graybox pair on entry, through the
+        // same request the debug hub writes — one spawn path, not two.
+        for id in crate::scene::SceneId::ALL {
+            app.add_systems(
+                OnEnter(crate::scene::AppState::Scene(id)),
+                request_scene_enemies
+                    .run_if(crate::scene::scene_has(|c| c.enemies))
+                    .in_set(crate::scene::SceneBuild::Actors),
+            );
+        }
         app.add_systems(
             FixedUpdate,
             (
@@ -89,6 +99,11 @@ impl Plugin for EnemiesPlugin {
 /// message, and it shows up in the F1 panel).
 #[derive(Message, Debug, Clone, Copy)]
 pub struct SpawnBokobosRequest;
+
+/// Ask for the graybox pair when a scene that wants enemies starts.
+fn request_scene_enemies(mut requests: MessageWriter<SpawnBokobosRequest>) {
+    requests.write(SpawnBokobosRequest);
+}
 
 fn toggle_spawn(
     mut requests: MessageReader<SpawnBokobosRequest>,

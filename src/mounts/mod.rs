@@ -28,10 +28,25 @@ pub enum MountsSet {
 
 pub struct MountsPlugin;
 
+/// Ask for a horse when a scene that wants one starts.
+fn request_scene_horse(mut requests: MessageWriter<MountDebugRequest>) {
+    requests.write(MountDebugRequest::ToggleHorse);
+}
+
 impl Plugin for MountsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<MountDebugRequest>();
         app.add_message::<MountTransitionRequest>();
+        // Scenes that declare a horse get one on entry, through the same
+        // request the debug hub writes — one spawn path, not two.
+        for id in crate::scene::SceneId::ALL {
+            app.add_systems(
+                OnEnter(crate::scene::AppState::Scene(id)),
+                request_scene_horse
+                    .run_if(crate::scene::scene_has(|c| c.horse))
+                    .in_set(crate::scene::SceneBuild::Actors),
+            );
+        }
         app.init_resource::<charge_data::ChargeHitLedger>();
         app.init_resource::<charge_data::ChargeShape>();
         app.configure_sets(

@@ -22,6 +22,7 @@ mod player;
 mod presentation;
 mod projectiles;
 mod proposal;
+mod scene;
 mod sfx;
 mod time_control;
 mod visuals;
@@ -61,6 +62,7 @@ fn main() {
             interaction::InteractionPlugin,
             time_control::TimeControlPlugin,
             editor::EditorPlugin,
+            scene::ScenePlugin,
         ))
         .run();
 }

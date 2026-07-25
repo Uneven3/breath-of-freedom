@@ -67,10 +67,11 @@ pub(super) struct GrassTuftBaseRotation(Quat);
 pub(super) fn spawn_meadow(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    state: Res<GrassStressState>,
+    stress: Res<GrassStressState>,
+    scene: Res<State<crate::scene::AppState>>,
 ) {
-    let (count, radius, _) = GRASS_TIERS[state.tier as usize];
-    spawn_grass_density(&mut commands, &asset_server, count, radius);
+    let (count, radius, _) = GRASS_TIERS[stress.tier as usize];
+    spawn_grass_density(&mut commands, &asset_server, count, radius, *scene.get());
 }
 
 /// Scatter `count` tufts in a disc of `radius` around [`MEADOW_CENTER`], each a
@@ -80,6 +81,7 @@ fn spawn_grass_density(
     asset_server: &AssetServer,
     count: usize,
     radius: f32,
+    scene: crate::scene::AppState,
 ) {
     let tall_grass = asset_server.load("game/authored/props/prop_grass_tall_a.glb#Scene0");
     let card_grass = asset_server.load("game/authored/props/prop_grass_card_a.glb#Scene0");
@@ -113,6 +115,7 @@ fn spawn_grass_density(
         let base_rotation = Quat::from_rotation_y(yaw);
 
         commands.spawn((
+            DespawnOnExit(scene),
             Name::new(format!("GrassTuft_{i}")),
             GrassTuft,
             GrassTuftBaseRotation(base_rotation),
@@ -166,30 +169,41 @@ pub(super) struct TuftKind3D;
 #[derive(Component)]
 pub(super) struct TuftKindCard;
 
-/// Dynamic LOD and vertical scale growth (BOTW anti-pop technique):
-/// Evaluates player distance to every grass tuft in real-time.
-/// Swaps between 3D grass (< 12m) and 2D CardMesh (>= 12m) and scales Y smoothly.
+/// The camera the billboarded cards turn to face, disjoint from the tufts it
+/// reads alongside.
+type LodCameraQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static Transform,
+    (
+        With<Camera3d>,
+        Without<GrassTuft>,
+        Without<crate::movement::Player>,
+    ),
+>;
+
+/// Every tuft plus which representation it currently wears.
+type LodTuftQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut Transform,
+        Option<&'static TuftKind3D>,
+        Option<&'static TuftKindCard>,
+    ),
+    (With<GrassTuft>, Without<crate::movement::Player>),
+>;
+
+/// Dynamic LOD and vertical scale growth (BOTW anti-pop technique): evaluates
+/// player distance to every grass tuft in real-time, swaps between 3D grass
+/// (< 8 m) and 2D CardMesh (>= 8 m), and scales Y smoothly.
 pub(super) fn update_grass_dynamic_lod(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     player_query: Query<&Transform, With<crate::movement::Player>>,
-    camera_query: Query<
-        &Transform,
-        (
-            With<Camera3d>,
-            Without<GrassTuft>,
-            Without<crate::movement::Player>,
-        ),
-    >,
-    mut tufts: Query<
-        (
-            Entity,
-            &mut Transform,
-            Option<&TuftKind3D>,
-            Option<&TuftKindCard>,
-        ),
-        (With<GrassTuft>, Without<crate::movement::Player>),
-    >,
+    camera_query: LodCameraQuery,
+    mut tufts: LodTuftQuery,
 ) {
     let Ok(player_transform) = player_query.single() else {
         return;
@@ -223,15 +237,15 @@ pub(super) fn update_grass_dynamic_lod(
         }
 
         // Camera-facing billboarding for 2D Single Quad CardMeshes
-        if is_card.is_some() {
-            if let Some(cam_t) = camera_transform {
-                let cam_pos = cam_t.translation;
-                let dx = cam_pos.x - pos.x;
-                let dz = cam_pos.z - pos.z;
-                if dx.abs() > 0.001 || dz.abs() > 0.001 {
-                    let yaw = dx.atan2(dz);
-                    transform.rotation = Quat::from_rotation_y(yaw);
-                }
+        if is_card.is_some()
+            && let Some(cam_t) = camera_transform
+        {
+            let cam_pos = cam_t.translation;
+            let dx = cam_pos.x - pos.x;
+            let dz = cam_pos.z - pos.z;
+            if dx.abs() > 0.001 || dz.abs() > 0.001 {
+                let yaw = dx.atan2(dz);
+                transform.rotation = Quat::from_rotation_y(yaw);
             }
         }
 
@@ -255,6 +269,7 @@ pub(super) fn handle_grass_stress_toggle(
     keys: Res<ButtonInput<KeyCode>>,
     asset_server: Res<AssetServer>,
     mut state: ResMut<GrassStressState>,
+    scene: Res<State<crate::scene::AppState>>,
     tufts: Query<Entity, With<GrassTuft>>,
 ) {
     if !keys.just_pressed(KeyCode::F8) {
@@ -266,5 +281,5 @@ pub(super) fn handle_grass_stress_toggle(
     state.tier = (state.tier + 1) % GRASS_TIERS.len() as u8;
     let (count, radius, label) = GRASS_TIERS[state.tier as usize];
     info!("[grass-stress] density → {label} (count: {count}, radius: {radius}m)");
-    spawn_grass_density(&mut commands, &asset_server, count, radius);
+    spawn_grass_density(&mut commands, &asset_server, count, radius, *scene.get());
 }

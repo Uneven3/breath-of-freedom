@@ -351,16 +351,24 @@ fn inspect_collider(
         .collect();
     let (min, max) = bounds(&scaled_points);
     let size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    let kind = if name.starts_with("UCX_") {
-        "ConvexHull"
-    } else if name.starts_with("UBX_") {
-        "Box"
-    } else if name.starts_with("UCP_") {
-        "Capsule"
-    } else if name.starts_with("USP_") {
-        "Sphere"
-    } else {
-        "Cylinder"
+    // Exhaustive on purpose. This used to fall through to "Cylinder" for
+    // anything unrecognised, which quietly turned a typo — `UBOX_Body`,
+    // `UCYL_Trunk` — into a cylinder collider of the wrong shape, with no error
+    // anywhere. The prefix *is* the contract (`ASSET_PIPELINE.md`): a helper
+    // whose name Bevy cannot read is a broken asset, not a cylinder.
+    let kind = match name.split('_').next().unwrap_or_default() {
+        "UCX" => "ConvexHull",
+        "UBX" => "Box",
+        "UCP" => "Capsule",
+        "USP" => "Sphere",
+        "UCY" => "Cylinder",
+        _ => {
+            return Err(format!(
+                "{key}: collider {name} has no known shape prefix \
+                 (expected UCX_/UBX_/UCP_/USP_/UCY_)"
+            )
+            .into());
+        }
     };
     let node_extras = extras(node.extras().as_deref(), &format!("{key}: {name}"))?;
     let climbable = bool_property(&node_extras, "bof_climbable")

@@ -32,9 +32,10 @@ Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/
 jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
 percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
 F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
-fases con carga Bannerlord, pradera densa de hierba estilo BOTW (1,500 matojos
-authored prop_grass_a/b/c en 12m con GPU Instancing, viento rotacional mundial,
-LODs autores 0..30m/20..58m/50..70m y suelo verde pradera a 60 FPS estables),
+fases con carga Bannerlord, pradera densa de hierba estilo BOTW (Pasos 1-9
+completados: Macro-Chunking ~49 baldosas en 0.0ms CPU, AABB +1.5m, 45 matojos/chunk,
+muestreo topológico CPU de pendientes con filtrado >45°, arquitectura de doble hijo
+pre-instanciado 3D/2D hasta 48m con billboarding Y-axis y mascarilla alpha en FoliageCard a 60 FPS estables),
 maniquí UAL1 como player, mundo 320×320 con bosque, audio de pasos por superficie.
 
 Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
@@ -165,20 +166,46 @@ apagado sobre terreno ya esculpido = **59-61 FPS clavados**; editor encendido y
 pintando = 36-55; gpu constante ~4.4 ms en ambos. Esto **corrige** el
 diagnóstico del 2026-07-24 (se había apuntado a las sombras del relieve). El
 costo es CPU en el camino pincel→malla, y con la escena vacía no hay dónde
-esconderse. Los tres culpables, por impacto:
-1. **[ARREGLADO]** `sync_terrain_visual` hacía `meshes.add()` **cada frame
-   editado** — asset nuevo de 32768 tris, alocado, registrado en el render world
-   y liberado 60 veces por segundo. Ahora escribe sobre el asset existente
-   (`get_mut`), conservando handle, buffers de GPU y entrada de pipeline; los
-   índices solo se re-emiten si cambió la resolución.
-2. **[ARREGLADO]** `brush_stroke` recorría los 16641 puntos para tocar ~100.
-   Ahora visita solo la ventana de grilla que el trazo puede alcanzar
-   (`Terrain::window`). Dos tests fijan que acotar no recorta el alcance del
-   radio ni se sale de la grilla en las esquinas.
-3. **[PENDIENTE]** `rebuild_terrain_collider` rehace el heightfield de parry
-   entero cada tick editado. Medir si todavía se nota antes de tocarlo.
+esconderse. Dos culpables **[ARREGLADOS]**: `sync_terrain_visual` minteaba un
+asset de 32768 tris cada frame editado (ahora escribe sobre el existente con
+`get_mut`), y `brush_stroke` recorría los 16641 puntos para tocar ~100 (ahora
+solo la ventana alcanzable, `Terrain::window`, con dos tests que fijan que
+acotar no recorta el radio ni se sale en las esquinas).
 
-Sin medir todavía si con 1 y 2 alcanza para volver a 60 mientras se pinta.
+**[PENDIENTE]** `rebuild_terrain_collider` rehace el heightfield de parry entero
+cada tick editado (~130 allocations: `Vec<Vec<f32>>` que Avian vuelve a aplanar).
+Medir si se nota antes de tocarlo; la vía barata exige `parry` como dep directa.
+Lo mismo el trabajo por frame de trazo, que sigue siendo el grueso: 3 MB de
+atributos de malla + un `clone()` de 66 KB de la grilla por aplicación (dos en
+`raise_area`, que relaja mientras sube). Sin medir todavía si alcanza para 60.
+
+### Errores de la herramienta corregidos (2026-07-25, sin jugar todavía)
+
+Auditados a pedido del usuario, `visuals`/pasto excluido (lo lleva otro agente).
+
+- **El pincel mordía a través de la UI y de la freecam.** El puntero es
+  compartido (hub e inventario se operan por click, la freecam gira con RMB) y el
+  pincel leía `ButtonInput` crudo: un click en el hub cavaba un cráter detrás del
+  panel. Ahora `ModalInputFocus` responde *de quién* es el click (`owns_pointer`
+  / `is_held_by`): con un panel abierto el pincel calla y el gizmo se esconde;
+  **con la freecam sí se esculpe** (decisión del usuario: autorear una montaña no
+  debe exigir caminar hasta ella), pero ahí el RMB mira y no baja. Perder el
+  puntero **cierra** el trazo.
+- **Ctrl+Z a mitad de arrastre** archivaba de vuelta el estado deshecho al soltar
+  el botón; se ignora mientras hay trazo en curso (`is_stroking`).
+- **`apply_ron` ignoraba el `extent` del archivo**: un nivel de 160 m en un mundo
+  de 320 m se estiraba en silencio, partiendo sus pendientes al medio. El
+  remuestreo pasa ahora **por espacio de mundo**; además rechaza NaN/∞ (un NaN
+  llega a parry como vértice y rompe todo contacto sin un solo error) y clampea
+  al guard band.
+- **`Ctrl+S` ahora es atómico** (`.ron.tmp` + rename): el archivo *es* el nivel y
+  un corte a mitad de escritura se llevaba la sesión que describía. Y un `Ctrl+L`
+  fallido ya no deja un paso de undo espurio.
+
+Fuera de alcance por pedido: `visuals/grass.rs` incumple `clippy -D warnings`
+(`radius` sin usar) y sus presets de radio no se aplican — `spawn_grass_density`
+usa un cuadrado fijo de 48 m. **La build no cierra bajo §13 hasta que se
+arregle.**
 
 **Caerse al vacío al cargar un nivel (2026-07-25, encontrado jugando):** el
 terreno guardado tenía 8.10 m sobre el punto de spawn y `PLAYER_SPAWN` era la
@@ -230,33 +257,43 @@ del mundo (el pincel de rugosidad es autoría manual, no generación), y el tuni
 de wall-climb para pendientes orgánicas (tarea de *movimiento*, aparte). Cuevas =
 mallas colocadas como instancias, no heightfield.
 
+## Tipografía de la UI (2026-07-25, sin jugar todavía)
+
+**La fuente por defecto de Bevy tiene 95 glifos** (`FiraMono-subset.ttf`): ASCII
+y nada más, ni `ó`. Todo acento y todo `·`, `—`, `→` del HUD en español salía
+como caja vacía. Bevy 0.19 tampoco cae a fuentes del sistema salvo que se active
+la feature `system_font_discovery`, que no sirve para distribuir.
+
+- **Cuerpo: Fira Sans** (OFL, 404 KB), *compilada* en el binario y escrita sobre
+  el handle de fuente por defecto en `ThemePlugin::build` — así todo `TextFont`
+  del proyecto la usa sin tocar un solo call site, y no existe un primer frame
+  sin fuente. Hermana de la FiraMono que Bevy traía: la UI no cambia de carácter.
+- **Iconos: Symbols Nerd Font** (MIT) y **emoji a color: Noto Color Emoji** (OFL),
+  como assets (2.4 + 10.7 MB, fuera del binario). Se usan por *nombre de familia*
+  en un span propio: `theme::icon_font()` / `theme::emoji_font()`. Bevy sí
+  rasteriza emoji a color (swash `ColorBitmap` → atlas RGBA), y por eso ignoran
+  `TextColor`. Nerd Font ≠ emoji: son iconos monocromos del área de uso privado.
+- Tres tests: cobertura del cuerpo contra los caracteres que la UI escribe, los
+  nombres de familia contra los archivos, y que Parley registra ambas familias
+  (un nombre mal escrito falla **en silencio**, cayendo a otra tipografía).
+
 ## Cierre de rendimiento (2026-07-21): 13 → 60 FPS estables
 
-En el peor punto del bosque el frame pasó de ~72 ms (13 FPS) a **nunca bajar de
-60**, con vsync. El camino:
+El peor punto del bosque pasó de ~72 ms a nunca bajar de 60, con vsync. El
+detalle está en git; lo que sigue informando decisiones:
 
-1. **Materiales de tronco a `OPAQUE`/single-sided**: la corteza venía
-   `MASK`+`doubleSided` sin serlo; restauró early-Z sobre el ~70% del bosque.
-2. **Sombras 2048→1024 y hojas sin sombra**: el sol no se apaga, se presupuesta.
-3. **La decisión de raíz: el graybox tenía que ser honesto sobre el costo.** Los
-   árboles Quaternius fingían ser baratos y daban un número falso; se
-   reemplazaron por **proxies procedurales** instanciados, con el modelo
-   detallado como tier opt-in (`tree-detail`). Esto llevó el peor caso a 60.
-4. **Baseline PBR nativo:** perfil mate de `StandardMaterial`; la atmósfera se
-   construye con luz, paleta y entorno. Toon y outline descartados (no es la
-   dirección visual, y el outline chocaba con el MSAA del perfil móvil).
-5. **Bruma nativa:** `DistanceFog` lineal, 45→240 m, mezcla máx. 30%, sigue el
-   color del cielo. Profundidad sin un pase fullscreen.
-
-Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
-
+- **La decisión de raíz: el graybox tenía que ser honesto sobre el costo.** Los
+  árboles Quaternius fingían ser baratos y daban un número falso; se
+  reemplazaron por **proxies procedurales** instanciados, con el modelo detallado
+  como tier opt-in (`tree-detail`). Lo demás fue presupuestar: troncos `OPAQUE`
+  (early-Z sobre el 70% del bosque), sombras 2048→1024, hojas sin sombra.
 - **El costo es propiedad de la representación, no de la identidad.** `TreeKind`
   resuelve a dos tiers en `VisualCatalog`; impostores e instancing se enchufan
-  ahí sin tocar simulación.
-- **Watchdog de polígonos** (`visuals/budget.rs`): cuenta tris por malla al
-  cargar y avisa sobre presupuesto. Agnóstico de asset — delató al Ranger
-  (pies: 9172 tris) y motivó su retiro por el maniquí.
-- **La atmósfera parte del pipeline estándar**: sin pipeline toon ni outline.
+  ahí sin tocar simulación. El **watchdog de polígonos** (`visuals/budget.rs`)
+  cuenta tris al cargar y avisa: así delató al Ranger (pies: 9172 tris).
+- **La atmósfera parte del pipeline estándar**: PBR mate + `DistanceFog` lineal
+  (45→240 m, ≤30%, sigue el cielo). Toon y outline descartados — no es la
+  dirección visual, y el outline chocaba con el MSAA del perfil móvil.
 
 ## Referencia de rendimiento (cerrado 2026-07-21)
 
@@ -281,17 +318,41 @@ Arquitectura que sostiene esto (ver `ARCHITECTURE.md`):
 
 ## Suite de rendimiento (2026-07-23)
 
-Antes de agrandar el juego: instrumentación que diga, siempre, si se aplican las
-técnicas correctas. Principio: **el medidor dice *cuándo* una técnica vale la
-pena; no se aplican todas siempre** (eso es cargo-culting y frena al dev, no al
-juego). Piso objetivo: **móvil gama media ~2021**; arte propio en **Blender**
-(low-poly, ver NORTE).
+Principio: **el medidor dice *cuándo* una técnica vale la pena; no se aplican
+todas siempre** (eso es cargo-culting y frena al dev, no al juego). Piso
+objetivo: **móvil gama media ~2021**; arte propio en Blender (ver NORTE).
 
 Instrumentación cerrada (2026-07-22): FPS/frame-time y GPU por passes
 (`gpu_pass_costs`, sombras fuera), watchdog de tris, cull por distancia, 12
 perillas A/B, la sección `scene` del debug, vistas `wireframe`/`overdraw`, y
 presupuestos móviles con `BOF_PROFILE=mobile`. Último perfil móvil medido:
 **37.3k tris, 62 draws, 53 mats → "medio", por materiales.**
+
+### Presupuesto de polígonos como contrato (2026-07-25)
+
+**Conteos sí, milisegundos no.** Los tris/draws/materiales son *dato* (dependen
+de lo que la escena declara): deterministas, testeables, pueden romper el build.
+Los tiempos son *medición* (dependen de GPU, driver y de qué más corría): un test
+de ms falla por ruido, se ignora y muere. Van por carriles separados.
+
+- `build.rs` **cuenta triángulos por LOD** al importar cada GLB y los emite en el
+  manifiesto (`GeneratedAsset::triangles`). El presupuesto por categoría vive en
+  `schema.rs::lod0_triangle_budget` (SoT compartida, como el contrato de clips) y
+  **falla el build** al exportar, nombrando el asset — no un `warn!` que se lee
+  después, que es como pasaron unos pies de 9172 tris. También rechaza un LOD que
+  cueste *más* que el anterior (igual sí: un card son 2 tris en todos).
+- Tests de escena (`perf/budget.rs::static_cost`): suman lo que cada fila de
+  `SCENES` declara y lo enfrentan al presupuesto móvil. Es lo que el contador de
+  runtime no puede ser: él grada lo que la cámara ve, así que una escena pasada
+  de presupuesto puede leer "bien" desde un rincón donde casi todo está culleado.
+- Hoy: props de pasto 12 tris (card 2, flor 24), `tree_pine_a` 100. El terreno
+  son **32768 tris fijos** en toda escena — un tercio del presupuesto móvil antes
+  de poner nada encima; subir `CELLS` es una decisión de presupuesto.
+- **Hueco conocido:** la pradera no entra en la suma (su tier vive en
+  `GRASS_TIERS`, privado en `visuals/grass.rs`, del otro agente). Lo cierra hacer
+  esa constante `pub(crate)`. Un draw call exacto **no** es testeable sin cámara
+  (un draw es un par malla/material que sobrevivió al culling): lo testeable es
+  la cota superior.
 
 ### Cámara y flythrough (2026-07-23)
 
@@ -323,14 +384,11 @@ Siguiente / diferido:
 Hecho, probado y con rendimiento cerrado (2026-07-21). Lo que sigue informando
 decisiones (el detalle de implementación quedó en git):
 
-- **Ciclo día/noche por transición** (`world/day_night.rs`): amanecer coral,
-  atardecer magenta, luna direccional propia (400 lux + sombras) y ambiente azul
-  nocturno para no perder volumen ni navegación de noche. 5 tests.
+- **Ciclo día/noche por transición** (`world/day_night.rs`): luna direccional
+  propia y ambiente azul nocturno, para no perder volumen ni navegación. 5 tests.
 - **Inventario con UI en capa propia** (`presentation/inventory_ui/`):
   presentación **solo lee** y emite mensajes por slot que `InventoryPlugin`
   valida en `FixedUpdate` — el patrón a copiar para cualquier UI que actúe.
-  Conserva swap/durabilidad, apilado y pickups mixtos; equipar inserta/retira
-  `WeaponProfile`, romper emite `WeaponBrokeMessage`.
 - **Mundo 320×320 + bosque** (`world/forest.rs`, `visuals/forest.rs`): 179
   árboles deterministas, clearing de 42 m, camino N/S libre. `TreeKind` vive en
   mundo y presentación lo resuelve por `VisualCatalog` — la separación que
@@ -445,16 +503,13 @@ dependa del audio (§20). Cuatro capas, la flecha siempre baja hacia datos:
 
 - **Datos** (`asset_pipeline/schema.rs`): `SurfaceKind {Grass, Stone, Wood}` +
   `surface_from_material()`, la forma tipada del `material_kind` de Blender.
-  Compartido con `build.rs` (`#[path]`), de ahí su `#[allow(dead_code)]`.
-- **Mundo** (`world::Surface`): cada box/tread lo recibe en `spawn_box` desde su
-  `material_key`.
+- **Mundo** (`world::Surface`): cada box/tread lo recibe desde su `material_key`.
 - **Simulación** (`movement::GroundFacts::surface`): el probe lo lee del
   `hit.entity`, gratis. La sim lo registra, nunca ramifica en él.
 - **Presentación** (`sfx`): `emit_step_cues` emite un paso por `STRIDE_LEN` (2 m)
-  con suelo; `play_audio_cues` mapea superficie→sonido. El mapeo vive **solo** acá.
+  con suelo; `play_audio_cues` mapea superficie→sonido, y el mapeo vive solo acá.
 
-Validado jugándolo: 92 pasos, cadencia correcta, exit 0. De paso se invirtió la
-única flecha que subía (`projectiles/presentation.rs` → `visuals/arrows.rs`, §20).
+Validado jugándolo: 92 pasos, cadencia correcta, exit 0.
 
 Pendiente: **audio real** (hoy es un `debug!`) y **timing por foot-plant** (el
 acumulador de zancada es un stopgap hasta que la animación emita eventos de

@@ -3,6 +3,7 @@ pub const ASSET_CATEGORIES: &[&str] = &["char", "creature", "prop", "structure",
 pub const PALETTE_KEYS: &[&str] = &[
     "Bark",
     "Fletching",
+    "FoliageCard",
     "FoliageCommon",
     "FoliageDry",
     "FoliageGnarled",
@@ -245,9 +246,51 @@ pub fn missing_required_player_clips(present: &[&str]) -> Vec<&'static str> {
         .collect()
 }
 
+/// LOD0 triangle ceiling per asset category — the polygon budget as a
+/// *contract*, not a warning.
+///
+/// The runtime watchdog already counts triangles, but a `warn!` in a log is
+/// something you read after the fact, if you read it: that is how a pair of feet
+/// worth 9172 triangles shipped in a character. Here the number blocks the
+/// build, at the moment of export, naming the asset.
+///
+/// The figures come from the mobile scene budget (100k triangles) divided by how
+/// many of each kind are on screen at once: hundreds of props and trees, a
+/// handful of characters. Raising one is a decision to make on purpose, in a
+/// diff, not a surprise found while profiling.
+/// `allow` rather than `expect`: the build script (which shares this file) and
+/// the budget tests both use it, so the lint fires only in the runtime build.
+#[allow(dead_code)]
+pub const fn lod0_triangle_budget(category: &str) -> u32 {
+    // `match` on &str in a const fn needs bytes.
+    match category.as_bytes() {
+        b"prop" => 1_500,
+        b"weapon" => 2_000,
+        b"tree" => 3_000,
+        b"structure" => 6_000,
+        // Characters and creatures carry the silhouette the player looks at for
+        // the whole game, and there are few of them in frame.
+        b"char" | b"creature" => 15_000,
+        _ => 4_000,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_category_declares_a_triangle_budget() {
+        // A category that falls through to the default is a category nobody
+        // sized on purpose, which is how a budget quietly stops meaning
+        // anything. Pin the ones the key grammar accepts.
+        for category in ["prop", "weapon", "tree", "structure", "char", "creature"] {
+            assert!(
+                lod0_triangle_budget(category) != lod0_triangle_budget("nonsense"),
+                "{category} shares the fallback budget: size it deliberately"
+            );
+        }
+    }
 
     #[test]
     fn player_contract_flags_missing_required_clips() {

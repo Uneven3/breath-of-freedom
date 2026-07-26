@@ -101,6 +101,14 @@ fn tree_collider(kind: TreeKind) -> (f32, f32) {
     }
 }
 
+/// How many trees a forest scene plants. Exposed as a count rather than the
+/// layout itself so the scene budget can weigh a forest without spawning one,
+/// and without `ForestTreeRow` leaking out of this module.
+#[cfg(test)]
+pub(crate) fn tree_count() -> usize {
+    forest_layout().len()
+}
+
 fn forest_layout() -> Vec<ForestTreeRow> {
     let mut rows = Vec::new();
     let mut cell_index = 0_u32;

@@ -102,6 +102,42 @@ pub(crate) fn warn_scene_budget(
     warning.0 = matches!(grade, SceneBudgetGrade::Bad | SceneBudgetGrade::Critical);
 }
 
+/// What a scene costs in triangles **before it is ever rendered**, summed from
+/// the data that decides it: the terrain grid, the authored assets' LOD0 counts
+/// and how many instances of each the scene declares.
+///
+/// This is deliberately a *static* count, not a measurement. It ignores frustum
+/// culling and LOD distance, so it answers "what did we sign up for", which is
+/// the question a budget is about — a number that does not move when the camera
+/// does, and that a test can therefore hold to.
+#[cfg(test)]
+pub(crate) mod static_cost {
+    use crate::asset_pipeline::authored_assets;
+
+    /// LOD0 triangles of an authored asset, by key. Panics rather than
+    /// defaulting to zero: a silently missing asset would make a scene look
+    /// free, which is the one failure a budget must never have.
+    pub(crate) fn asset_triangles(key: &str) -> usize {
+        authored_assets()
+            .iter()
+            .find(|asset| asset.key == key)
+            .unwrap_or_else(|| panic!("no authored asset named {key}"))
+            .triangles
+            .first()
+            .copied()
+            .unwrap_or(0) as usize
+    }
+
+    /// The ground: two triangles per grid cell, always on screen, in every
+    /// scene. At 128 cells that is a third of the whole mobile budget spent
+    /// before anything is placed on it — which is why raising `CELLS` is a
+    /// budget decision, not a quality knob.
+    pub(crate) fn terrain_triangles(points: usize) -> usize {
+        let cells = points - 1;
+        cells * cells * 2
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +147,61 @@ mod tests {
             triangles: (MOBILE_TRIANGLES as f64 * load) as usize,
             ..default()
         }
+    }
+
+    /// The ground every scene pays for, whatever else it declares.
+    fn terrain_cost() -> usize {
+        static_cost::terrain_triangles(crate::world::Terrain::flat_for_test().points())
+    }
+
+    #[test]
+    fn the_terrain_alone_leaves_room_for_a_scene_on_top_of_it() {
+        // The grid resolution is a performance decision disguised as a quality
+        // knob: it is fixed cost, always in frame, in every scene. 128 cells
+        // spend a third of the mobile budget before a single prop is placed —
+        // raising it has to be a deliberate diff, not a tuning afternoon.
+        let terrain = terrain_cost();
+        assert!(
+            terrain * 2 <= MOBILE_TRIANGLES,
+            "the terrain alone is {terrain} triangles of a {MOBILE_TRIANGLES} budget; \
+             at over half, no scene can be built on it"
+        );
+    }
+
+    #[test]
+    fn every_scene_fits_the_mobile_triangle_budget() {
+        // The guardrail the runtime counter cannot be: it grades what the camera
+        // happens to see, so a scene can be over budget and still read "bien"
+        // from a corner where most of it is culled. This sums what the scene
+        // *declares*, so passing means it fits from anywhere in it.
+        let forest =
+            crate::world::forest::tree_count() * static_cost::asset_triangles("tree_pine_a");
+        for scene in crate::scene::SCENES {
+            let mut triangles = terrain_cost();
+            if scene.contents.forest {
+                triangles += forest;
+            }
+            assert!(
+                triangles <= MOBILE_TRIANGLES,
+                "scene {} declares {triangles} triangles, over the {MOBILE_TRIANGLES} budget",
+                scene.label
+            );
+        }
+    }
+
+    #[test]
+    fn an_authored_asset_costs_what_the_build_counted() {
+        // Guards the seam rather than a number: if `build.rs` ever stops filling
+        // `triangles`, every budget test above would pass by measuring zero.
+        let pine = static_cost::asset_triangles("tree_pine_a");
+        assert!(
+            pine > 0,
+            "the manifest reports no triangles for tree_pine_a"
+        );
+        assert!(
+            pine <= crate::asset_pipeline::schema::lod0_triangle_budget("tree") as usize,
+            "tree_pine_a is over its category budget at {pine}"
+        );
     }
 
     #[test]

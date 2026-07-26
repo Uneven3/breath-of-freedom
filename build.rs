@@ -13,6 +13,11 @@ struct AssetRecord {
     key: String,
     runtime_path: String,
     profile: Option<String>,
+    /// Triangles per LOD level, index = level. Counted here because the GLB is
+    /// already open and parsed: a triangle count that only exists at runtime can
+    /// warn, but it cannot fail a build — and a budget that cannot fail is a
+    /// comment. Index 0 is the one that matters; it is what a close-up costs.
+    triangles: Vec<u32>,
     sockets: Vec<SocketRecord>,
     colliders: Vec<ColliderRecord>,
 }
@@ -134,6 +139,7 @@ fn inspect_asset(manifest_dir: &Path, path: &Path) -> Result<AssetRecord, Box<dy
     validate_materials(&document, &key)?;
 
     let mut lods: BTreeMap<String, BTreeSet<u8>> = BTreeMap::new();
+    let mut triangles_by_lod: BTreeMap<u8, u32> = BTreeMap::new();
     let mut sockets = Vec::new();
     let mut colliders = Vec::new();
     let mut has_render = false;
@@ -156,6 +162,9 @@ fn inspect_asset(manifest_dir: &Path, path: &Path) -> Result<AssetRecord, Box<dy
             has_render = true;
             has_skinned |= name.starts_with("SK_");
             lods.entry(part.to_owned()).or_default().insert(level);
+            // Every part of a level adds to that level's cost: an asset split
+            // into trunk and canopy still draws both.
+            *triangles_by_lod.entry(level).or_default() += count_triangles(&key, &mesh)?;
             continue;
         }
         if schema::is_collision_name(name) {
@@ -236,10 +245,43 @@ fn inspect_asset(manifest_dir: &Path, path: &Path) -> Result<AssetRecord, Box<dy
         .to_str()
         .ok_or_else(|| format!("{} is not UTF-8", relative.display()))?
         .replace('\\', "/");
+    // Dense by level: `lods` already proved the levels run 0..=max with no
+    // gaps, so indexing by level is safe and the manifest stays a plain slice.
+    let triangles: Vec<u32> = (0..=triangles_by_lod.keys().copied().max().unwrap_or(0))
+        .map(|level| triangles_by_lod.get(&level).copied().unwrap_or(0))
+        .collect();
+    // The polygon budget, enforced where it is cheapest to fix: at export, on
+    // the asset that broke it, before it is ever spawned in a scene.
+    let budget = schema::lod0_triangle_budget(expected_category);
+    let lod0 = triangles.first().copied().unwrap_or(0);
+    if lod0 > budget {
+        return Err(format!(
+            "{key}: LOD0 has {lod0} triangles, over the {expected_category} budget of {budget}. \
+             Decimate it, or raise the budget in schema.rs on purpose."
+        )
+        .into());
+    }
+    // A farther LOD may never cost *more* than a nearer one — that is a swap
+    // that makes the distance more expensive, always a mistake. Equality is
+    // allowed: a grass card is two triangles at every level because there is
+    // nothing left to remove.
+    for level in 1..triangles.len() {
+        if triangles[level] > triangles[level - 1] {
+            return Err(format!(
+                "{key}: LOD{level} has {} triangles, more than LOD{}'s {} — a LOD swap must \
+                 never cost more further away",
+                triangles[level],
+                level - 1,
+                triangles[level - 1]
+            )
+            .into());
+        }
+    }
     Ok(AssetRecord {
         key,
         runtime_path,
         profile,
+        triangles,
         sockets,
         colliders,
     })
@@ -344,6 +386,35 @@ fn inspect_collider(
     })
 }
 
+/// Triangles in a mesh, summed over its primitives.
+///
+/// Indexed primitives cost `indices / 3`; a non-indexed one lists every corner,
+/// so it is `positions / 3` — the same rule the runtime watchdog applies, kept
+/// identical on purpose so the compile-time budget and the in-game counter
+/// cannot disagree about what a triangle is.
+fn count_triangles(key: &str, mesh: &gltf::Mesh<'_>) -> Result<u32, Box<dyn Error>> {
+    let mut total = 0u32;
+    for primitive in mesh.primitives() {
+        if primitive.mode() != gltf::mesh::Mode::Triangles {
+            return Err(format!(
+                "{key}: {} is {:?}, but only triangle meshes are exported",
+                mesh.name().unwrap_or("<unnamed>"),
+                primitive.mode()
+            )
+            .into());
+        }
+        let corners = match primitive.indices() {
+            Some(indices) => indices.count(),
+            None => primitive
+                .get(&gltf::Semantic::Positions)
+                .map(|positions| positions.count())
+                .ok_or_else(|| format!("{key}: a primitive has no positions"))?,
+        };
+        total += (corners / 3) as u32;
+    }
+    Ok(total)
+}
+
 fn mesh_positions(
     mesh: &gltf::Mesh<'_>,
     buffers: &[gltf::buffer::Data],
@@ -431,6 +502,7 @@ fn emit_manifest(assets: &[AssetRecord]) -> String {
             Some(profile) => output.push_str(&format!("profile: Some({profile:?}),\n")),
             None => output.push_str("profile: None,\n"),
         }
+        output.push_str(&format!("triangles: &{:?},\n", asset.triangles));
         output.push_str("sockets: &[\n");
         for socket in &asset.sockets {
             output.push_str(&format!(

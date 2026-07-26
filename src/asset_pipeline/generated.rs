@@ -3,6 +3,12 @@ pub struct GeneratedAsset {
     pub key: &'static str,
     pub path: &'static str,
     pub profile: Option<&'static str>,
+    /// Triangles per LOD level, index = level. Counted by `build.rs` from the
+    /// authored GLB, so the polygon budget is a fact the build knows rather
+    /// than a number someone has to read off a runtime log. Read by the budget
+    /// tests; the runtime spends nothing on it.
+    #[allow(dead_code)]
+    pub triangles: &'static [u32],
     pub sockets: &'static [GeneratedSocket],
     pub colliders: &'static [GeneratedCollider],
 }

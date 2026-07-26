@@ -17,6 +17,7 @@ impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<cues::CueMessage>();
         app.add_plugins((
+            theme::ThemePlugin,
             juice::JuicePlugin,
             inventory_ui::InventoryUiPlugin,
             debug_ui::DebugUiPlugin,

@@ -10,7 +10,15 @@ use bevy::prelude::*;
 use super::SculptTool;
 use super::brush::BrushKind;
 use super::history::SculptHistory;
-use crate::presentation::theme::{ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font};
+use crate::presentation::theme::{
+    ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font, emoji_font, icon_font,
+};
+
+/// `nf-md-terrain` from the Nerd Font symbol range (private use area, so it is
+/// only meaningful in that face).
+const ICON_TERRAIN: &str = "\u{f0509}";
+/// Snow-capped mountain, rendered in colour from the emoji font.
+const EMOJI_MOUNTAIN: &str = "\u{1f3d4}";
 
 #[derive(Component)]
 pub(super) struct SculptHud;
@@ -46,11 +54,22 @@ pub(super) fn spawn_hud(mut commands: Commands) {
             Visibility::Hidden,
         ))
         .with_children(|panel| {
-            panel.spawn((
-                Text::new("Esculpir terreno"),
-                body_font(16.0),
-                TextColor(ACCENT),
-            ));
+            // Title in three spans, because three faces meet on this line: the
+            // Nerd Font icon and the colour emoji have no glyphs in the body
+            // face, and the body face has none of theirs. A span per face is
+            // how Bevy composes them — `TextColor` on the icon, ignored by the
+            // emoji, which arrives already coloured from its own bitmaps.
+            panel
+                .spawn((Text::new(""), body_font(16.0), TextColor(ACCENT)))
+                .with_children(|title| {
+                    title.spawn((
+                        TextSpan::new(ICON_TERRAIN),
+                        icon_font(16.0),
+                        TextColor(ACCENT),
+                    ));
+                    title.spawn((TextSpan::new(" Esculpir terreno "), body_font(16.0)));
+                    title.spawn((TextSpan::new(EMOJI_MOUNTAIN), emoji_font(15.0)));
+                });
             panel.spawn((
                 BrushLine,
                 Text::new(""),
@@ -67,7 +86,8 @@ pub(super) fn spawn_hud(mut commands: Commands) {
                 Text::new(
                     "1 Elevar · 2 Suavizar · 3 Aplanar · 4 Rampa · 5 Rugosidad · 6 Terrazas\n\
                      MMB suaviza siempre · rueda: radio · Shift+rueda o [ ]: fuerza\n\
-                     Ctrl+Z/Ctrl+Y deshacer · Ctrl+S guardar · Ctrl+L recargar · F5 salir",
+                     Ctrl+Z/Ctrl+Y deshacer · Ctrl+S guardar · Ctrl+L recargar · F5 salir\n\
+                     En freecam (F3) el RMB mira, no baja · con un panel abierto el pincel calla",
                 ),
                 body_font(13.0),
                 TextColor(TEXT_MUTED),

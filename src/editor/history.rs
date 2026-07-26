@@ -50,10 +50,13 @@ impl SculptHistory {
         self.redo.clear();
     }
 
-    /// Record a grid to come back to, for edits that are not strokes (loading a
-    /// file over your work is the one that would otherwise be unrecoverable).
-    pub fn record(&mut self, terrain: &Terrain) {
-        self.push_undo(terrain.snapshot());
+    /// File an already-taken snapshot as a step to come back to, for edits that
+    /// are not strokes (loading a file over your work is the one that would
+    /// otherwise be unrecoverable). Takes the grid rather than the terrain
+    /// because the caller has to snapshot *before* the edit and file it *after*
+    /// it succeeds.
+    pub fn record_grid(&mut self, grid: Vec<f32>) {
+        self.push_undo(grid);
         self.redo.clear();
     }
 
@@ -92,6 +95,11 @@ impl SculptHistory {
         (self.undo.len(), self.redo.len())
     }
 
+    /// Is a stroke open right now (button down, dirt already moved)?
+    pub fn is_stroking(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Forget everything. Called when a scene ends: these snapshots describe a
     /// terrain that no longer exists, and since every scene's grid has the same
     /// dimensions, [`Terrain::restore`] would happily accept one — undo in the
@@ -121,6 +129,14 @@ pub(super) fn undo_redo(
     let undo = keys.just_pressed(KeyCode::KeyZ) && !shift;
     let redo = keys.just_pressed(KeyCode::KeyY) || (keys.just_pressed(KeyCode::KeyZ) && shift);
     if !(undo || redo) {
+        return;
+    }
+    // Not mid-stroke. The open stroke's "before" snapshot predates the step we
+    // would undo, so filing it on button-up would push the undone state back in
+    // as a new entry — the stack ends up describing a history that never
+    // happened. Finish the drag first; the step is still there afterwards.
+    if history.is_stroking() {
+        info!("[editor] undo/redo ignorado: hay un trazo en curso");
         return;
     }
     let Ok(mut terrain) = terrain.single_mut() else {
@@ -211,6 +227,24 @@ mod tests {
         terrain.raise_area(Vec2::new(20.0, 0.0), 10.0, 3.0);
         history.end_stroke(&terrain);
         assert_eq!(history.depth(), (1, 0));
+    }
+
+    #[test]
+    fn a_stroke_in_progress_blocks_undo() {
+        // Ctrl+Z mid-drag used to undo a step whose "before" the open stroke
+        // still held, so releasing the button filed the undone state right back
+        // in. The stack has to describe what actually happened.
+        let mut terrain = hill();
+        let mut history = SculptHistory::default();
+        history.begin_stroke(&terrain);
+        terrain.raise_area(Vec2::ZERO, 10.0, 1.0);
+        assert!(history.is_stroking());
+        history.end_stroke(&terrain);
+        assert!(!history.is_stroking());
+
+        history.begin_stroke(&terrain);
+        terrain.raise_area(Vec2::new(20.0, 0.0), 10.0, 1.0);
+        assert!(history.is_stroking(), "the second drag is still open");
     }
 
     #[test]

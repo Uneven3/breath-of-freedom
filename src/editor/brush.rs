@@ -12,7 +12,9 @@ use bevy::color::palettes::css;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use super::{SculptTool, StrokeAnchor, history::SculptHistory};
+use super::{SculptFocus, SculptTool, StrokeAnchor, history::SculptHistory};
+use crate::camera::CameraRig;
+use crate::input::ModalInputFocus;
 use crate::world::{GameLayer, Terrain};
 
 /// Metres of height change per second at the brush centre while raising.
@@ -107,6 +109,44 @@ enum Stroke {
     Smooth,
 }
 
+/// How much of the pointer the brush gets this frame.
+///
+/// The pointer is shared: the F1 hub and the inventory are operated by clicking,
+/// and the freecam turns with the right button held. All of them ride the same
+/// raw `ButtonInput`, so without this the brush answers their clicks too —
+/// clicking a hub button used to dig a crater in the ground behind the panel.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Pointer {
+    /// Nothing else modal is up: all three buttons are the brush's.
+    Ours,
+    /// Sculpting from the air. The rig takes modal focus only in freecam, where
+    /// the right button means *look* — and while that drag holds the cursor, the
+    /// pick ray is frozen in place, so honouring it would grind a crater at one
+    /// spot while you turn. Left and middle still sculpt: authoring a mountain
+    /// should not require walking to it.
+    SharedWithFreecam,
+    /// A panel owns this click.
+    Theirs,
+}
+
+fn pointer_state(
+    focus: &ModalInputFocus,
+    owner: &Query<Entity, With<SculptFocus>>,
+    rig: &Query<Entity, With<CameraRig>>,
+) -> Pointer {
+    let Ok(owner) = owner.single() else {
+        return Pointer::Theirs;
+    };
+    let rig = rig.single().ok();
+    if !focus.owns_pointer(owner, |holder| Some(holder) == rig) {
+        return Pointer::Theirs;
+    }
+    match rig {
+        Some(rig) if focus.is_held_by(rig) => Pointer::SharedWithFreecam,
+        _ => Pointer::Ours,
+    }
+}
+
 /// While held: apply the selected brush under the cursor.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn sculpt_terrain(
@@ -115,6 +155,9 @@ pub(super) fn sculpt_terrain(
     buttons: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
     spatial: SpatialQuery,
+    focus: Res<ModalInputFocus>,
+    owner: Query<Entity, With<SculptFocus>>,
+    rig: Query<Entity, With<CameraRig>>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut terrain: Query<(Entity, &mut Terrain)>,
@@ -122,19 +165,22 @@ pub(super) fn sculpt_terrain(
     let Ok((entity, mut terrain)) = terrain.single_mut() else {
         return;
     };
-    let stroke = if !tool.active {
+    let pointer = pointer_state(&focus, &owner, &rig);
+    let stroke = if !tool.active || pointer == Pointer::Theirs {
         None
     } else if buttons.pressed(MouseButton::Middle) {
         Some(Stroke::Smooth)
     } else if buttons.pressed(MouseButton::Left) {
         Some(Stroke::Apply)
-    } else if buttons.pressed(MouseButton::Right) {
+    } else if buttons.pressed(MouseButton::Right) && pointer == Pointer::Ours {
         Some(Stroke::Invert)
     } else {
         None
     };
     let Some(stroke) = stroke else {
-        // Buttons up: the stroke is over, so it becomes one undo entry.
+        // Buttons up — or the pointer went to a panel, which ends the stroke
+        // rather than pausing it: what you drew before reaching for the hub is
+        // one finished thing you did.
         tool.anchor = None;
         history.end_stroke(&terrain);
         return;
@@ -217,15 +263,21 @@ fn cursor_terrain_hit(
 /// A flat ring on the ground showing where and how wide the brush bites — plus,
 /// mid-ramp, the line the slope is being laid along, because a ramp you cannot
 /// see the ends of is a ramp you cannot aim.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_brush_gizmo(
     tool: Res<SculptTool>,
     spatial: SpatialQuery,
+    focus: Res<ModalInputFocus>,
+    owner: Query<Entity, With<SculptFocus>>,
+    rig: Query<Entity, With<CameraRig>>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     terrain: Query<(Entity, &Terrain)>,
     mut gizmos: Gizmos,
 ) {
-    if !tool.active {
+    // Hidden exactly when the brush is deaf, so the ring is an honest read of
+    // whether the next click will bite.
+    if !tool.active || pointer_state(&focus, &owner, &rig) == Pointer::Theirs {
         return;
     }
     let (Ok(window), Ok((camera, camera_transform)), Ok((entity, _))) =

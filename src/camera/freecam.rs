@@ -11,7 +11,7 @@
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 
-use crate::input::{MOUSE_SENSITIVITY, ModalInputFocusRequest, SetCursorGrab};
+use crate::input::{MOUSE_SENSITIVITY, ModalInputFocusRequest, PointerCaptured, SetCursorGrab};
 use crate::visuals::PlayerVisual;
 
 use super::CameraRig;
@@ -58,6 +58,17 @@ pub(super) fn toggle_camera_mode(
             focus.write(ModalInputFocusRequest::Release(rig_entity));
         }
     }
+    // Logged because a playtest log that does not say which camera was flying
+    // cannot explain what the session felt like — the first time this mattered,
+    // a report about the freecam could not be placed against the log at all.
+    info!(
+        "[camera] freecam: {}",
+        if control.mode == CameraMode::Freecam {
+            "ON (RMB mantenido = mirar)"
+        } else {
+            "OFF"
+        }
+    );
 }
 
 /// Flies the camera each frame while in freecam mode. Reads the keyboard
@@ -68,19 +79,26 @@ pub(super) fn fly_freecam(
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     time: Res<Time>,
+    captured: Res<PointerCaptured>,
     cam: Single<(&mut Transform, &mut CameraControl), With<CameraRig>>,
     mut grab: MessageWriter<SetCursorGrab>,
 ) {
     let (mut transform, mut control) = cam.into_inner();
 
-    // Ask Input to grab the cursor only for the duration of a look-drag, so the
+    // Ask Input to hold the cursor for the duration of a look-drag, so the
     // pointer is free to operate the hub the rest of the time. Input stays the
     // sole writer of the cursor (§7).
-    if mouse.just_pressed(MouseButton::Right) {
-        grab.write(SetCursorGrab(true));
-    }
-    if mouse.just_released(MouseButton::Right) {
-        grab.write(SetCursorGrab(false));
+    //
+    // Stated as "the grab should match the button", not "grab on the press
+    // edge": anything that changes modal focus mid-drag hands the cursor back
+    // (`apply_modal_focus_requests` releases it whenever the owner set moves),
+    // and an edge-triggered request never asks again — the drag goes on with a
+    // loose cursor that slides across the screen instead of turning the camera.
+    // Comparing against `PointerCaptured` also keeps this from writing a message
+    // every frame, so the window is not told to re-grab 60 times a second.
+    let want_grab = mouse.pressed(MouseButton::Right);
+    if captured.0 != want_grab {
+        grab.write(SetCursorGrab(want_grab));
     }
     if mouse.pressed(MouseButton::Right) && motion.delta != Vec2::ZERO {
         control.freecam_yaw -= motion.delta.x * MOUSE_SENSITIVITY;

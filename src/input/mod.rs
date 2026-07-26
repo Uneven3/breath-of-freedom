@@ -37,6 +37,31 @@ impl ModalInputFocus {
         self.len != 0
     }
 
+    /// Is `owner` one of the current holders?
+    pub fn is_held_by(&self, owner: Entity) -> bool {
+        self.holders().any(|holder| holder == owner)
+    }
+
+    /// True when `owner` holds the focus and every *other* holder is one
+    /// `shares_with` accepts.
+    ///
+    /// Focus is multi-owner (the hub, the freecam and the sculpt tool can be up
+    /// at once), so "I have focus" is not the same as "this click is mine". A
+    /// tool that acts on the raw pointer — the terrain brush — asks this
+    /// instead: it goes quiet when a panel is also listening, rather than acting
+    /// on the same click the panel does, while still naming the holders it can
+    /// coexist with.
+    pub fn owns_pointer(&self, owner: Entity, shares_with: impl Fn(Entity) -> bool) -> bool {
+        self.is_held_by(owner)
+            && self
+                .holders()
+                .all(|holder| holder == owner || shares_with(holder))
+    }
+
+    fn holders(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.owners[..self.len].iter().flatten().copied()
+    }
+
     pub fn purge_despawned(&mut self, entities: &bevy::ecs::entity::Entities) -> bool {
         let mut changed = false;
         let mut i = 0;
@@ -360,6 +385,42 @@ mod modal_focus_tests {
         assert!(focus.is_active());
         assert!(focus.release(first));
         assert!(!focus.is_active());
+    }
+
+    #[test]
+    fn a_pointer_tool_keeps_the_pointer_only_past_holders_it_named() {
+        // The terrain brush acts on raw mouse buttons, so it must know whether a
+        // click is its own. It can coexist with the camera rig (sculpting while
+        // flying) but not with a panel, whose buttons answer the same click.
+        let brush = Entity::from_raw_u32(1).unwrap();
+        let rig = Entity::from_raw_u32(2).unwrap();
+        let panel = Entity::from_raw_u32(3).unwrap();
+        let shares_with = |holder: Entity| holder == rig;
+        let mut focus = ModalInputFocus::default();
+
+        assert!(
+            !focus.owns_pointer(brush, shares_with),
+            "focus not taken yet"
+        );
+        assert!(focus.acquire(brush));
+        assert!(focus.owns_pointer(brush, shares_with));
+        assert!(!focus.is_held_by(rig));
+
+        assert!(focus.acquire(rig));
+        assert!(
+            focus.owns_pointer(brush, shares_with),
+            "the freecam is a named sharer"
+        );
+        assert!(focus.is_held_by(rig));
+
+        assert!(focus.acquire(panel));
+        assert!(
+            !focus.owns_pointer(brush, shares_with),
+            "the panel answers this click"
+        );
+
+        assert!(focus.release(panel));
+        assert!(focus.owns_pointer(brush, shares_with));
     }
 
     #[test]

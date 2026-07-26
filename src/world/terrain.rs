@@ -77,8 +77,8 @@ pub struct Terrain {
 }
 
 /// The on-disk shape of a level. Resolution and extent travel with the heights
-/// so a file authored before a `CELLS` change still loads — [`Terrain::apply_file`]
-/// resamples instead of rejecting.
+/// so a file authored before a `CELLS` or `WORLD_SIZE` change still loads —
+/// [`Terrain::apply_ron`] resamples in world space instead of rejecting.
 #[derive(Serialize, Deserialize)]
 struct TerrainFile {
     points: usize,
@@ -158,6 +158,17 @@ impl Terrain {
         } else {
             corner(0, 0) + (corner(1, 1) - corner(0, 1)) * u + (corner(0, 1) - corner(0, 0)) * v
         }
+    }
+
+    /// Calculate terrain slope angle in degrees at a world coordinate position (x, z).
+    pub fn slope_deg_at(&self, xz: Vec2) -> f32 {
+        let step = 0.5;
+        let h0 = self.height_at(xz);
+        let h_east = self.height_at(xz + Vec2::X * step);
+        let h_north = self.height_at(xz + Vec2::Y * step);
+        let dx = (h_east - h0) / step;
+        let dz = (h_north - h0) / step;
+        (dx * dx + dz * dz).sqrt().atan().to_degrees()
     }
 
     /// The heightfield collider derived from the grid. `scale` maps parry's unit
@@ -370,30 +381,54 @@ impl Terrain {
     }
 
     /// Load a grid saved by [`Terrain::to_ron`], resampling bilinearly when the
-    /// file's resolution differs from the current one. Resampling rather than
-    /// rejecting is what lets `CELLS` be tuned later without orphaning levels.
+    /// file's resolution or world size differs from the current one. Resampling
+    /// rather than rejecting is what lets `CELLS` be tuned later without
+    /// orphaning levels.
+    ///
+    /// The resampling goes **through world space**, using the file's own
+    /// `extent`: a sample lands where the file says it is in metres, not at the
+    /// same fraction of the grid. Stretching a 320 m level over a 640 m world
+    /// would double every slope silently — the ground would look right and walk
+    /// wrong. A file covering less than the current world keeps its edge heights
+    /// outward, which is what clamping the sample does.
+    ///
+    /// Rejects what it cannot honour: this file *is* the level, and a grid with
+    /// a `NaN` in it poisons the collider (parry builds a heightfield that
+    /// swallows anything standing on it) with no error anywhere. Heights that
+    /// are merely out of band are clamped, not refused — a stray peak is a fixed
+    /// level, not a lost one.
     pub fn apply_ron(&mut self, text: &str) -> Result<(), String> {
         let file: TerrainFile = ron::from_str(text).map_err(|error| error.to_string())?;
         if file.points < 2 || file.heights.len() != file.points * file.points {
             return Err("terrain file is malformed (points/heights mismatch)".into());
         }
-        if file.points == self.points {
-            self.heights = file.heights;
-            return Ok(());
+        if !file.extent.is_finite() || file.extent <= 0.0 {
+            return Err(format!("terrain file has a bad extent ({})", file.extent));
         }
-        let last = (self.points - 1) as f32;
-        let source_last = (file.points - 1) as f32;
-        self.heights = (0..self.points)
-            .flat_map(|row| {
-                (0..self.points).map(move |col| {
-                    (
-                        row as f32 / last * source_last,
-                        col as f32 / last * source_last,
+        if let Some(bad) = file.heights.iter().find(|height| !height.is_finite()) {
+            return Err(format!("terrain file holds a non-finite height ({bad})"));
+        }
+        if file.points == self.points && file.extent == self.extent {
+            self.heights = file.heights;
+        } else {
+            let source_last = (file.points - 1) as f32;
+            let source_index =
+                |metres: f32| ((metres / file.extent + 0.5) * source_last).clamp(0.0, source_last);
+            self.heights = (0..self.heights.len())
+                .map(|idx| {
+                    let xz = grid_xz(self.points, self.extent, idx);
+                    sample_bilinear(
+                        &file.heights,
+                        file.points,
+                        source_index(xz.x),
+                        source_index(xz.y),
                     )
                 })
-            })
-            .map(|(row, col)| sample_bilinear(&file.heights, file.points, row, col))
-            .collect();
+                .collect();
+        }
+        for height in &mut self.heights {
+            *height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+        }
         Ok(())
     }
 }
@@ -839,6 +874,65 @@ mod tests {
     }
 
     #[test]
+    fn a_grid_saved_for_a_smaller_world_keeps_its_metres() {
+        // The file's `extent` is not decoration: a level authored for a 160 m
+        // world must land on the middle 160 m of a 320 m one, at its authored
+        // heights. Stretching it to fill the world instead would halve every
+        // slope — ground that looks authored and walks wrong.
+        let half = WORLD_SIZE / 2.0;
+        let coarse = TerrainFile {
+            points: 3,
+            extent: half,
+            heights: vec![0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0],
+        };
+        let text = ron::ser::to_string(&coarse).expect("serialises");
+        let mut terrain = Terrain::flat();
+        terrain.apply_ron(&text).expect("loads");
+        // The file spans x ∈ [-80, 80] with height 0 → 20 across it.
+        assert!((terrain.height_at(Vec2::new(-half / 2.0, 0.0)) - 0.0).abs() < 0.05);
+        assert!((terrain.height_at(Vec2::ZERO) - 10.0).abs() < 0.05);
+        assert!((terrain.height_at(Vec2::new(half / 2.0, 0.0)) - 20.0).abs() < 0.05);
+        // Outside the file's world the edge height carries on, rather than the
+        // level being stretched to reach the corner.
+        assert!((terrain.height_at(Vec2::new(WORLD_SIZE / 2.0, 0.0)) - 20.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn a_file_with_a_non_finite_height_is_refused() {
+        // A NaN reaches parry as a heightfield vertex and quietly breaks every
+        // contact against it, so it has to die at the door.
+        let mut terrain = Terrain::flat();
+        terrain.raise_area(Vec2::ZERO, 20.0, 3.0);
+        let expected = terrain.snapshot();
+        let poisoned = "(points: 2, extent: 320.0, heights: [0.0, NaN, 0.0, 0.0])";
+        assert!(terrain.apply_ron(poisoned).is_err());
+        assert_eq!(terrain.snapshot(), expected);
+        assert!(
+            terrain
+                .apply_ron("(points: 2, extent: 0.0, heights: [0.0, 0.0, 0.0, 0.0])")
+                .is_err()
+        );
+        assert_eq!(terrain.snapshot(), expected);
+    }
+
+    #[test]
+    fn a_loaded_height_outside_the_guard_band_is_clamped() {
+        let mut terrain = Terrain::flat();
+        let text = format!(
+            "(points: 2, extent: 320.0, heights: [{}, {}, {}, {}])",
+            MAX_HEIGHT * 10.0,
+            MAX_HEIGHT * 10.0,
+            MIN_HEIGHT * 10.0,
+            MIN_HEIGHT * 10.0
+        );
+        terrain.apply_ron(&text).expect("loads");
+        let peak = terrain.snapshot().iter().cloned().fold(f32::MIN, f32::max);
+        let pit = terrain.snapshot().iter().cloned().fold(f32::MAX, f32::min);
+        assert!(peak <= MAX_HEIGHT, "{peak} should be capped");
+        assert!(pit >= MIN_HEIGHT, "{pit} should be floored");
+    }
+
+    #[test]
     fn a_malformed_file_is_rejected_without_touching_the_grid() {
         let mut terrain = Terrain::flat();
         terrain.raise_area(Vec2::ZERO, 20.0, 3.0);
@@ -851,5 +945,16 @@ mod tests {
         );
         assert!(terrain.apply_ron("not ron at all").is_err());
         assert_eq!(terrain.snapshot(), expected);
+    }
+
+    #[test]
+    fn slope_deg_at_calculates_flat_and_inclined_slopes() {
+        let flat_terrain = Terrain::flat();
+        assert_eq!(flat_terrain.slope_deg_at(Vec2::ZERO), 0.0);
+
+        let mut sloped_terrain = Terrain::flat();
+        sloped_terrain.ramp_area(Vec2::ZERO, 0.0, Vec2::new(10.0, 0.0), 10.0, 5.0, 1.0);
+        let slope = sloped_terrain.slope_deg_at(Vec2::new(5.0, 0.0));
+        assert!(slope > 0.0, "slope on ramp should be positive, got {slope}");
     }
 }

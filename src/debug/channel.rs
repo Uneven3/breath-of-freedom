@@ -27,6 +27,8 @@ impl DebugConfigView<'_> {
         match channel {
             DebugChannel::Colliders => self.config.show_colliders,
             DebugChannel::Casts => self.config.show_casts,
+            DebugChannel::LogPerfSamples => self.config.log_perf_samples,
+            DebugChannel::LogStateChanges => self.config.log_state_changes,
             DebugChannel::LogTransitions => self.config.log_transitions,
             DebugChannel::LogVerbose => self.config.log_verbose,
             DebugChannel::LogFactFlips => self.config.log_fact_flips,
@@ -39,6 +41,15 @@ impl DebugConfigView<'_> {
 pub enum DebugChannel {
     Colliders,
     Casts,
+    /// The periodic perf/scene time series ([`console::log_periodic`]).
+    ///
+    /// [`console::log_periodic`]: super::console
+    LogPerfSamples,
+    /// Discrete snapshot values, logged when one moves
+    /// ([`console::log_on_change`]).
+    ///
+    /// [`console::log_on_change`]: super::console
+    LogStateChanges,
     LogTransitions,
     LogVerbose,
     LogFactFlips,
@@ -46,9 +57,11 @@ pub enum DebugChannel {
 }
 
 impl DebugChannel {
-    pub const ALL: [DebugChannel; 6] = [
+    pub const ALL: [DebugChannel; 8] = [
         DebugChannel::Colliders,
         DebugChannel::Casts,
+        DebugChannel::LogPerfSamples,
+        DebugChannel::LogStateChanges,
         DebugChannel::LogTransitions,
         DebugChannel::LogVerbose,
         DebugChannel::LogFactFlips,
@@ -59,6 +72,8 @@ impl DebugChannel {
         match self {
             DebugChannel::Colliders => "Colliders",
             DebugChannel::Casts => "Sensor casts",
+            DebugChannel::LogPerfSamples => "Log: perf samples",
+            DebugChannel::LogStateChanges => "Log: state changes",
             DebugChannel::LogTransitions => "Log: transitions",
             DebugChannel::LogVerbose => "Log: per-tick trace",
             DebugChannel::LogFactFlips => "Log: fact flips",
@@ -72,6 +87,8 @@ impl DebugChannel {
         match self {
             DebugChannel::Colliders => "wireframes — adds draw calls",
             DebugChannel::Casts => "gizmos — adds draw calls",
+            DebugChannel::LogPerfSamples => "~1 line/s — for manual A/B",
+            DebugChannel::LogStateChanges => "noisy while walking",
             DebugChannel::LogTransitions => "quiet unless state changes",
             DebugChannel::LogVerbose => "~60 lines/s per actor",
             DebugChannel::LogFactFlips => "quiet unless facts flip",

@@ -49,6 +49,14 @@ pub(super) fn apply_channel_toggles(
                 config.show_casts = !config.show_casts;
                 config.show_casts
             }
+            DebugChannel::LogPerfSamples => {
+                config.log_perf_samples = !config.log_perf_samples;
+                config.log_perf_samples
+            }
+            DebugChannel::LogStateChanges => {
+                config.log_state_changes = !config.log_state_changes;
+                config.log_state_changes
+            }
             DebugChannel::LogTransitions => {
                 config.log_transitions = !config.log_transitions;
                 config.log_transitions

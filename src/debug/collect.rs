@@ -113,6 +113,12 @@ pub(super) fn collect_locomotion(
             Field::flag("grounded", ground.grounded),
             Field::flag("probe", ground.probe_hit),
             Field::flag("slope_ok", ground.slope_ok),
+            // Discrete, so it lands on screen *and* in the change log the moment
+            // you walk from one painted patch onto another. That is the only
+            // end-to-end proof the terrain's semantic layer reaches simulation:
+            // the footstep sound is presentation's job and there are no clips
+            // loaded yet, so without this the data arrives silently.
+            Field::new("surface", format!("{:?}", ground.surface)),
             Field::volatile("ascend_dot", format!("{:.3}", ground.ascend_dot)),
         ],
     );

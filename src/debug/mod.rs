@@ -46,10 +46,18 @@ use crate::movement::proposal::ProposalBuffer;
 
 /// Which debug channels are active. Mirrored into `CastTrace.enabled` and
 /// avian's `PhysicsGizmos` by `handle_toggles`.
+///
+/// **Everything defaults off.** A log that is always on is a log nobody reads:
+/// the console sink alone was 208 of the 240 lines of a real playtest, which
+/// buried the 28 that were about the game. What a channel costs is in
+/// [`DebugChannel::hint`](channel::DebugChannel::hint); what it is *for* is a
+/// question you are asking on purpose, so you turn it on when you ask it.
 #[derive(Resource, Default)]
 pub struct DebugConfig {
     pub show_colliders: bool,
     pub show_casts: bool,
+    pub log_perf_samples: bool,
+    pub log_state_changes: bool,
     pub log_transitions: bool,
     pub log_verbose: bool,
     pub log_fact_flips: bool,

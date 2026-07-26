@@ -24,6 +24,7 @@ pub mod enemy;
 pub mod foliage;
 pub mod forest;
 mod grass;
+pub mod grass_material;
 pub mod horse;
 pub mod player;
 pub mod probe;
@@ -73,6 +74,7 @@ impl Plugin for VisualsPlugin {
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content
         // (`crate::scene`), so they are built on entry and die on exit.
+        app.add_plugins(grass_material::GrassMaterialPlugin);
         app.add_systems(
             Startup,
             (
@@ -120,11 +122,9 @@ impl Plugin for VisualsPlugin {
                     foliage::apply_foliage_lod,
                     foliage::apply_shadow_caster_budget,
                 ),
-                (
-                    grass::handle_grass_stress_toggle,
-                    grass::animate_grass_wind,
-                    grass::update_grass_dynamic_lod,
-                ),
+                // One system, and only on a keypress: the field is baked meshes,
+                // so nothing walks the blades per frame.
+                grass::handle_grass_stress_toggle,
                 terrain::sync_terrain_visual,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),

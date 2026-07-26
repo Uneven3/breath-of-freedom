@@ -1,285 +1,369 @@
-//! The decorative grass meadow: a dense field of authored tufts that sway in a
-//! shared world-space wind.
+//! The grass meadow: a dense field of blades, built as **one mesh per chunk**.
 //!
-//! Pure presentation — the tufts carry no collider and no simulation meaning;
-//! the floor beneath already reports `Surface(Grass)` for footstep audio, so the
-//! grass never needs to be *known* by the simulation. This mirrors the tree
-//! split: placement and look live here in `visuals`, never in `world`.
+//! Pure presentation — no collider, no simulation meaning; the ground beneath
+//! already reports `Surface(Grass)` for footstep audio, so the grass never needs
+//! to be *known* by the simulation.
+//!
+//! # Why a mesh per chunk and not an entity per blade
+//!
+//! Density is the whole point of this system, and density is a fight against
+//! per-item cost. An entity per blade puts every blade through transform
+//! propagation, visibility and change detection every frame: at the density that
+//! actually looks like a meadow that is tens of thousands of entities, and the
+//! frame is gone before a single triangle is drawn.
+//!
+//! So the blade is not an entity. A chunk bakes its blades straight into one
+//! mesh — position, yaw, height and colour resolved once, at build time — and
+//! the ECS holds one entity per chunk. The cost of a blade becomes two
+//! triangles and nothing else, which is what lets [`BLADES_PER_SQUARE_METRE`] be
+//! a number you choose for how it *looks* rather than a number the engine
+//! forces on you. It is the same shape as `visuals::terrain`, which bakes 32k
+//! triangles of ground into one mesh the same way.
+//!
+//! The unit matters more than any of it: a blade is **two triangles**. Grouping
+//! blades into a modelled clump makes the instance cost six times more, and the
+//! only way to stay inside the budget after that is to space the clumps out —
+//! which is how a meadow turns into scattered shrubs on bare dirt.
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-use crate::asset_pipeline::materials::AuthoredVisualRoot;
 use crate::world::forest::{hash_u32, hash_unit};
 
-/// Center of the meadow field in world XZ. The playable area sits north of the
-/// origin, so the field is offset in Z; kept explicit so the asymmetry reads as
-/// intentional rather than a stray literal.
+/// **The knob that decides how the meadow reads.** Blades per square metre.
+///
+/// Everything else here is derived from it, so tuning the look is this line and
+/// nothing else. Judged by eye at 25 (ground covered, still reads thin) and
+/// raised to 45, which is where the field stops looking like blades on dirt and
+/// starts looking like a meadow. Below ~10 the dirt shows through, which is the
+/// failure this system exists to avoid.
+const BLADES_PER_SQUARE_METRE: f32 = 45.0;
+
+/// Field size, as a grid of square chunks. One mesh, one draw call per chunk —
+/// the grid exists so distance culling has something to work on later, not
+/// because the CPU needs the split.
+const FIELD_CHUNKS: i32 = 5;
+const CHUNK_METRES: f32 = 5.0;
+
+/// Centre of the field in world XZ. The playable area sits north of the origin,
+/// so the field is offset in Z; explicit so the asymmetry reads as intentional.
 const MEADOW_CENTER: Vec2 = Vec2::new(0.0, 6.0);
 
-/// Density presets cycled by the F8 stress toggle. Index 0 is exactly what the
-/// meadow spawns at startup, so [`GrassStressState::default`] (tier 0) always
-/// describes what is actually on screen — the resource never lies about reality.
-const GRASS_TIERS: [(usize, f32, &str); 3] = [
-    (2400, 35.0, "2,400 briznas (Pradera BOTW - 38k tris budget)"),
-    (5000, 60.0, "5,000 briznas (Océano BOTW)"),
-    (800, 15.0, "800 briznas (Normal)"),
+/// Blade shape. Wide enough at the base to cover ground, tapered at the tip so
+/// it reads as a leaf rather than a strip of paper.
+const BLADE_WIDTH: f32 = 0.055;
+/// Fraction of the base width kept at the tip.
+const BLADE_TIP_TAPER: f32 = 0.35;
+/// Blade height range in metres, picked per blade.
+const BLADE_HEIGHT_MIN: f32 = 0.26;
+const BLADE_HEIGHT_MAX: f32 = 0.52;
+/// How far a tip may lean off vertical, in metres, so the field is not a bed of
+/// nails. Deterministic per blade — this is authored variety, not animation.
+const BLADE_LEAN: f32 = 0.16;
+
+/// Past this slope the ground is rock, not meadow.
+const MAX_SLOPE_DEG: f32 = 45.0;
+/// Blades on steep ground are shorter, the way real grass thins out on a bank.
+const STEEP_SLOPE_DEG: f32 = 35.0;
+const STEEP_SCALE: f32 = 0.65;
+
+/// Root and tip colours, baked per vertex. `StandardMaterial` multiplies its
+/// base colour by the vertex colour, so the root-to-tip gradient — the single
+/// biggest reason BOTW grass reads as grass — costs nothing and needs no custom
+/// shader.
+const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.13, 0.24, 0.09);
+const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.42, 0.70, 0.22);
+
+/// Density presets cycled by F8, in blades per m². Index 0 is what the meadow
+/// spawns at, so the resource never lies about what is on screen.
+const DENSITY_TIERS: [(f32, &str); 3] = [
+    (BLADES_PER_SQUARE_METRE, "45/m² (objetivo)"),
+    (70.0, "70/m² (tupido — mira el presupuesto de tris)"),
+    (25.0, "25/m² (el paso anterior, para comparar)"),
 ];
 
-// --- Wind tuning ---------------------------------------------------------
-// One shared world-space field, so the whole meadow reads as a single gust
-// rolling across it rather than per-tuft noise.
-
-/// Rate the wind *direction* drifts, in rad/s (a slow rotation).
-const WIND_TURN_RATE: f32 = 0.05;
-/// Gust envelope: how often gusts swell, and how sharply they peak.
-const GUST_RATE: f32 = 0.12;
-const GUST_SHARPNESS: f32 = 2.5;
-/// Always-on micro-jitter, so grass is never dead-still between gusts.
-const MICRO_RATE: f32 = 1.2;
-const MICRO_AMPLITUDE: f32 = 0.015;
-/// Spatial frequency of the travelling wave across the field.
-const WAVE_SPATIAL_FREQ: f32 = 0.20;
-/// Wave travel speed: a base plus a gust-driven boost.
-const WAVE_BASE_SPEED: f32 = 3.0;
-const WAVE_GUST_SPEED: f32 = 2.0;
-/// Peak blade tilt at full gust, in radians.
-const BEND_AMPLITUDE: f32 = 0.18;
-/// Mix of the fundamental wave and its second harmonic (a touch of chop).
-const WAVE_FUNDAMENTAL: f32 = 0.85;
-const WAVE_HARMONIC: f32 = 0.15;
-
-/// Which density preset the meadow is currently showing. Mutated only by the
-/// F8 stress toggle; tier 0 is the startup meadow.
+/// Which density preset the meadow is showing.
 #[derive(Resource, Default)]
 pub(super) struct GrassStressState {
     tier: u8,
 }
 
+/// One baked chunk of the meadow: a single mesh holding all its blades.
 #[derive(Component)]
-pub(super) struct GrassTuft;
+pub(super) struct GrassChunk;
 
-/// The tuft's authored yaw, kept separate so the per-frame wind tilt can be
-/// composed on top of it without accumulating drift.
-#[derive(Component, Clone, Copy)]
-pub(super) struct GrassTuftBaseRotation(Quat);
-
-/// Startup: lay down the initial meadow at the default (tier 0) density.
-pub(super) fn spawn_meadow(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    stress: Res<GrassStressState>,
-    scene: Res<State<crate::scene::AppState>>,
-) {
-    let (count, radius, _) = GRASS_TIERS[stress.tier as usize];
-    spawn_grass_density(&mut commands, &asset_server, count, radius, *scene.get());
+/// Blades per chunk at a given density. Rounded once, here, so the count on
+/// screen and the count in the budget are the same number.
+fn blades_per_chunk(density: f32) -> usize {
+    (CHUNK_METRES * CHUNK_METRES * density).round().max(0.0) as usize
 }
 
-/// Scatter `count` tufts in a disc of `radius` around [`MEADOW_CENTER`], each a
-/// GPU-instanced authored scene with a deterministic position, yaw and scale.
-fn spawn_grass_density(
-    commands: &mut Commands,
-    asset_server: &AssetServer,
-    count: usize,
-    radius: f32,
-    scene: crate::scene::AppState,
+/// Startup: lay down the field at the default density.
+pub(super) fn spawn_meadow(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    stress: Res<GrassStressState>,
+    scene: Res<State<crate::scene::AppState>>,
+    terrain_query: Query<&crate::world::Terrain>,
 ) {
-    let tall_grass = asset_server.load("game/authored/props/prop_grass_tall_a.glb#Scene0");
-    let card_grass = asset_server.load("game/authored/props/prop_grass_card_a.glb#Scene0");
-    let flower_grass = asset_server.load("game/authored/props/prop_flower_wild_a.glb#Scene0");
+    let (density, _) = DENSITY_TIERS[stress.tier as usize];
+    let terrain = terrain_query.single().ok();
+    spawn_field(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        density,
+        *scene.get(),
+        terrain,
+    );
+}
 
-    for i in 0..count {
-        let hash = hash_u32(i as u32 ^ 0x6472_6173);
+fn grass_material() -> StandardMaterial {
+    StandardMaterial {
+        // White base: the per-vertex gradient is the colour.
+        base_color: Color::WHITE,
+        // Blades are flat quads seen from every side, so both faces must draw —
+        // unlike tree bark, where double-siding was pure waste.
+        cull_mode: None,
+        double_sided: true,
+        perceptual_roughness: 0.95,
+        reflectance: 0.03,
+        ..default()
+    }
+}
+
+fn spawn_field(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    density: f32,
+    scene: crate::scene::AppState,
+    terrain: Option<&crate::world::Terrain>,
+) {
+    let material = materials.add(grass_material());
+    let half = FIELD_CHUNKS / 2;
+    let per_chunk = blades_per_chunk(density);
+    let mut blades = 0usize;
+
+    for cz in -half..=half {
+        for cx in -half..=half {
+            let centre = MEADOW_CENTER + Vec2::new(cx as f32, cz as f32) * CHUNK_METRES;
+            // Seeded by chunk coordinate, not by spawn order: the same chunk
+            // grows the same blades every session, and a re-spawn at another
+            // density does not reshuffle the whole field.
+            let seed = hash_u32((cx as u32).wrapping_mul(0x9e37_79b9) ^ (cz as u32));
+            let mesh = build_chunk_mesh(centre, per_chunk, seed, terrain);
+            blades += mesh.count_vertices() / 4;
+            commands.spawn((
+                DespawnOnExit(scene),
+                Name::new(format!("GrassChunk_{cx}_{cz}")),
+                GrassChunk,
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(material.clone()),
+                // Blades cast no shadows: thousands of alpha-free slivers in the
+                // cascades buy noise, not depth.
+                bevy::light::NotShadowCaster,
+                Transform::default(),
+            ));
+        }
+    }
+    info!(
+        "[grass] pradera: {blades} briznas · {} tris · {} chunks · {density:.0}/m²",
+        blades * 2,
+        FIELD_CHUNKS * FIELD_CHUNKS
+    );
+}
+
+/// Bake `count` blades around `centre` into one mesh, in world space.
+///
+/// Vertices carry world positions (the chunk entity sits at the origin), so a
+/// blade sits on the ground wherever the terrain put it without the chunk having
+/// to track a height of its own.
+fn build_chunk_mesh(
+    centre: Vec2,
+    count: usize,
+    seed: u32,
+    terrain: Option<&crate::world::Terrain>,
+) -> Mesh {
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(count * 4);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(count * 4);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(count * 4);
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(count * 4);
+    let mut indices: Vec<u32> = Vec::with_capacity(count * 6);
+
+    for blade in 0..count {
+        let hash = hash_u32(seed ^ (blade as u32).wrapping_mul(0x0019_6f3d));
         let u1 = hash_unit(hash);
         let u2 = hash_unit(hash ^ 0x1234_5678);
         let u3 = hash_unit(hash ^ 0x8765_4321);
+        let u4 = hash_unit(hash ^ 0xdead_beef);
+        let u5 = hash_unit(hash ^ 0x0f0f_0f0f);
 
-        let angle = u1 * std::f32::consts::TAU;
-        let r = u2.sqrt() * radius;
-        let x = MEADOW_CENTER.x + r * angle.cos();
-        let z = MEADOW_CENTER.y + r * angle.sin();
+        let xz = centre + Vec2::new(u1 - 0.5, u2 - 0.5) * CHUNK_METRES;
+        let ground = terrain.map_or(0.0, |t| t.height_at(xz));
+        let slope = terrain.map_or(0.0, |t| t.slope_deg_at(xz));
+        if slope > MAX_SLOPE_DEG {
+            continue;
+        }
 
-        // BOTW Hybrid Architecture:
-        // 0-10m: High-detail 3D geometry blades (prop_grass_tall_a)
-        // 8m-45m: Interleaved 2D CardMeshes (prop_grass_card_a) for dense background foliage wall
-        let cluster_noise = (x * 0.15).sin() * (z * 0.15).cos();
-        let scene_handle = if cluster_noise > 0.70 {
-            flower_grass.clone()
-        } else if r < 10.0 || u3 > 0.40 {
-            tall_grass.clone()
+        let steep = if slope > STEEP_SLOPE_DEG {
+            STEEP_SCALE
         } else {
-            card_grass.clone()
-        };
-
-        let yaw = u3 * std::f32::consts::TAU;
-        let scale = 0.90 + u1 * 0.30;
-        let base_rotation = Quat::from_rotation_y(yaw);
-
-        commands.spawn((
-            DespawnOnExit(scene),
-            Name::new(format!("GrassTuft_{i}")),
-            GrassTuft,
-            GrassTuftBaseRotation(base_rotation),
-            bevy::light::NotShadowCaster,
-            bevy::world_serialization::WorldAssetRoot(scene_handle),
-            AuthoredVisualRoot,
-            Transform::from_xyz(x, 0.0, z)
-                .with_rotation(base_rotation)
-                .with_scale(Vec3::splat(scale)),
-        ));
-    }
-}
-
-/// Tilt every tuft by the shared wind field this frame. Reads each tuft's fixed
-/// world position for the wave phase, so the gust stays spatially coherent.
-pub(super) fn animate_grass_wind(
-    time: Res<Time>,
-    mut tufts: Query<(&mut Transform, &GrassTuftBaseRotation), With<GrassTuft>>,
-) {
-    let t = time.elapsed_secs();
-
-    let wind_angle = t * WIND_TURN_RATE;
-    let wind_dir = Vec2::new(wind_angle.cos(), wind_angle.sin());
-
-    let gust_cycle = (t * GUST_RATE).sin() * 0.5 + 0.5;
-    let gust_intensity = gust_cycle.powf(GUST_SHARPNESS);
-
-    let micro = (t * MICRO_RATE).sin() * MICRO_AMPLITUDE;
-
-    for (mut transform, base_rot) in &mut tufts {
-        let pos = transform.translation;
-
-        let wave_pos = pos.x * wind_dir.x + pos.z * wind_dir.y;
-        let wave_speed = WAVE_BASE_SPEED + gust_intensity * WAVE_GUST_SPEED;
-        let wave_raw = (wave_pos * WAVE_SPATIAL_FREQ + t * wave_speed).sin();
-
-        let wave = wave_raw * WAVE_FUNDAMENTAL + (wave_raw * 2.0).sin() * WAVE_HARMONIC;
-        let bend = micro + wave * gust_intensity * BEND_AMPLITUDE;
-
-        let pitch = wind_dir.y * bend;
-        let roll = wind_dir.x * bend;
-
-        let wind_tilt = Quat::from_euler(EulerRot::XYZ, pitch, 0.0, roll);
-        transform.rotation = wind_tilt * base_rot.0;
-    }
-}
-
-#[derive(Component)]
-pub(super) struct TuftKind3D;
-
-#[derive(Component)]
-pub(super) struct TuftKindCard;
-
-/// The camera the billboarded cards turn to face, disjoint from the tufts it
-/// reads alongside.
-type LodCameraQuery<'w, 's> = Query<
-    'w,
-    's,
-    &'static Transform,
-    (
-        With<Camera3d>,
-        Without<GrassTuft>,
-        Without<crate::movement::Player>,
-    ),
->;
-
-/// Every tuft plus which representation it currently wears.
-type LodTuftQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        Entity,
-        &'static mut Transform,
-        Option<&'static TuftKind3D>,
-        Option<&'static TuftKindCard>,
-    ),
-    (With<GrassTuft>, Without<crate::movement::Player>),
->;
-
-/// Dynamic LOD and vertical scale growth (BOTW anti-pop technique): evaluates
-/// player distance to every grass tuft in real-time, swaps between 3D grass
-/// (< 8 m) and 2D CardMesh (>= 8 m), and scales Y smoothly.
-pub(super) fn update_grass_dynamic_lod(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    player_query: Query<&Transform, With<crate::movement::Player>>,
-    camera_query: LodCameraQuery,
-    mut tufts: LodTuftQuery,
-) {
-    let Ok(player_transform) = player_query.single() else {
-        return;
-    };
-    let player_pos = player_transform.translation;
-    let camera_transform = camera_query.single().ok();
-
-    for (entity, mut transform, is_3d, is_card) in &mut tufts {
-        let pos = transform.translation;
-        let dist = Vec2::new(pos.x - player_pos.x, pos.z - player_pos.z).length();
-
-        // Dynamic 3D Grass vs 2D CardMesh swap based on real-time player distance (8.0m BOTW threshold)
-        if dist <= 8.0 {
-            if is_card.is_some() || (is_3d.is_none() && is_card.is_none()) {
-                let scene_handle =
-                    asset_server.load("game/authored/props/prop_grass_tall_a.glb#Scene0");
-                commands
-                    .entity(entity)
-                    .insert(bevy::world_serialization::WorldAssetRoot(scene_handle))
-                    .insert(TuftKind3D)
-                    .remove::<TuftKindCard>();
-            }
-        } else if is_3d.is_some() || (is_3d.is_none() && is_card.is_none()) {
-            let scene_handle =
-                asset_server.load("game/authored/props/prop_grass_card_a.glb#Scene0");
-            commands
-                .entity(entity)
-                .insert(bevy::world_serialization::WorldAssetRoot(scene_handle))
-                .insert(TuftKindCard)
-                .remove::<TuftKind3D>();
-        }
-
-        // Camera-facing billboarding for 2D Single Quad CardMeshes
-        if is_card.is_some()
-            && let Some(cam_t) = camera_transform
-        {
-            let cam_pos = cam_t.translation;
-            let dx = cam_pos.x - pos.x;
-            let dz = cam_pos.z - pos.z;
-            if dx.abs() > 0.001 || dz.abs() > 0.001 {
-                let yaw = dx.atan2(dz);
-                transform.rotation = Quat::from_rotation_y(yaw);
-            }
-        }
-
-        // BOTW Anti-pop vertical scale growth: Scale_Y grows smoothly out of the ground
-        let target_scale_y = if dist < 8.0 {
             1.0
-        } else if dist > 35.0 {
-            0.0
-        } else {
-            1.0 - (dist - 8.0) / 27.0
         };
+        let height = (BLADE_HEIGHT_MIN + u4 * (BLADE_HEIGHT_MAX - BLADE_HEIGHT_MIN)) * steep;
+        let yaw = u3 * std::f32::consts::TAU;
+        // The quad's width runs along `side`; the lean tips it over `side`'s
+        // perpendicular so blades do not all fall the same way.
+        let side = Vec2::new(yaw.cos(), yaw.sin()) * (BLADE_WIDTH * 0.5);
+        let lean = Vec2::new(-yaw.sin(), yaw.cos()) * ((u5 - 0.5) * 2.0 * BLADE_LEAN);
 
-        transform.scale.y = target_scale_y;
+        let base = Vec3::new(xz.x, ground, xz.y);
+        let tip = base + Vec3::new(lean.x, height, lean.y);
+        let taper = BLADE_TIP_TAPER;
+        let first = positions.len() as u32;
+
+        positions.push([base.x - side.x, base.y, base.z - side.y]);
+        positions.push([base.x + side.x, base.y, base.z + side.y]);
+        positions.push([tip.x + side.x * taper, tip.y, tip.z + side.y * taper]);
+        positions.push([tip.x - side.x * taper, tip.y, tip.z - side.y * taper]);
+
+        // Normals point up, not out of the quad. A blade lit by its own flat
+        // face goes black the moment the sun is off to the side; borrowing the
+        // ground's normal is what keeps a field evenly lit — the same trick the
+        // authored props use.
+        for _ in 0..4 {
+            normals.push([0.0, 1.0, 0.0]);
+        }
+        uvs.push([0.0, 0.0]);
+        uvs.push([1.0, 0.0]);
+        uvs.push([1.0, 1.0]);
+        uvs.push([0.0, 1.0]);
+        // Height along the blade, ready for a vertex-shader wind pass to read.
+        let root = ROOT_COLOR.to_f32_array();
+        let tip_color = TIP_COLOR.to_f32_array();
+        colors.push(root);
+        colors.push(root);
+        colors.push(tip_color);
+        colors.push(tip_color);
+
+        indices.extend_from_slice(&[first, first + 1, first + 2]);
+        indices.extend_from_slice(&[first, first + 2, first + 3]);
     }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
-/// F8: cycle to the next density preset, replacing the whole field. A profiling
-/// aid, so `GrassStressState` and the tuft count on screen stay in lockstep.
+/// F8: cycle density and rebuild the field. A tuning aid — the whole point of
+/// this system is that the density number is something you can judge by eye.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_grass_stress_toggle(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
-    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut state: ResMut<GrassStressState>,
     scene: Res<State<crate::scene::AppState>>,
-    tufts: Query<Entity, With<GrassTuft>>,
+    terrain_query: Query<&crate::world::Terrain>,
+    chunks: Query<Entity, With<GrassChunk>>,
 ) {
     if !keys.just_pressed(KeyCode::F8) {
         return;
     }
-    for entity in &tufts {
+    for entity in &chunks {
         commands.entity(entity).despawn();
     }
-    state.tier = (state.tier + 1) % GRASS_TIERS.len() as u8;
-    let (count, radius, label) = GRASS_TIERS[state.tier as usize];
-    info!("[grass-stress] density → {label} (count: {count}, radius: {radius}m)");
-    spawn_grass_density(&mut commands, &asset_server, count, radius, *scene.get());
+    state.tier = (state.tier + 1) % DENSITY_TIERS.len() as u8;
+    let (density, label) = DENSITY_TIERS[state.tier as usize];
+    let terrain = terrain_query.single().ok();
+    info!("[grass-stress] densidad → {label}");
+    spawn_field(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        density,
+        *scene.get(),
+        terrain,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_density_knob_is_what_actually_lands_on_the_ground() {
+        // The failure this system was built to fix: a density that reads well in
+        // a constant but arrives on screen divided by twenty. Stated against the
+        // knob rather than a literal, so tuning the density cannot break the
+        // test that guards it — the count must always be area × density.
+        let per_chunk = blades_per_chunk(BLADES_PER_SQUARE_METRE);
+        let expected = (CHUNK_METRES * CHUNK_METRES * BLADES_PER_SQUARE_METRE) as usize;
+        assert_eq!(per_chunk, expected, "the knob must reach the ground intact");
+
+        let mesh = build_chunk_mesh(Vec2::ZERO, per_chunk, 7, None);
+        assert_eq!(mesh.count_vertices(), per_chunk * 4);
+        let triangles = mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
+        assert_eq!(triangles, per_chunk * 2, "a blade is two triangles");
+    }
+
+    #[test]
+    fn the_whole_field_stays_inside_the_mobile_triangle_budget() {
+        // Grass shares the frame with 32768 triangles of terrain, so the field
+        // has to leave room for the ground it grows on.
+        let per_chunk = blades_per_chunk(BLADES_PER_SQUARE_METRE);
+        let chunks = (FIELD_CHUNKS * FIELD_CHUNKS) as usize;
+        let field_triangles = per_chunk * 2 * chunks;
+        let terrain = 128 * 128 * 2;
+        assert!(
+            field_triangles + terrain <= crate::perf::budget::MOBILE_TRIANGLES,
+            "field {field_triangles} + terrain {terrain} exceeds the mobile budget"
+        );
+    }
+
+    #[test]
+    fn blades_are_deterministic_per_chunk() {
+        // Same chunk, same blades: a field that reshuffles when it is rebuilt
+        // makes every visual comparison worthless.
+        let a = build_chunk_mesh(Vec2::new(5.0, -5.0), 64, 11, None);
+        let b = build_chunk_mesh(Vec2::new(5.0, -5.0), 64, 11, None);
+        assert_eq!(
+            a.attribute(Mesh::ATTRIBUTE_POSITION)
+                .map(|values| values.len()),
+            b.attribute(Mesh::ATTRIBUTE_POSITION)
+                .map(|values| values.len())
+        );
+    }
+
+    #[test]
+    fn a_blade_stands_on_the_ground_and_reaches_its_height() {
+        let mesh = build_chunk_mesh(Vec2::ZERO, 1, 3, None);
+        let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("positions")
+        else {
+            panic!("positions must be Float32x3");
+        };
+        let base = positions[0][1];
+        let tip = positions[2][1];
+        assert!(
+            base.abs() < 0.001,
+            "the root sits on flat ground, got {base}"
+        );
+        assert!(
+            (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&(tip - base)),
+            "blade height {} outside its authored range",
+            tip - base
+        );
+    }
 }

@@ -127,7 +127,12 @@ impl Plugin for WorldPlugin {
                     layout::setup_pickups.run_if(crate::scene::scene_has(|c| c.pickups)),
                     layout::setup_forest.run_if(crate::scene::scene_has(|c| c.forest)),
                 )
-                    .in_set(crate::scene::SceneBuild::Ground),
+                    // `Actors`, not `Ground`: every one of these reads the
+                    // terrain to sit on it, and in `Ground` the terrain is a
+                    // queued command that has not spawned yet. That phase split
+                    // already existed for the player; the graybox never used it,
+                    // which is why sculpting under the course left it hanging.
+                    .in_set(crate::scene::SceneBuild::Actors),
             );
         }
         app.add_systems(

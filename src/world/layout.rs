@@ -22,6 +22,24 @@ const FLOOR_MATERIAL: &str = "GroundGrass";
 const PROP_MATERIAL: &str = "GrayboxProp";
 const VAULT_MATERIAL: &str = "GrayboxVault";
 
+/// What a row's `y` is measured from.
+///
+/// The ground stopped being flat, so an authored `y` had to pick a meaning.
+/// It means **height above the terrain**, because that is what the piece is
+/// for: a vault block is "knee high" wherever you meet it, and the traversal
+/// motors measure obstacles against the ground you are standing on, not
+/// against the world origin. On flat ground both anchors agree exactly, which
+/// is why the tables did not have to change a single number.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Anchor {
+    /// `y` is a height over the terrain sampled beneath the piece.
+    Ground,
+    /// `y` is absolute. For pieces too large to sit on any one sample: the
+    /// perimeter walls span the whole world, so "the ground beneath them" is
+    /// not a place — sampling one point would bury one end and float the other.
+    World,
+}
+
 struct BoxRow {
     name: &'static str,
     pos: Vec3,
@@ -29,6 +47,7 @@ struct BoxRow {
     material_key: &'static str,
     /// `NonClimbable` marker: ladder walls and containment perimeter.
     climbable: bool,
+    anchor: Anchor,
 }
 
 pub const WORLD_SIZE: f32 = 320.0;
@@ -46,6 +65,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(WORLD_SIZE, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
         material_key: PROP_MATERIAL,
         climbable: false,
+        anchor: Anchor::World,
     },
     BoxRow {
         name: "SouthPerimeterWall",
@@ -53,6 +73,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(WORLD_SIZE, PERIMETER_HEIGHT, PERIMETER_THICKNESS),
         material_key: PROP_MATERIAL,
         climbable: false,
+        anchor: Anchor::World,
     },
     BoxRow {
         name: "WestPerimeterWall",
@@ -60,6 +81,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, WORLD_SIZE),
         material_key: PROP_MATERIAL,
         climbable: false,
+        anchor: Anchor::World,
     },
     BoxRow {
         name: "EastPerimeterWall",
@@ -67,6 +89,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(PERIMETER_THICKNESS, PERIMETER_HEIGHT, WORLD_SIZE),
         material_key: PROP_MATERIAL,
         climbable: false,
+        anchor: Anchor::World,
     },
     BoxRow {
         name: "Wall",
@@ -74,6 +97,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(10.0, 4.0, 1.0),
         material_key: PROP_MATERIAL,
         climbable: true,
+        anchor: Anchor::Ground,
     },
     BoxRow {
         name: "AutoVaultSingleBlock",
@@ -81,6 +105,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(2.0, 1.0, 0.5),
         material_key: VAULT_MATERIAL,
         climbable: true,
+        anchor: Anchor::Ground,
     },
     BoxRow {
         name: "AutoVaultWideRail",
@@ -88,6 +113,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(3.5, 0.9, 0.5),
         material_key: VAULT_MATERIAL,
         climbable: true,
+        anchor: Anchor::Ground,
     },
     BoxRow {
         name: "AutoVaultNarrowPost",
@@ -95,6 +121,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(0.8, 1.1, 0.5),
         material_key: VAULT_MATERIAL,
         climbable: true,
+        anchor: Anchor::Ground,
     },
     BoxRow {
         name: "AutoVaultTallBlocker",
@@ -102,6 +129,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(2.5, 2.2, 0.5),
         material_key: PROP_MATERIAL,
         climbable: true,
+        anchor: Anchor::Ground,
     },
     BoxRow {
         name: "Landing",
@@ -109,6 +137,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(4.0, 2.0, 3.0),
         material_key: FLOOR_MATERIAL,
         climbable: true,
+        anchor: Anchor::Ground,
     },
     BoxRow {
         name: "LadderWall",
@@ -116,6 +145,7 @@ const BOXES: &[BoxRow] = &[
         dims: Vec3::new(4.0, 4.0, 1.0),
         material_key: PROP_MATERIAL,
         climbable: false,
+        anchor: Anchor::Ground,
     },
 ];
 
@@ -264,14 +294,38 @@ pub(super) fn setup_sky(
 /// the ladder and the ramps. One of the pieces a scene row can ask for
 /// (`crate::scene`), so the traversal box can have it without the forest and
 /// the sandbox can have none of it.
+/// The terrain a scene is built on, if it has one yet.
+///
+/// These systems run in [`SceneBuild::Actors`](crate::scene::SceneBuild), after
+/// the ground exists — which is the whole reason that phase is there. A missing
+/// terrain is not an error, it just means every piece keeps its authored `y`.
+type GroundQuery<'w, 's> = Query<'w, 's, &'static super::Terrain>;
+
+/// Lift an authored position onto the ground beneath it.
+///
+/// The authored `y` is a height *over* the terrain, so this adds the ground
+/// height at the piece's own XZ. Flat ground samples 0 and the position comes
+/// back unchanged, which is why sculpting a scene cannot silently move a course
+/// that was authored before the terrain existed.
+fn settle(pos: Vec3, anchor: Anchor, ground: Option<&super::Terrain>) -> Vec3 {
+    match (anchor, ground) {
+        (Anchor::Ground, Some(terrain)) => {
+            Vec3::new(pos.x, pos.y + terrain.height_at(pos.xz()), pos.z)
+        }
+        _ => pos,
+    }
+}
+
 pub(super) fn setup_course(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
+    ground: GroundQuery,
 ) {
     let m = &mut meshes;
     let scene = *state.get();
+    let ground = ground.single().ok();
 
     // --- Declarative tables ---
     for row in BOXES {
@@ -280,7 +334,7 @@ pub(super) fn setup_course(
             m,
             &palette,
             row.name,
-            row.pos,
+            settle(row.pos, row.anchor, ground),
             row.dims,
             row.material_key,
             scene,
@@ -295,7 +349,7 @@ pub(super) fn setup_course(
         Name::new("Rock"),
         Mesh3d(m.add(Sphere::new(2.0))),
         MeshMaterial3d(palette.handle(PROP_MATERIAL)),
-        Transform::from_xyz(-10.0, 1.0, -5.0),
+        Transform::from_translation(settle(Vec3::new(-10.0, 1.0, -5.0), Anchor::Ground, ground)),
         RigidBody::Static,
         Collider::sphere(2.0),
     ));
@@ -306,7 +360,7 @@ pub(super) fn setup_course(
         Name::new("Tree"),
         Mesh3d(m.add(Cylinder::new(1.0, 10.0))),
         MeshMaterial3d(palette.handle("TreeTrunk")),
-        Transform::from_xyz(10.0, 5.0, -5.0),
+        Transform::from_translation(settle(Vec3::new(10.0, 5.0, -5.0), Anchor::Ground, ground)),
         RigidBody::Static,
         Collider::cylinder(1.0, 10.0),
     ));
@@ -317,7 +371,7 @@ pub(super) fn setup_course(
         Name::new("Slope"),
         Mesh3d(m.add(Cuboid::new(8.0, 0.3, 4.0))),
         MeshMaterial3d(palette.handle(FLOOR_MATERIAL)),
-        Transform::from_xyz(10.0, 1.37, 0.0)
+        Transform::from_translation(settle(Vec3::new(10.0, 1.37, 0.0), Anchor::Ground, ground))
             .with_rotation(Quat::from_rotation_z(20.0_f32.to_radians())),
         RigidBody::Static,
         Collider::cuboid(8.0, 0.3, 4.0),
@@ -329,18 +383,26 @@ pub(super) fn setup_course(
     let ladder_surface_z = ladder_wall_z + 0.5;
     // Authored body centerline: surface + capsule radius + a small skin gap.
     let ladder_body_z = ladder_surface_z + 0.55;
+    // The ladder is five authored points that have to keep agreeing with each
+    // other *and* with the wall they hang on, so the whole assembly takes one
+    // lift — sampling each point separately would tilt the climb against a wall
+    // that moved as a block.
+    let ladder_lift = ground.map_or(0.0, |terrain| {
+        terrain.height_at(Vec2::new(ladder_x, ladder_wall_z))
+    });
+    let rung = |y: f32, z: f32| Vec3::new(ladder_x, y + ladder_lift, z);
     commands.spawn((
         DespawnOnExit(scene),
         Name::new("Ladder"),
         Mesh3d(m.add(Cuboid::new(0.8, 4.0, 0.1))),
         MeshMaterial3d(palette.handle("Ladder")),
-        Transform::from_xyz(ladder_x, 2.0, ladder_surface_z + 0.05),
+        Transform::from_translation(rung(2.0, ladder_surface_z + 0.05)),
         Ladder {
-            bottom: Vec3::new(ladder_x, 0.0, ladder_body_z),
-            top: Vec3::new(ladder_x, 4.0, ladder_body_z),
-            body_anchor: Vec3::new(ladder_x, 0.0, ladder_body_z),
+            bottom: rung(0.0, ladder_body_z),
+            top: rung(4.0, ladder_body_z),
+            body_anchor: rung(0.0, ladder_body_z),
             outward_normal: Vec3::Z,
-            trigger_center: Vec3::new(ladder_x, 2.0, ladder_body_z),
+            trigger_center: rung(2.0, ladder_body_z),
             trigger_half_extents: Vec3::new(0.7, 2.0, 0.65),
         },
     ));
@@ -354,9 +416,11 @@ pub(super) fn setup_stairs(
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
+    ground: GroundQuery,
 ) {
     let m = &mut meshes;
     let scene = *state.get();
+    let ground = ground.single().ok();
 
     for row in STAIRS {
         spawn_stair_segment(
@@ -365,7 +429,10 @@ pub(super) fn setup_stairs(
             &palette,
             StairSegmentSpec {
                 name: row.name,
-                base: row.base,
+                // A flight of stairs is one designed shape: it takes a single
+                // lift from its base, so the steps keep their rise relative to
+                // each other instead of following every bump underneath.
+                base: settle(row.base, Anchor::Ground, ground),
                 axis: row.axis,
                 step_count: row.step_count,
                 step_depth: row.step_depth,
@@ -379,7 +446,7 @@ pub(super) fn setup_stairs(
 
     // --- Derived geometry: exit ramp continuing the long-tread stairs ---
     let long = &STAIRS[1];
-    let stair_top = long.base
+    let stair_top = settle(long.base, Anchor::Ground, ground)
         + long.axis * (long.step_count as f32 * long.step_depth)
         + Vec3::Y * (long.step_count as f32 * long.step_rise);
     let ramp_length = 5.0;
@@ -403,7 +470,7 @@ pub(super) fn setup_stairs(
 
     // --- Derived geometry: curved castle stair — twelve independently
     // oriented one-step segments. ---
-    let arc_center = Vec3::new(-13.0, 0.0, 13.0);
+    let arc_center = settle(Vec3::new(-13.0, 0.0, 13.0), Anchor::Ground, ground);
     let arc_radius = 3.0;
     let arc_steps = 12;
     let arc_step_rise = 0.2;
@@ -443,8 +510,10 @@ pub(super) fn setup_targets(
     mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
+    ground: GroundQuery,
 ) {
     let scene = *state.get();
+    let ground = ground.single().ok();
     for (name, center) in PRACTICE_TARGETS {
         spawn_practice_target(
             &mut commands,
@@ -452,7 +521,7 @@ pub(super) fn setup_targets(
             &mut materials,
             &palette,
             name,
-            *center,
+            settle(*center, Anchor::Ground, ground),
             scene,
         );
     }
@@ -464,15 +533,17 @@ pub(super) fn setup_pickups(
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
+    ground: GroundQuery,
 ) {
     let scene = *state.get();
+    let ground = ground.single().ok();
     for row in PICKUPS {
         crate::inventory::spawn_world_item(
             &mut commands,
             &mut meshes,
             &palette,
             row.name,
-            row.pos,
+            settle(row.pos, Anchor::Ground, ground),
             row.stack,
             row.mode,
             scene,
@@ -493,6 +564,54 @@ pub(super) fn setup_forest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flat_ground_leaves_every_authored_position_untouched() {
+        // The tables were authored when the floor was flat, and not one number
+        // changed when `y` started meaning "over the terrain". That only holds
+        // if a flat sample is a no-op — otherwise this refactor silently moved
+        // a course that took a long time to calibrate.
+        let flat = super::super::Terrain::flat_for_test();
+        for row in BOXES {
+            assert_eq!(
+                settle(row.pos, row.anchor, Some(&flat)),
+                row.pos,
+                "{} moved on flat ground",
+                row.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_piece_rides_the_ground_it_stands_on() {
+        let mut terrain = super::super::Terrain::flat_for_test();
+        terrain.raise_area(Vec2::ZERO, 25.0, 6.0);
+        let authored = Vec3::new(0.0, 0.5, 4.0);
+        let settled = settle(authored, Anchor::Ground, Some(&terrain));
+        let ground = terrain.height_at(authored.xz());
+
+        assert!(ground > 0.5, "the test hill must actually lift this spot");
+        assert_eq!(settled.xz(), authored.xz(), "only height may change");
+        assert!(
+            (settled.y - (authored.y + ground)).abs() < 0.001,
+            "a knee-high block must stay knee high over the hill it sits on"
+        );
+    }
+
+    #[test]
+    fn the_perimeter_never_rides_the_terrain() {
+        // Walls that span the whole world have no single ground beneath them:
+        // one sample would bury one end and float the other.
+        let mut terrain = super::super::Terrain::flat_for_test();
+        terrain.raise_area(Vec2::ZERO, 40.0, 9.0);
+        for row in BOXES.iter().filter(|row| row.anchor == Anchor::World) {
+            assert_eq!(settle(row.pos, row.anchor, Some(&terrain)), row.pos);
+        }
+        assert!(
+            BOXES.iter().any(|row| row.anchor == Anchor::World),
+            "the perimeter rows must still be anchored to the world"
+        );
+    }
 
     #[test]
     fn every_layout_row_has_a_unique_name_and_positive_dimensions() {

@@ -26,56 +26,48 @@ cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`.
   vuelca el snapshot al log sin abrir un modal sobre lo observado.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
-## Estado (2026-07-24)
+## Estado (2026-07-25)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/
-jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con
-percepción gradual (melee + arquero), health/muerte/respawn, horse (montar
-F8/E, carga con sweep, inmunidad de dueño), espada con combos, arco de dos
-fases con carga Bannerlord, pradera densa de hierba estilo BOTW (Pasos 1-9
-completados: Macro-Chunking ~49 baldosas en 0.0ms CPU, AABB +1.5m, 45 matojos/chunk,
-muestreo topológico CPU de pendientes con filtrado >45°, arquitectura de doble hijo
-pre-instanciado 3D/2D hasta 48m con billboarding Y-axis y mascarilla alpha en FoliageCard a 60 FPS estables),
-maniquí UAL1 como player, mundo 320×320 con bosque, audio de pasos por superficie.
+jump/glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con percepción
+gradual (melee + arquero), health/muerte/respawn, horse (montar F8/E, carga con
+sweep, inmunidad de dueño), espada con combos, arco de dos fases con carga
+Bannerlord, maniquí UAL1 como player, mundo 320×320 con bosque, audio de pasos
+por superficie. **369 tests**; `fmt` + `clippy -D warnings` en verde.
 
-Auditoría adversarial de arquitectura (2026-07-17): 4 hallazgos reales, 4
-corregidos el mismo día (input a PreUpdate, patrón CapacityPending
-eliminado, `Perceivable`, test del veto ForbidSprint).
+**Pradera** (rehecha el 2026-07-25, ver `BOTWGrass.md`): 45 briznas/m², 28.125
+briznas de 2 tris horneadas en una malla por chunk — 25 entidades, cero trabajo
+por frame. Medido en la caja `Pasto`: **5,78 ms de frame, 4,16 de GPU, 11 draws**.
+Reemplaza un intento previo de matojos por entidad que daba 0,48 matojos/m² y
+cuya documentación afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que
+el medidor marcaba 35-46 FPS. **Regla que sale de ahí: ningún número entra a
+estos documentos sin salir del medidor.**
 
-Audit de calidad (2026-07-24): sin errores ECS, panics en runtime ni
-referencias huérfanas; la única redundancia real (tres `despawn_orphaned_*_visual`
-idénticas) unificada en un sistema genérico sobre `VisualOf`, acotado a las
-familias graybox con un `Or` para no tocar catálogo ni flechas pooled. Capas
-datos/simulación/presentación limpias (§20). 333 tests.
+Auditorías: arquitectura (2026-07-17, 4 hallazgos, 4 corregidos), calidad
+(2026-07-24, capas limpias §20) y presentación (2026-07-25: 10 defectos en el
+pasto por entidad, resueltos al rehacerlo).
 
 ## Escenas: cajas contenidas + mundo (2026-07-25)
 
 Motivo (decisión del usuario): **para hacer bien la herramienta hay que poder
 empezar una escena desde 0.** Todo el mundo nacía en `Startup` y vivía para
 siempre, así que esculpir era esculpir *debajo* de un bosque que `main.rs`
-spawneaba igual, y un `terrain.json` nunca era "el nivel".
+spawneaba igual, y el archivo de terreno nunca era "el nivel".
 
-La línea que ahora existe (`src/scene/`, `AppState { MainMenu, Scene(SceneId) }`):
+La línea (`src/scene/`, `AppState { MainMenu, Scene(SceneId) }`): la
+**infraestructura** vive todo el proceso (cámara, paneles, pool de flechas,
+assets de animación, foco y HUD del editor); el **contenido de escena** nace y
+muere con ella (terreno, cielo, graybox, bosque, pradera, player), marcado con
+`DespawnOnExit` para no mantener un sistema de limpieza sincronizado a mano.
 
-- **Infraestructura**, vive todo el proceso: cámara, paneles de UI, pool de
-  flechas, assets de animación, y el foco + HUD del editor.
-- **Contenido de escena**, nace y muere con ella: terreno, cielo, sol/luna,
-  layout graybox, bosque, pradera, player. Marcado con `DespawnOnExit`, así que
-  salir del estado lo borra sin un sistema de limpieza que mantener sincronizado.
+**Las escenas son dato** (`scene::SCENES`): etiqueta, **su propio heightmap** y
+qué piezas contiene. El menú se genera de la tabla, así que no puede desviarse de
+lo que carga.
 
-**Las escenas son dato** (`scene::SCENES`): una fila con etiqueta, **su propio
-heightmap** y qué piezas contiene. El menú se genera de la tabla, así que no
-puede desviarse de lo que carga.
-
-Aclaración del usuario (2026-07-25): la mayoría **no son áreas del juego, son
-cajas de prueba** — el mundo más chico que permite juzgar *una* cosa mientras la
-construís, sin que el resto del juego discuta. "Estoy haciendo pasto, quiero
-probarlo aislado antes de meterlo al principal". Las cajas van y vienen con el
-trabajo: agregar una es una variante + una fila; borrarla cuando la feature
-aterriza son las mismas dos líneas al revés.
-
-Por eso `Contents` tiene **un flag por sistema visible** (curso, escaleras,
-dianas, pickups, bosque, pradera, enemigos, caballo), no por área: "solo el
+Aclaración del usuario: la mayoría **no son áreas del juego, son cajas de
+prueba** — el mundo más chico que permite juzgar *una* cosa mientras la
+construís. Van y vienen con el trabajo: agregar una es una variante + una fila.
+Por eso `Contents` tiene **un flag por sistema visible**, no por área: "solo el
 pasto" tiene que ser expresable o la caja no aísla nada.
 
 | escena | heightmap | piezas |
@@ -122,20 +114,18 @@ raycast, gizmo de anillo); suavizado y radio por rueda; y **persistencia**: el
 archivo **es** el nivel (`Ctrl+S` escribe, `Ctrl+L` recarga, `setup_terrain` lo
 carga al entrar).
 
-Formato **RON** (decisión del usuario 2026-07-25: RON para todo el workspace;
-`ron = "0.12"` en las deps compartidas — los otros proyectos siguen en JSON,
-migrarlos es tarea aparte). Pretty salvo los arrays, para que la cabecera se lea
-sin que las 16k alturas ocupen 16k líneas. Resolución y extent viajan dentro y
-`apply_ron` **remuestrea bilineal** si difieren, así cambiar `CELLS` mañana no
-huerfaniza los niveles de hoy; un test fija el formato en disco contra un archivo
-escrito a mano, para que tocar el serializador no los huerfanice tampoco.
+Formato **RON** (decisión del usuario: RON para todo el workspace). Pretty salvo
+los arrays, para que la cabecera se lea sin que las 16k alturas ocupen 16k
+líneas. Resolución y extent viajan dentro y `apply_ron` **remuestrea en espacio
+de mundo** si difieren, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los
+niveles de hoy; un test fija el formato en disco contra un archivo escrito a mano.
 
-### Set de pinceles (2026-07-25, sin jugar todavía)
+### Set de pinceles (2026-07-25)
 
 Decisión: la herramienta no es para mover tierra, es para **hacer mundos que
 valga la pena caminar**. De ahí el set — formar, calmar, tener dónde pararse,
-**conectar** dos niveles para que sean transitables, ensuciar lo que se ve a
-CAD, y escalonar una ladera para que sea un lugar. Seis pinceles con `1..6`:
+**conectar** dos niveles, ensuciar lo que se ve a CAD, y escalonar una ladera
+para que sea un lugar. Seis pinceles con `1..6`:
 
 `1` Elevar · `2` Suavizar · `3` Aplanar · `4` Rampa · `5` Rugosidad · `6` Terrazas
 
@@ -160,17 +150,12 @@ de largo cero, y por eso rampa comparte traversal con los radiales); `editor/`
 solo decide **dónde y cuándo**. Un séptimo pincel es un método + una fila en
 `BrushKind`, nunca un sistema nuevo. `editor/` = `brush`+`history`+`persist`+`hud`.
 
-Medido jugando en la escena limpia (2026-07-25, 5 min, exit 0, sin panics):
-**esculpir cuesta, el relieve no.** Con 3 draws / 46.5k tris en pantalla: editor
-apagado sobre terreno ya esculpido = **59-61 FPS clavados**; editor encendido y
-pintando = 36-55; gpu constante ~4.4 ms en ambos. Esto **corrige** el
-diagnóstico del 2026-07-24 (se había apuntado a las sombras del relieve). El
-costo es CPU en el camino pincel→malla, y con la escena vacía no hay dónde
-esconderse. Dos culpables **[ARREGLADOS]**: `sync_terrain_visual` minteaba un
-asset de 32768 tris cada frame editado (ahora escribe sobre el existente con
-`get_mut`), y `brush_stroke` recorría los 16641 puntos para tocar ~100 (ahora
-solo la ventana alcanzable, `Terrain::window`, con dos tests que fijan que
-acotar no recorta el radio ni se sale en las esquinas).
+Medido jugando (2026-07-25): **esculpir cuesta, el relieve no** — el costo es CPU
+en el camino pincel→malla, no GPU (corrige el diagnóstico del 24, que culpaba a
+las sombras). Dos culpables **[ARREGLADOS]**: `sync_terrain_visual` minteaba un
+asset de 32768 tris cada frame editado (ahora escribe sobre el existente), y
+`brush_stroke` recorría los 16641 puntos para tocar ~100 (ahora solo la ventana
+alcanzable, con tests que fijan que acotar no recorta el radio).
 
 **[PENDIENTE]** `rebuild_terrain_collider` rehace el heightfield de parry entero
 cada tick editado (~130 allocations: `Vec<Vec<f32>>` que Avian vuelve a aplanar).
@@ -179,7 +164,20 @@ Lo mismo el trabajo por frame de trazo, que sigue siendo el grueso: 3 MB de
 atributos de malla + un `clone()` de 66 KB de la grilla por aplicación (dos en
 `raise_area`, que relaja mientras sube). Sin medir todavía si alcanza para 60.
 
-### Errores de la herramienta corregidos (2026-07-25, sin jugar todavía)
+### Dónde se retoma (2026-07-26)
+
+1. **Pasto, Paso 1 de `BOTWGrass.md`**: densidad decreciente con la distancia,
+   para poder agrandar el campo (hoy 25×25 m con borde recto) sin gastar más
+   triángulos. Es lo que más molesta de lo que hay.
+2. **Jugar lo de ayer sin validar**: el graybox asentado sobre relieve
+   (esculpir en `Traversal`, guardar, reentrar) y el feeling del pincel.
+3. **Medición**: atar la ruta del flythrough a la escena y guardar línea base en
+   disco. Hoy los tramos se llaman `spawn→clearing` en cajas que no tienen ni
+   claro ni bosque, y una regresión de ~1 ms de GPU pasó dos días inadvertida.
+4. **Sin decidir**: `assets/grass_textures_1k/` (11 MB, sin referencias) y
+   `AUDITORIA_CODIGO_2026-07-25.md` quedaron fuera de los commits a propósito.
+
+### Errores de la herramienta corregidos (2026-07-25)
 
 Auditados a pedido del usuario, `visuals`/pasto excluido (lo lleva otro agente).
 
@@ -202,30 +200,39 @@ Auditados a pedido del usuario, `visuals`/pasto excluido (lo lleva otro agente).
   un corte a mitad de escritura se llevaba la sesión que describía. Y un `Ctrl+L`
   fallido ya no deja un paso de undo espurio.
 
-Fuera de alcance por pedido: `visuals/grass.rs` incumple `clippy -D warnings`
-(`radius` sin usar) y sus presets de radio no se aplican — `spawn_grass_density`
-usa un cuadrado fijo de 48 m. **La build no cierra bajo §13 hasta que se
-arregle.**
+Validado jugando (2026-07-25, tarde): la freecam **gira bien** con el pincel
+activo, y los colliders responden mejor en modo edición. La build vuelve a
+cerrar bajo §13: `fmt` + `clippy -D warnings` + 369 tests.
 
-**Caerse al vacío al cargar un nivel (2026-07-25, encontrado jugando):** el
-terreno guardado tenía 8.10 m sobre el punto de spawn y `PLAYER_SPAWN` era la
-constante `(0, 1.5, 0)` de cuando el piso era plano — el player nacía **6.6 m
-bajo tierra**, y un heightfield es una superficie de una cara: desde abajo no
-frena, así que la caída no termina nunca. Arreglado en la causa: se autorea
-**solo el XZ** (`PLAYER_SPAWN_XZ`) y la altura sale de `Terrain::height_at`
-(bilineal); igual para el respawn por muerte. Como el player necesita que el
-suelo ya exista, `scene::SceneBuild { Ground, Actors }` ordena las fases de
-`OnEnter` — cualquier cosa que se pare sobre el suelo va en `Actors`.
+**Caerse al vacío al cargar un nivel (encontrado jugando):** `PLAYER_SPAWN` era
+una constante de cuando el piso era plano, así que el player nacía 6,6 m bajo
+tierra — y un heightfield es una superficie de una cara: desde abajo no frena, la
+caída no termina nunca. Se autorea **solo el XZ** y la altura sale de
+`Terrain::height_at`; igual el respawn. De ahí nació `scene::SceneBuild
+{ Ground, Actors }`: cualquier cosa que se pare sobre el suelo va en `Actors`.
 
-**[DEUDA] El mismo problema tiene el graybox de `Playing`:** cajas, escaleras,
-pickups y dianas llevan `y` autorada de cuando el piso era plano. Sobre relieve
-quedarán enterrados o flotando. No se toca hasta que haga falta jugar `Playing`
-sobre terreno esculpido.
+**El graybox se apoya en el relieve (2026-07-25, cerrado; sin jugar todavía).**
+Era la misma deuda que el spawn del player, para todo lo demás: cajas,
+escaleras, pickups y dianas llevaban `y` de cuando el piso era plano, así que
+esculpir bajo el curso lo dejaba colgado. Ahora la `y` de las tablas significa
+**altura sobre el terreno** — y no cambió un solo número autorado, porque sobre
+piso plano ambas lecturas coinciden (hay un test que lo fija). Es además el
+significado correcto para las mecánicas: vault y mantle miden el obstáculo
+contra el suelo donde estás parado.
 
-Sin verificar todavía: **el pincel se siente suave** (solo lo sabe quien juega),
-la **carga del nivel al arrancar** (ya hay `terrain.json` guardado con 1116
-vértices movidos, hasta 9.91 m), y el **ida y vuelta entre escenas**, que es
-donde saldría una entidad sin marcar con `DespawnOnExit`.
+Tres excepciones, cada una por su motivo: el **perímetro** queda absoluto
+(`Anchor::World` — son paredes de 320 m, un solo muestreo enterraría un extremo
+y flotaría el otro), cada **escalera** toma un único apoyo desde su base (si
+cada escalón siguiera su bache, huella y contrahuella dejarían de ser
+regulares), y la **escalera de mano** se mueve en bloque con su muro.
+
+El bug de fondo: los `setup_*` corrían en `SceneBuild::Ground`, donde el terreno
+todavía es un comando encolado y **no se puede leer**. Movidos a `Actors`, la
+fase que existía para esto desde el spawn del player y que el graybox nunca usó.
+
+Sin verificar jugando: el **asentado del graybox**, que **el pincel se siente
+suave**, la **carga del nivel al arrancar**, y el **ida y vuelta entre escenas**
+(donde saldría una entidad sin `DespawnOnExit`).
 
 Aprendido jugando (2026-07-25):
 - **Resolución** subida 64→128 celdas (2.5m/vértice): con 64 el pincel cubría
@@ -233,23 +240,18 @@ Aprendido jugando (2026-07-25):
 - **Collider "a veces no colisionaba" era timing, no polígonos:** avian
   sincroniza en `FixedPostUpdate`, el rebuild estaba en `Update` (≥1 frame de
   retraso). Movido a `FixedUpdate` → colisiona en el mismo tick.
-- **Entrar al suelo: resuelto, y la hipótesis previa era falsa.** Se había
-  culpado al límite de 60° del `ground_service`; la captura del usuario lo
-  desmintió — `grounded=ON` y `slope_ok=ON` **con el cuerpo dentro**. Lo real:
-  nada sacaba al cuerpo una vez adentro (el probe encuentra superficie ahí mismo
-  y lo reporta cómodamente apoyado). `lift_actors_out_of_terrain` corre tras los
-  motores y lo sube si quedó bajo `height_at`; lee la forma del collider vigente,
-  así que vale de pie o agachado. 3 tests.
+- **Entrar al suelo: la hipótesis previa era falsa.** Se culpó al límite de 60°
+  del `ground_service`, pero la captura lo desmintió (`grounded=ON`, `slope_ok=ON`
+  con el cuerpo dentro). Lo real: nada sacaba al cuerpo una vez adentro.
+  `lift_actors_out_of_terrain` corre tras los motores y lo sube si quedó bajo
+  `height_at`, leyendo la forma del collider vigente. 3 tests.
 - **[NO ES BUG] "El pasto no suena":** el audio de pasos es un `debug!` stopgap y
   `debug` está apagado en `cargo run`. Falta cargar `.ogg` y reproducirlo en el
   cue `Step` (`sfx/mod.rs::play_audio_cues`).
-- **Flotar sobre el relieve (introducido y corregido el 2026-07-25):**
-  `height_at` interpolaba **bilineal**, pero el collider y la malla son dos
-  triángulos planos por celda; la superficie bilineal se abomba por encima de esa
-  triangulación dentro del quad (medio metro en celdas de 2.5 m con relieve real),
-  así que la depenetración levantaba el cuerpo hasta una superficie que no existe.
-  Ahora muestrea el **triángulo** (la diagonal `(row,col)→(row+1,col+1)` coincide
-  entre malla y parry, verificado). 2 tests.
+- **Flotar sobre el relieve:** `height_at` era **bilineal**, pero collider y malla
+  son dos triángulos planos por celda, y la superficie bilineal se abomba medio
+  metro sobre esa triangulación — la depenetración levantaba el cuerpo hasta una
+  superficie que no existe. Ahora muestrea el **triángulo**. 2 tests.
 
 Stop-line (fuera, diferido a propósito): capas semánticas, chunks/LOD/streaming,
 malla adaptativa, texture splatting, cuevas/instancias, **generación** procedural
@@ -394,47 +396,24 @@ decisiones (el detalle de implementación quedó en git):
   mundo y presentación lo resuelve por `VisualCatalog` — la separación que
   después permitió cambiar a proxies procedurales sin tocar simulación.
 
-Queda: revisar el feeling de día/noche + inventario + bosque + maniquí; después
-modelar un personaje propio low-poly que herede el rig UAL1/UAL2.
+**Contrato de animación** con SoT única (`schema.rs::PLAYER_CLIP_CONTRACT`,
+compartida por `build.rs` y el resolvedor): `AnimationRole`+`ROLE_TABLE` resuelven
+`AN_<Rol>` → alias vendor → fallback, y un GLB con `bof_animset="player"` falla el
+build si le falta un clip `required`. El placeholder fusiona UAL1+UAL2 (85 clips);
+los 13 roles ligan a clip real. Swim/dive y el eje direccional esperan motor.
 
-Contrato de animación con SoT única (`schema.rs::PLAYER_CLIP_CONTRACT`,
-compartida por `build.rs` y el resolvedor). Runtime: `AnimationRole`+`ROLE_TABLE`
-resuelven `AN_<Rol>` → alias vendor → fallback, con `debug!` nombrando el rol sin
-clip propio. Compile-time: un GLB con `bof_animset="player"` falla el build si le
-falta un clip `required`. El placeholder fusiona UAL1+UAL2 (85 clips): locomoción
-de UAL1, climb/slide/ninja de UAL2 — los 13 roles ligan a clip real. Roles
-planeados en el contrato (swim/dive, eje direccional aim+lock-on) esperan motor.
+**Facing unificado** (roadmap 3, `movement/facing.rs`): `FacingSource { Free,
+Look, LockOn(Entity) }` con `resolve_facing` como dueño único tras
+`TickActiveMotor` — los motores no rotan el cuerpo cuando el facing está
+desacoplado, así no hay pelea. Encima de eso: lock-on (`player/lock_on.rs`, 30 m,
+cono ~60°), intención facing-relativa con `StrafeDir` (circle-strafe real),
+encuadre de cámara con blend, animación direccional con back-pedal en reversa, y
+arco que auto-apunta al objetivo lockeado.
 
-Facing unificado (roadmap 3): `FacingSource { Free, Look, LockOn(Entity) }`
-(`movement/facing.rs`) + `resolve_facing` tras `TickActiveMotor`, dueño único del
-facing desacoplado (fija el yaw al objetivo, sobrescribe el giro del motor →
-encara limpio; climb/ladder mantienen facing de pared).
-- **3b Lock-on** (`player/lock_on.rs`): toggle `IntentAction::LockOn` (middle-mouse
-  o `T`), adquiere el enemigo más centrado al crosshair (rango 30 m, cono ~60°),
-  rompe por despawn o >40 m.
-- **Intención facing-relativa explícita** (`intents.planar.local` + `StrafeDir`,
-  en `brain.rs`): con facing desacoplado, el stick se lee en el marco del objetivo
-  — "izquierda" es un strafe explícito, y el movimiento es circle-strafe relativo
-  al objetivo. En `Free` siempre es forward. Visible en debug (`strafe=`).
-- **3c Cámara lock-on** (`camera/mod.rs`, `CameraRig::lock_blend`): encuadra hacia
-  el objetivo con blend suave al entrar/salir.
-- **Animación direccional** (`animation.rs::directional_role`): `StrafeDir` elige
-  `AN_Walk/Run/SneakStrafeL/R|Bwd`; sin clips en el placeholder cae a la base
-  (walk), listo para cuando existan. El back-pedal reproduce el clip base en
-  reversa (`strafe_playback_speed`) para no moonwalkear; L/R esperan clips.
-
-**Arco + lock-on** (`combat/motors/aim.rs`): estando lockeado, el disparo usa una
-orientación efectiva que apunta al objetivo (`lock_aim_orientation`), no el mouse
-—que la cámara ya desacopló—, así el arco auto-apunta al enemigo lockeado.
-
-El facing lockeado es un **giro suave** (`resolve_facing` slerp a
-`DECOUPLED_TURN_RATE`): los motores no rotan el cuerpo cuando el facing está
-desacoplado (`MotorCore.facing` + `faces_movement`), así `resolve_facing` es el
-único dueño y no hay pelea. `Free` intacto.
-
-Falta: **clips de strafe** propios; motores swim/dive; clips de combate. Bug
-conocido resuelto: teleport por caída (era realimentación de `body_yaw`). La
-preview de aim mientras cargás (no el disparo) aún puede no seguir al objetivo.
+Falta: **clips de strafe** propios, motores swim/dive, clips de combate, y
+revisar el feeling de día/noche + inventario + bosque. Después, un personaje
+low-poly propio que herede el rig UAL1/UAL2. La preview de aim mientras cargás
+(no el disparo) aún puede no seguir al objetivo.
 
 ## Pipeline authored de assets — trabajo activo (2026-07-23)
 
@@ -460,40 +439,27 @@ referenciado directo desde vendor, sin paso Blender.
 
 ### Decisión — colisiones e hitboxes para assets finales (2026-07-19)
 
-Las fuentes públicas de Nintendo confirman el uso amplio de física en BotW,
-pero no documentan sus hurtboxes exactas; se toma el *feeling*, no una
-implementación supuesta. Hoy un único `Collider` cápsula sirve como cuerpo
-sólido y receptor de melee/flechas/carga (`GameLayer::Actor`). El visual ya
-es separado; su escala/pivot salieron de `BodyDimensions` y viven en la
-receta de presentación, sin convertir todavía ningún asset fuente.
+Se toma el *feeling* de BotW, no una implementación supuesta: las fuentes
+públicas no documentan sus hurtboxes. Hoy una sola cápsula es cuerpo sólido y
+receptor de melee/flechas/carga. El contrato para cuando lleguen los assets
+finales:
 
-Contrato acordado:
+1. **Locomotion body:** cápsula elegida por traversal, no generada del mesh. La
+   forma (standing/crouched) se separa del envelope semántico (pies, cabeza,
+   radio de soporte) que consumen ledges/stairs/ladders — un cambio cosmético no
+   altera `FixedUpdate`.
+2. **Hurtboxes:** sensores hijos con `owner` + región, sin respuesta física; las
+   posturas cambian desde simulación, nunca desde el esqueleto.
+3. **Hitboxes:** sweeps de capacidad fija por arma/ataque y fase autoritativa. Si
+   una animación exige precisión, Blender exporta sockets o curvas horneadas.
+4. **Mundo/assets:** colisión simplificada y semántica en nodos GLTF propios;
+   nunca trimesh visual automático.
 
-1. **Locomotion body:** cápsula simple elegida por traversal y capacidades, no
-   generada desde el mesh. La forma (`standing/crouched`) se separará del
-   envelope semántico (pies, cabeza, radio de soporte) que consumen
-   ledges/stairs/ladders. Un cambio cosmético no altera `FixedUpdate`.
-2. **Hurtboxes:** primitivas sensoras hijas con `owner` + región, sin respuesta
-   física. Las posturas cambian desde simulación, nunca desde el esqueleto.
-3. **Hitboxes:** sweeps de capacidad fija definidos por arma/ataque y fase
-   autoritativa. Si una animación exige precisión, Blender exporta sockets o
-   curvas horneadas que el loader convierte a datos puros de simulación.
-4. **Mundo/assets:** colisión simplificada y semántica (`climbable`, material,
-   etc.) en nodos GLTF propios; nunca trimesh visual automático como default.
-
-Migración incremental antes del primer asset final: separar layers
-Body/Hurtbox con vínculo hurtbox→Actor; migrar melee/flecha/carga a resolver
-dueño/región y deduplicar por Actor; separar `LocomotionShapeSet` de
-`BodyEnvelope`.
-
-Auditoría de salud cerrada (2026-07-22): pool autoritativo de proyectiles,
-capacidad preparada fuera del tick, ground/snap excluyen `GameLayer::Actor`, y
-correcciones de melee/inventario/percepción. Los módulos grandes quedaron
-partidos por responsabilidad; `time_control` es único dueño de `Time<Virtual>`.
-
-Tests obligatorios: swap visual no cambia simulación; múltiples hurtboxes dan
-un solo hit por ataque; self-hit imposible; sensores no bloquean locomoción;
-mounted/sneak tienen política explícita; ningún ledger/cache crece en tick.
+Antes del primer asset final: separar layers Body/Hurtbox, deduplicar hits por
+Actor, y separar `LocomotionShapeSet` de `BodyEnvelope`. Tests obligatorios: el
+swap visual no cambia simulación; varias hurtboxes dan un hit por ataque;
+self-hit imposible; los sensores no bloquean locomoción; ningún caché crece en el
+tick.
 
 ## Costura superficie→sonido (checkpoint jugado 2026-07-24)
 

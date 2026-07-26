@@ -1,17 +1,22 @@
-//! The terrain: the ground as **editable data** — a height grid that is the
-//! single source of truth the physics collider and the visual mesh both derive
-//! from.
+//! The terrain: the ground as **editable data**, and the single source of truth
+//! the physics collider, the visual mesh and the footstep audio all derive from.
+//!
+//! Two channels, which is what a map needs to be more than a shape:
+//! - **relief** — the height grid, in metres, on the grid's corners.
+//! - **meaning** — what each cell is *made of* ([`TerrainKind`]), on the quads.
 //!
 //! Data lives here in `world` (data-in-the-world). The flat-shaded visual is
-//! generated in [`crate::visuals::terrain`], and the in-engine sculpt tool lives
-//! in [`crate::editor`]. One grid → two representations, kept in sync by change
-//! detection: mutating [`Terrain`] re-triggers both the collider rebuild and the
-//! mesh rebuild.
+//! generated in [`crate::visuals::terrain`], and the in-engine authoring tool
+//! lives in [`crate::editor`]. One grid → several representations, kept in sync by
+//! change detection: mutating [`Terrain`] re-triggers the mesh rebuild, and the
+//! collider rebuild when the *relief* specifically moved
+//! ([`Terrain::relief_revision`]).
 //!
 //! **The grid owns *how* it changes.** Every brush the editor offers is a method
 //! here; the editor only decides *where and when* one fires. That split is what
 //! keeps a new brush from needing a new system — it is a closure handed to
-//! [`Terrain::brush_stroke`].
+//! [`Terrain::brush_stroke`], or in the semantic layer's case
+//! [`Terrain::paint_area`].
 
 use std::path::Path;
 
@@ -19,10 +24,9 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::Surface;
 use super::forest::hash_u32;
 use super::layout::WORLD_SIZE;
-use crate::asset_pipeline::schema::SurfaceKind;
+use super::terrain_kind::TerrainKind;
 
 /// Grid cells per side; the heightfield has `CELLS + 1` points per side. Sized
 /// so the brush covers enough vertices to sculpt smooth domes (a coarser grid
@@ -63,27 +67,72 @@ const MAX_RELAX_PER_STEP: f32 = 0.3;
 /// interpolating over ~12 m reads as terrain.
 const NOISE_CELL: f32 = 12.0;
 
-/// The ground as a height grid. Authoritative data: both the collider and the
-/// visual mesh are derived from it. Row-major `points × points`, where the row
-/// indexes X and the column indexes Z (parry heightfield convention).
+/// The ground as editable data: a height grid plus what each cell is **made
+/// of**. Authoritative: the collider and the visual mesh are both derived from
+/// it. Row-major `points × points`, where the row indexes X and the column
+/// indexes Z (parry heightfield convention).
+///
+/// Two channels on one grid, because they answer two different questions and are
+/// sampled differently. Heights live on the `points × points` **corners** and
+/// interpolate — the surface between them is a real slope. Kinds live on the
+/// `cells × cells` **quads** and do not: a patch of ground is stone or it is
+/// sand, and there is no meaningful halfway.
 #[derive(Component, Debug, Clone)]
 pub struct Terrain {
     /// Heights in world units, row-major (`row * points + col`).
     heights: Vec<f32>,
+    /// What each cell is made of, row-major (`row * cells + col`).
+    kinds: Vec<TerrainKind>,
+    /// Bumped every time [`Terrain::heights`] actually changes.
+    ///
+    /// `Changed<Terrain>` cannot tell the two channels apart, and the physics
+    /// collider is derived from the heights alone. Without this, painting a patch
+    /// of sand would rebuild a 16k-point heightfield that is bit-identical to the
+    /// one already there — the most expensive thing this module does, for nothing.
+    relief_revision: u32,
     /// Points per side (`CELLS + 1`).
     points: usize,
     /// World size spanned on each of X and Z.
     extent: f32,
 }
 
-/// The on-disk shape of a level. Resolution and extent travel with the heights
-/// so a file authored before a `CELLS` or `WORLD_SIZE` change still loads —
+/// The on-disk shape of a level. Resolution and extent travel with the data so a
+/// file authored before a `CELLS` or `WORLD_SIZE` change still loads —
 /// [`Terrain::apply_ron`] resamples in world space instead of rejecting.
 #[derive(Serialize, Deserialize)]
 struct TerrainFile {
     points: usize,
     extent: f32,
     heights: Vec<f32>,
+    /// The semantic layer, run-length encoded, cell-major.
+    ///
+    /// Run-length because a painted map is mostly uniform: a fresh level is a
+    /// single run, and a level with a meadow on it is a few hundred. That keeps
+    /// the one part of the file a human can actually read *readable* — you can
+    /// see at a glance that a level is all soil except one patch — next to 16k
+    /// heights that will never be anything but noise.
+    ///
+    /// `default` on purpose: levels saved before this layer existed have no
+    /// field, and an empty list means "all the default kind" rather than an
+    /// error. That is what keeps the terrain files already on disk loadable.
+    #[serde(default)]
+    kinds: Vec<KindRun>,
+}
+
+/// `(how many cells, of what)`. Serialises as `(1234, Soil)`.
+#[derive(Serialize, Deserialize)]
+struct KindRun(u32, TerrainKind);
+
+/// A copy of both channels, for the editor's undo history.
+///
+/// Opaque on purpose: only [`Terrain::restore`] can put one back, so history
+/// cannot invent a grid the terrain never had. It carries the semantic layer too
+/// — undo has to take back a paint stroke as readily as a sculpt one, and a
+/// snapshot of half the data would silently resurrect the other half.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainSnapshot {
+    heights: Vec<f32>,
+    kinds: Vec<TerrainKind>,
 }
 
 impl Terrain {
@@ -92,6 +141,8 @@ impl Terrain {
         let points = CELLS + 1;
         Self {
             heights: vec![0.0; points * points],
+            kinds: vec![TerrainKind::default(); CELLS * CELLS],
+            relief_revision: 0,
             points,
             extent: WORLD_SIZE,
         }
@@ -108,8 +159,50 @@ impl Terrain {
         self.points
     }
 
+    /// How many times the height grid has changed. Only meaningful compared
+    /// against a previously observed value.
+    pub fn relief_revision(&self) -> u32 {
+        self.relief_revision
+    }
+
+    /// Cells per side — one fewer than [`Terrain::points`], since a cell is the
+    /// quad *between* four corners.
+    pub fn cells(&self) -> usize {
+        self.points - 1
+    }
+
     pub fn height(&self, row: usize, col: usize) -> f32 {
         self.heights[row * self.points + col]
+    }
+
+    /// What cell `(row, col)` is made of.
+    pub fn kind(&self, row: usize, col: usize) -> TerrainKind {
+        self.kinds[row * self.cells() + col]
+    }
+
+    /// What the ground is made of at an arbitrary world XZ.
+    ///
+    /// Nearest cell, never interpolated: the answer is "stone" or "sand", and
+    /// there is no blend of the two to return. Read every tick by the ground
+    /// probe, so it stays a couple of divisions and an index.
+    pub fn kind_at(&self, xz: Vec2) -> TerrainKind {
+        let (row, col) = self.cell_at(xz);
+        self.kind(row, col)
+    }
+
+    /// The cell containing a world XZ, clamped to the grid.
+    fn cell_at(&self, xz: Vec2) -> (usize, usize) {
+        let cells = self.cells();
+        let last = (cells - 1) as f32;
+        let index = |v: f32| ((v / self.extent + 0.5) * cells as f32).clamp(0.0, last) as usize;
+        (index(xz.x), index(xz.y))
+    }
+
+    /// World XZ of the *centre* of cell `(row, col)` — half a cell past its
+    /// low corner, which is the point a paint brush measures its radius against.
+    fn cell_centre_xz(&self, row: usize, col: usize) -> Vec2 {
+        let spacing = self.extent / self.cells() as f32;
+        self.point_xz(row, col) + Vec2::splat(spacing * 0.5)
     }
 
     /// World XZ of grid point `(row, col)`, independent of its height. The one
@@ -136,11 +229,12 @@ impl Terrain {
     /// so you fall forever.
     ///
     /// It samples the **triangle**, not a bilinear patch. Both the collider and
-    /// the visual mesh cut each cell along the `(row, col) → (row+1, col+1)`
-    /// diagonal into two flat triangles; a bilinear patch bulges above that
-    /// surface inside the quad — by half a metre on 2.5 m cells with real
-    /// relief. Lifting a body onto the bulge is how the player ended up
+    /// the visual mesh cut each cell into two flat triangles; a bilinear patch
+    /// bulges above that surface inside the quad — by half a metre on 2.5 m cells
+    /// with real relief. Lifting a body onto the bulge is how the player ended up
     /// hovering above sculpted ground.
+    ///
+    /// **Which diagonal is not ours to choose** — see [`Terrain::to_collider`].
     pub fn height_at(&self, xz: Vec2) -> f32 {
         let last = (self.points - 1) as f32;
         let fx = ((xz.x / self.extent + 0.5) * last).clamp(0.0, last);
@@ -151,12 +245,16 @@ impl Terrain {
         let u = fx - row as f32;
         let v = fz - col as f32;
         let corner = |dr: usize, dc: usize| self.height(row + dr, col + dc);
-        // The shared diagonal runs where `u == v`, so the sign of `u - v` picks
-        // the triangle; each expression is the plane through its three corners.
-        if u >= v {
-            corner(0, 0) + (corner(1, 0) - corner(0, 0)) * u + (corner(1, 1) - corner(1, 0)) * v
+        // The shared diagonal runs where `u + v == 1`, so that sum picks the
+        // triangle; each expression is the plane through its three corners.
+        if u + v <= 1.0 {
+            // The triangle holding the low corner: (0,0), (1,0), (0,1).
+            corner(0, 0) + (corner(1, 0) - corner(0, 0)) * u + (corner(0, 1) - corner(0, 0)) * v
         } else {
-            corner(0, 0) + (corner(1, 1) - corner(0, 1)) * u + (corner(0, 1) - corner(0, 0)) * v
+            // The triangle holding the high corner: (1,1), (0,1), (1,0).
+            corner(1, 1)
+                + (corner(0, 1) - corner(1, 1)) * (1.0 - u)
+                + (corner(1, 0) - corner(1, 1)) * (1.0 - v)
         }
     }
 
@@ -173,6 +271,29 @@ impl Terrain {
 
     /// The heightfield collider derived from the grid. `scale` maps parry's unit
     /// rectangle to the world extent; heights pass through at `scale.y = 1`.
+    ///
+    /// **This function is why the cell diagonal is not ours to choose.** Which way a
+    /// quad is cut into two triangles is parry's decision, and everything that reads
+    /// this grid has to follow it.
+    ///
+    /// A quad's four corners are only coplanar on flat or uniformly sloping ground.
+    /// Anywhere the relief twists, the two possible diagonals describe two *different
+    /// surfaces*, and the collider is authoritative because it is the one bodies
+    /// stand on.
+    ///
+    /// `parry3d` cuts along the **anti-diagonal** — from `(row, col+1)` to
+    /// `(row+1, col)`. Its `HeightField::triangles_at` picks the main diagonal only
+    /// for cells flagged `ZIGZAG_SUBDIVISION`, and the default cell status is empty
+    /// (`heightfield3.rs`: `Array2::repeat(.., HeightFieldCellStatus::default())`),
+    /// so no cell is ever flagged. Nothing in our code path sets it, and reaching it
+    /// would need `parry` as a direct dependency.
+    ///
+    /// Found by playing: the collider visibly disagreed with the ground "where the
+    /// terrain is very uneven", which is exactly the shape of this bug. Measured
+    /// before the fix on hard-sculpted ground: **0.33 m at worst, and 36% of sampled
+    /// points off by more than a centimetre**. It cost nothing on the flat graybox
+    /// floor this code was written against, which is why it survived this long — and
+    /// why the test that guards it now sweeps a grid instead of six points.
     fn to_collider(&self) -> Collider {
         let rows: Vec<Vec<f32>> = (0..self.points)
             .map(|row| (0..self.points).map(|col| self.height(row, col)).collect())
@@ -180,20 +301,29 @@ impl Terrain {
         Collider::heightfield(rows, Vec3::new(self.extent, 1.0, self.extent))
     }
 
-    /// A copy of the raw grid, for the editor's undo history. Opaque on purpose:
-    /// only [`Terrain::restore`] can put one back, so history cannot invent a
-    /// grid the terrain never had.
-    pub fn snapshot(&self) -> Vec<f32> {
-        self.heights.clone()
+    /// A copy of both channels, for the editor's undo history.
+    pub fn snapshot(&self) -> TerrainSnapshot {
+        TerrainSnapshot {
+            heights: self.heights.clone(),
+            kinds: self.kinds.clone(),
+        }
     }
 
     /// Put a [`Terrain::snapshot`] back. Ignores a snapshot of the wrong size
     /// (a stale history across a resolution change) rather than panicking.
-    pub fn restore(&mut self, snapshot: &[f32]) -> bool {
-        if snapshot.len() != self.heights.len() {
+    pub fn restore(&mut self, snapshot: &TerrainSnapshot) -> bool {
+        if snapshot.heights.len() != self.heights.len() || snapshot.kinds.len() != self.kinds.len()
+        {
             return false;
         }
-        self.heights.copy_from_slice(snapshot);
+        // Compare before copying: undoing a paint-only stroke leaves the relief
+        // untouched, and claiming otherwise would rebuild the collider for a
+        // heightfield that did not move.
+        if self.heights != snapshot.heights {
+            self.heights.copy_from_slice(&snapshot.heights);
+            self.relief_revision = self.relief_revision.wrapping_add(1);
+        }
+        self.kinds.copy_from_slice(&snapshot.kinds);
         true
     }
 
@@ -286,6 +416,65 @@ impl Terrain {
         });
     }
 
+    // ---- the semantic layer ------------------------------------------------
+
+    /// Paint `kind` onto every cell whose centre falls within `radius` of
+    /// `centre`. Returns whether anything actually changed.
+    ///
+    /// **No falloff, and no rate.** Both are meaningless here: there is no
+    /// halfway between rock and sand to ease into, and painting the same cell
+    /// twice cannot deepen it. A cell is either inside the circle or it is not,
+    /// which makes a paint stroke idempotent — hold the button still and nothing
+    /// keeps happening, unlike every sculpt brush.
+    ///
+    /// The consequence to know about: the edge of a painted patch is the cell
+    /// grid, 2.5 m at the current resolution. Fine detail is not available at
+    /// this resolution and pretending otherwise with a soft brush would only
+    /// hide it.
+    pub fn paint_area(&mut self, centre: Vec2, radius: f32, kind: TerrainKind) -> bool {
+        if radius <= 0.0 {
+            return false;
+        }
+        let cells = self.cells();
+        let mut changed = false;
+        let (rows, cols) = self.cell_window(centre, radius);
+        for row in rows {
+            for col in cols.clone() {
+                if self.cell_centre_xz(row, col).distance(centre) >= radius {
+                    continue;
+                }
+                let idx = row * cells + col;
+                if self.kinds[idx] != kind {
+                    self.kinds[idx] = kind;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// The inclusive cell window a paint stroke of `radius` can reach. Same job
+    /// as [`Terrain::window`] does for grid points, in cell space.
+    fn cell_window(
+        &self,
+        centre: Vec2,
+        radius: f32,
+    ) -> (
+        std::ops::RangeInclusive<usize>,
+        std::ops::RangeInclusive<usize>,
+    ) {
+        let cells = self.cells();
+        let last = (cells - 1) as f32;
+        // Inverse of `cell_centre_xz`: world metres back to a fractional cell
+        // index, measured from cell centres (hence the half-cell shift).
+        let index = |v: f32| (v / self.extent + 0.5) * cells as f32 - 0.5;
+        let clamp = |v: f32| v.clamp(0.0, last) as usize;
+        (
+            clamp(index(centre.x - radius).floor())..=clamp(index(centre.x + radius).ceil()),
+            clamp(index(centre.y - radius).floor())..=clamp(index(centre.y + radius).ceil()),
+        )
+    }
+
     // ---- brush plumbing ----------------------------------------------------
 
     /// Radial brush: a stroke whose two ends coincide.
@@ -312,6 +501,7 @@ impl Terrain {
             return;
         }
         let snapshot = self.heights.clone();
+        self.relief_revision = self.relief_revision.wrapping_add(1);
         // Only the grid window the stroke can reach. Walking all 16k points to
         // touch the ~100 under a 6 m brush was pure waste, and it ran every
         // frame of a stroke — twice, since `raise_area` relaxes as it lifts.
@@ -374,6 +564,7 @@ impl Terrain {
                 points: self.points,
                 extent: self.extent,
                 heights: self.heights.clone(),
+                kinds: encode_kinds(&self.kinds),
             },
             config,
         )
@@ -408,8 +599,11 @@ impl Terrain {
         if let Some(bad) = file.heights.iter().find(|height| !height.is_finite()) {
             return Err(format!("terrain file holds a non-finite height ({bad})"));
         }
+        let file_cells = file.points - 1;
+        let file_kinds = decode_kinds(&file.kinds, file_cells)?;
         if file.points == self.points && file.extent == self.extent {
             self.heights = file.heights;
+            self.kinds = file_kinds;
         } else {
             let source_last = (file.points - 1) as f32;
             let source_index =
@@ -425,12 +619,65 @@ impl Terrain {
                     )
                 })
                 .collect();
+            // Nearest cell, not bilinear: there is no value between `Rock` and
+            // `TallGrass` to interpolate to. Copying the height path here would
+            // have invented kinds nobody painted the first time `CELLS` changed.
+            let cells = self.cells();
+            let last = (file_cells - 1) as f32;
+            let source_cell =
+                |metres: f32| ((metres / file.extent + 0.5) * file_cells as f32).clamp(0.0, last);
+            self.kinds = (0..cells * cells)
+                .map(|idx| {
+                    let xz = self.cell_centre_xz(idx / cells, idx % cells);
+                    let row = source_cell(xz.x) as usize;
+                    let col = source_cell(xz.y) as usize;
+                    file_kinds[row * file_cells + col]
+                })
+                .collect();
         }
         for height in &mut self.heights {
             *height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
         }
+        self.relief_revision = self.relief_revision.wrapping_add(1);
         Ok(())
     }
+}
+
+/// Run-length encode the semantic layer, cell-major.
+fn encode_kinds(kinds: &[TerrainKind]) -> Vec<KindRun> {
+    let mut runs: Vec<KindRun> = Vec::new();
+    for &kind in kinds {
+        match runs.last_mut() {
+            Some(run) if run.1 == kind => run.0 += 1,
+            _ => runs.push(KindRun(1, kind)),
+        }
+    }
+    runs
+}
+
+/// Expand what [`encode_kinds`] wrote, for a grid of `cells × cells`.
+///
+/// An empty list is not an error: it is how a level saved before this layer
+/// existed reads, and the honest expansion of "no semantic layer" is a level of
+/// the default kind. Anything else must add up exactly — a truncated run list
+/// would otherwise offset every cell after the gap, sliding the whole map's
+/// meaning sideways by a silent amount.
+fn decode_kinds(runs: &[KindRun], cells: usize) -> Result<Vec<TerrainKind>, String> {
+    let expected = cells * cells;
+    if runs.is_empty() {
+        return Ok(vec![TerrainKind::default(); expected]);
+    }
+    let total: u64 = runs.iter().map(|run| u64::from(run.0)).sum();
+    if total != expected as u64 {
+        return Err(format!(
+            "terrain file's semantic layer covers {total} cells, expected {expected}"
+        ));
+    }
+    let mut kinds = Vec::with_capacity(expected);
+    for run in runs {
+        kinds.extend(std::iter::repeat_n(run.1, run.0 as usize));
+    }
+    Ok(kinds)
 }
 
 /// World XZ of a grid index, without needing the terrain itself — brush closures
@@ -507,21 +754,40 @@ fn sample_bilinear(heights: &[f32], points: usize, row: f32, col: f32) -> f32 {
     top.lerp(bottom, fr)
 }
 
-/// Rebuild the heightfield collider whenever the grid changes (sculpting). Like
-/// the mesh in `visuals::terrain`, this reacts to `Changed`, which also fires
-/// the frame the terrain spawns — rebuilding once more then is harmless.
+/// Tracks which version of the relief the collider on this entity was built
+/// from, so the rebuild can tell a sculpt edit from a paint edit.
+#[derive(Component)]
+pub(super) struct ColliderRevision(u32);
+
+/// Rebuild the heightfield collider whenever the **relief** changes. Reacts to
+/// `Changed`, which also fires the frame the terrain spawns — rebuilding once
+/// more then is harmless.
+///
+/// `Changed<Terrain>` is necessary but not sufficient: the semantic layer shares
+/// the component and changes far more often than the heights do while painting,
+/// and this rebuild is the single most expensive thing an edit can trigger. The
+/// revision check is what keeps painting off the physics path entirely.
 pub(super) fn rebuild_terrain_collider(
-    mut terrain: Query<(&Terrain, &mut Collider), Changed<Terrain>>,
+    mut terrain: Query<(&Terrain, &mut Collider, &mut ColliderRevision), Changed<Terrain>>,
 ) {
-    for (terrain, mut collider) in &mut terrain {
+    for (terrain, mut collider, mut built) in &mut terrain {
+        if built.0 == terrain.relief_revision() {
+            continue;
+        }
+        built.0 = terrain.relief_revision();
         *collider = terrain.to_collider();
     }
 }
 
 /// Spawn the single terrain entity: the height grid plus its derived collider.
 /// Static world geometry, so it stays on the `Default` collision layer (no
-/// `CollisionLayers`) where ledge sensing can see it. Carries `Surface` so the
-/// footstep audio seam keeps working, exactly as the old floor did.
+/// `CollisionLayers`) where ledge sensing can see it.
+///
+/// No `Surface` component, unlike every other piece of ground. One component
+/// could only name one surface for all 320 m of terrain, which is exactly the
+/// thing the semantic layer exists to stop being true; the ground probe reads
+/// [`Terrain::kind_at`] at the contact point instead. Leaving a stale `Surface`
+/// on the entity would have given the probe two answers to choose from.
 ///
 /// The saved level, if there is one, *is* the starting ground — a missing file
 /// is the normal first-run case, not an error.
@@ -539,11 +805,13 @@ pub(super) fn setup_terrain(mut commands: Commands, state: Res<State<crate::scen
         }
     }
     let collider = terrain.to_collider();
+    let revision = ColliderRevision(terrain.relief_revision());
     commands.spawn((
         DespawnOnExit(*state.get()),
         Name::new("Terrain"),
         terrain,
         collider,
+        revision,
         // A margin gives this thin, one-sided surface virtual thickness for
         // stable depenetration — but it also lifts the effective surface by its
         // own size, and 0.1 m of that is **visible**: the body rests a hand's
@@ -554,7 +822,6 @@ pub(super) fn setup_terrain(mut commands: Commands, state: Res<State<crate::scen
         // corrects against the real surface instead of hiding under a cushion.
         CollisionMargin(0.02),
         RigidBody::Static,
-        Surface(SurfaceKind::Grass),
         Transform::default(),
     ));
 }
@@ -756,57 +1023,86 @@ mod tests {
         terrain.heights[(row + 1) * points + col] = 10.0;
         terrain.heights[row * points + col + 1] = 10.0;
 
-        // Cell centre sits exactly on the shared diagonal, whose endpoints are
-        // both 0.0 — so the surface there is 0.0, while bilinear would say 5.0.
-        let a = terrain.point_xz(row, col);
-        let c = terrain.point_xz(row + 1, col + 1);
-        let centre = (a + c) * 0.5;
+        // The cell centre sits exactly on the shared diagonal, so the surface
+        // there is the height of that diagonal's endpoints — and bilinear would
+        // say 5.0, the average of all four corners, which is the bug this guards.
+        //
+        // Which endpoints those are depends on which diagonal parry cuts, and
+        // this assertion used to say `0.0`: it had the *other* diagonal baked in,
+        // and went on passing while the collider and the mesh described two
+        // different surfaces. So it now checks the invariant it actually cares
+        // about — the sample is on a triangle, not on the bulge — and gets the
+        // diagonal from the collider instead of from an assumption.
+        let centre = (terrain.point_xz(row, col) + terrain.point_xz(row + 1, col + 1)) * 0.5;
         let sampled = terrain.height_at(centre);
+
+        let collider = terrain.to_collider();
+        let ray =
+            avian3d::parry::query::Ray::new(Vec3::new(centre.x, 500.0, centre.y), Vec3::NEG_Y);
+        let hit = collider
+            .shape_scaled()
+            .cast_local_ray(&ray, 1000.0, true)
+            .expect("the ray must hit the terrain");
+        let on_collider = 500.0 - hit;
+
         assert!(
-            sampled.abs() < 0.1,
-            "on the diagonal the surface is 0, got {sampled} (bilinear would say 5)"
+            (sampled - on_collider).abs() < 0.01,
+            "the grid says {sampled} where the collider says {on_collider}"
+        );
+        assert!(
+            (sampled - 5.0).abs() > 1.0,
+            "{sampled} is the bilinear average — the sample left the triangle"
         );
     }
 
     #[test]
-    fn the_collider_surface_matches_the_visual_mesh() {
+    fn the_collider_surface_matches_the_grid_everywhere() {
         // The wireframe looked offset from the ground. This settles it without
         // interpreting a screenshot: shoot a ray straight down at the actual
-        // collider and compare where it lands with what `height_at` (the mesh's
-        // own surface) claims. Any mapping mistake — transposed axes, a shifted
-        // origin, the wrong diagonal — shows up here as a mismatch.
+        // collider and compare where it lands with what `height_at` (the surface
+        // the mesh is built from) claims. Any mapping mistake — transposed axes,
+        // a shifted origin, the wrong diagonal — shows up here as a mismatch.
+        //
+        // **Swept, not sampled.** This test used to check six hand-picked points
+        // and it passed for days while a third of the terrain was wrong: cutting
+        // the cell along the other diagonal than parry does is invisible on even
+        // ground and grows with the twist of each quad, so six points on gentle
+        // relief hit none of it. Hence: hard-sculpted ground, and a grid of
+        // samples deliberately offset from the cell centres so they land all over
+        // the inside of the quads, where the two triangulations differ most.
+        // See `Terrain::to_collider`.
         let mut terrain = Terrain::flat();
-        terrain.raise_area(Vec2::new(-40.0, 20.0), 35.0, 9.0);
-        terrain.noise_area(Vec2::ZERO, 120.0, 3.0, 5);
+        terrain.raise_area(Vec2::ZERO, 60.0, 12.0);
+        terrain.noise_area(Vec2::ZERO, 150.0, 6.0, 7);
+        terrain.terrace_area(Vec2::new(30.0, 30.0), 40.0, 2.0, 1.0);
         let collider = terrain.to_collider();
         let shape = collider.shape_scaled();
 
         let mut worst = 0.0_f32;
         let mut worst_at = Vec2::ZERO;
-        for (x, z) in [
-            (0.0, 0.0),
-            (-40.0, 20.0),
-            (40.0, -20.0),
-            (17.3, 61.9),
-            (-93.4, -12.7),
-            (120.0, 120.0),
-        ] {
-            let xz = Vec2::new(x, z);
-            let expected = terrain.height_at(xz);
-            let ray = avian3d::parry::query::Ray::new(Vec3::new(x, 500.0, z), Vec3::NEG_Y);
-            let hit = shape
-                .cast_local_ray(&ray, 1000.0, true)
-                .expect("the ray must hit the terrain");
-            let collider_height = 500.0 - hit;
-            let error = (collider_height - expected).abs();
-            if error > worst {
-                worst = error;
-                worst_at = xz;
+        let mut checked = 0;
+        for i in 0..60 {
+            for j in 0..60 {
+                // 2.51 m step against 2.5 m cells: the sample drifts across the
+                // cell instead of landing on the same spot of every one.
+                let xz = Vec2::new(-75.0 + i as f32 * 2.51, -75.0 + j as f32 * 2.51);
+                let ray =
+                    avian3d::parry::query::Ray::new(Vec3::new(xz.x, 500.0, xz.y), Vec3::NEG_Y);
+                let Some(hit) = shape.cast_local_ray(&ray, 1000.0, true) else {
+                    continue;
+                };
+                checked += 1;
+                let error = (500.0 - hit - terrain.height_at(xz)).abs();
+                if error > worst {
+                    worst = error;
+                    worst_at = xz;
+                }
             }
         }
+        assert!(checked > 3000, "the sweep hit only {checked} points");
         assert!(
             worst < 0.01,
-            "collider and mesh disagree by {worst} m at {worst_at:?}"
+            "collider and grid disagree by {worst} m at {worst_at:?}"
         );
     }
 
@@ -824,7 +1120,212 @@ mod tests {
     #[test]
     fn a_snapshot_of_the_wrong_size_is_refused() {
         let mut terrain = Terrain::flat();
-        assert!(!terrain.restore(&[0.0; 4]));
+        let stale = TerrainSnapshot {
+            heights: vec![0.0; 4],
+            kinds: vec![TerrainKind::default(); 1],
+        };
+        assert!(!terrain.restore(&stale));
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_semantic_layer_too() {
+        // Undo has to take back a paint stroke as readily as a sculpt one. A
+        // snapshot of only the heights would restore the shape and leave the
+        // painted meaning behind — the level would come back half undone.
+        let mut terrain = Terrain::flat();
+        let before = terrain.snapshot();
+        assert!(terrain.paint_area(Vec2::ZERO, 20.0, TerrainKind::Rock));
+        assert_ne!(terrain.snapshot(), before);
+        assert!(terrain.restore(&before));
+        assert_eq!(terrain.kind_at(Vec2::ZERO), TerrainKind::Soil);
+    }
+
+    #[test]
+    fn painting_covers_the_radius_and_nothing_past_it() {
+        let mut terrain = Terrain::flat();
+        let radius = 20.0;
+        assert!(terrain.paint_area(Vec2::ZERO, radius, TerrainKind::Rock));
+        assert_eq!(terrain.kind_at(Vec2::ZERO), TerrainKind::Rock);
+        // A cell centre just inside the circle is painted; well outside is not.
+        let spacing = WORLD_SIZE / CELLS as f32;
+        assert_eq!(
+            terrain.kind_at(Vec2::new(radius - spacing * 1.5, 0.0)),
+            TerrainKind::Rock
+        );
+        assert_eq!(
+            terrain.kind_at(Vec2::new(radius + spacing * 1.5, 0.0)),
+            TerrainKind::Soil
+        );
+    }
+
+    #[test]
+    fn painting_the_same_patch_twice_changes_nothing() {
+        // Paint has no rate and no falloff, so a held button must be idempotent.
+        // The editor relies on this to know whether a stroke is worth an undo
+        // step: a brush that always reports a change files empty history.
+        let mut terrain = Terrain::flat();
+        assert!(terrain.paint_area(Vec2::ZERO, 15.0, TerrainKind::Sand));
+        assert!(!terrain.paint_area(Vec2::ZERO, 15.0, TerrainKind::Sand));
+    }
+
+    #[test]
+    fn painting_at_the_world_edge_stays_inside_the_grid() {
+        // Same guard the sculpt window needs: the cell window is clamped, so a
+        // stroke centred on the corner must not index past the end.
+        let mut terrain = Terrain::flat();
+        let edge = WORLD_SIZE / 2.0;
+        terrain.paint_area(Vec2::new(edge, edge), 30.0, TerrainKind::Rock);
+        terrain.paint_area(Vec2::new(-edge, -edge), 30.0, TerrainKind::Sand);
+        let last = terrain.cells() - 1;
+        assert_eq!(terrain.kind(last, last), TerrainKind::Rock);
+        assert_eq!(terrain.kind(0, 0), TerrainKind::Sand);
+    }
+
+    #[test]
+    fn painting_never_touches_the_relief_revision() {
+        // The guard that keeps painting off the physics path: the collider is
+        // derived from the heights alone, and rebuilding it is the most expensive
+        // thing an edit can trigger. A paint stroke must be invisible to it.
+        let mut terrain = Terrain::flat();
+        let before = terrain.relief_revision();
+        assert!(terrain.paint_area(Vec2::ZERO, 20.0, TerrainKind::TallGrass));
+        assert_eq!(
+            terrain.relief_revision(),
+            before,
+            "painting moved no ground"
+        );
+
+        terrain.raise_area(Vec2::ZERO, 20.0, 1.0);
+        assert_ne!(
+            terrain.relief_revision(),
+            before,
+            "sculpting did move ground"
+        );
+    }
+
+    #[test]
+    fn undoing_a_paint_stroke_does_not_rebuild_the_collider() {
+        // The same guard on the way back. `restore` writes both channels, so it
+        // has to check whether the relief actually differs rather than assume it.
+        let mut terrain = Terrain::flat();
+        let before = terrain.snapshot();
+        terrain.paint_area(Vec2::ZERO, 20.0, TerrainKind::Rock);
+        let revision = terrain.relief_revision();
+        assert!(terrain.restore(&before));
+        assert_eq!(terrain.relief_revision(), revision);
+
+        // ...but undoing a sculpt stroke must.
+        terrain.raise_area(Vec2::ZERO, 20.0, 2.0);
+        let sculpted = terrain.relief_revision();
+        assert!(terrain.restore(&before));
+        assert_ne!(terrain.relief_revision(), sculpted);
+    }
+
+    #[test]
+    fn the_semantic_layer_round_trips_through_disk() {
+        let mut terrain = Terrain::flat();
+        terrain.paint_area(Vec2::ZERO, 25.0, TerrainKind::TallGrass);
+        terrain.paint_area(Vec2::new(60.0, -40.0), 12.0, TerrainKind::Rock);
+        let expected = terrain.snapshot();
+        let text = terrain.to_ron().expect("serialises");
+        let mut loaded = Terrain::flat();
+        loaded.apply_ron(&text).expect("loads");
+        assert_eq!(loaded.snapshot(), expected);
+    }
+
+    #[test]
+    fn a_level_saved_before_the_semantic_layer_still_loads() {
+        // The terrain files already on disk have no `kinds` field. They are the
+        // levels of the sessions before this one, and losing them to a format
+        // change is exactly what the file-is-the-level rule forbids.
+        //
+        // Both load paths, because `apply_ron` branches on whether the file's
+        // resolution matches the current one and the real files take the branch a
+        // small hand-written fixture does not: `sandbox.ron` on disk today is
+        // `points: 129, extent: 320.0` with no `kinds`.
+        let resampled = "(\n    points: 3,\n    extent: 320.0,\n    heights: [0.0, 1.0, 2.0, \
+                         3.0, 4.0, 5.0, 6.0, 7.0, 8.0],\n)\n";
+        let native = format!(
+            "(points: {}, extent: {WORLD_SIZE:?}, heights: {:?})",
+            CELLS + 1,
+            vec![0.0f32; (CELLS + 1) * (CELLS + 1)]
+        );
+        for text in [resampled.to_string(), native] {
+            let mut terrain = Terrain::flat();
+            terrain.paint_area(Vec2::ZERO, 40.0, TerrainKind::Rock);
+            terrain
+                .apply_ron(&text)
+                .expect("a file without kinds loads");
+            // And it loads as unpainted, rather than leaving whatever the previous
+            // level had painted in place: the file is the level, all of it.
+            assert_eq!(terrain.kind_at(Vec2::ZERO), TerrainKind::Soil);
+        }
+    }
+
+    #[test]
+    fn a_truncated_semantic_layer_is_refused() {
+        // Run-length encoding's failure mode: runs that do not add up would
+        // offset every cell after the gap, sliding the whole map's meaning
+        // sideways. Silently accepting that is worse than not loading.
+        let text = "(\n    points: 3,\n    extent: 320.0,\n    heights: [0.0, 0.0, 0.0, \
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0],\n    kinds: [(2, Rock)],\n)\n";
+        let mut terrain = Terrain::flat();
+        let error = terrain
+            .apply_ron(text)
+            .expect_err("a short run list must be refused");
+        assert!(error.contains("semantic layer"), "unhelpful error: {error}");
+    }
+
+    #[test]
+    fn run_length_encoding_survives_every_pattern_it_can_meet() {
+        // Encode/decode is the one place a bug corrupts a level silently, so it
+        // is pinned on the shapes that actually occur: uniform (a fresh level),
+        // one patch (a painted one), and alternating (the worst case for runs).
+        let cells = 8;
+        let uniform = vec![TerrainKind::Soil; cells * cells];
+        let mut patch = uniform.clone();
+        for cell in patch.iter_mut().skip(10).take(7) {
+            *cell = TerrainKind::TallGrass;
+        }
+        let striped: Vec<TerrainKind> = (0..cells * cells)
+            .map(|i| TerrainKind::ALL[i % TerrainKind::ALL.len()])
+            .collect();
+        for original in [uniform, patch, striped] {
+            let runs = encode_kinds(&original);
+            assert_eq!(decode_kinds(&runs, cells).expect("decodes"), original);
+        }
+        // And the point of the encoding: a fresh level is a single run.
+        assert_eq!(encode_kinds(&vec![TerrainKind::Soil; 4096]).len(), 1);
+    }
+
+    #[test]
+    fn a_semantic_layer_from_another_resolution_is_resampled_without_inventing_kinds() {
+        // Heights resample bilinearly; kinds must not. Interpolating them would
+        // produce values between `Rock` and `TallGrass` — which is to say kinds
+        // nobody painted, appearing the first time `CELLS` changes.
+        let coarse = TerrainFile {
+            points: 3,
+            extent: WORLD_SIZE,
+            heights: vec![0.0; 9],
+            // 2×2 cells: rock along the low-x row, sand along the high-x row.
+            kinds: vec![KindRun(2, TerrainKind::Rock), KindRun(2, TerrainKind::Sand)],
+        };
+        let text = ron::ser::to_string(&coarse).expect("serialises");
+        let mut terrain = Terrain::flat();
+        terrain.apply_ron(&text).expect("loads");
+        let quarter = WORLD_SIZE / 4.0;
+        assert_eq!(terrain.kind_at(Vec2::new(-quarter, 0.0)), TerrainKind::Rock);
+        assert_eq!(terrain.kind_at(Vec2::new(quarter, 0.0)), TerrainKind::Sand);
+        // Every cell holds a kind that was actually in the file.
+        for row in 0..terrain.cells() {
+            for col in 0..terrain.cells() {
+                let kind = terrain.kind(row, col);
+                assert!(
+                    kind == TerrainKind::Rock || kind == TerrainKind::Sand,
+                    "resampling invented {kind:?} at ({row}, {col})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -848,6 +1349,7 @@ mod tests {
             points: 5,
             extent: WORLD_SIZE,
             heights: (0..25).map(|i| (i / 5) as f32).collect(),
+            kinds: Vec::new(),
         };
         let text = ron::ser::to_string(&coarse).expect("serialises");
         let mut terrain = Terrain::flat();
@@ -884,6 +1386,7 @@ mod tests {
             points: 3,
             extent: half,
             heights: vec![0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0],
+            kinds: Vec::new(),
         };
         let text = ron::ser::to_string(&coarse).expect("serialises");
         let mut terrain = Terrain::flat();
@@ -926,8 +1429,9 @@ mod tests {
             MIN_HEIGHT * 10.0
         );
         terrain.apply_ron(&text).expect("loads");
-        let peak = terrain.snapshot().iter().cloned().fold(f32::MIN, f32::max);
-        let pit = terrain.snapshot().iter().cloned().fold(f32::MAX, f32::min);
+        let heights = terrain.snapshot().heights;
+        let peak = heights.iter().cloned().fold(f32::MIN, f32::max);
+        let pit = heights.iter().cloned().fold(f32::MAX, f32::min);
         assert!(peak <= MAX_HEIGHT, "{peak} should be capped");
         assert!(pit >= MIN_HEIGHT, "{pit} should be floored");
     }

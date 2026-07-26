@@ -12,7 +12,7 @@ use bevy::color::palettes::css;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use super::{SculptFocus, SculptTool, StrokeAnchor, history::SculptHistory};
+use super::{EditorTool, SculptFocus, StrokeAnchor, ToolLayer, history::SculptHistory};
 use crate::camera::CameraRig;
 use crate::input::ModalInputFocus;
 use crate::world::{GameLayer, Terrain};
@@ -116,7 +116,7 @@ enum Stroke {
 /// raw `ButtonInput`, so without this the brush answers their clicks too —
 /// clicking a hub button used to dig a crater in the ground behind the panel.
 #[derive(PartialEq, Eq, Clone, Copy)]
-enum Pointer {
+pub(super) enum Pointer {
     /// Nothing else modal is up: all three buttons are the brush's.
     Ours,
     /// Sculpting from the air. The rig takes modal focus only in freecam, where
@@ -129,7 +129,7 @@ enum Pointer {
     Theirs,
 }
 
-fn pointer_state(
+pub(super) fn pointer_state(
     focus: &ModalInputFocus,
     owner: &Query<Entity, With<SculptFocus>>,
     rig: &Query<Entity, With<CameraRig>>,
@@ -150,7 +150,7 @@ fn pointer_state(
 /// While held: apply the selected brush under the cursor.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn sculpt_terrain(
-    mut tool: ResMut<SculptTool>,
+    mut tool: ResMut<EditorTool>,
     mut history: ResMut<SculptHistory>,
     buttons: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
@@ -166,7 +166,7 @@ pub(super) fn sculpt_terrain(
         return;
     };
     let pointer = pointer_state(&focus, &owner, &rig);
-    let stroke = if !tool.active || pointer == Pointer::Theirs {
+    let stroke = if !tool.active || tool.layer != ToolLayer::Relief || pointer == Pointer::Theirs {
         None
     } else if buttons.pressed(MouseButton::Middle) {
         Some(Stroke::Smooth)
@@ -204,7 +204,7 @@ pub(super) fn sculpt_terrain(
     let center = Vec2::new(hit.x, hit.z);
     let radius = tool.radius;
     let step = tool.strength * time.delta_secs();
-    match (stroke, tool.kind) {
+    match (stroke, tool.brush) {
         (Stroke::Smooth, _) | (_, BrushKind::Smooth) => {
             terrain.smooth_area(center, radius, (SMOOTH_RATE * step).min(1.0));
         }
@@ -243,7 +243,7 @@ pub(super) fn sculpt_terrain(
 
 /// The world point under the cursor, but only when the ray lands on the terrain
 /// (not on a prop in front of it).
-fn cursor_terrain_hit(
+pub(super) fn cursor_terrain_hit(
     spatial: &SpatialQuery,
     window: &Window,
     camera: &Camera,
@@ -265,7 +265,7 @@ fn cursor_terrain_hit(
 /// see the ends of is a ramp you cannot aim.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_brush_gizmo(
-    tool: Res<SculptTool>,
+    tool: Res<EditorTool>,
     spatial: SpatialQuery,
     focus: Res<ModalInputFocus>,
     owner: Query<Entity, With<SculptFocus>>,
@@ -290,9 +290,18 @@ pub(super) fn draw_brush_gizmo(
     };
     let lift = Vec3::Y * GIZMO_LIFT;
     let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
-    gizmos.circle(Isometry3d::new(hit + lift, flat), tool.radius, css::YELLOW);
+    // The ring's colour says which layer the click will land on. Without it the
+    // two layers look identical under the cursor while doing entirely different
+    // things to the level — and painting is silent on flat ground, so there would
+    // be no other tell until you saved.
+    let ring = match tool.layer {
+        ToolLayer::Relief => css::YELLOW,
+        ToolLayer::Meaning => css::AQUA,
+    };
+    gizmos.circle(Isometry3d::new(hit + lift, flat), tool.radius, ring);
 
-    if tool.kind == BrushKind::Ramp
+    if tool.layer == ToolLayer::Relief
+        && tool.brush == BrushKind::Ramp
         && let Some(anchor) = tool.anchor
     {
         let start = Vec3::new(anchor.xz.x, anchor.height, anchor.xz.y) + lift;

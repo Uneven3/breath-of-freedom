@@ -87,6 +87,10 @@ pub enum SurfaceKind {
     Grass,
     Stone,
     Wood,
+    /// Bare earth. Reachable only from the terrain's semantic layer
+    /// (`world::TerrainKind`), not from any authored material key.
+    Dirt,
+    Sand,
 }
 
 /// Map an authored `material_kind` (or graybox palette key) to a surface.

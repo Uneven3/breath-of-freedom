@@ -1,13 +1,13 @@
-//! The level on disk. **The file is the level**: `Ctrl+S` writes the height
-//! grid, `Ctrl+L` reloads it, and `world::terrain` loads it at startup — so a
-//! sculpting session survives closing the game, which is the difference between
-//! a toy and a tool.
+//! The level on disk. **The file is the level**: `Ctrl+S` writes the height grid
+//! *and the semantic layer*, `Ctrl+L` reloads them, and `world::terrain` loads
+//! the file at startup — so an authoring session survives closing the game, which
+//! is the difference between a toy and a tool.
 
 use std::path::Path;
 
 use bevy::prelude::*;
 
-use super::SculptTool;
+use super::EditorTool;
 use super::history::SculptHistory;
 use crate::scene::AppState;
 use crate::world::{Terrain, terrain_file};
@@ -15,7 +15,7 @@ use crate::world::{Terrain, terrain_file};
 /// Ctrl+S saves, Ctrl+L reloads from disk (discarding unsaved sculpting, but
 /// filed in the undo history first so it is not a one-way door).
 pub(super) fn save_or_reload(
-    tool: Res<SculptTool>,
+    tool: Res<EditorTool>,
     mut history: ResMut<SculptHistory>,
     keys: Res<ButtonInput<KeyCode>>,
     state: Res<State<AppState>>,
@@ -50,7 +50,7 @@ pub(super) fn save_or_reload(
     match load_terrain(terrain.bypass_change_detection(), file) {
         Ok(()) => {
             terrain.set_changed();
-            history.record_grid(before);
+            history.record_snapshot(before);
             info!("[editor] terreno recargado desde {file}");
         }
         Err(error) => warn!("[editor] no se pudo cargar: {error}"),

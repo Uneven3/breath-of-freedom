@@ -20,7 +20,7 @@ use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::GroundSensing;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
-use crate::world::{GameLayer, Surface};
+use crate::world::{GameLayer, Surface, Terrain};
 
 /// Suppress grounding only while *genuinely launching off* the floor (m/s).
 /// During a jump's first ticks the body is still within probe range of the
@@ -68,6 +68,7 @@ pub fn ground_service(
     >,
     spatial: SpatialQuery,
     surfaces: Query<&Surface>,
+    terrains: Query<&Terrain>,
     mut trace: ResMut<CastTrace>,
 ) {
     for (entity, transform, collider, velocity, sensing, mut facts, state, lod) in &mut q {
@@ -109,10 +110,18 @@ pub fn ground_service(
             floor_normal.is_some() && !is_ascending(velocity.0, normal, sensing.ascend_epsilon);
         facts.floor_normal = normal;
         // The surface the probe stands on, for presentation (footstep audio).
-        // Reads the hit entity's authored `Surface`; `None` → default Grass.
+        //
+        // Two sources, because the ground is two different kinds of thing. A box
+        // or a stair tread is uniform, so it carries one authored `Surface`. The
+        // terrain is not: it is 320 m of painted cells, so it answers per contact
+        // point through its semantic layer — which is the whole reason that layer
+        // exists. Terrain first, since it is the entity that would otherwise need
+        // a `Surface` component lying about the other 16k cells.
         facts.surface = hit
-            .and_then(|h| surfaces.get(h.entity).ok())
-            .map(|surface| surface.0)
+            .and_then(|h| match terrains.get(h.entity) {
+                Ok(terrain) => Some(terrain.kind_at(h.point1.xz()).surface()),
+                Err(_) => surfaces.get(h.entity).ok().map(|surface| surface.0),
+            })
             .unwrap_or_default();
         // Diagnostic decomposition for the debug HUD/logs.
         facts.probe_hit = hit.is_some();

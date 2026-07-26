@@ -1,9 +1,16 @@
-//! Undo/redo for sculpting, one entry per **stroke**.
+//! Undo/redo for authoring, one entry per **stroke**.
 //!
 //! Per stroke, not per frame: a two-second drag is one thing you did, so it
-//! should be one thing you can take back. The unit of history is a full grid
-//! snapshot — 129² floats is 66 KB, and at [`MAX_STEPS`] that is ~2 MB for the
-//! whole history, which is cheaper than the bookkeeping a diff would need.
+//! should be one thing you can take back. The unit of history is a full
+//! [`TerrainSnapshot`] — 129² heights plus 128² kinds is 83 KB, and at
+//! [`MAX_STEPS`] that is ~2.7 MB for the whole history, which is cheaper than
+//! the bookkeeping a diff would need.
+//!
+//! One stack for both authoring layers, not one each. Undo means "take back the
+//! last thing I did", and a developer who paints a patch and then sculpts a hill
+//! expects two presses to walk back through both — a per-layer stack would make
+//! Ctrl+Z depend on which mode happens to be selected, which is how you lose
+//! work you thought you had undone.
 //!
 //! This exists because the destructive brushes (flatten, terrace) make
 //! experimenting expensive without it: you stop trying things when a mistake
@@ -11,20 +18,20 @@
 
 use bevy::prelude::*;
 
-use super::SculptTool;
-use crate::world::Terrain;
+use super::EditorTool;
+use crate::world::{Terrain, TerrainSnapshot};
 
 /// How many strokes back you can go before the oldest is dropped.
 const MAX_STEPS: usize = 32;
 
 #[derive(Resource, Default)]
 pub(crate) struct SculptHistory {
-    /// Grids to go back to, oldest first.
-    undo: Vec<Vec<f32>>,
-    /// Grids undone, ready to be redone. Cleared by any new stroke.
-    redo: Vec<Vec<f32>>,
-    /// The grid as it was when the current stroke started, if one is running.
-    pending: Option<Vec<f32>>,
+    /// States to go back to, oldest first.
+    undo: Vec<TerrainSnapshot>,
+    /// States undone, ready to be redone. Cleared by any new stroke.
+    redo: Vec<TerrainSnapshot>,
+    /// The terrain as it was when the current stroke started, if one is running.
+    pending: Option<TerrainSnapshot>,
 }
 
 impl SculptHistory {
@@ -37,8 +44,9 @@ impl SculptHistory {
     }
 
     /// Close the stroke and file it. A stroke that changed nothing (button
-    /// pressed and released without moving dirt) leaves no entry, so undo never
-    /// spends a step doing nothing visible.
+    /// pressed and released without moving dirt, or repainting a patch the kind
+    /// it already was) leaves no entry, so undo never spends a step doing
+    /// nothing visible.
     pub fn end_stroke(&mut self, terrain: &Terrain) {
         let Some(before) = self.pending.take() else {
             return;
@@ -52,19 +60,19 @@ impl SculptHistory {
 
     /// File an already-taken snapshot as a step to come back to, for edits that
     /// are not strokes (loading a file over your work is the one that would
-    /// otherwise be unrecoverable). Takes the grid rather than the terrain
+    /// otherwise be unrecoverable). Takes the snapshot rather than the terrain
     /// because the caller has to snapshot *before* the edit and file it *after*
     /// it succeeds.
-    pub fn record_grid(&mut self, grid: Vec<f32>) {
-        self.push_undo(grid);
+    pub fn record_snapshot(&mut self, state: TerrainSnapshot) {
+        self.push_undo(state);
         self.redo.clear();
     }
 
-    fn push_undo(&mut self, grid: Vec<f32>) {
+    fn push_undo(&mut self, state: TerrainSnapshot) {
         if self.undo.len() == MAX_STEPS {
             self.undo.remove(0);
         }
-        self.undo.push(grid);
+        self.undo.push(state);
     }
 
     pub fn undo(&mut self, terrain: &mut Terrain) -> bool {
@@ -103,7 +111,8 @@ impl SculptHistory {
     /// Forget everything. Called when a scene ends: these snapshots describe a
     /// terrain that no longer exists, and since every scene's grid has the same
     /// dimensions, [`Terrain::restore`] would happily accept one — undo in the
-    /// next scene would silently paste in the previous scene's ground.
+    /// next scene would silently paste in the previous scene's ground *and* its
+    /// painted meaning.
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -113,7 +122,7 @@ impl SculptHistory {
 
 /// Ctrl+Z steps back, Ctrl+Y (or Ctrl+Shift+Z) steps forward.
 pub(super) fn undo_redo(
-    tool: Res<SculptTool>,
+    tool: Res<EditorTool>,
     mut history: ResMut<SculptHistory>,
     keys: Res<ButtonInput<KeyCode>>,
     mut terrain: Query<&mut Terrain>,

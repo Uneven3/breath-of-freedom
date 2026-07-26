@@ -58,6 +58,10 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
   el piso móvil el costo real no son los polígonos sino fill-rate/overdraw,
   passes fullscreen, sombras y draw calls. Más mundo no justifica degradar la
   respuesta del movimiento.
+- **Máquina de referencia: AMD Polaris 11 (RX 460/560), 2 GB VRAM, 2016** — la
+  del dev, y low-end real. El costo escala con lo que se **ve**, no con el tamaño
+  del mundo (Bevy hace frustum culling), mientras la distancia de dibujo esté
+  acotada. Es el número que hace concretos los presupuestos de arriba.
 - Música ambiental minimalista; SFX estilizados. Hasta tener audio real,
   cada punto sonoro emite un *cue* de debug (`[audio] cue: …`).
 
@@ -70,7 +74,9 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 4. **Monturas** — ✅ horse base (montar, carga, inmunidad de dueño). El
    diseño final es más ambicioso: criaturas variadas, terrestres y
    voladoras, con vínculo personal jugador-criatura (línea *Avatar*:
-   Ikran/Direwolf), no transporte genérico.
+   Ikran/Direwolf), no transporte genérico. Las **voladoras son un motor, no una
+   clase**: reutilizan todo el montado y lo nuevo es un motor `Fly` que suspende
+   el contrato de suelo — primo directo de nadar/bucear.
 5. **Mundo y entorno** — ciclo día/noche ✅, mundo 320×320 + bosque ✅;
    ⏳ próximo foco: recuperar rendimiento con profiling/LOD/culling antes de
    sumar temperatura, clima, tala, animales o personajes. Después: crafteo y

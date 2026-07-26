@@ -1,166 +1,140 @@
 # Pipeline de assets — Blender → Bevy
 
-Contrato de autoría e integración de arte propio. Presupuesto: **≤250 líneas**.
-Visión visual: `NORTE.md`; leyes de capas: `ARCHITECTURE.md`; migración activa:
-`AHORA.md`.
+Contrato de autoría e integración de arte propio (**≤250 líneas**). Visión:
+`NORTE.md`; leyes de capas: `ARCHITECTURE.md`; trabajo activo: `AHORA.md`;
+texturas: `TEXTURES.md`; vegetación: `BOTWGrass.md`.
 
 ## Principios
 
-- Blender 5.2 LTS es la fuente de autoría; runtime usa glTF 2.0 binario (`.glb`).
-- Soltar un GLB válido y recompilar lo registra sin agregar una ruta o receta Rust por asset.
-- Identidad de gameplay, apariencia y perfil espacial son claves tipadas distintas. Ninguna es una ruta ni un `Handle`.
-- **Desacoplamiento Estricto de Capas (§20):**
-  - **Presentación (`Update`):** Mallas `SM_` / `SK_`, coordenadas UV y texturas de material (`M_`).
-  - **Simulación (`FixedUpdate`):** Lógica pura en Rust (`Cuttable`, `Burnable`, `Health`, `RigidBody`). Mallas renderizadas NUNCA son colliders; `UBX_`, `USP_`, `UCY_` se convierten a datos puros en compilación y se elimina su render. `FixedUpdate` jamás lee escenas GLB.
-- **Protección Compile-Time (`build.rs`):** `cargo check` escanea y rechaza en compilación cualquier asset en Blender con nomenclatura inválida, nodos sin prefijo `SM_/SK_/UBX_/USP_/UCY_/SKT_`, LODs discontinuos o falta de licencia.
-- Pocos `StandardMaterial` mate compartidos. La belleza proviene de paleta, luz y atmósfera, no de multiplicar materiales o polígonos.
+- Blender 5.2 LTS es la fuente; runtime usa glTF 2.0 binario (`.glb`). Soltar un
+  GLB válido y recompilar lo registra, sin una ruta ni una receta Rust por asset.
+- Identidad de gameplay, apariencia y perfil espacial son **claves tipadas
+  distintas**. Ninguna es una ruta ni un `Handle`.
+- **Desacoplamiento de capas (§20):** presentación (`Update`) se queda con las
+  mallas `SM_`/`SK_`, las UV y los materiales `M_`; simulación (`FixedUpdate`)
+  con lógica pura en Rust. Una malla renderizada **nunca** es collider: los
+  helpers `U*_` se hornean a datos puros en compilación y pierden su render, y
+  `FixedUpdate` jamás lee una escena GLB.
+- **Protección compile-time:** `build.rs` rechaza nomenclatura inválida, prefijos
+  desconocidos, LODs discontinuos o licencia faltante, nombrando asset y regla.
+- Pocos `StandardMaterial` mate compartidos. La belleza viene de paleta, luz y
+  atmósfera, no de multiplicar materiales o polígonos.
 
 ## Carpetas
 
 ```text
-art/blender/<categoria>/              fuentes propias .blend
-art/vendor/<catalogo>/                fuentes y licencias de terceros
-assets/game/authored/<categoria>/     GLB propios; scanner estricto
-assets/game/legacy/<catalogo>/        runtime vendor aún necesario
-assets/textures/<categoria>/          texturas de terreno y albedo/normales (.png)
+art/blender/<categoria>/            fuentes propias .blend
+art/vendor/<catalogo>/              fuentes y licencias de terceros
+assets/game/authored/<categoria>/   GLB propios; scanner estricto
+assets/game/legacy/<catalogo>/      runtime vendor aún necesario
+assets/textures/<categoria>/        texturas (contrato en TEXTURES.md)
 ```
 
-Categorías y directorios runtime:
+Categoría → directorio runtime: `char_`→`characters/`, `creature_`→`creatures/`,
+`prop_`→`props/`, `structure_`→`structures/`, `tree_`→`trees/`,
+`weapon_`→`weapons/`.
 
-| Prefijo | Directorio |
-|---|---|
-| `char_` | `characters/` |
-| `creature_` | `creatures/` |
-| `prop_` | `props/` |
-| `structure_` | `structures/` |
-| `tree_` | `trees/` |
-| `weapon_` | `weapons/` |
-
-`assets/game/authored/` es la única frontera autodescubierta. Legacy no se
-valida contra esta convención y conserva receta explícita hasta ser reemplazado.
+`assets/game/authored/` es la única frontera autodescubierta. Legacy no se valida
+contra esta convención y conserva receta explícita hasta ser reemplazado.
 
 ## Tutorial recomendado: primero el contrato, después el detalle
 
-No empezar esculpiendo. Primero construir en Blender una versión gris que
-demuestre escala, pivote y colisión; probarla en Bevy; recién después agregar
-silueta, materiales y LODs. Para `prop_barrel`:
+No empezar esculpiendo: primero una versión gris que demuestre escala, pivote y
+colisión, probada en Bevy; recién después silueta, materiales y LODs. Para
+`prop_barrel`:
 
-1. **Elegir identidad y carpeta.** Crear
-   `art/blender/props/prop_barrel.blend`. El nombre define la clave estable; no
-   es una ruta de gameplay.
-2. **Fijar metros, frente y pivote.** Usar unidades Metric/1, apoyar el origen
-   en el suelo y verificar el tamaño junto a una referencia humana.
-3. **Crear la colisión primero.** Agregar una primitiva Blender separada
-   (Cube, UV Sphere, Cylinder o Capsule), ajustarla al volumen jugable, aplicar
-   escala/rotación y nombrar objeto **y mesh datablock** según lo que Bevy debe
-   construir: `UBX_Body`, `USP_Body`, `UCY_Body` o `UCP_Body`.
-4. **Crear el render alrededor del collider.** El primer mesh es
-   `SM_Barrel_LOD0`; nunca reutilizarlo como colisión. El helper puede verse en
-   Blender, pero el loader le quita su render al instanciar el GLB.
-5. **Asignar paleta.** Reusar `M_Wood`, `M_Steel`, etc. Si el look ya existe,
-   no crear otra clave. Un look realmente nuevo se aprueba y agrega a la
-   paleta antes de exportar.
-6. **Agregar raíz y ficha.** Parentar todo bajo `ROOT_prop_barrel` y declarar
-   `bof_license`, `bof_profile`, `bof_material_kind` y `bof_climbable`.
-7. **Agregar lo opcional al final.** Primero sockets `SKT_*`; después
-   `LOD1/LOD2`; animaciones sólo para `SK_*`. Validar cada incremento.
-8. **Guardar, exportar y compilar** con los comandos de “Export reproducible”.
-   Un fallo debe corregirse en Blender, no parchearse con escala, collider o
-   material bespoke en Rust.
+1. **Identidad y carpeta.** `art/blender/props/prop_barrel.blend`. El nombre del
+   archivo define la clave estable; no es una ruta de gameplay.
+2. **Metros, frente y pivote.** Metric/1, origen apoyado en el suelo, tamaño
+   verificado junto a una referencia humana.
+3. **La colisión primero.** Una primitiva Blender separada, ajustada al volumen
+   jugable, con escala/rotación aplicadas, y con **objeto y mesh datablock**
+   nombrados según lo que Bevy debe construir: `UBX_/USP_/UCY_/UCP_/UCX_`.
+4. **El render alrededor del collider.** `SM_Barrel_LOD0`; nunca reutilizarlo
+   como colisión. El helper se ve en Blender, pero el loader le quita el render.
+5. **Paleta.** Reusar `M_Wood`, `M_Steel`… Un look realmente nuevo se aprueba y
+   se agrega a la paleta *antes* de exportar.
+6. **Raíz y ficha.** Todo bajo `ROOT_prop_barrel`, declarando `bof_license`,
+   `bof_profile`, `bof_material_kind` y `bof_climbable`.
+7. **Lo opcional al final.** Sockets `SKT_*`; después `LOD1/LOD2`; animaciones
+   sólo para `SK_*`. Validar cada incremento.
+8. **Exportar y compilar** con los comandos de "Export reproducible". Un fallo se
+   corrige en Blender, nunca con escala, collider o material bespoke en Rust.
 
-Árbol mínimo esperado:
+Árbol mínimo: `ROOT_prop_barrel` con `SM_Barrel_LOD0` `[M_Wood, M_Steel]`,
+`UBX_Body` y `SKT_Top`.
 
-```text
-ROOT_prop_barrel
-├── SM_Barrel_LOD0   [M_Wood, M_Steel]
-├── UBX_Body
-└── SKT_Top
-```
+La primitiva pierde su historial de "fui creada como Cube" al pasar a glTF:
+queda como geometría. **Por eso el prefijo es el contrato autoritativo** — `UBX_`
+significa "Bevy construirá un box desde estos bounds" aunque alguien deforme el
+helper. Para que sea lo que dice ser: partir de la primitiva correspondiente, no
+editar su topología, aplicar transforms. `UCX_` es la excepción — sus vértices
+authored sí definen el hull. Un prefijo desconocido **falla el build**.
 
-La primitiva de Blender pierde su historial de “fui creada como Cube” al
-convertirse en glTF: queda como geometría. Por eso el prefijo es el contrato
-autoritativo. `UBX_` significa “Bevy construirá un box desde estos bounds”,
-aunque alguien deforme el helper; `UCY_` significa cylinder, etc. Para que “sea
-lo que dice ser”, partir de la primitiva correspondiente, no editar su
-topología y aplicar transforms. `UCX_` es la excepción: sus vértices authored
-sí definen el convex hull.
+Tres controles, con responsabilidades distintas: el **exportador Blender**
+rechaza nombres, transforms, jerarquía, materiales o LODs inválidos antes de
+escribir el GLB; **`build.rs`** abre el GLB real y falla `cargo check` nombrando
+asset y regla, además de hornear sockets/colliders a datos puros; y **el loader**
+remapea paleta, aplica LOD, oculta helpers y comprueba `GltfExtras`, conservando
+el proxy y logueando si la escena no carga.
 
-Hay tres controles, con responsabilidades distintas:
-
-1. **Exportador Blender:** rechaza nombres, transforms, jerarquía, materiales o
-   LODs inválidos antes de escribir el GLB.
-2. **Bevy al compilar:** `build.rs` abre el GLB real; si ruta, extras, helper,
-   material o geometría contradicen el contrato, `cargo check` falla nombrando
-   asset y regla. También hornea sockets/colliders a datos puros.
-3. **Bevy al instanciar:** remapea la paleta, aplica LOD, oculta helpers y
-   comprueba `GltfExtras`. Si la escena no carga conserva el proxy y loguea el
-   error. Verla bien en pantalla completa la validación.
-
-Registro automático no significa spawn automático. Soltar el GLB lo incorpora
-al catálogo; todavía se elige explícitamente qué identidad de gameplay lo usa y
-dónde aparece en `world/layout.rs`. Ese binding menciona claves semánticas
-(`prop_barrel`, `prop_barrel_body`), nunca paths, meshes ni handles.
+Registro automático no significa spawn automático: soltar el GLB lo incorpora al
+catálogo, pero qué identidad de gameplay lo usa y dónde aparece se sigue eligiendo
+en `world/layout.rs`, por claves semánticas y nunca por paths ni handles.
 
 ## Sistema de coordenadas y escena Blender
 
-- Unidades `Metric`, `Unit Scale = 1`; una unidad equivale a un metro.
-- Blender: `+Z` arriba y frente del asset `-Y`; el exportador produce Bevy
-  `+Y` arriba y frente `-Z`.
-- Escala y rotación aplicadas en render meshes. Pivote/origen en suelo para
-  estáticos y entre los pies para personajes.
-- Una raíz `ROOT_<asset_key>`, donde `asset_key` es el nombre del archivo sin
-  extensión. Ejemplo: `ROOT_tree_pine_a`.
-- Nombres ASCII, únicos y sin sufijos automáticos `.001`.
+- `Metric`, `Unit Scale = 1`: una unidad es un metro.
+- Blender `+Z` arriba y frente `-Y`; el exportador produce Bevy `+Y` y `-Z`.
+- Escala y rotación aplicadas en render meshes. Pivote en el suelo para
+  estáticos, entre los pies para personajes.
+- Una raíz `ROOT_<asset_key>` (nombre del archivo sin extensión). Nombres ASCII,
+  únicos, sin sufijos automáticos `.001`.
 
 ## Tamaños de referencia (metros)
 
-Escala común para juzgar proporciones nuevas contra lo ya integrado. 1 unidad =
-1 m; la altura de los assets authored sale de los bounds del manifiesto
-build-time, la de los proxies de las primitivas en `visuals/forest.rs`.
+Escala común para juzgar proporciones nuevas contra lo ya integrado. La altura
+de los authored sale de los bounds del manifiesto; la de los proxies, de las
+primitivas en `visuals/forest.rs`.
 
 | Asset | Tipo | Alto | Ancho / copa ⌀ | Notas |
 | --- | --- | --- | --- | --- |
 | Player (maniquí UAL1) | personaje | ~2.0 | ~0.5 hombros | mesh nativo 1.829 m, escalado ×1.093 |
 | `tree_pine_a` | pino authored | 7.6 | copa ~3.5 | tronco `UCY_Trunk`; primera vertical propia |
-| Proxy común (esfera) | graybox árbol | ~7.4 | copa 4.0 | `TreeSilhouette::Rounded` |
-| Proxy pino (cono) | graybox árbol | ~7.5 | copa 3.6 | `TreeSilhouette::Conical` |
-| Proxy retorcido | graybox árbol | ~8.5 | copa 3.8 | `TreeSilhouette::Gnarled` |
+| Proxies graybox | árbol | 7.4–8.5 | copa 3.6–4.0 | `TreeSilhouette::{Rounded,Conical,Gnarled}` |
 
-Referencia humana: el player mide ~2 m, así que un pino de 7.6 m es ~3.8×
-su altura. Assets nuevos se dimensionan contra esta columna antes de exportar.
+El player mide ~2 m, así que un pino de 7.6 m es ~3.8× su altura. Todo asset
+nuevo se dimensiona contra esta columna antes de exportar.
 
 ## Nomenclatura
 
 ### Archivos
 
-`<categoria>_<nombre>[_<variante>].glb`, todo `lower_snake_case`.
-
-Ejemplos: `char_villager`, `tree_pine_a`, `prop_barrel`,
-`weapon_sword_short`.
+`<categoria>_<nombre>[_<variante>].glb`, todo `lower_snake_case`:
+`char_villager`, `tree_pine_a`, `prop_barrel`, `weapon_sword_short`.
 
 ### Render y LOD
 
 - Estático: `SM_<Parte>_LOD0`; skinned: `SK_<Parte>_LOD0`.
 - `Parte` usa PascalCase ASCII: `SM_Trunk_LOD0`, `SK_Body_LOD1`.
-- `LOD0` es obligatorio; LODs opcionales son contiguos hasta `LOD2`.
-- Cada node y su mesh datablock comparten exactamente el mismo nombre.
+- `LOD0` obligatorio; los opcionales son contiguos hasta `LOD2`. Cada node y su
+  mesh datablock comparten exactamente el mismo nombre.
 - Bandas default: LOD0 0–30 m, LOD1 20–58 m, LOD2 50–70 m, con margen de
   transición mediante `VisibilityRange`. El perfil móvil puede acotar el final.
 
 ### Materiales
 
-- `M_<ClavePaleta>`: `M_Bark`, `M_FoliagePine`, `M_Steel`.
-- La clave debe existir en la paleta del engine. El loader reemplaza el material
-  importado por el único `Handle<StandardMaterial>` canónico.
-- Baseline: `metallic = 0`, `roughness ≥ 0.8`, sin textura salvo excepción
-  medida y aprobada. Una clave desconocida invalida el asset.
-- Mismo look implica misma clave; no se crean variantes por malla.
+- `M_<ClavePaleta>`: `M_Bark`, `M_FoliagePine`, `M_Steel`. La clave debe existir
+  en la paleta; el loader reemplaza el material importado por el único
+  `Handle<StandardMaterial>` canónico, y una clave desconocida invalida el asset.
+- Baseline: `metallic = 0`, `roughness ≥ 0.8`, sin textura salvo excepción medida
+  y aprobada (reglas de textura: `TEXTURES.md`). Mismo look, misma clave.
 
 ### Sockets
 
-- Empty `SKT_<Slot>`: `SKT_MainHand`, `SKT_OffHand`, `SKT_Canopy`.
-- Su transform local se hornea al manifiesto espacial. Attach de simulación lee
-  ese dato puro; attach visual puede seguir el node instanciado.
+- Empty `SKT_<Slot>`: `SKT_MainHand`, `SKT_OffHand`, `SKT_Canopy`. Su transform
+  local se hornea al manifiesto: el attach de simulación lee ese dato puro, el
+  visual puede seguir el node instanciado.
 
 ### Colisión
 
@@ -173,136 +147,104 @@ Ejemplos: `char_villager`, `tree_pine_a`, `prop_barrel`,
 | `UCY_` | cylinder; extensión propia para troncos/pilares baratos |
 
 Los helpers llevan nombre de propósito (`UCY_Trunk`, `UBX_Body_00`), no material
-renderizable. `UCX_` puede leer vértices sólo de su mesh de colisión explícito;
-nunca deriva un hull/trimesh del `SM_`/`SK_`.
+renderizable. `UCX_` lee vértices sólo de su mesh explícito; nunca deriva un
+hull/trimesh del `SM_`/`SK_`. **Un prefijo fuera de esta tabla falla el build**
+(hasta el 2026-07-26 caía en silencio a cilindro).
 
 ### Animaciones
 
-- `AN_<Accion>[_<Variante>]`: `AN_Idle`, `AN_Walk`,
-  `AN_AttackLight_01`.
-- Un asset puramente `SM_` no exige ni admite clips. Un asset `SK_` requiere
-  clips nombrados; los catálogos de animación conservan identidad propia.
+- `AN_<Accion>[_<Variante>]`: `AN_Idle`, `AN_Walk`, `AN_AttackLight_01`.
+- Un asset puramente `SM_` no exige ni admite clips; un `SK_` requiere clips
+  nombrados, y los catálogos de animación conservan identidad propia.
 
 #### Contrato de animación del player (plug and play + guardrail)
 
 Los nombres de clip son un **contrato rígido con una sola fuente de verdad**:
-`asset_pipeline/schema.rs::PLAYER_CLIP_CONTRACT`, compartido por el validador de
-`build.rs` y el resolvedor de runtime, así no pueden desincronizarse. Cada rol
-del contrato deriva de un motor de `movement/motors/`. El vocabulario es
-`AN_<Rol>`.
+`schema.rs::PLAYER_CLIP_CONTRACT`, compartido por el validador de `build.rs` y el
+resolvedor de runtime, así no pueden desincronizarse. Cada rol deriva de un motor
+de `movement/motors/`; el vocabulario es `AN_<Rol>`. Dos niveles de enforcement:
 
-Dos niveles de enforcement:
+- **Runtime (placeholder vendor, blando):** el resolvedor (`ROLE_TABLE`) prueba
+  (1) nombre canónico, (2) alias vendor, (3) clip del rol de *fallback*. Un rol
+  sin clip degrada en cadena hacia Idle y se loguea a `debug!`. Nunca se congela.
+- **Compile-time (personaje authored, duro):** un GLB con `bof_animset =
+  "player"` **falla el build** si le falta un clip `required`, listando cuáles.
 
-- **Runtime (placeholder vendor, blando):** la máquina de estados pide un **rol**
-  y el resolvedor (`visuals/animation.rs`, `ROLE_TABLE`) prueba en orden (1)
-  nombre canónico `AN_<Rol>`, (2) alias vendor, (3) clip del rol de *fallback*.
-  Un rol sin clip propio degrada en cadena hacia Idle y se **loguea a `debug!`**
-  nombrando qué falta. Nunca se congela.
-- **Compile-time (personaje authored, duro):** un GLB con extra raíz
-  `bof_animset = "player"` **falla el build** si le falta cualquier clip
-  `required`, listando exactamente cuáles. Ahí está el guardrail medible.
+**Lo que un asset `bof_animset = "player"` debe traer** — 13 clips `required`,
+uno por motor de locomoción en producción:
 
-| Rol | Clip canónico | Estado(s) | Fallback | Placeholder hoy |
-| --- | --- | --- | --- | --- |
-| Idle | `AN_Idle` | quieto (requerido) | — | `Idle_Loop` |
-| Walk | `AN_Walk` | Walk, Stairs | Idle | `Walk_Loop` |
-| Run | `AN_Run` | Sprint | Walk | `Sprint_Loop` |
-| Sneak | `AN_Sneak` | Sneak | Walk | `Crouch_Fwd_Loop` |
-| Jump | `AN_Jump` | Jump | Idle | `Jump_Start` |
-| Fall | `AN_Fall` | Fall | Jump | `Jump_Loop` |
-| Glide | `AN_Glide` | Glide | Fall | `NinjaJump_Idle_Loop` |
-| Climb | `AN_Climb` | Climb | Idle | `ClimbUp_1m` |
-| Ladder | `AN_Ladder` | Ladder | Climb | `ClimbUp_1m` |
-| Mantle | `AN_Mantle` | Mantle | Climb | `ClimbUp_1m` |
-| Vault | `AN_Vault` | AutoVault | Jump | `ClimbUp_1m` |
-| WallJump | `AN_WallJump` | WallJump | Jump | `NinjaJump_Start` |
-| EdgeLeap | `AN_EdgeLeap` | EdgeLeap | Jump | `NinjaJump_Start` |
+```text
+AN_Idle  AN_Walk  AN_Run   AN_Sneak  AN_Jump   AN_Fall  AN_Glide
+AN_Climb AN_Ladder AN_Mantle AN_Vault AN_WallJump AN_EdgeLeap
+```
 
-El placeholder **fusiona ambas librerías** (`animation_sources` = UAL1 + UAL2,
-85 clips): UAL1 aporta locomoción neutra (Walk/Sprint/Crouch/Jump), UAL2 aporta
-climb/slide/ninja; comparten rig, así los clips de una retargetean sobre la otra.
-En colisión de nombre gana la primera fuente (UAL1).
+A qué estado responde cada rol, con qué clip vendor está cubierto hoy y hacia
+dónde degrada son **tablas de código**, no de este documento: viven en
+`schema.rs::PLAYER_CLIP_CONTRACT` y `visuals/animation.rs::ROLE_TABLE`. Copiarlas
+acá sólo crea una cuarta copia que se desincroniza.
 
-**Roles planeados** (en el contrato como `required: false`, validados si existen,
-sin lógica de selección aún — roadmap paso 3): `AN_Swim`, `AN_Dive`, y el eje
-direccional del modo facing-bloqueado (aim + lock-on) `AN_{Walk,Run,Sneak}Bwd`
-/ `…StrafeL` / `…StrafeR`. Cuando el motor y los clips existan, se activan sin
-reescribir el contrato.
+El placeholder **fusiona ambas librerías** (UAL1 locomoción + UAL2 acciones, 85
+clips); comparten rig, así retargetean entre sí, y en colisión de nombre gana
+UAL1. **Roles planeados** (`required: false`, validados si existen, sin lógica de
+selección aún): `AN_Swim`, `AN_Dive` y el eje direccional del modo
+facing-bloqueado (`…Bwd`, `…StrafeL`, `…StrafeR`).
 
 ## Custom properties
 
-Blender exporta propiedades `bof_*` a `extras`; Bevy las observa mediante
-`GltfExtras`. En la raíz:
+Blender exporta propiedades `bof_*` a `extras`, que Bevy lee vía `GltfExtras`.
+En la raíz:
 
-- `bof_license`: SPDX o licencia/procedencia declarada; obligatorio.
+- `bof_license`: SPDX o procedencia declarada; **obligatorio**.
 - `bof_profile`: clave espacial estable si hay sockets o colisión.
-- `bof_material_kind`: superficie semántica (`wood`, `stone`, etc.).
+- `bof_material_kind`: superficie semántica (`wood`, `stone`, …).
 - `bof_climbable`: booleano; default `true` para geometría de mundo.
-- `bof_animset`: opta al contrato de animación. Con `"player"`, el build exige
-  todos los clips `required` de `PLAYER_CLIP_CONTRACT` o falla nombrando los que
-  falten. Sin el extra, un `SK_` sólo exige que sus clips tengan forma `AN_*`.
+- `bof_animset`: opta al contrato de animación. Con `"player"` el build exige
+  todos los clips `required` o falla nombrando los que falten; sin el extra, un
+  `SK_` sólo exige que sus clips tengan forma `AN_*`.
 
-El import build-time es la autoridad para simulación. La lectura runtime de
+El import build-time es **la autoridad para simulación**. La lectura runtime de
 `GltfExtras` verifica consistencia y alimenta presentación/debug; nunca modifica
 un collider en respuesta a una escena que terminó de cargar.
 
 ## Import en Bevy
 
-1. `build.rs` escanea recursivamente `assets/game/authored/`.
-2. Valida archivo/directorio, raíz, nodes, materiales, LOD, animaciones, extras
-   y geometría de colisión.
-3. Genera en `OUT_DIR` un manifiesto con paths de presentación y descriptores
-   espaciales puros. Duplicados o convenciones inválidas fallan el build con el
-   asset y la regla exacta.
-4. `VisualCatalog` combina el manifiesto con recetas legacy.
-5. Al instanciar, el loader remapea paleta, asigna rangos LOD, elimina render de
-   helpers de colisión y comprueba extras.
-6. La representación anterior permanece visible durante la carga; éxito hace
-   swap atómico, fallo conserva fallback y loguea sin panic.
+1. `build.rs` escanea `assets/game/authored/` y valida archivo/directorio, raíz,
+   nodes, materiales, LOD, animaciones, extras y geometría de colisión.
+2. Genera en `OUT_DIR` un manifiesto con paths de presentación y descriptores
+   espaciales puros. Duplicados o convenciones inválidas fallan el build
+   nombrando el asset y la regla exacta.
+3. `VisualCatalog` combina el manifiesto con recetas legacy; al instanciar, el
+   loader remapea paleta, asigna rangos LOD, quita el render de los helpers y
+   comprueba extras.
+4. La representación anterior sigue visible durante la carga: éxito hace swap
+   atómico, fallo conserva el fallback y loguea sin panic.
 
 ## Export reproducible
 
 ```text
 timeout 120s blender -noaudio --background --factory-startup \
-  --python tools/export_blender_asset.py -- \
-  --source art/blender/<categoria>/<asset_key>.blend \
-  --output assets/game/authored/<categoria>/<asset_key>.glb
+  --python tools/export_blender_asset.py \
+  -- --source art/blender/<cat>/<key>.blend \
+     --output assets/game/authored/<cat>/<key>.glb
 ```
 
-Settings fijos: GLB, selección/colección de export, animaciones por actions,
-conversión Y-up y sin datos ajenos al asset. El script valida antes de escribir y
-sale distinto de cero ante una violación. En este host el `timeout` también
-evita el cuelgue de cierre por PipeWire.
+Settings fijos: GLB, animaciones por actions, conversión Y-up, sin datos ajenos
+al asset. El script valida antes de escribir y sale distinto de cero ante una
+violación. El `timeout` evita además el cuelgue de cierre por PipeWire.
 
-Validación de entrega:
+Validación de entrega: `cargo fmt` + `cargo clippy --all-targets -- -D warnings`
++ `cargo test`, y el checkpoint jugado por el usuario. Para assets visuales,
+además F1 → material breakdown, flythrough y watchdog de triángulos. Sólo
+entonces se retira el placeholder reemplazado; fuente, licencia y catálogo de
+procedencia permanecen.
 
-```text
-cargo fmt --package breath-of-freedom
-cargo clippy --all-targets -- -D warnings
-cargo test
-```
+## Vegetación
 
-El usuario hace el checkpoint Wayland. Para assets visuales ejecuta además F1 →
-material breakdown, flythrough y watchdog de triángulos. Sólo entonces se
-retira la dependencia runtime placeholder reemplazada; fuente, licencia y
-catálogo de procedencia permanecen.
+**El tema es de `BOTWGrass.md`.** Lo único que toca a *este* contrato: la
+vegetación authored usa la paleta mate (`M_Foliage*`) y **sin canal alfa**.
 
-## Técnicas de Presentación de Vegetación (Follaje y Praderas)
-
-Contrato visual y técnico de población para praderas estilo *Breath of the Wild*:
-
-1. **Geometría Pura sin Alpha (Blade Geometry vs. Alpha Overdraw):**
-   - La hierba se modela como vértices 3D puros de bajo poligonaje teñidos con la paleta mate (`M_FoliageCommon`), **evitando texturas con transparencia Alpha**. Elimina el costo de *Overdraw* en GPU y garantiza bordes limpios estilo cel-shading a 60 FPS.
-
-2. **Transición por Crecimiento Vertical ($Scale_Y: 0 \to 1$ - Anti-Popping):**
-   - En lugar de aparecer bruscamente al cruzar el radio de visibilidad, la vegetación **nace del suelo aumentando dinámicamente su escala vertical ($Scale_Y: 0 \to 1$)** conforme la cámara se acerca. Evita líneas duras de corte.
-
-3. **Inclinación Adaptativa hacia la Cámara (Camera-Facing Billboarding):**
-   - El pasto aplica un leve ajuste dinámico de rotación hacia el ángulo del vector de la cámara cuando esta se eleva o gira en picado. Evita que la vegetación parezca "hojas de papel invisibles" vista desde arriba.
-
-4. **Iluminación Translúcida / Subsurface Scattering (SSS):**
-   - El material/shader de la vegetación simula translucidez vegetal: cuando la luz del sol da desde atrás (contraluz), las puntas de la hierba se iluminan en un tono verde claro brillante/casi blanco, dando sensación de frescura y vida.
-
-5. **Multiplicación Procedural por Frustum & Presupuesto de Sombras:**
-   - La densidad se escala dinámicamente según el cono de visión directo de la cámara.
-   - Las briznas de hierba fina llevan `NotShadowCaster` en las cascadas del sol. El volumen y anclaje proceden de la oclusión PBR e integración con el color del suelo (`Color::srgb(0.22, 0.40, 0.18)`).
+> Acá había una sección que describía en presente el billboarding hacia cámara,
+> el subsurface scattering y la densidad por frustum. **Ninguna existe en el
+> código** (verificado 2026-07-26). Se borró en vez de corregirse porque duplicaba
+> a `BOTWGrass.md`, que existe justamente porque la doc anterior del pasto
+> afirmaba cosas que la medición desmintió.

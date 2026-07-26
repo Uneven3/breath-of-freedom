@@ -33,12 +33,13 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§19** Datos separados de sistemas (`state.rs`/`intents.rs` vs `mod.rs`/motores).
 - **§20** Simulación nunca depende de visuales; cámara/HUD/interpolación/cues
   viven en `Update` y solo **leen**.
-- **§21** **No construir lo que el motor va a dar.** `bevy_scene` 0.19 trae BSN
-  (`bsn!`, parches por campo, assets por string): la dirección es migrar hacia
-  BSN, no ampliar andamiaje propio que lo duplique. `world/layout.rs` (tablas +
-  `spawn_box`/`spawn_stair_segment`) **es** un BSN artesanal: candidato #1.
-  Fuera de alcance de BSN y por tanto nuestro: estados de app y ciclo de vida,
-  contenido procedural (bosque, pradera), y datos numéricos como el heightfield.
+- **§21** **No construir lo que el motor va a dar — ni planear sobre lo que
+  todavía no da.** `bevy_scene` 0.19 trae el macro `bsn!` con parches por campo:
+  la dirección es migrar hacia ahí, no ampliar andamiaje que lo duplique, y
+  `world/layout.rs` es un BSN artesanal (candidato #1). Pero **verificado en las
+  fuentes el 2026-07-26: el formato `.bsn` no existe y un `Scene` no se
+  serializa**, así que BSN no puede ser un formato de archivo. Nuestro: estados y
+  ciclo de vida, contenido procedural, y datos numéricos (heightfield, semántica).
 
 ## El pipeline seleccionado
 
@@ -99,18 +100,15 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 - **Percepción por marcador.** Los enemigos perciben actores `Perceivable`
   (marcador de Perception; hoy solo el player). Cuando la hostilidad
   necesite más de un bit (animales, aliados), se reemplaza por facción.
-- **Presentación desechable.** Cada actor tiene un visual separado que
-  interpola hacia el cuerpo (`VisualOf` lo enlaza para efectos
-  transversales). La simulación no porta meshes ni handles. Sistemas de
-  presentación que tocan entidades despawneables el mismo frame usan
-  comandos tolerantes (`try_insert`). `AppearanceBinding` vive en esa raíz
-  visual y selecciona por clave+slot una receta de `VisualCatalog`; la identidad
-  de gameplay jamás es una ruta de asset. Body/MainHand/OffHand/World separan
-  cuerpo, espada, escudo y props por dueño. LOD, culling e instancing solo
-  cambian entidades/recetas visuales: nunca el collider ni el estado de
-  simulación. La UI de inventario solo lee
-  `Inventory` en `Update` y emite comandos por slot; Inventory valida y aplica
-  en `FixedUpdate`. El foco modal pertenece a Input.
+- **Presentación desechable.** Cada actor tiene un visual separado que interpola
+  hacia el cuerpo (`VisualOf` lo enlaza para efectos transversales); la simulación
+  no porta meshes ni handles, y lo que toca entidades despawneables el mismo frame
+  usa comandos tolerantes (`try_insert`). `AppearanceBinding` vive en esa raíz y
+  selecciona por clave+slot una receta de `VisualCatalog` — la identidad de
+  gameplay jamás es una ruta de asset; Body/MainHand/OffHand/World separan por
+  dueño. LOD, culling e instancing solo cambian entidades/recetas visuales: nunca
+  el collider ni el estado de simulación. Toda UI que actúa lee en `Update` y
+  emite comandos que su dueño valida en `FixedUpdate`; el foco modal es de Input.
 - **Combate apuntado en dos fases.** El rayo del crosshair nace del pivote a
   altura de ojos (`AIM_PIVOT_HEIGHT`, simulación pura — §20; la cámara lo
   importa y se alinea al apuntar) y resuelve el target; la flecha sale del
@@ -169,18 +167,19 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   el suavizado justo cuando más se nota, cambiando el comportamiento de cámara
   y visuales entre configuraciones de un mismo A/B. Los `lerp` que quedan
   mezclan por un factor de estado (p. ej. `aim_blend`), no por tiempo.
-- **Checkpoint jugado, luego tests.** El feeling se valida jugando
-  (§10-§11); el loop operativo es: implementar → `fmt`+`clippy`+`test` →
-  lanzar el juego para el usuario → leer el log de la sesión
-  (`[health] X took N`, `[debug] animation clip …`) antes de reportar.
-  Rendimiento requiere además escena/build/resolución repetibles y frame time
-  antes/después; no se optimiza por intuición ni se acepta solo porque corre.
+- **Checkpoint jugado, luego tests** (§10-§11). El loop: implementar →
+  `fmt`+`clippy`+`test` → lanzar el juego para el usuario → leer el log antes de
+  reportar. Rendimiento exige además escena/build/resolución repetibles y frame
+  time antes/después: no se optimiza por intuición ni se acepta porque corre.
 
 ## Mapa de módulos (los que existen)
 
 | Módulo | Posee | Frontera |
 |---|---|---|
-| `input` | `ActiveActions`, `ControlOrientation`, bindings, foco modal | Nadie lee hardware salvo él; resuelve en PreUpdate |
+| `input` | `ActiveActions`, `ControlOrientation`, bindings, foco modal | Nadie lee hardware salvo él (ley hoy violada en 14 archivos: C2); resuelve en PreUpdate |
+| `scene` | `AppState`, tabla `SCENES`, `SceneBuild`, ciclo de vida | Decide *qué existe y cuándo*; `DespawnOnExit` en todo contenido de escena |
+| `editor` | Autoría in-engine: pinceles de relieve, pintura semántica, historial, persistencia | Decide *dónde y cuándo*; el **cómo** cambia el dato es de `world` |
+| `asset_pipeline` | Manifiesto build-time, `MaterialPalette`, `SpatialCatalog`, `schema.rs` | Única autoridad espacial de lo authored; SoT compartida con `build.rs` |
 | `movement` | `Intents`, `LocomotionState`, motores, facts, attachment/link | Brains escriben Intents; Combat pide por mensaje |
 | `proposal` | Núcleo genérico de arbitración | Type-aliases por sistema |
 | `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |

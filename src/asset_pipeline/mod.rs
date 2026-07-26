@@ -100,7 +100,6 @@ impl Plugin for AssetPipelinePlugin {
                 materials::apply_authored_lod,
                 materials::strip_collision_rendering,
                 materials::validate_authored_extras,
-                materials::configure_terrain_texture_samplers,
             ),
         );
     }

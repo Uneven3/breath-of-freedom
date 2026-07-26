@@ -5,8 +5,6 @@
 //! the frame it first appears), so future sculpting shows up live. Each triangle
 //! owns its vertices and a single face normal, for the faceted look.
 
-use std::f32::consts::FRAC_1_SQRT_2;
-
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
@@ -78,12 +76,13 @@ fn write_terrain_mesh(terrain: &Terrain, mesh: &mut Mesh) {
             let c = terrain.point_world_pos(row + 1, col + 1);
             let d = terrain.point_world_pos(row, col + 1);
             for tri in [[a, d, c], [a, c, b]] {
-                let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+                let raw_normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+                let normal = raw_normal.lerp(Vec3::Y, 0.75).normalize_or_zero();
                 for v in tri {
                     positions.push([v.x, v.y, v.z]);
                     normals.push([normal.x, normal.y, normal.z]);
-                    let u = (v.x - v.z) * FRAC_1_SQRT_2 / 4.0;
-                    let v_uv = (v.x + v.z) * FRAC_1_SQRT_2 / 4.0;
+                    let u = (v.x + 160.0) / 12.0;
+                    let v_uv = (v.z + 160.0) / 12.0;
                     uvs.push([u, v_uv]);
                 }
             }

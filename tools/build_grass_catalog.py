@@ -173,6 +173,22 @@ def generate_grass_asset(asset_key, variant_type, material_name, material_color)
         # Apply Upward Split Normals for Cel-Shading
         apply_upward_normals(mesh)
 
+        # Apply Vertex Color Gradient (Root Dark -> Tip Sunny Green)
+        vcol_layer = mesh.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='POINT')
+        for v_idx, v in enumerate(mesh.vertices):
+            t = max(0.0, min(1.0, v.co.z / height_range[1]))
+            if t < 0.25:
+                factor = t / 0.25
+                r = 0.14 + factor * (0.27 - 0.14)
+                g = 0.28 + factor * (0.50 - 0.28)
+                b = 0.11 + factor * (0.22 - 0.11)
+            else:
+                factor = (t - 0.25) / 0.75
+                r = 0.27 + factor * (0.38 - 0.27)
+                g = 0.50 + factor * (0.64 - 0.50)
+                b = 0.22 + factor * (0.25 - 0.22)
+            vcol_layer.data[v_idx].color = (r, g, b, 1.0)
+
         obj = bpy.data.objects.new(mesh_name, mesh)
         bpy.context.collection.objects.link(obj)
         obj.parent = root
@@ -282,7 +298,7 @@ def main():
     for key, vtype, mname, mcolor in assets_to_build:
         generate_grass_asset(key, vtype, mname, mcolor)
 
-    generate_card_asset("prop_grass_card_a", "M_FoliageCommon", (0.27, 0.50, 0.22, 1.0))
+    generate_card_asset("prop_grass_card_a", "M_FoliageCard", (0.27, 0.50, 0.22, 1.0))
 
 if __name__ == "__main__":
     main()

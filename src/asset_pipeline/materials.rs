@@ -74,11 +74,14 @@ fn matte(color: Color) -> StandardMaterial {
     }
 }
 
+pub const BOTW_GRASS_ROOT_COLOR: Color = Color::srgb(0.22, 0.40, 0.18);
+
 fn palette_material(key: &str, asset_server: &AssetServer) -> StandardMaterial {
     let color = match key {
         "Bark" => Color::srgb(0.33, 0.24, 0.15),
         "Fletching" => Color::srgb(0.85, 0.15, 0.15),
-        "FoliageCommon" => Color::srgb(0.27, 0.50, 0.22),
+        "FoliageCommon" => Color::srgb(0.32, 0.58, 0.22),
+        "FoliageCard" => Color::srgb(0.32, 0.58, 0.22),
         "FoliageDry" => Color::srgb(0.58, 0.52, 0.28),
         "FoliageGnarled" => Color::srgb(0.36, 0.45, 0.20),
         "FoliagePine" => Color::srgb(0.16, 0.40, 0.24),
@@ -87,7 +90,7 @@ fn palette_material(key: &str, asset_server: &AssetServer) -> StandardMaterial {
         "GrayboxProp" => Color::srgb(0.55, 0.50, 0.45),
         "GrayboxVault" => Color::srgb(0.70, 0.50, 0.30),
         "GroundDirt" => Color::srgb(0.30, 0.22, 0.14),
-        "GroundGrass" => Color::srgb(0.24, 0.44, 0.18),
+        "GroundGrass" => BOTW_GRASS_ROOT_COLOR,
         "GroundLeaves" => Color::srgb(0.38, 0.28, 0.16),
         "GroundPath" => Color::srgb(0.48, 0.38, 0.26),
         "Horse" => Color::srgb(0.42, 0.23, 0.10),
@@ -113,26 +116,58 @@ fn palette_material(key: &str, asset_server: &AssetServer) -> StandardMaterial {
     if matches!(key, "Sun" | "Moon" | "String") {
         material.unlit = true;
     }
+    if matches!(
+        key,
+        "FoliageCommon"
+            | "FoliageDry"
+            | "FoliageCard"
+            | "FoliageGnarled"
+            | "FoliagePine"
+            | "FoliageWildflowers"
+    ) {
+        material.cull_mode = None;
+        material.double_sided = true;
+        material.perceptual_roughness = 0.95;
+        material.reflectance = 0.05;
+    }
     match key {
-        "GroundGrass" => {
+        "FoliageCard" => {
             material.base_color = Color::WHITE;
             material.base_color_texture =
-                Some(asset_server.load("textures/terrain/T_GroundGrass_Albedo.png"));
+                Some(asset_server.load("textures/props/T_GrassCard_Albedo.png"));
+            material.alpha_mode = AlphaMode::Mask(0.4);
+        }
+        "GroundGrass" => {
+            material.base_color = Color::WHITE;
+            material.base_color_texture = Some(load_repeating_texture(
+                asset_server,
+                "textures/terrain/T_GroundGrass_Albedo.png",
+            ));
+            material.normal_map_texture = Some(load_repeating_texture(
+                asset_server,
+                "textures/terrain/T_GroundGrass_Normal.png",
+            ));
         }
         "GroundDirt" => {
             material.base_color = Color::WHITE;
-            material.base_color_texture =
-                Some(asset_server.load("textures/terrain/T_GroundDirt_Albedo.png"));
+            material.base_color_texture = Some(load_repeating_texture(
+                asset_server,
+                "textures/terrain/T_GroundDirt_Albedo.png",
+            ));
         }
         "GroundPath" => {
             material.base_color = Color::WHITE;
-            material.base_color_texture =
-                Some(asset_server.load("textures/terrain/T_GroundPath_Albedo.png"));
+            material.base_color_texture = Some(load_repeating_texture(
+                asset_server,
+                "textures/terrain/T_GroundPath_Albedo.png",
+            ));
         }
         "GroundLeaves" => {
             material.base_color = Color::WHITE;
-            material.base_color_texture =
-                Some(asset_server.load("textures/terrain/T_GroundLeaves_Albedo.png"));
+            material.base_color_texture = Some(load_repeating_texture(
+                asset_server,
+                "textures/terrain/T_GroundLeaves_Albedo.png",
+            ));
         }
         _ => {}
     }
@@ -274,25 +309,26 @@ pub(super) fn validate_authored_extras(
     }
 }
 
-pub(super) fn configure_terrain_texture_samplers(
-    mut events: MessageReader<AssetEvent<bevy::image::Image>>,
-    mut images: ResMut<Assets<bevy::image::Image>>,
-) {
-    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
-    for event in events.read() {
-        let id = match event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => id,
-            _ => continue,
-        };
-        if let Some(mut image) = images.get_mut(*id) {
-            image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+fn load_repeating_texture(asset_server: &AssetServer, path: &'static str) -> Handle<Image> {
+    use bevy::image::{
+        ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler,
+        ImageSamplerDescriptor,
+    };
+    asset_server
+        .load_builder()
+        .with_settings(|settings: &mut ImageLoaderSettings| {
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
                 address_mode_u: ImageAddressMode::Repeat,
                 address_mode_v: ImageAddressMode::Repeat,
                 address_mode_w: ImageAddressMode::Repeat,
+                mag_filter: ImageFilterMode::Linear,
+                min_filter: ImageFilterMode::Linear,
+                mipmap_filter: ImageFilterMode::Linear,
+                anisotropy_clamp: 16,
                 ..default()
             });
-        }
-    }
+        })
+        .load(path)
 }
 
 #[cfg(test)]

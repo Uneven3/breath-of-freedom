@@ -207,7 +207,11 @@ fn set_active_nodes(
             }
         }
         for (node, weight, speed) in &merged {
-            player.play(*node).set_weight(*weight).set_speed(*speed).repeat();
+            player
+                .play(*node)
+                .set_weight(*weight)
+                .set_speed(*speed)
+                .repeat();
         }
         *active = desired_nodes;
     } else {
@@ -767,13 +771,21 @@ mod tests {
         let mut player = AnimationPlayer::default();
         let mut active = Vec::new();
 
-        set_active_nodes(&mut player, &mut active, &[(walk, 0.7, 1.2), (run, 0.3, 0.9)]);
+        set_active_nodes(
+            &mut player,
+            &mut active,
+            &[(walk, 0.7, 1.2), (run, 0.3, 0.9)],
+        );
         assert_eq!(active, vec![walk, run]);
         assert_eq!(player.animation(walk).unwrap().weight(), 0.7);
         assert_eq!(player.animation(run).unwrap().weight(), 0.3);
 
         // Same node set next frame: weights update in place, no replay.
-        set_active_nodes(&mut player, &mut active, &[(walk, 0.4, 1.5), (run, 0.6, 1.1)]);
+        set_active_nodes(
+            &mut player,
+            &mut active,
+            &[(walk, 0.4, 1.5), (run, 0.6, 1.1)],
+        );
         assert_eq!(active, vec![walk, run]);
         assert_eq!(player.animation(walk).unwrap().weight(), 0.4);
 
@@ -795,7 +807,11 @@ mod tests {
         let mut player = AnimationPlayer::default();
         let mut active = Vec::new();
 
-        set_active_nodes(&mut player, &mut active, &[(shared, 0.7, 1.0), (shared, 0.3, 2.0)]);
+        set_active_nodes(
+            &mut player,
+            &mut active,
+            &[(shared, 0.7, 1.0), (shared, 0.3, 2.0)],
+        );
         assert_eq!(active, vec![shared]);
         let anim = player.animation(shared).unwrap();
         assert_eq!(anim.weight(), 1.0, "weights must sum, not clobber");

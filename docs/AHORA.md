@@ -41,25 +41,33 @@ visuales tienen un doc por tema: `TEXTURES.md`, `BOTWGrass.md`,
   2026-07-26 solo quedan libres **F7, F9, F11, F12**.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
-## Personaje propio: elfo re-skinneado + locomoción continua (2026-07-29, sin jugar todavía)
+## Personaje propio: elfo re-skinneado + locomoción continua (2026-07-29/30, jugado — falla)
 
-Trabajo hecho en `.claude/worktrees/test-animaciones`, **sin compilar ni
-jugar en esta sesión** (el worktree no es miembro del workspace de Cargo
-compartido — ver más abajo):
+Trabajo hecho en `.claude/worktrees/test-animaciones`, mergeado a `main` y
+jugado el 2026-07-30. **Veredicto del usuario: "muchos errores", "la
+animación no está correcta"** — sin detalle todavía de qué exactamente se ve
+mal; retomar pidiendo específicos (¿qué clip, qué rango de velocidad, patina,
+salta, tiembla?) antes de tocar código. El log de esa corrida (~63 s de
+juego, cerrado a mano) **no tiene ni una línea de `error`/`panic`** — lo que
+sea que está mal es de *feel*/visual, no un crash ni un panic silencioso.
 
+- **El elfo no apareció** — el jugador siguió siendo el maniquí UAL1 de
+  siempre. Esperado: `char_elf.blend` nunca se exportó por
+  `tools/export_blender_asset.py` a `assets/game/authored/`, así que no puede
+  ser `PLAYER_APPEARANCE` todavía. Sigue faltando **`bof_license`** (el asset
+  no trae licencia) y meter `M_Atlas-1.002` (roughness 0.6) en la paleta
+  (exige ≥0.8) antes de poder exportarlo.
 - **`art/blender/char/char_elf.blend`** (+ `tools/distill_char_elf.py`,
   reproducible): `Elf_MaleCharacter-Free` re-skinneado sobre el armature de la
   Universal Animation Library (en vez de retargeting hueso-a-hueso), con los
   13 clips `AN_*` requeridos + `AN_Swim` renombrados desde UAL1/UAL2. El bug
-  real que costó tres iteraciones: la malla del elfo viene modelada en
-  A-pose pero el bind de Blender siempre asume que la malla de destino está
-  en la pose de reposo del armature (T-pose) — se resolvió posando el elfo a
-  T-pose con su propio rig (bueno) *antes* de transferir pesos, no
-  posando el donante ni suavizando pesos después (ambos probados, ninguno
-  ataca la causa). Verificado con renders headless de Blender (sin GUI), no
-  con el ojo en Bevy. **Falta antes de exportar por `build.rs`:** `bof_license`
-  (el asset no trae licencia) y meter su material `M_Atlas-1.002` (roughness
-  0.6) en la paleta del proyecto (exige ≥0.8).
+  real que costó tres iteraciones al construirlo: la malla del elfo viene
+  modelada en A-pose pero el bind de Blender siempre asume que la malla de
+  destino está en la pose de reposo del armature (T-pose) — se resolvió
+  posando el elfo a T-pose con su propio rig (bueno) *antes* de transferir
+  pesos, no posando el donante ni suavizando pesos después (ambos probados,
+  ninguno ataca la causa). Verificado solo con renders headless de Blender
+  (sin GUI); nunca se vio puesto en el jugador dentro de Bevy.
 - **`src/visuals/animation.rs`:** implementa `docs/BOTWMovements.md` §3
   (escalado de velocidad por nodo) más un blend continuo Walk↔Run por
   velocidad real (`locomotion_blend_weight`, `set_active_nodes`) — sin
@@ -67,9 +75,16 @@ compartido — ver más abajo):
   (`motor_common::drive_planar_velocity`). Reemplaza el crossfade
   disparado-por-cambio-de-estado con pesos de `AnimationPlayer` controlados
   cuadro a cuadro mientras el estado es `Walk`/`Sprint`; el resto de estados
-  sigue con `AnimationTransitions` sin cambios. **No verificado con
-  `cargo check`** (ver deuda abajo) — el riesgo real es si Bevy 0.19 deja
-  reproducir dos nodos con pesos independientes como asume el código.
+  sigue con `AnimationTransitions` sin cambios. **`cargo check`/`clippy -D
+  warnings`/`test` (394) verdes y `fmt` aplicado** (corridos post-merge desde
+  el checkout principal — ver deuda de workspace abajo), pero eso solo prueba
+  que compila y que los tests unitarios de la función de blend dan el número
+  esperado; no prueba que el resultado *se sienta* bien, y el usuario dice
+  que no. Sospecha sin confirmar: los anclajes de velocidad
+  (`WALK_AUTHORED_SPEED = 1.5`, `RUN_AUTHORED_SPEED = 4.0`) o el rango de
+  crossfade pueden estar mal calibrados para el maniquí UAL1 puntual, o el
+  hand-off duro (`stop_all`-equivalente) al entrar/salir del blend puede
+  notarse más de lo esperado en vez de ser imperceptible.
 - **Deuda de infraestructura, sin resolver — decidir entre sesiones:** este
   worktree (y probablemente cualquier otro bajo `.claude/worktrees/`) no está
   en `members` del Cargo.toml compartido

@@ -152,6 +152,39 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 
 ---
 
+## Vista diagnóstica semántica del terreno
+
+El aspecto artístico no puede ser la única forma de saber qué datos fueron
+pintados. El hub F1 ofrece un selector persistente
+`TerrainDebugView::{Off, Kind, Climbable, Flammable, Cuttable}`; no consume una
+tecla global nueva.
+
+| Vista | Color | Significado |
+|---|---|---|
+| `Kind` | café | `TerrainKind::Soil` / camino de tierra |
+| `Kind` | gris | `TerrainKind::Rock` |
+| `Kind` | verde | `TerrainKind::TallGrass` |
+| `Kind` | ocre | `TerrainKind::Sand` |
+| `Climbable` | rojo / casi negro | escalable / no escalable |
+| `Flammable` | naranja / casi negro | inflamable / no inflamable |
+| `Cuttable` | verde lima / casi negro | cortable / no cortable |
+
+Las vistas de propiedad son separadas a propósito: una celda puede ser
+inflamable y cortable a la vez, y una prioridad de colores ocultaría uno de los
+datos. La leyenda visible del overlay muestra siempre el modo y ambos valores.
+
+La presentación **lee** `TerrainKind::props()` y la autoridad de traversal; no
+deduce gameplay a partir del color ni modifica simulación. `Off` restaura
+exactamente los handles/materiales previos. Como toda vista diagnóstica, sus
+materiales/draws se excluyen de muestras de rendimiento y del informe normal de
+materiales.
+
+Si “camino” adquiere propiedades distintas de `Soil`, primero se vuelve un
+`TerrainKind` explícito con su fila de propiedades; un tinte café por sí solo no
+crea una nueva semántica.
+
+---
+
 ## Fase 1 — El suelo
 
 ### Paso 1: El contrato y la prueba mínima del array
@@ -178,7 +211,15 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 - **Entregable & validación.** Pintar roca en el editor y ver roca, en el mismo
   draw call. `mats` no sube.
 
-### Paso 3: Compresión en el import
+### Paso 3: Vista diagnóstica semántica
+
+- **Lógica.** Incorporar `TerrainDebugView` al hub F1 y renderizar cada modo
+  desde los datos semánticos, con paleta y leyenda canónicas.
+- **Entregable & validación.** Pintar cada `TerrainKind` y alternar todas las
+  vistas sin alterar el archivo de nivel, `TerrainKind`, colliders ni
+  materiales restaurados al volver a `Off`.
+
+### Paso 4: Compresión en el import
 
 - **Lógica.** Crear fuentes 1K propias, reducir a 512² y convertir a
   KTX2/Basis Universal en el import automatizado, no a mano. En la Polaris se
@@ -188,7 +229,7 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 - **Entregable & validación.** El array entero bajo el tope de 2 MB, con la
   imagen indistinguible del PNG a distancia de juego.
 
-### Paso 4: Bordes difusos — **solo si molesta**
+### Paso 5: Bordes difusos — **solo si molesta**
 
 - **Lógica.** Pesos por esquina mirando las hasta 4 celdas que tocan cada punto
   de la grilla; la GPU interpola dentro del triángulo. Con 4 suelos entra en un
@@ -201,7 +242,7 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 
 ## Fase 2 — Hojas, Follaje y Props
 
-### Paso 5: Que las hojas no reintroduzcan alfa
+### Paso 6: Que las hojas no reintroduzcan alfa
 
 - **Lógica.** Cualquier textura de hoja nueva nace sin alfa: la forma de la hoja
   va en la geometría de la carta y el albedo sólo aporta color y variación. Una
@@ -210,14 +251,14 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
   frame time en la caja del bosque, y que el watchdog no marque materiales
   nuevos.
 
-### Paso 6: Retirar la deuda de `Mask`
+### Paso 7: Retirar la deuda de `Mask`
 
 - **Lógica.** Toda carta heredada con `AlphaMode::Mask` debe mover la silueta a
   geometría o retirarse. `T_GrassCard_Albedo` es el caso de migración nominal.
 - **Entregable & validación.** Cero `AlphaMode::Mask` en el proyecto, fijado por
   un test que recorra la paleta.
 
-### Paso 7: Texturas de Props y Personajes
+### Paso 8: Texturas de Props y Personajes
 
 - **Lógica.** Props y estructuras reusan paletas compartidas (`M_Wood`,
   `M_Stone`, `M_Steel`). Albedo 512² primero; personajes usan atlas 1024².
@@ -233,7 +274,7 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 
 ## Fase 3 — Cielo, Agua y Horizonte
 
-### Paso 8: El cielo es un gradiente, no una textura
+### Paso 9: El cielo es un gradiente, no una textura
 
 - **Lógica.** Esto es lo que hay que decidir **antes** de buscar imágenes de
   cielo: un cubemap cuesta VRAM y **no se puede interpolar por hora del día** sin
@@ -243,15 +284,15 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 - **Entregable & validación.** El amanecer se ve como un amanecer y `mats` sube
   como mucho en uno.
 
-### Paso 9: El horizonte se cierra con niebla, no con geometría
+### Paso 10: El horizonte se cierra con niebla, no con geometría
 
-- **Lógica.** El mismo principio que el Paso 3 de `BOTWGrass.md`: lo lejano no se
+- **Lógica.** El mismo principio de convergencia de `BOTWGrass.md`: lo lejano no se
   tapa, se hace **converger en color** con lo que tiene detrás. La `DistanceFog`
   toma el color del gradiente **a la altura del horizonte**, no el color medio.
 - **Entregable & validación.** Desde el punto más alto que se pueda esculpir, no
   se distingue dónde termina el terreno.
 
-### Paso 10: Olas de Agua tileables (Normal Map)
+### Paso 11: Olas de Agua tileables (Normal Map)
 
 - **Lógica.** La presentación futura del agua consume la profundidad que publique
   el dueño de `WaterVolume` y combina color procedural con
@@ -267,7 +308,7 @@ testeables y pueden romper el build. Los milisegundos van por el otro carril.
 Triplanar mapping (el terreno no tiene paredes verticales: es un heightfield),
 parallax/POM, tessellation, texturas de detalle a dos escalas, atlas virtual,
 streaming de texturas, materiales PBR completos por suelo, y **cielo por
-cubemap** — descartado con motivo en el Paso 8, no por costo de implementación.
+cubemap** — descartado con motivo en el Paso 9, no por costo de implementación.
 
 ## Cómo se mide
 

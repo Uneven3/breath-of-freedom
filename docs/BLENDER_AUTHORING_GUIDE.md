@@ -1,9 +1,10 @@
 # Guía personal: modificar mesh low-poly, riggear y animar (Blender → GLB → Bevy)
 
-> **Ayuda personal, NO documentación del proyecto.** Este archivo está sin
-> trackear a propósito (no forma parte del repo ni del presupuesto documental).
-> El contrato autoritativo del pipeline vive en `ASSET_PIPELINE.md`. Acá va el
-> "cómo hacerlo en Blender" paso a paso, en criollo.
+> **Ayuda personal, NO documentación autoritativa del proyecto.** Este archivo
+> está trackeado por conveniencia, pero no forma parte de los dos niveles de
+> coordinación/planes ni del presupuesto documental. El contrato autoritativo
+> del pipeline vive en `ASSET_PIPELINE.md`. Acá va el "cómo hacerlo en Blender"
+> paso a paso, en criollo.
 
 El objetivo típico: tomar un mesh low-poly (uno de Quaternius, o el maniquí), 
 ajustarlo, ponerle esqueleto, animarlo con los nombres `AN_<Rol>` que el juego 

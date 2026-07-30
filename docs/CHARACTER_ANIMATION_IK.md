@@ -2,24 +2,22 @@
 
 Hoja de ruta técnica para la **mezcla de animaciones**, el **mapeo/retargeting de rigs** y el sistema de **Cinemática Inversa (IK)** para pies y manos en **Bevy 0.19** con **Rust** y **Avian3D**.
 
+> Este documento define el sistema que se quiere construir. Código y
+> `AHORA.md` indican qué parte existe en cada momento.
+>
 > **Principios de Arquitectura (§1, §6, §7, §14, §19, §20, §21):**
 > 1. **Desacoplamiento Estricto (§20):** La física y el movimiento (`FixedUpdate`) jamás leen huesos ni ejecutan solvers de IK. El IK y el blending de animaciones se ejecutan exclusivamente en **`PostUpdate`** sobre entidades visuales (`PlayerVisual` / `Armature`), encadenados `.after(bevy::animation::animate_targets)` y `.before(TransformSystem::TransformPropagate)` para evitar que `bevy_animation` borre los ajustes de IK.
 > 2. **Ortogonalidad de Estados (§1, §6, §19):** `LocomotionState` es la SSoT de piernas. La carga y empuje de objetos (`ObjectManipulationState`) es un estado ortogonal en las manos/tronco procesado por su propio árbitro en `FixedUpdate` (§7). Cargar una vasija no destruye `LocomotionState` cuando el personaje salta o cae por un precipicio.
-> 3. **Rendimiento e Invariante de Simulación (§6, §18):** Sin asignaciones dinámicas en el hot-path por tick. El solver IK de pies incluye un IK LOD gate (descarte automático a $>30\text{m}$) y lee datos de piso puros (`FootingFacts` / `Terrain::height_and_normal_at`, **esta última todavía sin implementar**) sin realizar raycasts de física en la fase de presentación.
+> 3. **Rendimiento e Invariante de Simulación (§6, §18):** Sin asignaciones dinámicas en el hot-path por tick. El solver IK de pies incluye un IK LOD gate (descarte automático a $>30\text{m}$) y lee datos de piso puros (`FootingFacts` / la API planeada `Terrain::height_and_normal_at`) sin realizar raycasts de física en la fase de presentación.
 
 
-> **`Terrain::height_and_normal_at` NO EXISTE todavía (verificado 2026-07-26).**
-> Este documento la nombra como si estuviera; es API *planeada*. Hoy
-> `world/terrain.rs` expone `height_at(xz) -> f32` y `slope_deg_at(xz) -> f32`,
-> y nada más.
->
-> **Cuando se escriba, tiene que muestrear la anti-diagonal** — de `(row, col+1)`
+> **Contrato de la API planeada `Terrain::height_and_normal_at`:** tiene que
+> muestrear la anti-diagonal — de `(row, col+1)`
 > a `(row+1, col)` — y devolver la **normal de cara** de ese triángulo, no una
 > normal por diferencias centrales ni una interpolación bilineal. Motivo: parry
 > triangula su heightfield por esa diagonal y el collider es la superficie
-> autoritativa. Implementarla "de la forma obvia" reintroduce un bug ya corregido
-> el 2026-07-26, que medía **0,33 m de desvío en el 36% del terreno** y solo se
-> notaba donde el relieve es dispar. Ver el doc de `Terrain::to_collider`.
+> autoritativa. El criterio de aceptación compara la altura devuelta contra el
+> collider en todo el grid y exige error bajo la tolerancia numérica.
 
 ---
 
@@ -46,7 +44,7 @@ Hoja de ruta técnica para la **mezcla de animaciones**, el **mapeo/retargeting 
 
 1. **El esqueleto visual no afecta la física:** La cápsula de locomoción en `FixedUpdate` es la autoridad de colisión y movimiento. Si el IK flexiona una pierna o baja la cadera, la cápsula no cambia de tamaño ni posición.
 2. **El solver de IK es analítico de 2 huesos (Closed-Form 2-Bone IK):** No se usan métodos iterativos pesados (FABRIK / CCD) en extremidades de 2 segmentos (muslo-pantorrilla-pie, hombro-antebrazo-mano). Se usa la Ley de los Cosenos ($O(1)$) para garantizar 60 FPS estables.
-3. **El terreno, datos de piso y sockets son la fuente de verdad de IK:** Los pies detectan la superficie pisoteada leyendo `FootingFacts` (altura de colisionadores grabada en simulación) o `Terrain::height_and_normal_at` en $O(1)$ (**planeada, no existe aún**); las manos leen sockets de armas (`SKT_MainHand`, `SKT_OffHand`), empuje (`SKT_Push_L/R`), carga sobre la cabeza (`SKT_Carry_Overhead`) o eventos de posición de loot en coordenadas locales (`LootGestureEvent { local_target_pos }`).
+3. **El terreno, datos de piso y sockets son la fuente de verdad de IK:** Los pies detectan la superficie pisoteada leyendo `FootingFacts` (altura de colisionadores grabada en simulación) o la API planeada `Terrain::height_and_normal_at` en $O(1)$; las manos leen sockets de armas (`SKT_MainHand`, `SKT_OffHand`), empuje (`SKT_Push_L/R`), carga sobre la cabeza (`SKT_Carry_Overhead`) o eventos de posición de loot en coordenadas locales (`LootGestureEvent { local_target_pos }`).
 4. **Mezcla en capas (Layering & Masking):** El tronco inferior (locomoción) y el tronco superior (acciones/combate/carga/empuje) corren en nodos independientes del `AnimationGraph`, permitiendo atacar, cargar vasijas o recoger loot mientras se camina.
 
 ---
@@ -218,7 +216,7 @@ Limitando el ángulo máximo de inclinación del tobillo a $\le 35^\circ$ para e
 1. **Escalada y Apoyo (`Climb` / `Mantle`):** Las manos deben posarse exactamente sobre los agarres o salientes de la roca/pared.
 2. **Agarre de Armas de Dos Manos (Arco / Mandoble):** La mano secundaria (`Hand.L` o `Hand.R`) debe buscar el socket exacto de la empuñadura del arma (`SKT_OffHand`).
 3. **Empuje y Carga (`PushPull` / `Carry`):** Ajustar las palmas a cajas pesadas o vasijas/barriles sostenidos sobre la cabeza (`SKT_Carry_Overhead`).
-4. **Looting en Movimiento:** Extensión rápida de mano hacia la coordenada espacial local `local_target_pos` emitida por `LootGestureEvent` sin depender de una entidad viva ni estirar el brazo hacia atrás.
+4. **Looting en Movimiento (Planeado Fase 3):** Extensión rápida de mano hacia la coordenada espacial local `local_target_pos` emitida por `LootGestureEvent` (evento planeado) sin depender de una entidad viva ni estirar el brazo hacia atrás.
 
 ### Arquitectura Técnica del Solver de Manos
 

@@ -223,8 +223,7 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
    (esculpir en `Traversal`, guardar, reentrar) y la tipografía de la UI.
 5. **Deuda medida**: `rebuild_terrain_collider` arma un `Vec<Vec<f32>>` entero
    por tick esculpido (C1; ya no se dispara al pintar, pero sí al esculpir).
-6. **Limpieza pendiente**: `assets/grass_textures_1k/` es un **duplicado exacto**
-   de `T_GroundGrass_*` (verificado por MD5), commiteado dos veces.
+6. **Limpieza realizada (2026-07-26)**: `assets/grass_textures_1k/` (duplicado exacto de `T_GroundGrass_*`) fue eliminado del repositorio.
 
 ## Rendimiento: lo que sigue informando decisiones
 

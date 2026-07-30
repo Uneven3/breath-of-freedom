@@ -1,133 +1,142 @@
-# Técnicas Gráficas, Auditoría de Implementación y Estándares de la Industria
+# Técnicas gráficas — estándar y hoja de ruta
 
-Documento de referencia técnica sobre **LODs, Culling, Instancing/Batching, Shading y Optimización Gráfica** para **Breath of Freedom** en **Bevy 0.19 (Vulkan/WebGL2)**, incluyendo la auditoría de estado de implementación en el código fuente (`src/`).
+Contrato objetivo para LOD, culling, batching, shading y presupuesto gráfico de
+**Breath of Freedom** en Bevy 0.19. El código y `AHORA.md` describen el estado
+vivo; este documento define lo que se quiere construir y cómo se acepta.
 
----
+Los contratos especializados siguen teniendo un único dueño:
 
-## 1. Auditoría de Estado de Implementación en el Proyecto
-
-A continuación se detalla qué técnicas gráficas y de optimización están **ya aplicadas e integradas** en el motor del juego, verificando su cumplimiento estricto con el ECS y las Leyes de Arquitectura (§1–§21).
-
-### A. Vegetación de Pradera sin Alpha por Chunks (`src/visuals/grass.rs`)
-- **Estado:** **APLICADO Y VALIDADO EN CÓDIGO.**
-- **Detalle Técnico ([grass.rs:L1-L100](file:///home/francisco/Programming/uneven/breath-of-freedom/src/visuals/grass.rs#L1-L100)):**
-  - **Sin Alpha Overdraw:** Cada brizna de hierba es una primitiva 3D de 2 triángulos teñida con gradiente de color de vértices (`ROOT_COLOR` a `TIP_COLOR`), eliminando texturas transparentes y el overdraw en GPU.
-  - **Chunk Mesh Grouping:** En lugar de crear un `Entity` de Bevy por brizna (lo cual saturaría el gestor de entidades a $45/\text{m}^2$), se hornean miles de briznas en **un solo mesh por chunk** de $5\text{m} \times 5\text{m}$ (`GrassChunk`).
-- **Cumplimiento de Arquitectura (§20 - Desacoplamiento Estricto):** **100% Correcto.** La simulación en `FixedUpdate` ignora la existencia del mesh de hierba. El suelo subyacente reporta `SurfaceKind::Grass` a través de datos puros. La pradera es $100\%$ visual en `Update`.
-
-### B. Culling por Distancia con Margen Progresivo (`src/visuals/foliage.rs`)
-- **Estado:** **APLICADO Y VALIDADO EN CÓDIGO.**
-- **Detalle Técnico ([foliage.rs:L140-L165](file:///home/francisco/Programming/uneven/breath-of-freedom/src/visuals/foliage.rs#L140-L165)):**
-  - Utiliza el componente nativo de Bevy `VisibilityRange` asignando un margen de desvanecimiento suave (`LOD_FADE = 12.0` metros):
-    `end_margin: (max - LOD_FADE).max(0.0)..max`.
-- **Cumplimiento de Arquitectura (§20 & ECS):** **100% Correcto.** Se ejecuta en el pipeline visual `Update` sobre componentes `VisibilityRange`. Jamás altera las cápsulas de colisión ni los colliders de física en `FixedUpdate`.
-
-### C. Guardrail de Presupuesto Poligonal Compile-Time (`src/asset_pipeline/schema.rs` & `build.rs`)
-- **Estado:** **APLICADO Y VALIDADO EN CÓDIGO.**
-- **Detalle Técnico ([schema.rs:L253-L280](file:///home/francisco/Programming/uneven/breath-of-freedom/src/asset_pipeline/schema.rs#L253-L280)):**
-  - La función `lod0_triangle_budget` bloquea el comando `cargo check` / `cargo build` si un archivo `.glb` supera su presupuesto de triángulos por categoría:
-    - `prop`: $1,500$ triángulos.
-    - `weapon`: $2,000$ triángulos.
-    - `tree`: $3,000$ triángulos.
-    - `structure`: $6,000$ triángulos.
-    - `char` / `creature`: $15,000$ triángulos.
-- **Cumplimiento de Arquitectura (§18 & Build Guardrails):** **100% Correcto.** La validación ocurre en tiempo de compilación mediante `build.rs`, garantizando 0 sobrecosto en runtime.
-
-### D. Monitoreo de Escena y Watchdog de Triángulos (`src/perf/budget.rs`)
-- **Estado:** **APLICADO Y VALIDADO EN CÓDIGO.**
-- **Detalle Técnico ([budget.rs:L5-L50](file:///home/francisco/Programming/uneven/breath-of-freedom/src/perf/budget.rs#L5-L50)):**
-  - El recurso `SceneInventory` monitorea los presupuestos móviles máximos en tiempo real:
-    - Triángulos visibles: $\le 100,000$.
-    - Draw calls: $\le 100$.
-    - Materiales únicos: $\le 64$.
-  - Evalúa la calificación de rendimiento (`Good`, `Medium`, `Bad`, `Critical`) y emite advertencias al presionar **F1** o **F8**.
-- **Cumplimiento de Arquitectura (§6 & §20):** **100% Correcto.** Es un sistema de observabilidad pura encapsulado en recursos del ECS.
-
-### E. Mapeo de Animaciones e Invariante de Roles (`src/visuals/animation.rs`)
-- **Estado:** **APLICADO Y VALIDADO EN CÓDIGO.**
-- **Detalle Técnico ([animation.rs:L23-L82](file:///home/francisco/Programming/uneven/breath-of-freedom/src/visuals/animation.rs#L23-L82)):**
-  - Enums `AnimationRole` y resolvedor `ROLE_TABLE` que mapea `LocomotionState` con los clips del contrato `PLAYER_CLIP_CONTRACT` (`AN_<Rol>`). Degrada suavemente hacia `Idle` si falta un clip específico.
-- **Cumplimiento de Arquitectura (§20 & §21):** **100% Correcto.** Lee el `LocomotionState` producido en `FixedUpdate` y actualiza el `AnimationPlayer` de Bevy en `Update` / `PostUpdate`.
-
-### F. Sensing LOD para Física e IA (`src/movement/lod.rs`)
-- **Estado:** **APLICADO Y VALIDADO EN CÓDIGO.**
-- **Detalle Técnico ([lod.rs:L1-L67](file:///home/francisco/Programming/uneven/breath-of-freedom/src/movement/lod.rs#L1-L67)):**
-  - Aplica LOD a la **simulación** (no solo a los gráficos): desactiva ticks de escaneo pesados (`SenseWorld`) para actores distantes de la cámara.
-- **Cumplimiento de Arquitectura (§19 & ECS):** **100% Correcto.** Aplica exclusivamente sobre componentes de `MovementSet` en `FixedUpdate`.
+- `ASSET_PIPELINE.md`: nombres, jerarquía Blender→GLB y bandas LOD.
+- `BOTWGrass.md`: representación, densidad y respuesta de la pradera.
+- `TEXTURES.md`: formatos, alfa, procedencia y presupuesto de texturas.
+- `LIGHTING.md`: luces, sombras y atmósfera.
 
 ---
 
-## 2. Puntos de Atención e Invariantes a Corregir en Código
+## Resultado buscado
 
-Durante la sexta ronda de auditoría técnica cruzada, se identificaron 3 áreas puntuales de refactorización en `src/` para garantizar la compatibilidad multijugador y la seguridad contra panics:
-
-1. **Sensing LOD Multijugador ([lod.rs:L73-L80](file:///home/francisco/Programming/uneven/breath-of-freedom/src/movement/lod.rs#L73-L80)):**
-   - *Hallazgo (corregido el 2026-07-26):* `PlayerAnchor` utiliza `Option<Single<...>>`. Con 2 o más jugadores **no hay panic** — `Single` que no matchea exactamente una entidad hace que el `Option` dé `None`, y el sistema corre igual. El problema real es más silencioso, y por eso peor: el LOD de sensado se queda **sin ancla** y degrada sin avisar a nadie.
-   - *Acción Planeada:* Sustituir `Single` por `Query<&Transform, With<Player>>` e iterar buscando la distancia mínima al jugador más cercano. **La conclusión sigue en pie**; lo que estaba mal era el mecanismo, no la acción.
-
-2. **Consulta Segura de Terreno en Hierba ([grass.rs:L112](file:///home/francisco/Programming/uneven/breath-of-freedom/src/visuals/grass.rs#L112)):**
-   - *Hallazgo retirado el 2026-07-26: era incorrecto por partida doble.* En Bevy 0.19 `Query::single()` **devuelve `Result`** — que es precisamente por qué el `.ok()` compila — así que `terrain_query.single().ok()` **no puede paniquear**: ya es el manejo seguro. Y `get_single` **no existe** en esta versión (0 usos en todo el repo; fue renombrado a `single`), de modo que aplicar la acción propuesta ni siquiera compilaría.
-   - *Acción:* ninguna. El código ya es correcto.
-
-3. **Escalado Dinámico de Velocidad en Animación ([animation.rs:L555](file:///home/francisco/Programming/uneven/breath-of-freedom/src/visuals/animation.rs#L555)):**
-   - *Hallazgo:* `animate_player` utiliza actualmente multiplicadores de velocidad fijos (`1.0` / `-1.0`).
-   - *Acción Planeada:* Implementar la fórmula del plan de movimiento $k_{speed\_node} = V_{real} / V_{autorada\_node}$ (protegida si $V_{autorada} < 0.05$).
+| Resultado visible | Técnica | Criterio |
+|---|---|---|
+| La silueta se conserva al alejarse | LOD solapado con `VisibilityRange` | No hay *popping* legible a distancia de juego |
+| Bosque y pradera no saturan CPU | Handles compartidos y geometría agrupada | El número de entidades/draws no escala por brizna |
+| El follaje no pierde el frame | Geometría opaca y cota de sombras | Sin alpha-test en vegetación baseline |
+| Los objetos fuera de alcance desaparecen sin afectar gameplay | Frustum/distance culling sólo visual | Colliders y resultados de `FixedUpdate` no cambian |
+| La escena cabe en el target móvil | Guardrails estáticos + inventario runtime | ≤100k tris, ≤100 draws, ≤64 materiales |
+| El estilo sigue siendo legible y barato | `StandardMaterial` mate | Sin toon shader ni outline fullscreen baseline |
 
 ---
 
-## 3. Estándar de Nivel de Detalle (Level of Detail - LOD)
+## Las seis leyes
 
-El sistema de LOD reduce la densidad poligonal y el costo de shading conforme los objetos se alejan de la cámara.
+### 1. El presupuesto es un contrato, no una advertencia
 
-### A. Regla de Selección de LODs por Categoría
-No todos los objetos requieren la misma cantidad de LODs. La regla se aplica mediante autodetección en Blender y se valida en compilación (`build.rs`):
+Cada GLB authored se rechaza en build si su LOD0 supera el presupuesto de su
+categoría:
 
-| Categoría | Niveles de LOD | Rangos de Distancia | Razón Técnica |
-|---|---|---|---|
-| **Estructuras (`structure_`)** | **3 LODs** (`LOD0, LOD1, LOD2`) | `LOD0`: 0–30m, `LOD1`: 20–55m, `LOD2`: 50–90m | Dominan la silueta en el horizonte. 3 niveles evitan el "popping" de silueta. |
-| **Vegetación Grande (`tree_`)** | **3 LODs** (`LOD0, LOD1, LOD2`) | `LOD0`: 0–30m, `LOD1`: 20–55m, `LOD2`: 50–80m | Gran masa poligonal. El paso $100\% \to 45\% \to 15\%$ suaviza la densidad en distancias medias. |
-| **Props y Cajas (`prop_`)** | **2 LODs** (`LOD0, LOD1`) | `LOD0`: 0–25m, `LOD1`: 20–50m | Objetos de tamaño medio. A más de 25m ocupan pocos píxeles en pantalla. |
-| **Armas (`weapon_`)** | **2 LODs** (`LOD0, LOD1`) | `LOD0`: 0–15m, `LOD1`: 10–35m | Altamente detalladas de cerca; en el suelo a distancia se simplifican drásticamente. |
-| **Personajes (`char_`, `creature_`)** | **2 LODs** (`LOD0, LOD1`) | `LOD0`: 0–30m, `LOD1`: 25–60m | El jugador se enfoca en la silueta. `LOD1` simplifica dedos y ropajes secundarios. |
+| Categoría | LOD0 máximo |
+|---|---:|
+| `prop` | 1.500 tris |
+| `weapon` | 2.000 tris |
+| `tree` | 3.000 tris |
+| `structure` | 6.000 tris |
+| `char` / `creature` | 15.000 tris |
+
+La escena completa apunta además a `MOBILE_TRIANGLES = 100_000`,
+`MOBILE_DRAWS = 100` y `MOBILE_MATERIALS = 64`. `SceneInventory` expone el
+resultado en el hub F1 y sólo avisa al cruzar o recuperar un límite.
+
+### 2. `ASSET_PIPELINE.md` es el único contrato de LOD
+
+`LOD0` es obligatorio y cubre `0–30 m`; `LOD1` y `LOD2` son opcionales, pero
+contiguos, con bandas default `20–58 m` y `50–70 m`. El loader aplica márgenes
+de solapamiento dentro de esas bandas.
+
+No se inventan rangos por categoría en otro documento. Si una medición exige
+variantes, se agregan al catálogo como política explícita y se validan en build.
+
+### 3. El culling de presentación no cambia simulación
+
+Frustum culling y `VisibilityRange` pueden ocultar mallas; nunca eliminan
+colliders, cambian `SurfaceKind` ni alteran un resultado de `FixedUpdate`.
+El sensing LOD sí puede espaciar trabajo costoso de IA, pero conserva el último
+hecho válido y calcula distancia al jugador más cercano, no a una entidad
+singular asumida.
+
+### 4. Compartir material no garantiza batching
+
+Reusar `Handle<Mesh>` y `Handle<StandardMaterial>` reduce variantes y permite a
+Bevy agrupar entidades compatibles. El batching exige además geometría,
+pipeline y estado compatibles.
+
+La pradera no promete hardware instancing: `BOTWGrass.md` agrupa miles de
+briznas en una malla por chunk. Ese diseño paga una entidad/draw por chunk, no
+por brizna.
+
+### 5. El baseline es opaco y mate
+
+El estilo usa `StandardMaterial`, `perceptual_roughness ≥ 0.8`,
+`metallic = 0.0` y reflectancia baja. No hay toon shader, ramp shading ni
+outline fullscreen baseline. Las excepciones de alfa pertenecen a
+`PARTICLES.md`/`TEXTURES.md` y siempre tienen cota.
+
+Un shader de rim/transmisión vegetal sólo entra como experimento opt-in,
+medido, y bajo el documento dueño `BOTWGrass.md`.
+
+### 6. Toda optimización conserva una comparación atribuible
+
+Los cambios se prueban A/B con el mismo recorrido, cámara, hora y escena. El
+modo de diagnóstico que agrega pases —wireframe u overdraw— nunca contamina la
+muestra de rendimiento que pretende explicar.
 
 ---
 
-## 4. Técnicas de Culling (Descarte de Geometría Invisible)
+## Orden de implementación
 
-El culling evita que la CPU o la GPU procesen geometría fuera de la pantalla.
+### Fase 1 — Guardrails y observabilidad
 
-### A. Frustum Culling (Descarte por Pirámide de Visión)
-- **Funcionamiento:** Se calcula la caja delimitadora (AABB) de cada mesh. Si la AABB no intersecta los 6 planos del frustum de la cámara, Bevy descarta el asset en CPU antes de emitir el *Draw Call*.
+- Validar nombres, LOD contiguos y presupuestos LOD0 en `build.rs`.
+- Mantener un `SceneInventory` con tris, draws y materiales visibles.
+- Exponer el inventario y los diales de comparación en el hub F1.
+- Mantener pruebas deterministas del costo estático de escenas declaradas.
 
-### B. Distance Culling & Smooth Fade
-- **Descarte por Alcance:** Objetos decorativos pequeños se ocultan completamente al superar su distancia máxima (ej. 70m).
-- **Smooth Alpha Fade:** Utiliza `VisibilityRange` de Bevy con `end_margin` progresivo de 12 metros (`LOD_FADE`).
+### Fase 2 — LOD y culling visual
+
+- Aplicar las bandas de `ASSET_PIPELINE.md` mediante `VisibilityRange`.
+- Usar margen de transición (`LOD_FADE = 12 m`) sin convertirlo en alpha blend.
+- Acotar la distancia de mallas y shadow casters por separado.
+- Confirmar que los colliders y la simulación son invariantes ante cada dial.
+
+### Fase 3 — Batching de vegetación
+
+- Reusar mesh/material en proxies de bosque compatibles con instancing.
+- Construir la pradera por chunks de geometría, según `BOTWGrass.md`.
+- Mantener hojas y briznas baseline opacas; la silueta vive en geometría.
+- Marcar briznas finas como `NotShadowCaster` cuando la medición confirme que
+  sus cascadas compran ruido y no profundidad.
+
+### Fase 4 — LOD de sensing y animación
+
+- Sustituir cualquier ancla `Single<Player>` por la distancia mínima a todos
+  los jugadores relevantes.
+- Espaciar `SenseWorld` de actores lejanos sin borrar el último dato válido.
+- Escalar reproducción de locomoción con
+  `k_speed_node = V_real / V_autorada_node`, protegido cuando
+  `V_autorada_node < 0.05`.
+- Medir animación/IK con el presupuesto definido por
+  `CHARACTER_ANIMATION_IK.md`.
+
+### Fase 5 — Validación de target
+
+- Ejecutar un flythrough reproducible con el perfil móvil, warmup excluido y
+  secuencia A/B/A con al menos tres muestras por condición.
+- Verificar ≤100k tris, ≤100 draws y ≤64 materiales en los puntos críticos.
+- Registrar mediana/p95 de frame time; FPS sólo como traducción secundaria.
+- Jugar el savepoint: una optimización que rompe silueta, lectura o control no
+  se acepta aunque reduzca milisegundos.
 
 ---
 
-## 5. Batching e Instancing (Optimización de Draw Calls)
+## Fuera de alcance
 
-### A. GPU Hardware Instancing (Instanciación Indirecta)
-- **Concepto:** Una sola malla se sube una sola vez a VRAM y se dibuja con una tabla de transformaciones por instancia.
-- **Uso en el Juego:** Bosques de pinos (`visuals/forest.rs`) y praderas de hierba (`visuals/grass.rs`).
-
-### B. Compartición de Materiales (`Handle<StandardMaterial>`)
-- Todos los assets reusan un número reducido de materiales de paleta canónicos (`M_Bark`, `M_Wood`, `M_Steel`, `M_FoliagePine`). Al compartir el mismo material, Bevy agrupa las llamadas de renderizado automáticamente.
-
----
-
-## 6. Shading y Estética Cel-Shading (Estilo BOTW)
-
-### A. Cel-Shading / Ramp Shading
-- Iluminación cuantizada mediante funciones de escalón o rampas para sombras planas marcadas en personajes y vegetación.
-
-### B. Subsurface Scattering (SSS) / Translucidez Vegetal
-- **Efecto Contraluz (Rim Light):** Difusión de luz que transmite un tono verde brillante en las puntas de la vegetación al estar a contraluz del sol.
-
----
-
-## 7. Presupuesto y Optimización para Móviles (Vulkan / TBDR)
-
-1. **Presupuesto Poligonal Máximo:** $\le 100,000$ triángulos en pantalla por frame (`MOBILE_TRIANGLES`).
-2. **Cascaded Shadow Maps (CSM):** Máximo **2 cascadas de sombras**. Briznas finas de pasto llevan `NotShadowCaster`.
-3. **Comandos de Diagnóstico:** Presionar **F1** para abrir el Hub de Diagnóstico (Flythrough benchmark, Watchdog de triángulos, Overdraw).
+Occlusion culling complejo, Nanite/virtualized geometry, impostores de alta
+memoria, toon shading global y optimizaciones sin una medición A/B atribuible.

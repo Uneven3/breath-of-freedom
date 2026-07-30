@@ -21,6 +21,9 @@ use crate::input::ModalInputFocusRequest;
 use crate::perf::{
     Benchmark, BenchmarkRequest, FlythroughRequest, PerfKnob, PerfKnobToggle, PerfToggles,
 };
+use crate::visuals::terrain_material::{
+    TerrainDebugState, TerrainDebugView, TerrainDebugViewRequest,
+};
 
 mod hud_menu;
 mod overlay;
@@ -71,6 +74,12 @@ struct ChannelText(DebugChannel);
 #[derive(Component)]
 struct ActionButton(DebugAction);
 
+#[derive(Component)]
+struct TerrainViewButton(TerrainDebugView);
+
+#[derive(Component)]
+struct TerrainViewText(TerrainDebugView);
+
 pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
@@ -98,6 +107,7 @@ impl Plugin for DebugUiPlugin {
                 // something to say.
                 overlay::update_overlay,
                 overlay::update_overdraw_legend,
+                overlay::update_terrain_legend,
             )
                 .chain(),
         );
@@ -161,10 +171,12 @@ fn handle_clicks(
     knobs: Query<(&Interaction, &KnobButton), Changed<Interaction>>,
     channels: Query<(&Interaction, &ChannelButton), Changed<Interaction>>,
     actions: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
+    terrain_views: Query<(&Interaction, &TerrainViewButton), Changed<Interaction>>,
     mut focus: MessageWriter<ModalInputFocusRequest>,
     mut knob_writer: MessageWriter<PerfKnobToggle>,
     mut channel_writer: MessageWriter<DebugChannelToggle>,
     mut action_writer: MessageWriter<DebugActionRequest>,
+    mut terrain_view_writer: MessageWriter<TerrainDebugViewRequest>,
     mut bench_writer: MessageWriter<BenchmarkRequest>,
     mut flythrough_writer: MessageWriter<FlythroughRequest>,
 ) {
@@ -186,6 +198,11 @@ fn handle_clicks(
     for (interaction, action) in &actions {
         if pressed(interaction) {
             action_writer.write(DebugActionRequest(action.0));
+        }
+    }
+    for (interaction, view) in &terrain_views {
+        if pressed(interaction) {
+            terrain_view_writer.write(TerrainDebugViewRequest(view.0));
         }
     }
     for (interaction, button) in &bench {
@@ -243,10 +260,12 @@ fn sync_labels(
     perf: Res<PerfToggles>,
     config: DebugConfigView,
     benchmark: Res<Benchmark>,
+    terrain_debug: Res<TerrainDebugState>,
     mut texts: ParamSet<(
         Query<(&mut Text, &KnobText)>,
         Query<(&mut Text, &ChannelText)>,
         Query<&mut Text, With<ReadoutText>>,
+        Query<(&mut Text, &TerrainViewText)>,
     )>,
 ) {
     for (mut text, knob) in &mut texts.p0() {
@@ -257,6 +276,13 @@ fn sync_labels(
             "ON".to_string()
         } else {
             "off".to_string()
+        };
+    }
+    for (mut text, view) in &mut texts.p3() {
+        text.0 = if terrain_debug.view() == view.0 {
+            format!("{} · ACTIVO", view.0.label())
+        } else {
+            view.0.label().to_string()
         };
     }
     // Button labels are static; only the readout reflects progress.

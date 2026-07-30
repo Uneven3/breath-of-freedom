@@ -20,6 +20,7 @@ use bevy::prelude::*;
 
 use crate::debug::MaterialReportNotice;
 use crate::perf::{Benchmark, Flythrough, PerfToggles};
+use crate::visuals::terrain_material::TerrainDebugState;
 
 /// How long the completion notice stays up after a run ends.
 const NOTICE_SECS: f32 = 12.0;
@@ -33,6 +34,21 @@ pub(super) struct BenchmarkOverlay;
 
 #[derive(Component)]
 pub(super) struct OverdrawLegend;
+
+#[derive(Component)]
+pub(super) struct TerrainLegend;
+
+#[derive(Component)]
+pub(super) struct TerrainLegendTitle;
+
+#[derive(Component)]
+pub(super) struct TerrainLegendRow(usize);
+
+#[derive(Component)]
+pub(super) struct TerrainLegendSwatch(usize);
+
+#[derive(Component)]
+pub(super) struct TerrainLegendLabel(usize);
 
 pub(super) fn spawn_overlay(mut commands: Commands) {
     commands.spawn((
@@ -121,6 +137,67 @@ pub(super) fn spawn_overlay(mut commands: Commands) {
                     }
                 });
         });
+
+    commands
+        .spawn((
+            TerrainLegend,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(16.0),
+                bottom: Val::Px(16.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.01, 0.015, 0.02, 0.9)),
+            GlobalZIndex(109),
+            Visibility::Hidden,
+        ))
+        .with_children(|legend| {
+            legend.spawn((
+                TerrainLegendTitle,
+                Text::new("TERRENO · ARTE"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.88, 0.92, 0.96)),
+            ));
+            for index in 0..4 {
+                legend
+                    .spawn((
+                        TerrainLegendRow(index),
+                        Node {
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|row| {
+                        row.spawn((
+                            TerrainLegendSwatch(index),
+                            Node {
+                                width: Val::Px(18.0),
+                                height: Val::Px(18.0),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::BLACK),
+                        ));
+                        row.spawn((
+                            TerrainLegendLabel(index),
+                            Text::new("—"),
+                            TextFont {
+                                font_size: FontSize::Px(13.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
+            }
+        });
 }
 
 pub(super) fn update_overdraw_legend(
@@ -133,6 +210,45 @@ pub(super) fn update_overdraw_legend(
         } else {
             Visibility::Hidden
         };
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn update_terrain_legend(
+    state: Res<TerrainDebugState>,
+    mut legend: Single<&mut Visibility, With<TerrainLegend>>,
+    mut title: Single<&mut Text, (With<TerrainLegendTitle>, Without<TerrainLegendLabel>)>,
+    mut rows: Query<(&TerrainLegendRow, &mut Node)>,
+    mut swatches: Query<(&TerrainLegendSwatch, &mut BackgroundColor)>,
+    mut labels: Query<(&TerrainLegendLabel, &mut Text), Without<TerrainLegendTitle>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    let view = state.view();
+    **legend = if view == crate::visuals::terrain_material::TerrainDebugView::Off {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    title.0 = format!("TERRENO · {}", view.label().to_uppercase());
+    let entries = view.legend();
+    for (row, mut node) in &mut rows {
+        node.display = if row.0 < entries.len() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for (swatch, mut color) in &mut swatches {
+        if let Some(entry) = entries.get(swatch.0) {
+            color.0 = entry.color;
+        }
+    }
+    for (label, mut text) in &mut labels {
+        if let Some(entry) = entries.get(label.0) {
+            text.0 = entry.label.to_string();
+        }
     }
 }
 

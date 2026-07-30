@@ -9,11 +9,13 @@ use super::style::{
 };
 use super::{
     BenchmarkButton, BenchmarkText, ChannelButton, ChannelText, CloseButton, DebugUiRoot,
-    FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel,
+    FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel, TerrainViewButton,
+    TerrainViewText,
 };
 use crate::debug::channel::{DebugAction, DebugChannel};
 use crate::perf::PerfKnob;
 use crate::perf::sequence::VantageMode;
+use crate::visuals::terrain_material::TerrainDebugView;
 
 use super::ActionButton;
 
@@ -59,8 +61,46 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
                 measurement_section(panel);
                 knob_section(panel);
                 channel_section(panel);
+                terrain_section(panel);
                 action_section(panel);
             });
+        });
+}
+
+fn terrain_section(panel: &mut ChildSpawnerCommands) {
+    section_title(
+        panel,
+        "Terreno semántico",
+        "El arte muestra las texturas. Estas vistas muestran los datos que pintaste; \
+         la leyenda aparece abajo a la izquierda.",
+    );
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            column_gap: Val::Px(8.0),
+            flex_wrap: FlexWrap::Wrap,
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|row| {
+            for view in TerrainDebugView::ALL {
+                row.spawn((
+                    TerrainViewButton(view),
+                    Button,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(PANEL_INSET),
+                ))
+                .with_child((
+                    TerrainViewText(view),
+                    Text::new(view.label()),
+                    body_font(),
+                    TextColor(TEXT_BRIGHT),
+                ));
+            }
         });
 }
 

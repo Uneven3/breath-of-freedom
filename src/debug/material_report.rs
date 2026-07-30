@@ -1,14 +1,12 @@
 //! On-demand material breakdown: turns the scene section's `mats=N` total into
 //! *which* materials are in view and how far the count could collapse.
 //!
-//! The scene inventory (`perf::budget`) counts distinct `StandardMaterial`
+//! The scene inventory (`perf::budget`) counts distinct production material
 //! handles among visible meshes — the axis the mobile budget flags first — but a
 //! bare total cannot say whether those are 60 different looks or 5 looks with 55
-//! redundant handles. This groups the visible materials by a quantised "look"
-//! (colour + roughness + metallic + base texture); materials that land in the
-//! same bucket are visually interchangeable and could share one handle. The
-//! headline number is how many are reducible, so a shared-material palette has a
-//! measured target instead of a guess.
+//! redundant handles. Standard materials are grouped by a quantised "look";
+//! the unique layered terrain material is reported separately because its array
+//! is deliberately not interchangeable with a palette material.
 
 use bevy::asset::AssetId;
 use bevy::camera::visibility::ViewVisibility;
@@ -20,6 +18,7 @@ use bevy::prelude::*;
 use super::channel::{DebugAction, DebugActionRequest};
 use crate::perf::PerfToggles;
 use crate::visuals::DiagnosticViewState;
+use crate::visuals::terrain_material::TerrainMaterial;
 
 /// The last breakdown's one-line headline, so the overlay can confirm on screen
 /// that a click landed — the log is the detail, but a click needs feedback the
@@ -81,12 +80,15 @@ struct LookStat {
 }
 
 type SceneMaterial<'a> = (&'a ViewVisibility, &'a MeshMaterial3d<StandardMaterial>);
+type TerrainSceneMaterial<'a> = (&'a ViewVisibility, &'a MeshMaterial3d<TerrainMaterial>);
 
 /// Scans once when the hub's "Material breakdown" action fires and logs the
 /// table. Read-only over presentation; nothing here mutates the scene (§20).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn log_material_breakdown(
     mut requests: MessageReader<DebugActionRequest>,
     meshes: Query<SceneMaterial>,
+    terrain_meshes: Query<TerrainSceneMaterial>,
     materials: Res<Assets<StandardMaterial>>,
     perf: Res<PerfToggles>,
     diagnostic: Res<DiagnosticViewState>,
@@ -111,6 +113,8 @@ pub(super) fn log_material_breakdown(
     let mut looks: HashMap<LookKey, LookStat> = HashMap::default();
     let mut handles: HashSet<AssetId<StandardMaterial>> = HashSet::default();
     let mut total_meshes = 0u32;
+    let mut terrain_handles: HashSet<AssetId<TerrainMaterial>> = HashSet::default();
+    let mut terrain_mesh_count = 0u32;
 
     for (visibility, material) in &meshes {
         if !visibility.get() {
@@ -130,22 +134,28 @@ pub(super) fn log_material_breakdown(
         stat.metallic = resolved.metallic;
         stat.textured = resolved.base_color_texture.is_some();
     }
+    for (visibility, material) in &terrain_meshes {
+        if visibility.get() {
+            terrain_handles.insert(material.0.id());
+            terrain_mesh_count += 1;
+        }
+    }
 
-    if handles.is_empty() {
-        info!("[materials] no visible StandardMaterials to report");
+    if handles.is_empty() && terrain_handles.is_empty() {
+        info!("[materials] no visible materials to report");
         notice.set(now, "MATERIALS · sin materiales visibles".into());
         return;
     }
 
-    let distinct_looks = looks.len();
-    let reducible = handles.len().saturating_sub(distinct_looks);
-    let percent = 100.0 * reducible as f64 / handles.len() as f64;
+    let total_handles = handles.len() + terrain_handles.len();
+    let distinct_looks = looks.len() + terrain_handles.len();
+    let reducible = total_handles.saturating_sub(distinct_looks);
+    let percent = 100.0 * reducible as f64 / total_handles as f64;
     notice.set(
         now,
         format!(
             "MATERIALS → log · {} mats · {:.0}% reducible",
-            handles.len(),
-            percent
+            total_handles, percent
         ),
     );
 
@@ -153,11 +163,11 @@ pub(super) fn log_material_breakdown(
     let mut rows: Vec<&LookStat> = looks.values().collect();
     rows.sort_by_key(|stat| std::cmp::Reverse(stat.handles.len()));
 
-    info!("[materials] ---- breakdown (visible StandardMaterials) ----");
+    info!("[materials] ---- breakdown (visible production materials) ----");
     info!(
         "[materials] {} materials across {} meshes → {} distinct looks ({} reducible, {:.0}%)",
-        handles.len(),
-        total_meshes,
+        total_handles,
+        total_meshes + terrain_mesh_count,
         distinct_looks,
         reducible,
         percent
@@ -178,6 +188,17 @@ pub(super) fn log_material_breakdown(
             stat.roughness,
             stat.metallic,
             if stat.textured { "yes" } else { "-" },
+        );
+    }
+    if !terrain_handles.is_empty() {
+        info!(
+            "[materials] {:<22} {:>5} {:>7} {:>6} {:>6} {:>4}",
+            "terrain texture array",
+            terrain_handles.len(),
+            terrain_mesh_count,
+            "0.90",
+            "0.00",
+            "yes"
         );
     }
     if rows.len() > 20 {

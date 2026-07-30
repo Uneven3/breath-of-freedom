@@ -9,30 +9,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
-use crate::asset_pipeline::MaterialPalette;
-use crate::world::{Terrain, TerrainKind};
-
-/// The colour presentation gives each terrain kind, multiplied over the ground
-/// material's own albedo.
-///
-/// This is the crudest possible reading of the semantic layer, and it is on
-/// purpose: the layer's job is to say what the ground *is*, and something visible
-/// has to answer or the map author is painting blind. A tint is what that answer
-/// costs today — one vertex attribute, no extra draw call, no second material.
-/// Real ground materials (splatting, tall grass geometry) replace this table
-/// without the data or the editor changing at all, which is the point of the
-/// split.
-///
-/// `Soil` is pure white so an unpainted level renders exactly as it did before
-/// this layer existed: white is the identity of a multiply.
-fn kind_tint(kind: TerrainKind) -> [f32; 4] {
-    match kind {
-        TerrainKind::Soil => [1.0, 1.0, 1.0, 1.0],
-        TerrainKind::Rock => [0.62, 0.63, 0.66, 1.0],
-        TerrainKind::TallGrass => [0.55, 0.85, 0.42, 1.0],
-        TerrainKind::Sand => [1.0, 0.94, 0.68, 1.0],
-    }
-}
+use crate::visuals::terrain_material::{TerrainMaterialAssets, semantic_vertex_data};
+use crate::world::{NonClimbable, Terrain};
 
 /// Marks the single terrain visual entity, so a rebuild replaces its mesh in
 /// place instead of spawning a second one.
@@ -51,29 +29,29 @@ pub(super) struct TerrainVisual;
 pub(super) fn sync_terrain_visual(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    palette: Res<MaterialPalette>,
-    terrain: Query<&Terrain, Changed<Terrain>>,
+    terrain_material: Res<TerrainMaterialAssets>,
+    terrain: Query<(&Terrain, Has<NonClimbable>), Changed<Terrain>>,
     existing: Query<&Mesh3d, With<TerrainVisual>>,
 ) {
-    let Ok(terrain) = terrain.single() else {
+    let Ok((terrain, non_climbable)) = terrain.single() else {
         return;
     };
     if let Ok(current) = existing.single()
         && let Some(mut mesh) = meshes.get_mut(&current.0)
     {
-        write_terrain_mesh(terrain, &mut mesh);
+        write_terrain_mesh(terrain, !non_climbable, &mut mesh);
         return;
     }
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
-    write_terrain_mesh(terrain, &mut mesh);
+    write_terrain_mesh(terrain, !non_climbable, &mut mesh);
     commands.spawn((
         Name::new("TerrainVisual"),
         TerrainVisual,
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(palette.handle("GroundGrass")),
+        MeshMaterial3d(terrain_material.material.clone()),
         Transform::default(),
     ));
 }
@@ -92,7 +70,7 @@ pub(super) fn sync_terrain_visual(
 /// Writes into `mesh`, replacing whatever it held. The vertex count only depends
 /// on the grid resolution, so a refresh reuses the same buffers and the index
 /// buffer never has to change.
-fn write_terrain_mesh(terrain: &Terrain, mesh: &mut Mesh) {
+fn write_terrain_mesh(terrain: &Terrain, climbable: bool, mesh: &mut Mesh) {
     let cells = terrain.points() - 1;
     let capacity = cells * cells * 6;
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(capacity);
@@ -110,7 +88,7 @@ fn write_terrain_mesh(terrain: &Terrain, mesh: &mut Mesh) {
             // every vertex of this quad is already its own (flat shading), so the
             // patch edges stay hard. Softening them here would be a lie about a
             // grid whose resolution the author can see.
-            let tint = kind_tint(terrain.kind(row, col));
+            let semantics = semantic_vertex_data(terrain.kind(row, col), climbable);
             for tri in [[a, d, b], [d, c, b]] {
                 let raw_normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
                 let normal = raw_normal.lerp(Vec3::Y, 0.75).normalize_or_zero();
@@ -120,7 +98,7 @@ fn write_terrain_mesh(terrain: &Terrain, mesh: &mut Mesh) {
                     let u = (v.x + 160.0) / 12.0;
                     let v_uv = (v.z + 160.0) / 12.0;
                     uvs.push([u, v_uv]);
-                    colors.push(tint);
+                    colors.push(semantics);
                 }
             }
         }
@@ -130,10 +108,9 @@ fn write_terrain_mesh(terrain: &Terrain, mesh: &mut Mesh) {
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    // `StandardMaterial` multiplies vertex colour into its base colour, so the
-    // semantic layer shows up without a shader, a second material or an extra
-    // draw call — the same trick the grass blades use for their root-to-tip
-    // gradient.
+    // The layered terrain shader treats colour as a compact semantic payload:
+    // texture layer, climbable, flammable, cuttable. Vertices are duplicated
+    // per cell, so these values never interpolate across semantic boundaries.
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     // Sequential indices: only re-issued when the buffer is not already the
     // right length, which after the first build it always is.
@@ -169,7 +146,7 @@ mod tests {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
         );
-        write_terrain_mesh(&terrain, &mut mesh);
+        write_terrain_mesh(&terrain, true, &mut mesh);
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {

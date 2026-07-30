@@ -17,13 +17,26 @@ Este proyecto se desarrolla con **múltiples agentes/herramientas de IA en
 paralelo** (Claude, Codex, Antigravity, DeepSeek, …), muchas veces en
 worktrees separados y sesiones sin memoria compartida entre sí. Por eso:
 
-- La documentación es exactamente **cuatro archivos** con presupuesto duro
-  (≤1000 líneas totales — el código documenta lo que se hizo):
-  `docs/ARCHITECTURE.md` (leyes §1-§20 + arquitectura y rationale, ≤200),
-  `docs/NORTE.md` (visión y roadmap, ≤200) y `docs/AHORA.md` (el trabajo
-  presente, ≤500), más `docs/ASSET_PIPELINE.md` (contrato Blender→Bevy,
-  ≤250). No se crean otros archivos de documentación; lo cerrado se borra de
-  AHORA.md (queda en git).
+- La documentación tiene **dos niveles**:
+  - **Coordinación (4 archivos core, ≤1000 líneas totales):** son la fuente de
+    verdad que todo agente lee primero.
+    `docs/ARCHITECTURE.md` (leyes + arquitectura, ≤200),
+    `docs/NORTE.md` (visión y roadmap, ≤200),
+    `docs/AHORA.md` (trabajo presente, ≤500),
+    `docs/ASSET_PIPELINE.md` (contrato Blender→Bevy, ≤250).
+    Lo cerrado se borra de AHORA.md (queda en git).
+  - **Referencias técnicas de dominio** (`docs/BOTWGrass.md`,
+    `docs/BOTWMovements.md`, `docs/CHARACTER_ANIMATION_IK.md`,
+    `docs/GraphicalTechniques.md`, `docs/TEXTURES.md`, `docs/LIGHTING.md`,
+    `docs/PARTICLES.md`, `docs/AUDIO.md`):
+    planes de implementación por feature, con la misma disciplina de
+    honestidad y medición. Describen **lo que se quiere construir**; no son
+    inventarios del código existente ni llevan el estado vivo de implementación.
+    Cada uno es dueño de su tema; no duplican contenido entre sí (un tema = un
+    documento). Los core los referencian, no los repiten.
+- `docs/BLENDER_AUTHORING_GUIDE.md` es una ayuda personal de operación, trackeada
+  por conveniencia pero **no autoritativa**: el contrato sigue siendo
+  `ASSET_PIPELINE.md` y el plan de animación/rig vive en sus docs de dominio.
 - Ningún acuerdo de esta conversación es válido si no quedó escrito en un
   archivo del repo — la coordinación no depende de memoria de sesión.
 

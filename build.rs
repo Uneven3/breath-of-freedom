@@ -1,5 +1,7 @@
 #[path = "src/asset_pipeline/schema.rs"]
 mod schema;
+#[path = "src/asset_pipeline/terrain_textures.rs"]
+mod terrain_textures;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -42,8 +44,10 @@ struct ColliderRecord {
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=assets/game/authored");
     println!("cargo:rerun-if-changed=src/asset_pipeline/schema.rs");
+    println!("cargo:rerun-if-changed=src/asset_pipeline/terrain_textures.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    validate_terrain_textures(&manifest_dir)?;
     let authored_root = manifest_dir.join("assets/game/authored");
     let mut paths = Vec::new();
     collect_glbs(&authored_root, &mut paths)?;
@@ -68,6 +72,44 @@ fn main() -> Result<(), Box<dyn Error>> {
     let generated = emit_manifest(&assets);
     let output = PathBuf::from(env::var("OUT_DIR")?).join("authored_assets.rs");
     fs::write(output, generated)?;
+    Ok(())
+}
+
+fn validate_terrain_textures(manifest_dir: &Path) -> Result<(), Box<dyn Error>> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+    for spec in terrain_textures::TERRAIN_TEXTURES {
+        let path = manifest_dir.join("assets").join(spec.path);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let bytes = fs::read(&path).map_err(|error| {
+            format!(
+                "{}: terrain texture cannot be read: {error}",
+                path.display()
+            )
+        })?;
+        if bytes.len() < 33 || &bytes[..8] != PNG_SIGNATURE || &bytes[12..16] != b"IHDR" {
+            return Err(format!("{}: expected a PNG with an IHDR chunk", path.display()).into());
+        }
+
+        let width = u32::from_be_bytes(bytes[16..20].try_into()?);
+        let height = u32::from_be_bytes(bytes[20..24].try_into()?);
+        let bit_depth = bytes[24];
+        let color_type = bytes[25];
+        if width != terrain_textures::TERRAIN_TEXTURE_EDGE
+            || height != terrain_textures::TERRAIN_TEXTURE_EDGE
+            || bit_depth != 8
+            || color_type != 2
+        {
+            return Err(format!(
+                "{}: terrain array layers must be {}x{} RGB8 PNG without alpha; found \
+                 {width}x{height}, bit depth {bit_depth}, PNG color type {color_type}",
+                path.display(),
+                terrain_textures::TERRAIN_TEXTURE_EDGE,
+                terrain_textures::TERRAIN_TEXTURE_EDGE,
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 

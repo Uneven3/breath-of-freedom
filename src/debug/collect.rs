@@ -27,6 +27,7 @@ use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
 use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
+use crate::visuals::terrain_material::TerrainMaterial;
 use crate::visuals::{AnimationDebug, DiagnosticViewState, PlayerAnimations};
 use crate::world::day_night::TimeOfDay;
 
@@ -222,16 +223,24 @@ type SceneMesh<'a> = (
     &'a MeshMaterial3d<StandardMaterial>,
 );
 
+type TerrainSceneMesh<'a> = (
+    &'a ViewVisibility,
+    &'a Mesh3d,
+    &'a MeshMaterial3d<TerrainMaterial>,
+);
+
 /// Static scene inventory — the numbers a mobile budget is actually spent on,
 /// distinct from the frame cost in `perf`. `draws` counts distinct
 /// `(mesh, material)` pairs among visible entities: Bevy batches by exactly
 /// that, so it approximates the draw-call count without a private wgpu hook and
 /// drops the moment shared handles let the batcher instance. Covers the shipped
-/// `StandardMaterial` path (world, foliage, imported glTF); experimental custom
-/// materials are out of frame. All fields are volatile — they drift as the
-/// camera moves, so change-triggered console output ignores them.
+/// `StandardMaterial` path plus the production layered terrain material. All
+/// fields are volatile — they drift as the camera moves, so change-triggered
+/// console output ignores them.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn collect_scene(
     meshes: Query<SceneMesh>,
+    terrain_meshes: Query<TerrainSceneMesh>,
     ranged: Query<&ViewVisibility, With<VisibilityRange>>,
     mesh_assets: Res<Assets<Mesh>>,
     perf: Res<PerfToggles>,
@@ -248,6 +257,9 @@ pub(super) fn collect_scene(
     let mut triangles = 0usize;
     let mut batches: HashSet<(AssetId<Mesh>, AssetId<StandardMaterial>)> = HashSet::default();
     let mut materials: HashSet<AssetId<StandardMaterial>> = HashSet::default();
+    let mut terrain_batches: HashSet<(AssetId<Mesh>, AssetId<TerrainMaterial>)> =
+        HashSet::default();
+    let mut terrain_materials: HashSet<AssetId<TerrainMaterial>> = HashSet::default();
 
     for (visibility, mesh3d, material) in &meshes {
         if !visibility.get() {
@@ -260,6 +272,20 @@ pub(super) fn collect_scene(
             triangles += match mesh.indices() {
                 Some(indices) => indices.len() / 3,
                 // Non-indexed meshes list every vertex per triangle.
+                None => mesh.count_vertices() / 3,
+            };
+        }
+    }
+    for (visibility, mesh3d, material) in &terrain_meshes {
+        if !visibility.get() {
+            continue;
+        }
+        visible_meshes += 1;
+        terrain_batches.insert((mesh3d.0.id(), material.0.id()));
+        terrain_materials.insert(material.0.id());
+        if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
+            triangles += match mesh.indices() {
+                Some(indices) => indices.len() / 3,
                 None => mesh.count_vertices() / 3,
             };
         }
@@ -279,8 +305,8 @@ pub(super) fn collect_scene(
     let scene = SceneInventory {
         visible_meshes,
         triangles,
-        draws: batches.len(),
-        materials: materials.len(),
+        draws: batches.len() + terrain_batches.len(),
+        materials: materials.len() + terrain_materials.len(),
         ranged_culled,
         ranged_total,
     };

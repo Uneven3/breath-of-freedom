@@ -8,6 +8,7 @@ use bevy::shader::ShaderRef;
 
 use crate::perf::PerfToggles;
 use crate::visuals::DiagnosticViewState;
+use crate::visuals::terrain_material::TerrainMaterial;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 struct OverdrawExtension {
@@ -52,6 +53,14 @@ impl OverdrawMaterials {
 #[derive(Component)]
 struct OverdrawOriginalMaterial {
     original: Handle<StandardMaterial>,
+    diagnostic: Handle<AdditiveOverdrawMaterial>,
+}
+
+/// Terrain uses its own layered material but participates in the same global
+/// overdraw replacement and two-frame restoration protocol.
+#[derive(Component)]
+struct OverdrawOriginalTerrainMaterial {
+    original: Handle<TerrainMaterial>,
     diagnostic: Handle<AdditiveOverdrawMaterial>,
 }
 
@@ -119,14 +128,32 @@ type SavedMeshQuery<'a> = (
     Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
 );
 
+type TerrainMeshQuery<'a> = (
+    Entity,
+    &'a MeshMaterial3d<TerrainMaterial>,
+    Option<&'a OverdrawOriginalTerrainMaterial>,
+    Has<Mesh3d>,
+);
+
+type SavedTerrainMeshQuery<'a> = (
+    Entity,
+    &'a OverdrawOriginalTerrainMaterial,
+    Has<Mesh3d>,
+    Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
+);
+
+#[allow(clippy::too_many_arguments)]
 fn apply_diagnostic_views(
     mut commands: Commands,
     perf: Res<PerfToggles>,
     overdraw: Res<OverdrawMaterials>,
     standard_materials: Res<Assets<StandardMaterial>>,
+    terrain_materials: Res<Assets<TerrainMaterial>>,
     mut wireframe: ResMut<WireframeConfig>,
     standard_meshes: Query<StandardMeshQuery>,
     saved_meshes: Query<SavedMeshQuery>,
+    terrain_meshes: Query<TerrainMeshQuery>,
+    saved_terrain_meshes: Query<SavedTerrainMeshQuery>,
 ) {
     let wanted_wireframe = perf.wireframe && !perf.overdraw;
     if wireframe.global != wanted_wireframe {
@@ -136,7 +163,11 @@ fn apply_diagnostic_views(
     // The shipped path pays no full-scene scan. While active we do scan each
     // frame so newly instantiated scenes join before render extraction; the
     // diagnostic mode already distorts cost by design.
-    if !perf.overdraw && !perf.is_changed() && saved_meshes.is_empty() {
+    if !perf.overdraw
+        && !perf.is_changed()
+        && saved_meshes.is_empty()
+        && saved_terrain_meshes.is_empty()
+    {
         return;
     }
 
@@ -169,6 +200,34 @@ fn apply_diagnostic_views(
                     .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
             }
         }
+        for (entity, material, _saved, has_mesh) in &terrain_meshes {
+            if !has_mesh {
+                continue;
+            }
+            let cull_mode = terrain_materials
+                .get(&material.0)
+                .map(|material| material.base.cull_mode)
+                .unwrap_or(Some(Face::Back));
+            commands
+                .entity(entity)
+                .try_remove::<MeshMaterial3d<TerrainMaterial>>()
+                .try_insert(OverdrawOriginalTerrainMaterial {
+                    original: material.0.clone(),
+                    diagnostic: overdraw.matching(cull_mode),
+                });
+        }
+        for (entity, saved, has_mesh, has_overdraw) in &saved_terrain_meshes {
+            if !has_mesh {
+                commands
+                    .entity(entity)
+                    .try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>()
+                    .try_remove::<OverdrawOriginalTerrainMaterial>();
+            } else if !has_overdraw {
+                commands
+                    .entity(entity)
+                    .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
+            }
+        }
     } else {
         for (entity, original, has_mesh, has_overdraw) in &saved_meshes {
             let mut entity = commands.entity(entity);
@@ -183,15 +242,28 @@ fn apply_diagnostic_views(
                 }
             }
         }
+        for (entity, original, has_mesh, has_overdraw) in &saved_terrain_meshes {
+            let mut entity = commands.entity(entity);
+            if has_overdraw {
+                entity.try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>();
+            } else {
+                entity.try_remove::<OverdrawOriginalTerrainMaterial>();
+                if has_mesh {
+                    entity.try_insert(MeshMaterial3d(original.original.clone()));
+                }
+            }
+        }
     }
 }
 
 fn publish_diagnostic_state(
     perf: Res<PerfToggles>,
     saved_meshes: Query<(), With<OverdrawOriginalMaterial>>,
+    saved_terrain_meshes: Query<(), With<OverdrawOriginalTerrainMaterial>>,
     mut state: ResMut<DiagnosticViewState>,
 ) {
-    state.overdraw_material_override = perf.overdraw || !saved_meshes.is_empty();
+    state.overdraw_material_override =
+        perf.overdraw || !saved_meshes.is_empty() || !saved_terrain_meshes.is_empty();
 }
 
 #[cfg(test)]
@@ -201,6 +273,7 @@ mod tests {
     fn test_app() -> App {
         let mut app = App::new();
         app.init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<TerrainMaterial>>()
             .init_resource::<Assets<AdditiveOverdrawMaterial>>()
             .init_resource::<PerfToggles>()
             .init_resource::<WireframeConfig>()

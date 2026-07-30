@@ -6,6 +6,7 @@
 mod generated;
 pub mod materials;
 pub mod schema;
+pub(crate) mod terrain_textures;
 
 use std::collections::HashMap;
 

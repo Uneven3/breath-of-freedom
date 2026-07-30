@@ -29,6 +29,7 @@ pub mod horse;
 pub mod player;
 pub mod probe;
 mod terrain;
+pub mod terrain_material;
 pub mod vfx;
 
 pub use animation::{AnimationDebug, PlayerAnimations};
@@ -75,6 +76,7 @@ impl Plugin for VisualsPlugin {
         // meshes. The player's visual and the meadow are scene content
         // (`crate::scene`), so they are built on entry and die on exit.
         app.add_plugins(grass_material::GrassMaterialPlugin);
+        app.add_plugins(terrain_material::TerrainMaterialPlugin);
         app.add_systems(
             Startup,
             (

@@ -70,7 +70,7 @@ PostUpdate   [ Animación e IK ] ──► bevy::animation::animate_targets ─�
 | **Stairs** | `stairs.rs` | `Stairs` | Adaptación de pasos para huella/contrahuella sin tropezar. |
 | **Mounts** | `mounts/mod.rs` | `Mount` | Montado de caballo mediante enlace transaccional `ActorLink`. |
 
-### B. Motores Faltantes y Estados Ortogonales para Paridad BOTW
+### B. Motores y Estados Ortogonales para el Feeling Objetivo
 
 #### 1. Motor `Swim` (Nado en Superficie)
 - **Activación:** `WaterFacts::can_swim == true` (intersección con `WaterVolume` e inmersión hasta el pecho).
@@ -125,9 +125,10 @@ $$k_{speed\_node} = \begin{cases}
 Esta protección evita `NaN` o divisiones por cero en clips estáticos y garantiza que durante los crossfades cada clip ajuste su velocidad a su propia zancada autorada.
 
 ### B. Capas del Grafo de Animación (`AnimationGraph` Upper/Lower Split)
-El `AnimationGraph` se compila en dos capas principales mediante máscaras de huesos:
-1. **Capa Inferior (Lower-Body):** Controla `Hips`, `Thighs`, `Calfs`, `Feet`. Ejecuta los clips de `LocomotionState` (`AN_Walk`, `AN_Run`, `AN_Swim`, etc.).
-2. **Capa Superior (Upper-Body):** Controla `Spine`, `Chest`, `UpperArms`, `LowerArms`, `Hands`. Ejecuta clips de combate, postura de carga de vasija (`AN_Carry_Upper`), empuje (`AN_Push_Upper`), o gesto rápido de recogida de loot (`AN_Loot_Quick`).
+
+Ver `CHARACTER_ANIMATION_IK.md` Fase 2 para la estructura del grafo con máscaras
+de huesos. Los clips de locomoción (`AN_Walk`, `AN_Run`, etc.) corren en la capa
+inferior; los de combate/carga/empuje en la superior.
 
 ---
 
@@ -191,24 +192,18 @@ Para garantizar la precisión de infraestructura sin tareas repetitivas manuales
 
 ## 7. Cinemática Inversa (IK) Analítica para Pies y Manos
 
-### IK de Pies Híbrido (Terreno $O(1)$ + Datos de Piso de Simulación)
-1. **Gate de Distancia e Inocuidad (IK LOD):** Si la entidad visual no es visible o supera los $30\text{ m}$ de distancia de la cámara, los solvers de IK se descarta inmediatamente.
-2. **Lectura Pura de Datos de Piso (`FootingFacts`):**
-   - **Caso A (Geometría Authored / Cajas):** `GroundFacts` en `FixedUpdate` registra la altura del colisionador de la caja en `FootingFacts::ground_y`. El solver de IK en `PostUpdate` lee ese dato puro sin realizar raycasts de física en la fase de presentación.
-   - **Caso B (Terreno Orgánico):** Se consulta directamente `Terrain::height_and_normal_at(xz)` en $O(1)$. **Esa función todavía no existe** — ver la nota al pie de esta sección.
-3. **Offset Rest-Pose:** Se suma `ankle_rest_y_offset` (altura tobillo-suela en T-Pose) para funcionar dinámicamente con cualquier rig.
-4. **Hips Lowering Protegido contra Precipicios:**
-   - Para evitar que la cadera colapse cuando un pie cuelga sobre un abismo o risco, el descenso de cadera se acota estrictamente:
-     $$\Delta Y_{hips} = \text{clamp}(\min(\Delta_L, \Delta_R), \; -0.35\text{ m}, \; 0.0\text{ m})$$
-   - Si la distancia del terreno bajo un pie supera el alcance máximo de la pierna ($L_1 + L_2$), ese pie se marca como *En Precipicio* y se excluye del cálculo de cadera; la pierna simplemente cuelga extendida hacia abajo.
-5. **Solver Analítico 2-Bone IK ($O(1)$):** Ley de los Cosenos sobre `Thigh` $\to$ `Calf` $\to$ `Foot`.
-6. **Rotación de Tobillos:** Alinea la planta del pie con la normal $N_{ground}$ del triángulo o superficie de colisión (límite $\le 35^\circ$).
+**Documento dueño: `CHARACTER_ANIMATION_IK.md`.**
 
-### IK de Manos en `PostUpdate` (Weapon Sockets, Push/Pull, Carrying & Loot)
-1. **Socket Target IK:** En armas de dos manos o arcos, el brazo secundario ejecuta el solver 2-Bone IK en `PostUpdate` para colocar la mano exactamente sobre el socket `SKT_OffHand` del arma.
-2. **Push/Pull IK:** En objetos `Pushable` (cajas, rocas), ambas manos ejecutan 2-Bone IK alineando las palmas con los puntos de empuje del objeto (`SKT_Push_L`, `SKT_Push_R`).
-3. **Carry IK:** En vasijas/barriles sostenidos sobre la cabeza (`SKT_Carry_Overhead`), las manos ejecutan IK para sujetar las asas/base del objeto.
-4. **Loot Reach IK:** Al recibir un `LootGestureEvent { local_target_pos }`, la mano derecha interpola suavemente IK hacia `local_target_pos` (coordenada espacial local del Actor), permitiendo recoger ítems en movimiento sin estirar el brazo hacia atrás.
+El sistema de IK es ortogonal a los motores de locomoción: los motores escriben
+`LocomotionState` y velocidad en `FixedUpdate`; el IK lee esos datos y corrige
+huesos en `PostUpdate`. Ver `CHARACTER_ANIMATION_IK.md` para el solver 2-bone,
+el pipeline de foot IK, el IK de manos y los pasos de implementación.
+
+Lo que este documento aporta al IK:
+- `FootingFacts` se graba en `MovementSet::SenseWorld` (altura del colisionador).
+- `ObjectManipulationState` define los sockets activos (`SKT_Push_L/R`,
+  `SKT_Carry_Overhead`) que el IK de manos consume.
+- Los motores Swim/Dive/Glide desactivan el IK de pies.
 
 ---
 
@@ -246,28 +241,11 @@ Para garantizar la precisión de infraestructura sin tareas repetitivas manuales
 - [ ] Configurar la instanciación de armas y objetos cargados en los sockets `SKT_MainHand`, `SKT_OffHand`, `SKT_Bow` y `SKT_Carry_Overhead`.
 - [ ] Actualizar la comprobación de `build.rs` para validar los nodos `SK_*` y sockets `SKT_*` en personajes authored.
 
-### Fase 4 — Exposición de Normales en Terreno e IK Híbrido de Pies en `PostUpdate`
-- [ ] Extender `src/world/terrain.rs` con el método `Terrain::height_and_normal_at(xz) -> (f32, Vec3)` acotado a `self.points - 2`.
-> **`Terrain::height_and_normal_at` NO EXISTE todavía (verificado 2026-07-26).**
-> Este documento la nombra como si estuviera; es API *planeada*. Hoy
-> `world/terrain.rs` expone `height_at(xz) -> f32` y `slope_deg_at(xz) -> f32`,
-> y nada más.
->
-> **Cuando se escriba, tiene que muestrear la anti-diagonal** — de `(row, col+1)`
-> a `(row+1, col)` — y devolver la **normal de cara** de ese triángulo, no una
-> normal por diferencias centrales ni una interpolación bilineal. Motivo: parry
-> triangula su heightfield por esa diagonal y el collider es la superficie
-> autoritativa. Implementarla "de la forma obvia" reintroduce un bug ya corregido
-> el 2026-07-26, que medía **0,33 m de desvío en el 36% del terreno** y solo se
-> notaba donde el relieve es dispar. Ver el doc de `Terrain::to_collider`.
-- [ ] Crear el módulo de física pura `src/visuals/ik_solver.rs` con la Ley de los Cosenos ($O(1)$).
-- [ ] Programar los sistemas de IK de pies en **`PostUpdate`** encadenados `.after(bevy::animation::animate_targets)` con IK LOD gate (descarte a $>30\text{m}$).
-- [ ] Detección basada en datos puros `FootingFacts` y `Has<Terrain>`, con clamping de `Hips Lowering` a $-0.35\text{ m}$ y exclusión de pie en abismos.
+### Fase 4-5 — IK de Pies y Manos
 
-### Fase 5 — Solver Analítico 2-Bone IK de Manos en `PostUpdate`
-- [ ] Programar los sistemas de IK de manos en **`PostUpdate`** encadenados `.after(bevy::animation::animate_targets)`.
-- [ ] Acoplamiento de manos a `SKT_OffHand`, `SKT_Push_L/R` y `SKT_Carry_Overhead`.
-- [ ] `LootGestureEvent { local_target_pos }` en `InteractionPlugin` e interpolación IK rápida de mano hacia `local_target_pos`.
+Ver `CHARACTER_ANIMATION_IK.md` Pasos 3-5. Los motores de este documento aportan
+`FootingFacts` y `ObjectManipulationState`; el solver y los sistemas de IK viven
+en el módulo de IK.
 
 ### Fase 6 — Profiling y Verificación de Invariantes
 - [ ] Medir en el hub F1 que el costo de animación e IK sea $\le 0.15\text{ ms}$ en CPU.

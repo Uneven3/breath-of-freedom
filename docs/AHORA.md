@@ -70,13 +70,25 @@ compartido — ver más abajo):
   sigue con `AnimationTransitions` sin cambios. **No verificado con
   `cargo check`** (ver deuda abajo) — el riesgo real es si Bevy 0.19 deja
   reproducir dos nodos con pesos independientes como asume el código.
-- **Deuda de infraestructura:** este worktree (y probablemente cualquier otro
-  bajo `.claude/worktrees/`) no está en `members` del Cargo.toml compartido
+- **Deuda de infraestructura, sin resolver — decidir entre sesiones:** este
+  worktree (y probablemente cualquier otro bajo `.claude/worktrees/`) no está
+  en `members` del Cargo.toml compartido
   (`/home/francisco/Programming/uneven/Cargo.toml`, fuera de este repo git) y
   además comparte nombre de paquete (`breath-of-freedom`) con el checkout
-  principal, así que sumarlo choca. Falta decidir cómo compilar/testear
-  código escrito en un worktree sin tocar el workspace compartido a mano cada
-  vez.
+  principal, así que sumarlo choca por nombre duplicado. Falta decidir **cómo
+  compilar/testear código escrito en un worktree antes de mergear**, sin
+  romper el workspace compartido (que usan también beyblade-hitmontop,
+  lightcore, naipes-bevy, etc.). Esta sesión mergeó a `main` sin haber
+  corrido `cargo check` ni una sola vez sobre el código nuevo — mala práctica,
+  aceptada solo porque no había alternativa a mano.
+  - Además, mergear una rama de worktree a `main` **sin poder pararse en el
+    checkout principal** (no es válido tener la misma rama activa en dos
+    worktrees) exige plomería: `git fetch .`/`git branch -f` se niegan por la
+    protección de git a ramas activas en otro worktree; `git update-ref
+    refs/heads/main <sha>` sí funciona (es fast-forward puro cuando la rama
+    del worktree ya trae `main` mergeado adentro), pero deja el *working
+    directory* del checkout principal desalineado de su propio `main` hasta
+    que alguien corra ahí un `git checkout -- .` (o equivalente) a mano.
 
 ## Estado (2026-07-26)
 

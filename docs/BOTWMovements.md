@@ -227,7 +227,16 @@ Para garantizar la precisión de infraestructura sin tareas repetitivas manuales
   - Configurar las cadenas de fallback en `ROLE_TABLE`.
 
 ### Fase 2 — Eliminación de Foot-Sliding y Grafo de Animación Protegido
-- [ ] Implementar en `visuals/animation.rs` el escalado dinámico de velocidad $k_{speed\_node} = V_{real} / V_{autorada\_node}$ protegido contra divisiones por cero ($V_{autorada} < 0.05$).
+- [x] **(2026-07-29, sin jugar todavía — ver `AHORA.md`)** Implementado en
+      `visuals/animation.rs`: `node_playback_speed` es exactamente
+      $k_{speed\_node} = V_{real} / V_{autorada\_node}$ protegido contra
+      $V_{autorada} < 0.05$. Además, no solo escala nodos: `Walk`↔`Run` ahora
+      mezclan continuo por velocidad real (`locomotion_blend_weight`,
+      `set_active_nodes`) en vez de un salto discreto — así caminar acelera
+      hacia un trote solo, sin `LocomotionState` nuevo (`Walk` ya acelera
+      gradualmente en `motor_common::drive_planar_velocity`). No verificado
+      con `cargo check`/`cargo test` en esta sesión (deuda de workspace, ver
+      `AHORA.md`).
 - [ ] Configurar el `AnimationGraph` con dos capas (Lower-Body para movimiento, Upper-Body para armas/ataques/objetos).
 - [ ] Agregar sincronización de fase entre animaciones de caminata y trote (*Phase Matching* por eventos de pisada).
 

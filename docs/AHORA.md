@@ -41,6 +41,43 @@ visuales tienen un doc por tema: `TEXTURES.md`, `BOTWGrass.md`,
   2026-07-26 solo quedan libres **F7, F9, F11, F12**.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
+## Personaje propio: elfo re-skinneado + locomoción continua (2026-07-29, sin jugar todavía)
+
+Trabajo hecho en `.claude/worktrees/test-animaciones`, **sin compilar ni
+jugar en esta sesión** (el worktree no es miembro del workspace de Cargo
+compartido — ver más abajo):
+
+- **`art/blender/char/char_elf.blend`** (+ `tools/distill_char_elf.py`,
+  reproducible): `Elf_MaleCharacter-Free` re-skinneado sobre el armature de la
+  Universal Animation Library (en vez de retargeting hueso-a-hueso), con los
+  13 clips `AN_*` requeridos + `AN_Swim` renombrados desde UAL1/UAL2. El bug
+  real que costó tres iteraciones: la malla del elfo viene modelada en
+  A-pose pero el bind de Blender siempre asume que la malla de destino está
+  en la pose de reposo del armature (T-pose) — se resolvió posando el elfo a
+  T-pose con su propio rig (bueno) *antes* de transferir pesos, no
+  posando el donante ni suavizando pesos después (ambos probados, ninguno
+  ataca la causa). Verificado con renders headless de Blender (sin GUI), no
+  con el ojo en Bevy. **Falta antes de exportar por `build.rs`:** `bof_license`
+  (el asset no trae licencia) y meter su material `M_Atlas-1.002` (roughness
+  0.6) en la paleta del proyecto (exige ≥0.8).
+- **`src/visuals/animation.rs`:** implementa `docs/BOTWMovements.md` §3
+  (escalado de velocidad por nodo) más un blend continuo Walk↔Run por
+  velocidad real (`locomotion_blend_weight`, `set_active_nodes`) — sin
+  `LocomotionState` nuevo, ya que `Walk` ya acelera gradualmente
+  (`motor_common::drive_planar_velocity`). Reemplaza el crossfade
+  disparado-por-cambio-de-estado con pesos de `AnimationPlayer` controlados
+  cuadro a cuadro mientras el estado es `Walk`/`Sprint`; el resto de estados
+  sigue con `AnimationTransitions` sin cambios. **No verificado con
+  `cargo check`** (ver deuda abajo) — el riesgo real es si Bevy 0.19 deja
+  reproducir dos nodos con pesos independientes como asume el código.
+- **Deuda de infraestructura:** este worktree (y probablemente cualquier otro
+  bajo `.claude/worktrees/`) no está en `members` del Cargo.toml compartido
+  (`/home/francisco/Programming/uneven/Cargo.toml`, fuera de este repo git) y
+  además comparte nombre de paquete (`breath-of-freedom`) con el checkout
+  principal, así que sumarlo choca. Falta decidir cómo compilar/testear
+  código escrito en un worktree sin tocar el workspace compartido a mano cada
+  vez.
+
 ## Estado (2026-07-26)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/

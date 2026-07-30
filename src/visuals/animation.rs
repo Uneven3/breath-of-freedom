@@ -119,6 +119,107 @@ fn strafe_playback_speed(
     }
 }
 
+/// Real-world speed (m/s) a base locomotion role's legs were authored to
+/// cover in one stride at 1x playback (`docs/BOTWMovements.md` §3). `Run`'s
+/// reference sits below `Sprint`'s own top speed on purpose: by the time
+/// `Walk` (whose own cap exceeds this) is near its ceiling, the blend below
+/// is already reading near-100% `Run`, so the handoff into an explicit
+/// Sprint has nothing left to snap.
+const WALK_AUTHORED_SPEED: f32 = 1.5;
+const RUN_AUTHORED_SPEED: f32 = 4.0;
+const SNEAK_AUTHORED_SPEED: f32 = 1.0;
+
+/// [`WALK_AUTHORED_SPEED`]/[`RUN_AUTHORED_SPEED`]/[`SNEAK_AUTHORED_SPEED`] for
+/// their role, `0.0` for anything else — poses and non-locomotion roles
+/// (Jump, Climb, Idle…) have no "stride speed" to match, and `0.0` is exactly
+/// what makes [`node_playback_speed`]'s guard leave them at 1x.
+fn authored_speed(role: AnimationRole) -> f32 {
+    match role {
+        AnimationRole::Walk => WALK_AUTHORED_SPEED,
+        AnimationRole::Run => RUN_AUTHORED_SPEED,
+        AnimationRole::Sneak => SNEAK_AUTHORED_SPEED,
+        _ => 0.0,
+    }
+}
+
+/// Playback-rate multiplier that matches a clip's stride to the body's real
+/// speed, so legs don't slide/skate while the body accelerates or
+/// decelerates. Guarded the same way `docs/BOTWMovements.md` §3 specifies:
+/// under `0.05` m/s authored speed means "not a locomotion clip" (a pose),
+/// always 1x, and never a division blowing up toward a static clip.
+fn node_playback_speed(real_speed: f32, authored_speed: f32) -> f32 {
+    if authored_speed < 0.05 {
+        1.0
+    } else {
+        real_speed / authored_speed
+    }
+}
+
+/// Continuous blend weight toward `Run`, driven by the body's real planar
+/// speed: `0.0` at or below [`WALK_AUTHORED_SPEED`], ramping linearly to
+/// `1.0` at [`RUN_AUTHORED_SPEED`] and staying there through the rest of the
+/// `Sprint` speed range. `Walk`'s own top speed already exceeds
+/// `RUN_AUTHORED_SPEED`, so a held-forward walk builds into a jog entirely
+/// from `motor_common::drive_planar_velocity`'s own acceleration curve — no
+/// discrete "jog" state, just this weight and [`node_playback_speed`] reading
+/// the same [`BodyVelocity`] the motor already produces.
+fn locomotion_blend_weight(real_speed: f32) -> f32 {
+    ((real_speed - WALK_AUTHORED_SPEED) / (RUN_AUTHORED_SPEED - WALK_AUTHORED_SPEED))
+        .clamp(0.0, 1.0)
+}
+
+/// Reconcile the player's manually-weighted nodes with `desired` (node,
+/// weight, speed) triples. The same node set across calls just updates
+/// weight/speed in place on the already-active [`ActiveAnimation`]s — the
+/// continuous blend's steady state, called every frame while held in one
+/// regime. A *different* set (entering/leaving the locomotion blend, or a
+/// debug-browser clip swap) zeroes the previous set's weight first: nothing
+/// else is watching these nodes to fade them out, unlike the
+/// [`AnimationTransitions`]-driven legacy path below, which manages its own.
+fn set_active_nodes(
+    player: &mut AnimationPlayer,
+    active: &mut Vec<petgraph::graph::NodeIndex>,
+    desired: &[(petgraph::graph::NodeIndex, f32, f32)],
+) {
+    // Two `desired` entries can resolve to the *same* node — e.g. Run with no
+    // clip of its own degrades through `ROLE_TABLE`'s fallback to the same
+    // node as Walk. Merge those before touching the player: summed weight,
+    // weight-averaged speed, so the clip gets one `set_weight`/`set_speed`
+    // call instead of the second entry silently clobbering the first's.
+    let mut merged: Vec<(petgraph::graph::NodeIndex, f32, f32)> = Vec::new();
+    for &(node, weight, speed) in desired {
+        if let Some(existing) = merged.iter_mut().find(|(n, _, _)| *n == node) {
+            let total_weight = existing.1 + weight;
+            if total_weight > f32::EPSILON {
+                existing.2 = (existing.2 * existing.1 + speed * weight) / total_weight;
+            }
+            existing.1 = total_weight;
+        } else {
+            merged.push((node, weight, speed));
+        }
+    }
+
+    let desired_nodes: Vec<_> = merged.iter().map(|(node, _, _)| *node).collect();
+    if *active != desired_nodes {
+        for node in active.drain(..) {
+            if let Some(previous) = player.animation_mut(node) {
+                previous.set_weight(0.0);
+            }
+        }
+        for (node, weight, speed) in &merged {
+            player.play(*node).set_weight(*weight).set_speed(*speed).repeat();
+        }
+        *active = desired_nodes;
+    } else {
+        for (node, weight, speed) in &merged {
+            if let Some(active_anim) = player.animation_mut(*node) {
+                active_anim.set_weight(*weight);
+                active_anim.set_speed(*speed);
+            }
+        }
+    }
+}
+
 /// One row of the clip-resolution contract. A role binds to the first name in
 /// `vendor_aliases` present in the GLB — after the canonical name is tried — and
 /// otherwise borrows the clip resolved for `fallback`, so partial rigs degrade
@@ -504,6 +605,11 @@ pub(super) fn animate_player(
     >,
     anims: Option<Res<PlayerAnimations>>,
     debug: Res<AnimationDebug>,
+    // Nodes the continuous locomotion blend below is currently driving
+    // directly (bypassing `AnimationTransitions`, which only fades nodes it
+    // played itself). Empty whenever the legacy single-clip path owns the
+    // player instead.
+    mut blend_nodes: Local<Vec<petgraph::graph::NodeIndex>>,
 ) {
     let Some(anims) = anims else {
         return;
@@ -512,24 +618,59 @@ pub(super) fn animate_player(
         return;
     };
 
+    let speed = velocity.0.xz().length();
+    let strafe = intents.planar.strafe_dir();
+    // Walk and Sprint share one continuous walk->jog->sprint blend (see
+    // `locomotion_blend_weight`); every other state — including Sneak/Stairs,
+    // which still snap to a single clip — falls through to the legacy path.
+    // The debug clip browser always wins so it can preview any clip in
+    // isolation.
+    let want_blend = matches!(*state, LocomotionState::Walk | LocomotionState::Sprint)
+        && speed > 0.1
+        && !(debug.enabled && !anims.clips.is_empty());
+
     for (mut player, mut transitions) in &mut animated_query {
+        if want_blend {
+            let walk_node = anims.node(directional_role(AnimationRole::Walk, strafe));
+            let run_node = anims.node(directional_role(AnimationRole::Run, strafe));
+            let weight_run = locomotion_blend_weight(speed);
+            set_active_nodes(
+                &mut player,
+                &mut blend_nodes,
+                &[
+                    (
+                        walk_node,
+                        1.0 - weight_run,
+                        node_playback_speed(speed, WALK_AUTHORED_SPEED),
+                    ),
+                    (
+                        run_node,
+                        weight_run,
+                        node_playback_speed(speed, RUN_AUTHORED_SPEED),
+                    ),
+                ],
+            );
+            continue;
+        }
+
+        // Leaving the blend (or never in it): the legacy path below only
+        // knows how to fade a node *it* played through `AnimationTransitions`,
+        // so any node the blend left weighted has to be zeroed here first.
+        if !blend_nodes.is_empty() {
+            for node in blend_nodes.drain(..) {
+                if let Some(previous) = player.animation_mut(node) {
+                    previous.set_weight(0.0);
+                }
+            }
+        }
+
         let (target_node, speed_multiplier) = if debug.enabled && !anims.clips.is_empty() {
             // Debug browser override: play the selected clip at normal speed.
             (anims.clips[debug.index % anims.clips.len()].1, 1.0)
         } else {
-            // Ground states show Idle when effectively still; airborne/climb
-            // states always present their own clip.
-            let base = match *state {
-                LocomotionState::Walk | LocomotionState::Sneak | LocomotionState::Stairs => {
-                    if velocity.0.xz().length() > 0.1 {
-                        role_for_state(*state)
-                    } else {
-                        AnimationRole::Idle
-                    }
-                }
-                other => role_for_state(other),
-            };
-            // Only the grounded planar roles carry a facing-relative variant.
+            // Only the grounded planar roles carry a facing-relative variant
+            // and idle-when-still refinement; Walk/Sprint are handled above,
+            // so here this only fires for Sneak/Stairs (still single-clip).
             let planar = matches!(
                 *state,
                 LocomotionState::Walk
@@ -537,7 +678,11 @@ pub(super) fn animate_player(
                     | LocomotionState::Sneak
                     | LocomotionState::Stairs
             );
-            let strafe = intents.planar.strafe_dir();
+            let base = if planar && speed <= 0.1 {
+                AnimationRole::Idle
+            } else {
+                role_for_state(*state)
+            };
             // Refine into the strafe/back variant (a no-op under free movement,
             // where the move is always forward). Resolves to the base clip until
             // strafe clips are authored.
@@ -546,17 +691,17 @@ pub(super) fn animate_player(
             } else {
                 base
             };
-            // UAL1 clips play at authored speed, except a back-pedal that fell
-            // back to its forward base clip, which plays in reverse so the legs
-            // cycle backward instead of moonwalking. (Foot-slide vs actual speed
-            // is a separate later knob.)
             let node = anims.node(role);
-            let speed = if planar {
+            // Back-pedal sign flip (moonwalk guard) times the real-speed
+            // stride-matching scale — a static base role (Idle, Jump…) has
+            // `authored_speed == 0.0`, so this reduces to the sign alone.
+            let playback_speed = if planar {
                 strafe_playback_speed(strafe, node, anims.node(base))
+                    * node_playback_speed(speed, authored_speed(base))
             } else {
                 1.0
             };
-            (node, speed)
+            (node, playback_speed)
         };
 
         if !player.is_playing_animation(target_node) {
@@ -581,6 +726,81 @@ mod tests {
             .enumerate()
             .map(|(i, name)| (*name, petgraph::graph::NodeIndex::new(i)))
             .collect()
+    }
+
+    #[test]
+    fn locomotion_blend_weight_ramps_walk_to_run_and_clamps() {
+        assert_eq!(locomotion_blend_weight(0.0), 0.0);
+        assert_eq!(locomotion_blend_weight(WALK_AUTHORED_SPEED), 0.0);
+        assert_eq!(locomotion_blend_weight(RUN_AUTHORED_SPEED), 1.0);
+        // Sprint's own top speed (10 m/s in GroundMovement::PLAYER) is well
+        // past RUN_AUTHORED_SPEED: the blend must stay pinned at 1.0, not
+        // shoot past it.
+        assert_eq!(locomotion_blend_weight(10.0), 1.0);
+        let mid = (WALK_AUTHORED_SPEED + RUN_AUTHORED_SPEED) / 2.0;
+        assert!((locomotion_blend_weight(mid) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn node_playback_speed_matches_stride_and_guards_static_clips() {
+        assert_eq!(node_playback_speed(3.0, WALK_AUTHORED_SPEED), 2.0);
+        assert_eq!(node_playback_speed(0.0, WALK_AUTHORED_SPEED), 0.0);
+        // A pose/non-locomotion role (authored_speed 0.0, e.g. Idle or Jump)
+        // never divides by zero — always 1x regardless of real speed.
+        assert_eq!(node_playback_speed(5.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn authored_speed_covers_locomotion_roles_and_defaults_elsewhere() {
+        assert_eq!(authored_speed(AnimationRole::Walk), WALK_AUTHORED_SPEED);
+        assert_eq!(authored_speed(AnimationRole::Run), RUN_AUTHORED_SPEED);
+        assert_eq!(authored_speed(AnimationRole::Sneak), SNEAK_AUTHORED_SPEED);
+        assert_eq!(authored_speed(AnimationRole::Idle), 0.0);
+        assert_eq!(authored_speed(AnimationRole::Jump), 0.0);
+    }
+
+    #[test]
+    fn set_active_nodes_reuses_same_set_and_zeroes_previous_on_change() {
+        let walk = petgraph::graph::NodeIndex::new(0);
+        let run = petgraph::graph::NodeIndex::new(1);
+        let idle = petgraph::graph::NodeIndex::new(2);
+        let mut player = AnimationPlayer::default();
+        let mut active = Vec::new();
+
+        set_active_nodes(&mut player, &mut active, &[(walk, 0.7, 1.2), (run, 0.3, 0.9)]);
+        assert_eq!(active, vec![walk, run]);
+        assert_eq!(player.animation(walk).unwrap().weight(), 0.7);
+        assert_eq!(player.animation(run).unwrap().weight(), 0.3);
+
+        // Same node set next frame: weights update in place, no replay.
+        set_active_nodes(&mut player, &mut active, &[(walk, 0.4, 1.5), (run, 0.6, 1.1)]);
+        assert_eq!(active, vec![walk, run]);
+        assert_eq!(player.animation(walk).unwrap().weight(), 0.4);
+
+        // A different set (e.g. leaving the blend for Idle) zeroes the old
+        // nodes' weight instead of leaving them stuck contributing.
+        set_active_nodes(&mut player, &mut active, &[(idle, 1.0, 1.0)]);
+        assert_eq!(active, vec![idle]);
+        assert_eq!(player.animation(walk).unwrap().weight(), 0.0);
+        assert_eq!(player.animation(run).unwrap().weight(), 0.0);
+    }
+
+    #[test]
+    fn set_active_nodes_merges_duplicate_nodes_instead_of_clobbering() {
+        // A degraded rig where Run has no clip of its own resolves to the
+        // *same* node as Walk (ROLE_TABLE's Run -> Walk fallback). The blend
+        // must not let the second entry silently overwrite the first's
+        // weight/speed.
+        let shared = petgraph::graph::NodeIndex::new(0);
+        let mut player = AnimationPlayer::default();
+        let mut active = Vec::new();
+
+        set_active_nodes(&mut player, &mut active, &[(shared, 0.7, 1.0), (shared, 0.3, 2.0)]);
+        assert_eq!(active, vec![shared]);
+        let anim = player.animation(shared).unwrap();
+        assert_eq!(anim.weight(), 1.0, "weights must sum, not clobber");
+        // Weight-averaged speed: 0.7*1.0 + 0.3*2.0 = 1.3.
+        assert!((anim.speed() - 1.3).abs() < 1e-5);
     }
 
     #[test]

@@ -6,6 +6,8 @@ continuar; actualízalo tras cada decisión aceptada, checkpoint jugado o
 cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`. Los sistemas
 visuales tienen un doc por tema: `TEXTURES.md`, `BOTWGrass.md`,
 `GraphicalTechniques.md`, `BOTWMovements.md`, `CHARACTER_ANIMATION_IK.md`.
+El plan para que las leyes se cobren solas (tests de frontera, determinismo,
+lints, crates) está en `CRATES.md`.
 
 ## Cómo trabajar en este repo
 
@@ -41,69 +43,55 @@ visuales tienen un doc por tema: `TEXTURES.md`, `BOTWGrass.md`,
   2026-07-26 solo quedan libres **F7, F9, F11, F12**.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
 
-## Personaje propio: elfo re-skinneado + locomoción continua (2026-07-29/30, jugado — falla)
+## Bloqueo pre-push del merge animación + terreno (2026-07-30)
 
-Trabajo hecho en `.claude/worktrees/test-animaciones`, mergeado a `main` y
-jugado el 2026-07-30. **Veredicto del usuario: "muchos errores", "la
-animación no está correcta"** — sin detalle todavía de qué exactamente se ve
-mal; retomar pidiendo específicos (¿qué clip, qué rango de velocidad, patina,
-salta, tiembla?) antes de tocar código. El log de esa corrida (~63 s de
-juego, cerrado a mano) **no tiene ni una línea de `error`/`panic`** — lo que
-sea que está mal es de *feel*/visual, no un crash ni un panic silencioso.
+**No hacer push.** Decisión del usuario: corregir mañana; esta auditoría queda
+sin commit. `fmt --check`, `clippy -D warnings` y los **394 tests** pasan, pero
+eso no valida ownership, lifecycle, procedencia ni feeling. El playtest mostró
+"muchos errores" de animación sin `error`/`panic` en el log.
 
-- **El elfo no apareció** — el jugador siguió siendo el maniquí UAL1 de
-  siempre. Esperado: `char_elf.blend` nunca se exportó por
-  `tools/export_blender_asset.py` a `assets/game/authored/`, así que no puede
-  ser `PLAYER_APPEARANCE` todavía. Sigue faltando **`bof_license`** (el asset
-  no trae licencia) y meter `M_Atlas-1.002` (roughness 0.6) en la paleta
-  (exige ≥0.8) antes de poder exportarlo.
-- **`art/blender/char/char_elf.blend`** (+ `tools/distill_char_elf.py`,
-  reproducible): `Elf_MaleCharacter-Free` re-skinneado sobre el armature de la
-  Universal Animation Library (en vez de retargeting hueso-a-hueso), con los
-  13 clips `AN_*` requeridos + `AN_Swim` renombrados desde UAL1/UAL2. El bug
-  real que costó tres iteraciones al construirlo: la malla del elfo viene
-  modelada en A-pose pero el bind de Blender siempre asume que la malla de
-  destino está en la pose de reposo del armature (T-pose) — se resolvió
-  posando el elfo a T-pose con su propio rig (bueno) *antes* de transferir
-  pesos, no posando el donante ni suavizando pesos después (ambos probados,
-  ninguno ataca la causa). Verificado solo con renders headless de Blender
-  (sin GUI); nunca se vio puesto en el jugador dentro de Bevy.
-- **`src/visuals/animation.rs`:** implementa `docs/BOTWMovements.md` §3
-  (escalado de velocidad por nodo) más un blend continuo Walk↔Run por
-  velocidad real (`locomotion_blend_weight`, `set_active_nodes`) — sin
-  `LocomotionState` nuevo, ya que `Walk` ya acelera gradualmente
-  (`motor_common::drive_planar_velocity`). Reemplaza el crossfade
-  disparado-por-cambio-de-estado con pesos de `AnimationPlayer` controlados
-  cuadro a cuadro mientras el estado es `Walk`/`Sprint`; el resto de estados
-  sigue con `AnimationTransitions` sin cambios. **`cargo check`/`clippy -D
-  warnings`/`test` (394) verdes y `fmt` aplicado** (corridos post-merge desde
-  el checkout principal — ver deuda de workspace abajo), pero eso solo prueba
-  que compila y que los tests unitarios de la función de blend dan el número
-  esperado; no prueba que el resultado *se sienta* bien, y el usuario dice
-  que no. Sospecha sin confirmar: los anclajes de velocidad
-  (`WALK_AUTHORED_SPEED = 1.5`, `RUN_AUTHORED_SPEED = 4.0`) o el rango de
-  crossfade pueden estar mal calibrados para el maniquí UAL1 puntual, o el
-  hand-off duro (`stop_all`-equivalente) al entrar/salir del blend puede
-  notarse más de lo esperado en vez de ser imperceptible.
-- **Deuda de infraestructura, sin resolver — decidir entre sesiones:** este
-  worktree (y probablemente cualquier otro bajo `.claude/worktrees/`) no está
-  en `members` del Cargo.toml compartido
-  (`/home/francisco/Programming/uneven/Cargo.toml`, fuera de este repo git) y
-  además comparte nombre de paquete (`breath-of-freedom`) con el checkout
-  principal, así que sumarlo choca por nombre duplicado. Falta decidir **cómo
-  compilar/testear código escrito en un worktree antes de mergear**, sin
-  romper el workspace compartido (que usan también beyblade-hitmontop,
-  lightcore, naipes-bevy, etc.). Esta sesión mergeó a `main` sin haber
-  corrido `cargo check` ni una sola vez sobre el código nuevo — mala práctica,
-  aceptada solo porque no había alternativa a mano.
-  - Además, mergear una rama de worktree a `main` **sin poder pararse en el
-    checkout principal** (no es válido tener la misma rama activa en dos
-    worktrees) exige plomería: `git fetch .`/`git branch -f` se niegan por la
-    protección de git a ramas activas en otro worktree; `git update-ref
-    refs/heads/main <sha>` sí funciona (es fast-forward puro cuando la rama
-    del worktree ya trae `main` mergeado adentro), pero deja el *working
-    directory* del checkout principal desalineado de su propio `main` hasta
-    que alguien corra ahí un `git checkout -- .` (o equivalente) a mano.
+### Bloqueantes para mañana
+
+1. **Una sola autoridad de animación.** `set_active_nodes` maneja
+   `AnimationPlayer` directamente mientras el mismo rig conserva
+   `AnimationTransitions`; Bevy prohíbe mezclar ambos porque su `main_animation`
+   queda desincronizada. Elegir un `AnimationGraph` con blend coherente o un
+   controlador propio completo, nunca el híbrido actual.
+2. **Estado por rig, no por sistema.** `blend_nodes: Local<Vec<_>>` se comparte
+   entre todos los `PlayerAnimationRig` y sobrevive a despawns/cambios de escena.
+   Volverlo componente puro del rig y fijar tests de dos rigs, despawn/recreación,
+   entrada/salida del blend y navegador de clips después del blend.
+3. **Licencia antes de distribuir.** `art/blender/char/char_elf.blend` deriva de
+   `Elf_MaleCharacter-Free`, cuya fuente no trae licencia. Obtener una compatible
+   y registrar procedencia bajo `art/vendor/`, o retirar el derivado de los
+   commits que se publicarían. Sin esto no puede entrar a un repo GPL público.
+4. **Diagnóstico fuera de medición.** `TerrainDebugView` persiste, pero benchmark
+   y flythrough sólo apagan wireframe/overdraw: hoy pueden medir el shader
+   semántico unlit. Suspender/restaurar la vista por mensaje o invalidar la
+   medición mientras cualquier diagnóstico visual esté activo.
+5. **Reparar las fuentes de verdad.** `ARCHITECTURE.md` todavía declara shaders
+   custom sólo opt-in; decidir y escribir la excepción del material único de
+   terreno o revertirla. Quitar de `BOTWMovements.md` el `[x]` y estado fechado:
+   los docs de dominio describen el objetivo; el estado vivo queda acá.
+
+### Deuda del terreno a cerrar con esa corrección
+
+- El loader deja `dirty=true` ante PNG ausente/inválido y reintenta cada frame;
+  usar estados Pending/Ready/Failed y reintentar sólo ante `AssetEvent`.
+- Paleta y números de modo están triplicados en catálogo Rust, leyenda y WGSL;
+  pasar la paleta canónica al shader por uniform.
+- `material_report` imprime roughness/metallic hardcodeados en vez de leer el
+  `TerrainMaterial` real.
+- Separar responsabilidades: `animation.rs` llegó a 972 líneas y
+  `terrain_material.rs` a 409 (§1, §16).
+
+### Estado real del elfo y del worktree
+
+El elfo **nunca apareció en Bevy**: el juego siguió usando el maniquí UAL1.
+`char_elf.blend` sólo fue revisado con renders headless y no se exportó a
+`assets/game/authored/`. El proceso de worktrees sigue sin forma de compilar
+antes del merge por el workspace compartido y nombre de paquete duplicado; no
+volver a integrar una rama sin resolver ese gate.
 
 ## Estado (2026-07-26)
 
@@ -111,7 +99,7 @@ Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/
 glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con percepción
 gradual (melee + arquero), health/muerte/respawn, horse, espada con combos, arco
 de dos fases con carga Bannerlord, maniquí UAL1 como player, mundo 320×320 con
-bosque, audio de pasos por superficie. **386 tests**; `fmt` + `clippy -D
+bosque, audio de pasos por superficie. **394 tests**; `fmt` + `clippy -D
 warnings` en verde.
 
 **Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
@@ -122,10 +110,8 @@ estables" el mismo día en que el medidor marcaba 35-46 FPS. **Regla que sale de
 ahí: ningún número entra a estos documentos sin salir del medidor.**
 
 Auditorías: arquitectura (2026-07-17, 4/4 corregidos), calidad (2026-07-24) y
-código (2026-07-25, `AUDITORIA_CODIGO_2026-07-25.md`). De esta última:
-**C3/M1/M2 cayeron solas** al rehacer el pasto y al cargar texturas por handle;
-siguen abiertas **C1** (`Vec<Vec<f32>>` por tick esculpido) y **C2** (hardware
-leído fuera de `input`, en 14 archivos).
+código (`AUDITORIA_CODIGO_2026-07-25.md`); de esta última siguen abiertas **C1**
+(`Vec<Vec<f32>>` por tick esculpido) y **C2** — ambas en Deudas anotadas.
 
 ## Escenas: cajas de prueba + mundo
 
@@ -220,9 +206,10 @@ difieren, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los niveles.
 - **Simulación**: `GroundFacts::surface` sale de `kind_at(punto de contacto)` en
   el terreno, y del `Surface` autorado en cajas y escalones. Al terreno se le
   **quitó** el componente `Surface`: uno solo no puede describir 320 m.
-- **Presentación**: tinte por celda con **color de vértice** (`StandardMaterial`
-  lo multiplica: sin shader, sin material y sin draw extra). `Soil` es blanco
-  puro = identidad del multiply. Es el andamio que reemplaza `TEXTURES.md`.
+- **Presentación**: el color de vértice codifica capa + propiedades y un único
+  `ExtendedMaterial` muestrea cuatro PNG desde un `texture_2d_array`. F1 ofrece
+  `Arte/Tipo/Escalable/Inflamable/Cortable`; su arquitectura sigue bloqueada por
+  los puntos de auditoría arriba.
 - **Pintar no toca la física**: `Changed<Terrain>` no distingue canales, así que
   `Terrain` lleva `relief_revision` y el rebuild del collider sale temprano si
   las alturas no se movieron.
@@ -273,11 +260,11 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## Dónde se retoma (2026-07-26)
+## Dónde se retoma (2026-07-30)
 
-1. **Texturas**: `TEXTURES.md`, Fase 1 Paso 1 — el contrato en `schema.rs` y la
-   prueba mínima del `texture_2d_array` sobre `ExtendedMaterial`, sin bajar
-   texturas nuevas. Es el paso que dice si la técnica corre en la Polaris.
+1. **Cerrar los cinco bloqueantes pre-push** de esta página, comenzando por
+   licencia y autoridad única de animación. Repetir checkpoint jugado; sólo
+   entonces considerar commit/push.
 2. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
    "acá hay una roca" y guardarlo en el archivo: filas `kind` + posición + yaw +
    escala; presentación resuelve el modelo por catálogo.
@@ -285,9 +272,8 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
    ver el parche releído del disco.
 4. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
    (esculpir en `Traversal`, guardar, reentrar) y la tipografía de la UI.
-5. **Deuda medida**: `rebuild_terrain_collider` arma un `Vec<Vec<f32>>` entero
-   por tick esculpido (C1; ya no se dispara al pintar, pero sí al esculpir).
-6. **Limpieza realizada (2026-07-26)**: `assets/grass_textures_1k/` (duplicado exacto de `T_GroundGrass_*`) fue eliminado del repositorio.
+5. **Cerrar C2 y el determinismo** con los tests de `CRATES.md` (fases 1-2): no
+   dependen del refactor de crates y frenan dos deudas que hoy crecen.
 
 ## Rendimiento: lo que sigue informando decisiones
 
@@ -407,9 +393,16 @@ legible que la función. Si sí, migrar `layout.rs` entero.
 - **C1 — allocation en `FixedUpdate`:** `rebuild_terrain_collider` arma un
   `Vec<Vec<f32>>` que Avian vuelve a aplanar, ~130 allocations por tick
   esculpido. La vía barata exige `parry` como dep directa.
-- **C2 — hardware leído fuera de `input`,** en 14 archivos. Ya se cobró una
-  víctima (la tecla `Tab`). Quiere un dueño único que traduzca bindings a
-  acciones tipadas, y un test que prohíba `ButtonInput` fuera de `src/input/`.
+- **C2 — hardware leído fuera de `input`,** en **15 archivos** (eran 14 el
+  2026-07-25: la deuda crece). Ya se cobró una víctima (la tecla `Tab`). Quiere
+  un dueño único que traduzca bindings a acciones tipadas, y un test que prohíba
+  `ButtonInput` fuera de `src/input/` — ese test es la fase 1 de `CRATES.md` y
+  se puede escribir sin mover un módulo.
+- **Determinismo roto en el spread del arco (2026-08-01).**
+  `combat/motors/aim.rs:288` siembra su LCG con `time.elapsed_secs_f64()` y
+  `shooter.to_bits()` — el ID de entidad depende del orden de spawn, así que dos
+  máquinas en co-op no ponen la flecha en el mismo sitio. Primera divergencia
+  del pilar 5. Plan en `CRATES.md` fase 2.
 - **Audio real:** el paso es un `debug!`; falta cargar `.ogg` y reproducirlo en
   el cue `Step`. Y el timing por **foot-plant**: el acumulador de zancada es un
   stopgap hasta que la animación emita eventos de pisada.

@@ -34,6 +34,10 @@ worktrees separados y sesiones sin memoria compartida entre sí. Por eso:
     inventarios del código existente ni llevan el estado vivo de implementación.
     Cada uno es dueño de su tema; no duplican contenido entre sí (un tema = un
     documento). Los core los referencian, no los repiten.
+  - **Planes de migración** (`docs/CRATES.md`): trabajo de ingeniería
+    transversal, con fases y criterios de aceptación por fase. **Temporales por
+    definición** — se borran cuando su última fase cierra, igual que AHORA.md
+    borra lo cerrado. No fijan leyes: las leyes viven en `ARCHITECTURE.md`.
 - `docs/BLENDER_AUTHORING_GUIDE.md` es una ayuda personal de operación, trackeada
   por conveniencia pero **no autoritativa**: el contrato sigue siendo
   `ASSET_PIPELINE.md` y el plan de animación/rig vive en sus docs de dominio.

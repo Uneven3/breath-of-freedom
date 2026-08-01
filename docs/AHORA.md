@@ -42,6 +42,18 @@ lints, crates) está en `CRATES.md`.
   así que una tecla ya usada no da error: da una función que "no hace nada". Al
   2026-07-26 solo quedan libres **F7, F9, F11, F12**.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
+- **Compilar cuesta caro, y conviene saber por qué.** El workspace comparte
+  `build-dir` (`uneven/.cargo/shared-build`) para compilar bevy una vez entre
+  todos los juegos, pero **esa premisa no se cumple**: Cargo cachea por *set de
+  features resuelto*, y avian3d activa `bevy/bevy_gizmos`, `bevy_mesh`,
+  `bevy_picking` y `bevy_world_serialization`, que los proyectos sin avian no
+  piden. Medido el 2026-08-01: **39 variantes de `libbevy_render`**, **136 GB**
+  en `deps/`, y **agregar un target nuevo** (un `tests/*.rs`, un bin) recompila
+  el árbol de bevy entero para ese target — `tests/architecture.rs` pasó de
+  25 min sin llegar a correr un test. Apagar las features default de avian
+  (fase 6 de `CRATES.md`) ataca las dos cosas. **Decisión abierta**: seguir
+  compartiendo o devolver cada proyecto a su target local, que hace `cargo
+  clean` predecible — y nunca `rm -rf` sobre lo que Cargo administra.
 
 ## Bloqueo pre-push del merge animación + terreno (2026-07-30)
 
@@ -217,29 +229,17 @@ difieren, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los niveles.
 Validado jugando (2026-07-26): pintado, `surface=Dirt→Stone→Dirt` bajo los pies,
 undo, y guardado en disco. **Falta** la relectura en vivo (F10 → menú → volver).
 
-### La diagonal de la celda no es nuestra (2026-07-26, ARREGLADO)
+### Lección de la diagonal de la celda (2026-07-26, arreglado)
 
-Encontrado jugando: "hay una colisión que no es igual al mesh del terreno, está
-donde el terreno es muy dispar". Los cuatro vértices de una celda solo son
-coplanares en terreno parejo; donde el relieve se retuerce, las dos diagonales
-posibles describen **dos superficies distintas**, y manda el collider. `parry3d`
-corta por la **anti-diagonal**; nuestra malla y `height_at` usaban la principal.
-Medido antes del arreglo: **0,33 m en el peor punto, 36% de las muestras
-desalineadas más de 1 cm**. En piso plano costaba cero, y por eso sobrevivió.
-
-El porqué quedó en el doc de `Terrain::to_collider`. Lo que hay que recordar es
-**por qué la suite no lo agarró**:
-
-- El test comparaba **6 puntos a mano**; con relieve suave las dos diagonales
-  casi coinciden. Ahora barre 3600 muestras con paso de 2,51 m contra celdas de
-  2,5 m, para que caigan por dentro de los quads.
-- **Nadie comparaba la malla que se ve contra la superficie que se camina.**
-  `world` chequeaba su grilla contra el collider y `visuals` construía una malla
-  de la misma grilla, pero ese par nunca se enfrentaba. Test nuevo sobre
-  **centroides** de triángulo (los vértices no sirven: ahí las triangulaciones
-  coinciden por construcción). Verificado que atrapa la regresión.
-- Un tercer test tenía la diagonal vieja horneada en su número esperado; ahora la
-  saca **del collider** en vez de asumirla.
+`parry3d` triangula el heightfield por la **anti-diagonal** y nuestra malla usaba
+la principal: **0,33 m** de desvío en el peor punto y **36% de las muestras** a
+más de 1 cm, invisible en piso plano y por eso sobrevivió. El porqué está en el
+doc de `Terrain::to_collider`; el detalle, en git. Lo que se queda es **por qué
+la suite no lo agarró**: comparaba 6 puntos a mano (con relieve suave las dos
+diagonales casi coinciden) y **nadie enfrentaba la malla que se ve contra la
+superficie que se camina**. Ahora se barren 3600 muestras con paso de 2,51 m
+contra celdas de 2,5 m, y se comparan **centroides** de triángulo — los vértices
+no sirven, ahí las triangulaciones coinciden por construcción.
 
 ### Lecciones del relieve que siguen aplicando
 

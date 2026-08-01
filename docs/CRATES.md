@@ -25,9 +25,8 @@ por defecto sale **limpio, 0 warnings**. Nada de lo anterior es descuido — es 
 distancia entre lo que clippy revisa por defecto y lo que las leyes exigen.
 
 Escala: 168 archivos, 38 198 LOC, 21 módulos, **un solo crate**, 394 tests.
-Cualquier cambio recompila los 38 k: la corrida de `clippy`, con las
-dependencias en caché y una sola unidad `Compiling breath-of-freedom`, tardó
-**7 min 21 s** (incluye espera de lock; es techo, no piso).
+Cualquier cambio recompila los 38 k: con las dependencias en caché y una sola
+unidad `Compiling breath-of-freedom`, `clippy` tardó **7 min 21 s**.
 
 ## El principio
 
@@ -70,8 +69,7 @@ de tests que leen el árbol con `std::fs` (`world/terrain.rs`,
   `src/input/`, con una **lista de excepciones conocidas que solo puede
   encoger**. El test entra en verde el día uno y la deuda deja de crecer.
 - El mismo test cubre §12 (`unsafe`) por dos líneas más.
-- Es provisional a propósito: en la fase 6 lo hace Cargo y el test se borra.
-  Pero da el grueso del beneficio en un día en vez de en seis semanas.
+- Provisional a propósito: en la fase 6 lo hace Cargo y el test se borra.
 
 ## Fase 2 — Determinismo
 
@@ -218,6 +216,8 @@ llamadas a `from_mesh`/`trimesh_from`/`convex_hull_from`) y `debug-plugin` se
 muda a presentación con `PhysicsDebugPlugin`, que ya vive en `main.rs`. Con
 `default-features = false, features = ["3d","f32","parry-f32","parallel","xpbd_joints"]`,
 un target headless que dependa solo de `bof_simulation` no linkea `bevy_render`.
+Y paga una deuda que no es de arquitectura: esas features bifurcan nuestro árbol
+de bevy del de los otros juegos y llenan el `build-dir` compartido (`AHORA.md`).
 
 Obstáculo real a resolver primero: **`build.rs` incluye
 `src/asset_pipeline/schema.rs` por `#[path]`** y `generated.rs` hace

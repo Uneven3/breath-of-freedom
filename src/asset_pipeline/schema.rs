@@ -22,6 +22,7 @@ pub const PALETTE_KEYS: &[&str] = &[
     "PickupFood",
     "PickupMaterial",
     "PickupWeapon",
+    "Player",
     "Probe",
     "Steel",
     "String",

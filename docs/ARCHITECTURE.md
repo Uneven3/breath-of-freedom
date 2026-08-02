@@ -141,8 +141,8 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   el tier barato para no mentir sobre el costo: un placeholder caro que la
   versión final no shipeará invalida toda medición hecha contra él. El watchdog
   de triángulos (`visuals/budget.rs`) hace visible en el log cualquier malla que
-  exceda el presupuesto. El baseline visual usa `StandardMaterial`; shaders
-  custom/fullscreen son experimentos opt-in, nunca costo fijo global default.
+  exceda el presupuesto. El baseline usa PBR de Bevy: `StandardMaterial` y el
+  único `ExtendedMaterial` del terreno; shaders fullscreen son opt-in.
 - **Debug: un snapshot, dos sinks.** Consola y pantalla responden preguntas
   distintas y no pueden contradecirse: el jugador mira el HUD para juzgar
   *feeling*, y el log es lo único que sobrevive al playtest para armar la tabla
@@ -176,7 +176,7 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 
 | Módulo | Posee | Frontera |
 |---|---|---|
-| `input` | `ActiveActions`, `ControlOrientation`, bindings, foco modal | Nadie lee hardware salvo él (ley hoy violada en 14 archivos: C2); resuelve en PreUpdate |
+| `input` | `ActiveActions`, `ControlOrientation`, bindings, foco modal | Nadie lee hardware salvo él (ley hoy violada en 13 archivos: C2); resuelve en PreUpdate |
 | `scene` | `AppState`, tabla `SCENES`, `SceneBuild`, ciclo de vida | Decide *qué existe y cuándo*; `DespawnOnExit` en todo contenido de escena |
 | `editor` | Autoría in-engine: pinceles de relieve, pintura semántica, historial, persistencia | Decide *dónde y cuándo*; el **cómo** cambia el dato es de `world` |
 | `asset_pipeline` | Manifiesto build-time, `MaterialPalette`, `SpatialCatalog`, `schema.rs` | Única autoridad espacial de lo authored; SoT compartida con `build.rs` |

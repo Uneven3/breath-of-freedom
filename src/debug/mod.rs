@@ -18,10 +18,9 @@
 //! and horse spawns that used to be bare F7/F8 keys — and the scripted
 //! benchmark) and the **F2** readout menu (which real-time groups the overlay
 //! draws). Twelve unlabelled function keys were not a design, and they had run
-//! out of room. The keys that remain are the ones a menu cannot serve:
-//! **[** / **]** cycle animation clips while the browser is open, and **P**
-//! dumps the current snapshot to the log so a moment can be marked without
-//! opening a modal over the thing being observed.
+//! out of room. **P** remains as the one direct debug key: it dumps the current
+//! snapshot to the log so a moment can be marked without opening a modal over
+//! the thing being observed.
 
 pub mod channel;
 mod collect;
@@ -126,7 +125,6 @@ impl Plugin for DebugPlugin {
                 toggles::apply_channel_toggles,
                 toggles::apply_debug_actions,
                 toggles::apply_hud_section_toggles,
-                toggles::cycle_animation_clips,
                 material_report::log_material_breakdown,
                 gizmos::draw_sensor_gizmos,
             ),

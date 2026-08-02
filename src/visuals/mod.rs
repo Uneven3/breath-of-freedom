@@ -4,9 +4,7 @@
 //! toward it each render frame; the simulation entity carries no mesh,
 //! material or asset handle. One submodule per visual family:
 //!
-//! - [`player`] — the player rig (GLB scene), bow visual, body interpolation.
-//! - [`animation`] — the player `AnimationGraph`, state→clip mapping and the
-//!   F7 debug clip browser.
+//! - [`player`] — the player's collision-matched capsule, bow, interpolation.
 //! - [`enemy`] — enemy capsules + awareness tint.
 //! - [`grass`] — the decorative meadow: authored tufts swaying in a wind field.
 //! - [`horse`] — horse graybox capsule.
@@ -15,7 +13,6 @@
 
 use bevy::prelude::*;
 
-pub mod animation;
 mod arrows;
 pub mod budget;
 pub mod catalog;
@@ -32,10 +29,7 @@ mod terrain;
 pub mod terrain_material;
 pub mod vfx;
 
-pub use animation::{AnimationDebug, PlayerAnimations};
-pub use catalog::{
-    AppearanceBinding, AppearanceKey, PLAYER_APPEARANCE, TreeSilhouette, VisualCatalog, VisualSlot,
-};
+pub use catalog::{AppearanceBinding, AppearanceKey, TreeSilhouette, VisualCatalog, VisualSlot};
 pub use player::PlayerVisual;
 
 /// Exponential decay rate for visual smoothing, fed to
@@ -69,7 +63,6 @@ pub struct VisualsPlugin;
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(diagnostic::DiagnosticViewsPlugin);
-        app.init_resource::<AnimationDebug>();
         app.init_resource::<VisualCatalog>();
         app.init_resource::<grass::GrassStressState>();
         // Startup keeps only what outlives a scene: loaded assets and shared
@@ -79,17 +72,9 @@ impl Plugin for VisualsPlugin {
         app.add_plugins(terrain_material::TerrainMaterialPlugin);
         app.add_systems(
             Startup,
-            (
-                animation::start_loading_animations,
-                forest::build_tree_proxy_assets,
-                arrows::init_assets,
-            ),
+            (forest::build_tree_proxy_assets, arrows::init_assets),
         );
         for id in crate::scene::SceneId::ALL {
-            app.add_systems(
-                OnEnter(crate::scene::AppState::Scene(id)),
-                player::spawn_visual,
-            );
             app.add_systems(
                 OnEnter(crate::scene::AppState::Scene(id)),
                 grass::spawn_meadow.run_if(crate::scene::scene_has(|c| c.meadow)),
@@ -99,7 +84,7 @@ impl Plugin for VisualsPlugin {
             Update,
             (
                 (
-                    player::link_player_visual,
+                    player::spawn_visual,
                     player::interpolate_visual,
                     player::animate_bow_visual,
                 ),
@@ -136,11 +121,6 @@ impl Plugin for VisualsPlugin {
                     arrows::tick_trails,
                 )
                     .chain(),
-                (
-                    animation::compile_animation_graph,
-                    animation::init_player_animation_graph,
-                    animation::animate_player,
-                ),
             ),
         );
     }
@@ -150,6 +130,7 @@ impl Plugin for VisualsPlugin {
 /// with it. Catalog-driven visuals (player, trees) and pooled arrow visuals own
 /// their own lifetime and are deliberately excluded.
 type GrayboxFamilyVisual = Or<(
+    With<player::PlayerVisual>,
     With<enemy::EnemyVisual>,
     With<horse::HorseVisual>,
     With<probe::TraversalProbeVisual>,

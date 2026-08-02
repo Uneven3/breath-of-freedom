@@ -142,6 +142,7 @@ fn toggle_spawn(
         ARCHER_BOKOBO_HP,
         (
             crate::combat::motors::aim::DrawStrength::default(),
+            crate::combat::motors::aim::ShotSpreadRng::BOKOBO_ARCHER,
             crate::input::frame::ControlOrientation::default(),
         ),
     );

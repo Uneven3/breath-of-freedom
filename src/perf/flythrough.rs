@@ -161,6 +161,7 @@ pub(super) fn start_requested_flythrough(
     benchmark: Res<super::Benchmark>,
     mut toggles: ResMut<PerfToggles>,
     time: Res<Time<Real>>,
+    terrain_debug: Res<crate::visuals::terrain_material::TerrainDebugState>,
 ) {
     if requests.read().next().is_none() {
         return;
@@ -178,6 +179,10 @@ pub(super) fn start_requested_flythrough(
     // Only one run may script the camera at a time.
     if benchmark.is_running() {
         warn!("[flythrough] ignored — a benchmark is already running");
+        return;
+    }
+    if terrain_debug.view() != crate::visuals::terrain_material::TerrainDebugView::Off {
+        warn!("[flythrough] cannot start — switch the terrain view back to Arte first");
         return;
     }
     if leg_count() == 0 {

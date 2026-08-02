@@ -217,21 +217,14 @@ Lo que este documento aporta al IK:
   - Actualizar `LocomotionState::ALL` y `assert_all_is_exhaustive`.
 - [ ] **Implementar Motores `Swim` y `Dive` (`src/movement/motors/`):** Flotabilidad en `WaterVolume`, stamina/oxígeno y ascenso automático.
 - [ ] **Implementar Carga y Empuje Desacoplados con Matemática Física (§20):** `RigidBody::Kinematic` posicionado matemáticamente en `FixedUpdate` y acople de malla visual a `SKT_Carry_Overhead` en `PostUpdate`.
-- [ ] **Actualizar Resolvedor de Animación (`src/visuals/animation.rs`):**
+- [ ] **Crear Resolvedor de Animación (`src/visuals/animation.rs`):**
   - Agregar `AnimationRole::{Swim, Dive, Push, Pull, CarryIdle, CarryWalk}`.
   - Configurar las cadenas de fallback en `ROLE_TABLE`.
 
 ### Fase 2 — Eliminación de Foot-Sliding y Grafo de Animación Protegido
-- [x] **(2026-07-29, sin jugar todavía — ver `AHORA.md`)** Implementado en
-      `visuals/animation.rs`: `node_playback_speed` es exactamente
-      $k_{speed\_node} = V_{real} / V_{autorada\_node}$ protegido contra
-      $V_{autorada} < 0.05$. Además, no solo escala nodos: `Walk`↔`Run` ahora
-      mezclan continuo por velocidad real (`locomotion_blend_weight`,
-      `set_active_nodes`) en vez de un salto discreto — así caminar acelera
-      hacia un trote solo, sin `LocomotionState` nuevo (`Walk` ya acelera
-      gradualmente en `motor_common::drive_planar_velocity`). No verificado
-      con `cargo check`/`cargo test` en esta sesión (deuda de workspace, ver
-      `AHORA.md`).
+- [ ] Implementar `node_playback_speed = V_real / V_autorada` protegido para
+  `V_autorada < 0.05`, y mezcla continua `Walk`↔`Run` por velocidad real sin
+  agregar un estado discreto de trote.
 - [ ] Configurar el `AnimationGraph` con dos capas (Lower-Body para movimiento, Upper-Body para armas/ataques/objetos).
 - [ ] Agregar sincronización de fase entre animaciones de caminata y trote (*Phase Matching* por eventos de pisada).
 

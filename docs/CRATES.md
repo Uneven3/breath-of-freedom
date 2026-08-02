@@ -3,8 +3,8 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **propuesta**, ninguna fase ejecutada. Se borra cuando la última fase
-cierre — igual que `AHORA.md` borra lo cerrado.
+Estado: **fase 1 ejecutada**; C2 y §12 están congeladas por test. Se borra cuando
+la última fase cierre — igual que `AHORA.md` borra lo cerrado.
 
 ## El problema, medido (2026-08-01)
 
@@ -18,21 +18,22 @@ las verifica nadie:
 | §12 | Sin `unsafe` | Cierto hoy; nada lo impide mañana. |
 | §13 | `clippy -D warnings` | Cero líneas de `[lints]` en `Cargo.toml`. |
 | §20 | Simulación nunca depende de visuales | 5 archivos de simulación nombran `Mesh`/`StandardMaterial`. |
-| C2 | Solo `input` lee hardware | **15 archivos fuera de `input`** (era 14 en la auditoría del 2026-07-25: la deuda crece). |
+| C2 | Solo `input` lee hardware | **13 archivos fuera de `input`**, congelados por `tests/architecture.rs` (eran 15 el 2026-08-01). |
 
 **El código no está sucio: el listón está bajo.** `cargo clippy` con los lints
 por defecto sale **limpio, 0 warnings**. Nada de lo anterior es descuido — es la
 distancia entre lo que clippy revisa por defecto y lo que las leyes exigen.
 
-Escala: 168 archivos, 38 198 LOC, 21 módulos, **un solo crate**, 394 tests.
+Escala: 167 archivos, 37 122 LOC, 21 módulos, **un solo crate**, 387 tests
+(385 unitarios + 2 de arquitectura).
 Cualquier cambio recompila los 38 k: con las dependencias en caché y una sola
 unidad `Compiling breath-of-freedom`, `clippy` tardó **7 min 21 s**.
 
 ## El principio
 
 **Si una ley se puede convertir en error de compilación o en un test, se
-convierte. La que necesita revisor es la que se incumple** — C2 lleva desde el
-2026-07-25 documentada en tres archivos, ya se cobró la tecla `Tab`, y creció.
+convierte. La que necesita revisor es la que se incumple** — C2 creció mientras
+vivió sólo en prosa; el test ahora obliga a que su lista sólo pueda encoger.
 
 Corolario para este repo: **no se agregan leyes.** 21 es más de lo que se
 recuerda al escribir código. Lo que sale de aquí es al revés — leyes que se
@@ -45,7 +46,7 @@ Por retorno sobre esfuerzo, no por prolijidad:
 
 | # | Fase | Cierra | Escala |
 |---|---|---|---|
-| 1 | Tests de frontera | C2, §12 | días |
+| 1 | Tests de frontera ✅ | C2, §12 | cerrada |
 | 2 | Determinismo | pilar 5 de `NORTE.md` | días |
 | 3 | Lints | §8, §9, §13 | 1-2 sesiones |
 | 4 | Acceso al terreno | escala del mundo | 1 sesión |
@@ -60,38 +61,27 @@ Las fases 1-4 no tocan la estructura y cada una termina jugable (§10) con
 
 ## Fase 1 — Los tests que no esperan al refactor
 
-`AHORA.md` ya especifica el remedio de C2: *"un test que prohíba `ButtonInput`
-fuera de `src/input/`"*. Se escribe hoy, sin mover un módulo, y hay precedente
-de tests que leen el árbol con `std::fs` (`world/terrain.rs`,
-`editor/persist.rs`).
+`tests/architecture.rs` recorre el árbol sin depender del juego y congela dos
+leyes antes del refactor:
 
-- Recorrer `src/`, fallar ante `ButtonInput`/`MouseMotion`/`MouseWheel` fuera de
+- Falla ante `ButtonInput`/`MouseMotion`/`MouseWheel` fuera de
   `src/input/`, con una **lista de excepciones conocidas que solo puede
-  encoger**. El test entra en verde el día uno y la deuda deja de crecer.
-- El mismo test cubre §12 (`unsafe`) por dos líneas más.
+  encoger**. Entró verde y la deuda dejó de crecer.
+- El mismo test cubre §12 (`unsafe`).
 - Provisional a propósito: en la fase 6 lo hace Cargo y el test se borra.
 
 ## Fase 2 — Determinismo
 
-`src/combat/motors/aim.rs:288`:
+Estado: **en curso**. El primer bug quedó cerrado: `ShotSpreadRng` vive por actor,
+recibe una semilla authored y no depende de reloj, `Entity` ni orden de query.
+Dos seeds iguales reproducen ocho disparos idénticos; actores con otra semilla
+tienen un stream independiente. Per-actor evita que dos tiradores se acoplen por
+el orden en que Bevy itera sus arquetipos.
 
-```rust
-let mut seed =
-    ((time.elapsed_secs_f64().fract() * 100000.0) as u32) ^ (shooter.to_bits() as u32);
-```
+Falta el guardrail general de la fase:
 
-El spread del arco depende de **`Entity::to_bits()`** — el orden de spawn y la
-generación tras despawns — y de un `f64` de tiempo acumulado. Dos máquinas en
-co-op no ponen la flecha en el mismo sitio: es la primera divergencia del pilar
-5 (*multiplayer host-autoritativo*), y está en el código hoy. Lo bueno es que no
-hay dependencia `rand` y que `terrain.rs`/`grass.rs` ya siembran explícito — la
-disciplina existe, le falta ser obligatoria.
-
-- Un `SimRng` como recurso de simulación, con semilla registrada e inyectada.
-  Nunca leer el reloj para decidir un resultado.
-- **`Entity` no entra en ningún cálculo que decida un resultado.** Es
-  transitorio. Para desempatar entre dos tiradores, un índice de actor estable.
-- Test: misma escena, misma semilla, dos corridas, `Transform`/`BodyVelocity`/
+- Ningún resultado futuro puede leer reloj real ni usar `Entity` como semilla.
+- Test: misma escena, mismas semillas, dos corridas, `Transform`/`BodyVelocity`/
   `LocomotionState` idénticos N ticks. Sin él, "host-autoritativo desde
   temprano" es una intención y no una propiedad.
 

@@ -1,7 +1,7 @@
 //! Benchmark knobs — pure data (§6, §19).
 //!
 //! `perf` is the only writer; each owner module *reads* what it needs and
-//! applies it to what it owns (§7), the same direction as `AnimationDebug`.
+//! applies it to what it owns (§7).
 //! Every knob is presentation-only: colliders, `TreeKind` and `FixedUpdate`
 //! results are identical in every combination.
 

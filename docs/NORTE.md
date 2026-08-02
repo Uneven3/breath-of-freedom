@@ -50,8 +50,8 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 - **PBR estilizado sobre `StandardMaterial`**, inclinado a lo plano: materiales
   mate (roughness alto, cero metal), color e iluminación mandando. Para arte
   propio: vertex-color / material plano apoyado en la luz, antes que sets PBR
-  texturizados. No se usa toon shader ni outline fullscreen; shaders custom se
-  reservan para diagnósticos opt-in como overdraw, nunca para el baseline.
+  texturizados. El terreno usa un `ExtendedMaterial` PBR único para sus capas;
+  toon, outline y pases fullscreen quedan como diagnósticos opt-in.
 - Assets de prototipado reemplazables mediante catálogo de presentación:
   identidad de gameplay, visual y colisión permanecen independientes.
 - **Rendimiento:** 60 FPS en hardware de referencia con presupuestos medidos; en

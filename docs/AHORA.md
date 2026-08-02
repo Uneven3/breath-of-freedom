@@ -55,64 +55,32 @@ lints, crates) está en `CRATES.md`.
   compartiendo o devolver cada proyecto a su target local, que hace `cargo
   clean` predecible — y nunca `rm -rf` sobre lo que Cargo administra.
 
-## Bloqueo pre-push del merge animación + terreno (2026-07-30)
+## Limpieza pre-push (2026-08-02)
 
-**No hacer push.** Decisión del usuario: corregir mañana; esta auditoría queda
-sin commit. `fmt --check`, `clippy -D warnings` y los **394 tests** pasan, pero
-eso no valida ownership, lifecycle, procedencia ni feeling. El playtest mostró
-"muchos errores" de animación sin `error`/`panic` en el log.
+Se retiraron el elfo, sus fuentes sin licencia y la herramienta de reskin. El
+player volvió a graybox: una cápsula procedural construida con el mismo
+`BodyDimensions` y el mismo estado `Crouched` que el collider. No hay rig,
+modelo ni controlador de animación activos; ese dominio se retoma cuando exista
+un personaje propio o con procedencia compatible.
 
-### Bloqueantes para mañana
+Los otros bloqueantes de la auditoría también quedaron resueltos: benchmark y
+flythrough rechazan arrancar con una vista semántica activa; el loader de
+texturas reintenta sólo ante `AssetEvent`; `material_report` lee el material
+real; y `ARCHITECTURE.md`/`NORTE.md` declaran la excepción PBR del terreno.
+Queda como deuda, no bloqueo: unificar paleta/IDs Rust↔WGSL y dividir
+`terrain_material.rs` (§1, §16). La suite completa cerró en verde: 385 tests
+unitarios y 2 de arquitectura, además de `fmt`, `check` y `clippy -D warnings`.
+El checkpoint visual quedó aplazado porque el host necesita reiniciarse; no se
+declara validada en juego la cápsula nueva hasta ejecutar ese checkpoint.
 
-1. **Una sola autoridad de animación.** `set_active_nodes` maneja
-   `AnimationPlayer` directamente mientras el mismo rig conserva
-   `AnimationTransitions`; Bevy prohíbe mezclar ambos porque su `main_animation`
-   queda desincronizada. Elegir un `AnimationGraph` con blend coherente o un
-   controlador propio completo, nunca el híbrido actual.
-2. **Estado por rig, no por sistema.** `blend_nodes: Local<Vec<_>>` se comparte
-   entre todos los `PlayerAnimationRig` y sobrevive a despawns/cambios de escena.
-   Volverlo componente puro del rig y fijar tests de dos rigs, despawn/recreación,
-   entrada/salida del blend y navegador de clips después del blend.
-3. **Licencia antes de distribuir.** `art/blender/char/char_elf.blend` deriva de
-   `Elf_MaleCharacter-Free`, cuya fuente no trae licencia. Obtener una compatible
-   y registrar procedencia bajo `art/vendor/`, o retirar el derivado de los
-   commits que se publicarían. Sin esto no puede entrar a un repo GPL público.
-4. **Diagnóstico fuera de medición.** `TerrainDebugView` persiste, pero benchmark
-   y flythrough sólo apagan wireframe/overdraw: hoy pueden medir el shader
-   semántico unlit. Suspender/restaurar la vista por mensaje o invalidar la
-   medición mientras cualquier diagnóstico visual esté activo.
-5. **Reparar las fuentes de verdad.** `ARCHITECTURE.md` todavía declara shaders
-   custom sólo opt-in; decidir y escribir la excepción del material único de
-   terreno o revertirla. Quitar de `BOTWMovements.md` el `[x]` y estado fechado:
-   los docs de dominio describen el objetivo; el estado vivo queda acá.
-
-### Deuda del terreno a cerrar con esa corrección
-
-- El loader deja `dirty=true` ante PNG ausente/inválido y reintenta cada frame;
-  usar estados Pending/Ready/Failed y reintentar sólo ante `AssetEvent`.
-- Paleta y números de modo están triplicados en catálogo Rust, leyenda y WGSL;
-  pasar la paleta canónica al shader por uniform.
-- `material_report` imprime roughness/metallic hardcodeados en vez de leer el
-  `TerrainMaterial` real.
-- Separar responsabilidades: `animation.rs` llegó a 972 líneas y
-  `terrain_material.rs` a 409 (§1, §16).
-
-### Estado real del elfo y del worktree
-
-El elfo **nunca apareció en Bevy**: el juego siguió usando el maniquí UAL1.
-`char_elf.blend` sólo fue revisado con renders headless y no se exportó a
-`assets/game/authored/`. El proceso de worktrees sigue sin forma de compilar
-antes del merge por el workspace compartido y nombre de paquete duplicado; no
-volver a integrar una rama sin resolver ese gate.
-
-## Estado (2026-07-26)
+## Estado (2026-08-02)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/
 glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con percepción
 gradual (melee + arquero), health/muerte/respawn, horse, espada con combos, arco
-de dos fases con carga Bannerlord, maniquí UAL1 como player, mundo 320×320 con
-bosque, audio de pasos por superficie. **394 tests**; `fmt` + `clippy -D
-warnings` en verde.
+de dos fases con carga Bannerlord, cápsula graybox como player, mundo 320×320
+con bosque y audio de pasos por superficie. La validación automatizada de esta
+limpieza está verde; la validación jugada de la cápsula sigue pendiente.
 
 **Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
 horneadas en una malla por chunk — 25 entidades, cero trabajo por frame. Medido
@@ -260,20 +228,20 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## Dónde se retoma (2026-07-30)
+## Dónde se retoma (2026-08-02)
 
-1. **Cerrar los cinco bloqueantes pre-push** de esta página, comenzando por
-   licencia y autoridad única de animación. Repetir checkpoint jugado; sólo
-   entonces considerar commit/push.
-2. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
+1. **Completar el checkpoint aplazado:** cápsula de pie/agachada, cambio de
+   escena, combate y benchmark. La suite automatizada ya está verde.
+2. **CRATES fase 2 — determinismo:** el spread ya usa un stream por actor con
+   semilla authored; falta el replay de escena por N ticks. Fase 1 congela
+   C2/§12 y esta limpieza redujo C2 a 13 archivos.
+3. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
    "acá hay una roca" y guardarlo en el archivo: filas `kind` + posición + yaw +
    escala; presentación resuelve el modelo por catálogo.
-3. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
+4. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
    ver el parche releído del disco.
-4. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
+5. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
    (esculpir en `Traversal`, guardar, reentrar) y la tipografía de la UI.
-5. **Cerrar C2 y el determinismo** con los tests de `CRATES.md` (fases 1-2): no
-   dependen del refactor de crates y frenan dos deudas que hoy crecen.
 
 ## Rendimiento: lo que sigue informando decisiones
 
@@ -340,14 +308,10 @@ swap atómico.
 Primera vertical: `tree_pine_a`, arte propio low-poly con LOD0/1/2, `UCY_Trunk`,
 tags y socket. Falta el checkpoint jugado antes de retirar Quaternius `Pine_1`.
 
-**Contrato de animación** con SoT única (`schema.rs::PLAYER_CLIP_CONTRACT`,
-compartida por `build.rs` y el resolvedor): `AnimationRole`+`ROLE_TABLE` resuelven
-`AN_<Rol>` → alias vendor → fallback, y un GLB con `bof_animset="player"` falla el
-build si le falta un clip `required`. El player es el maniquí neutro que **fusiona
-UAL1** (locomoción) **y UAL2** (acciones), catálogos separados que comparten rig.
-Falta: clips de strafe propios, motores swim/dive, clips de combate, y un
-personaje low-poly propio que herede el rig (el maniquí pesa ~13,7k tris, con las
-esferas `M_Joints` en 8012 — más que el cuerpo).
+**Contrato futuro de animación:** `schema.rs::PLAYER_CLIP_CONTRACT` y `build.rs`
+siguen rechazando un GLB authored incompleto, pero no existe rig/resolvedor
+runtime mientras el player sea la cápsula graybox. La dirección de blending e
+IK vive en sus docs de dominio y se implementa sólo con un personaje compatible.
 
 **Facing unificado**: `FacingSource { Free, Look, LockOn(Entity) }` con
 `resolve_facing` como dueño único tras `TickActiveMotor`, así los motores no
@@ -393,16 +357,13 @@ legible que la función. Si sí, migrar `layout.rs` entero.
 - **C1 — allocation en `FixedUpdate`:** `rebuild_terrain_collider` arma un
   `Vec<Vec<f32>>` que Avian vuelve a aplanar, ~130 allocations por tick
   esculpido. La vía barata exige `parry` como dep directa.
-- **C2 — hardware leído fuera de `input`,** en **15 archivos** (eran 14 el
-  2026-07-25: la deuda crece). Ya se cobró una víctima (la tecla `Tab`). Quiere
-  un dueño único que traduzca bindings a acciones tipadas, y un test que prohíba
-  `ButtonInput` fuera de `src/input/` — ese test es la fase 1 de `CRATES.md` y
-  se puede escribir sin mover un módulo.
-- **Determinismo roto en el spread del arco (2026-08-01).**
-  `combat/motors/aim.rs:288` siembra su LCG con `time.elapsed_secs_f64()` y
-  `shooter.to_bits()` — el ID de entidad depende del orden de spawn, así que dos
-  máquinas en co-op no ponen la flecha en el mismo sitio. Primera divergencia
-  del pilar 5. Plan en `CRATES.md` fase 2.
+- **C2 — hardware leído fuera de `input`,** en **13 archivos** (eran 15 el
+  2026-08-01: la lista ya sólo encoge). Ya se cobraron `Tab` y el navegador de
+  animación. El test de fase 1 ya impide que la lista crezca; falta el dueño
+  único que traduzca bindings a acciones tipadas.
+- **Determinismo:** el spread del arco ya no usa tiempo ni `Entity`; cada actor
+  porta `ShotSpreadRng` con semilla authored y tests de replay del stream. Falta
+  el test de dos escenas por N ticks para cerrar `CRATES.md` fase 2.
 - **Audio real:** el paso es un `debug!`; falta cargar `.ogg` y reproducirlo en
   el cue `Step`. Y el timing por **foot-plant**: el acumulador de zancada es un
   stopgap hasta que la animación emita eventos de pisada.

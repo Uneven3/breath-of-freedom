@@ -99,7 +99,7 @@ primitivas en `visuals/forest.rs`.
 
 | Asset | Tipo | Alto | Ancho / copa ⌀ | Notas |
 | --- | --- | --- | --- | --- |
-| Player (maniquí UAL1) | personaje | ~2.0 | ~0.5 hombros | mesh nativo 1.829 m, escalado ×1.093 |
+| Player graybox | cápsula | 2.0 | radio 0.5 | deriva de `BodyDimensions::PLAYER` |
 | `tree_pine_a` | pino authored | 7.6 | copa ~3.5 | tronco `UCY_Trunk`; primera vertical propia |
 | Proxies graybox | árbol | 7.4–8.5 | copa 3.6–4.0 | `TreeSilhouette::{Rounded,Conical,Gnarled}` |
 
@@ -159,15 +159,12 @@ hull/trimesh del `SM_`/`SK_`. **Un prefijo fuera de esta tabla falla el build**
 
 #### Contrato de animación del player (plug and play + guardrail)
 
-Los nombres de clip son un **contrato rígido con una sola fuente de verdad**:
-`schema.rs::PLAYER_CLIP_CONTRACT`, compartido por el validador de `build.rs` y el
-resolvedor de runtime, así no pueden desincronizarse. Cada rol deriva de un motor
-de `movement/motors/`; el vocabulario es `AN_<Rol>`. Dos niveles de enforcement:
+Los nombres de clip authored son un **contrato rígido con una sola fuente de
+verdad**: `schema.rs::PLAYER_CLIP_CONTRACT`, consumida por `build.rs`. El player
+actual es una cápsula sin rig; el resolvedor runtime se diseña con el primer
+personaje compatible, no antes. Enforcement disponible:
 
-- **Runtime (placeholder vendor, blando):** el resolvedor (`ROLE_TABLE`) prueba
-  (1) nombre canónico, (2) alias vendor, (3) clip del rol de *fallback*. Un rol
-  sin clip degrada en cadena hacia Idle y se loguea a `debug!`. Nunca se congela.
-- **Compile-time (personaje authored, duro):** un GLB con `bof_animset =
+- **Compile-time:** un GLB con `bof_animset =
   "player"` **falla el build** si le falta un clip `required`, listando cuáles.
 
 **Lo que un asset `bof_animset = "player"` debe traer** — 13 clips `required`,
@@ -178,16 +175,10 @@ AN_Idle  AN_Walk  AN_Run   AN_Sneak  AN_Jump   AN_Fall  AN_Glide
 AN_Climb AN_Ladder AN_Mantle AN_Vault AN_WallJump AN_EdgeLeap
 ```
 
-A qué estado responde cada rol, con qué clip vendor está cubierto hoy y hacia
-dónde degrada son **tablas de código**, no de este documento: viven en
-`schema.rs::PLAYER_CLIP_CONTRACT` y `visuals/animation.rs::ROLE_TABLE`. Copiarlas
-acá sólo crea una cuarta copia que se desincroniza.
-
-El placeholder **fusiona ambas librerías** (UAL1 locomoción + UAL2 acciones, 85
-clips); comparten rig, así retargetean entre sí, y en colisión de nombre gana
-UAL1. **Roles planeados** (`required: false`, validados si existen, sin lógica de
-selección aún): `AN_Swim`, `AN_Dive` y el eje direccional del modo
-facing-bloqueado (`…Bwd`, `…StrafeL`, `…StrafeR`).
+La relación futura estado→rol y sus fallbacks pertenece al código del resolvedor
+cuando exista. **Roles planeados** (`required: false`, validados si existen):
+`AN_Swim`, `AN_Dive` y el eje direccional del modo facing-bloqueado (`…Bwd`,
+`…StrafeL`, `…StrafeR`).
 
 ## Custom properties
 

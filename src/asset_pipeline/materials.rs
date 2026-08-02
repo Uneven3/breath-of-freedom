@@ -99,6 +99,7 @@ fn palette_material(key: &str, asset_server: &AssetServer) -> StandardMaterial {
         "PickupFood" => Color::srgb(0.80, 0.20, 0.20),
         "PickupMaterial" => Color::srgb(0.45, 0.30, 0.15),
         "PickupWeapon" => Color::srgb(0.60, 0.60, 0.65),
+        "Player" => Color::srgb(0.18, 0.42, 0.78),
         "Probe" => Color::srgb(0.85, 0.30, 0.25),
         "Steel" => Color::srgb(0.70, 0.70, 0.75),
         "String" => Color::srgb(0.90, 0.90, 0.95),

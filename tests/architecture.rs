@@ -2,7 +2,7 @@
 //!
 //! C2 (solo `input` lee hardware) y §12 (sin `unsafe`) son verificables por
 //! máquina, y hasta hoy no las verificaba nadie: C2 se documentó el 2026-07-25
-//! con 14 archivos, ya se comió la tecla `Tab`, y para el 2026-08-01 iba en 15.
+//! con 14 archivos, llegó a 15 el 2026-08-01 y desde entonces empezó a bajar.
 //! Una ley que solo vive en prosa no es una ley.
 //!
 //! Esto es andamiaje deliberado: cuando `src/input/` sea el único crate que
@@ -40,7 +40,6 @@ const HARDWARE: &[&str] = &[
 const HARDWARE_DEBT: &[&str] = &[
     "src/camera/freecam.rs",
     "src/debug/console.rs",
-    "src/debug/toggles.rs",
     "src/editor/brush.rs",
     "src/editor/history.rs",
     "src/editor/mod.rs",
@@ -81,8 +80,8 @@ fn collect(directory: &Path, files: &mut Vec<(String, String)>) {
         if path.is_dir() {
             collect(&path, files);
         } else if path.extension().is_some_and(|extension| extension == "rs") {
-            let contents =
-                fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let contents = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             files.push((relative(&path), contents));
         }
     }

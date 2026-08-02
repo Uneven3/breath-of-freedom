@@ -238,6 +238,7 @@ pub(super) fn start_requested_runs(
     mut toggles: ResMut<PerfToggles>,
     time: Res<Time<Real>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    terrain_debug: Res<crate::visuals::terrain_material::TerrainDebugState>,
 ) {
     let Some(mode) = requests.read().map(|request| request.0).next() else {
         return;
@@ -255,6 +256,10 @@ pub(super) fn start_requested_runs(
         warn!("[bench] cannot start — camera missing or ambiguous");
         return;
     };
+    if terrain_debug.view() != crate::visuals::terrain_material::TerrainDebugView::Off {
+        warn!("[bench] cannot start — switch the terrain view back to Arte first");
+        return;
+    }
     let pose = match mode {
         VantageMode::Here => (camera.translation(), camera.forward().as_vec3()),
         VantageMode::Canonical => (VANTAGE_POSITION, VANTAGE_FACING),

@@ -90,6 +90,7 @@ pub(super) fn log_material_breakdown(
     meshes: Query<SceneMaterial>,
     terrain_meshes: Query<TerrainSceneMaterial>,
     materials: Res<Assets<StandardMaterial>>,
+    terrain_materials: Res<Assets<TerrainMaterial>>,
     perf: Res<PerfToggles>,
     diagnostic: Res<DiagnosticViewState>,
     time: Res<Time<Real>>,
@@ -115,6 +116,7 @@ pub(super) fn log_material_breakdown(
     let mut total_meshes = 0u32;
     let mut terrain_handles: HashSet<AssetId<TerrainMaterial>> = HashSet::default();
     let mut terrain_mesh_count = 0u32;
+    let mut terrain_look = None;
 
     for (visibility, material) in &meshes {
         if !visibility.get() {
@@ -135,10 +137,19 @@ pub(super) fn log_material_breakdown(
         stat.textured = resolved.base_color_texture.is_some();
     }
     for (visibility, material) in &terrain_meshes {
-        if visibility.get() {
-            terrain_handles.insert(material.0.id());
-            terrain_mesh_count += 1;
+        if !visibility.get() {
+            continue;
         }
+        let Some(resolved) = terrain_materials.get(&material.0) else {
+            continue;
+        };
+        terrain_handles.insert(material.0.id());
+        terrain_mesh_count += 1;
+        terrain_look = Some((
+            resolved.base.perceptual_roughness,
+            resolved.base.metallic,
+            resolved.base.base_color_texture.is_some() || resolved.extension.has_textures(),
+        ));
     }
 
     if handles.is_empty() && terrain_handles.is_empty() {
@@ -190,15 +201,15 @@ pub(super) fn log_material_breakdown(
             if stat.textured { "yes" } else { "-" },
         );
     }
-    if !terrain_handles.is_empty() {
+    if let Some((roughness, metallic, textured)) = terrain_look {
         info!(
-            "[materials] {:<22} {:>5} {:>7} {:>6} {:>6} {:>4}",
+            "[materials] {:<22} {:>5} {:>7} {:>6.2} {:>6.2} {:>4}",
             "terrain texture array",
             terrain_handles.len(),
             terrain_mesh_count,
-            "0.90",
-            "0.00",
-            "yes"
+            roughness,
+            metallic,
+            if textured { "yes" } else { "-" }
         );
     }
     if rows.len() > 20 {

@@ -27,8 +27,8 @@ use crate::movement::state::LocomotionState;
 use crate::movement::{BodyVelocity, Player};
 use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
+use crate::visuals::DiagnosticViewState;
 use crate::visuals::terrain_material::TerrainMaterial;
-use crate::visuals::{AnimationDebug, DiagnosticViewState, PlayerAnimations};
 use crate::world::day_night::TimeOfDay;
 
 // Each section has its own focused producer (§1): a system reads exactly the
@@ -406,23 +406,8 @@ pub(super) fn collect_perf(
 pub(super) fn collect_toggles(
     config: Res<DebugConfig>,
     probe_alive: Query<(), With<TraversalProbe>>,
-    anim_debug: Res<AnimationDebug>,
-    anims: Option<Res<PlayerAnimations>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let anim_status = match (&anims, anim_debug.enabled) {
-        (Some(anims), true) if !anims.clips.is_empty() => {
-            let index = anim_debug.index % anims.clips.len();
-            format!(
-                "{}/{} {}",
-                index + 1,
-                anims.clips.len(),
-                anims.clips[index].0
-            )
-        }
-        _ => "off".to_string(),
-    };
-
     snapshot.set(
         SectionId::Toggles,
         vec![
@@ -432,7 +417,6 @@ pub(super) fn collect_toggles(
             Field::flag("log:trace", config.log_verbose),
             Field::flag("log:flips", config.log_fact_flips),
             Field::flag("probe", !probe_alive.is_empty()),
-            Field::new("anim", anim_status),
         ],
     );
 }

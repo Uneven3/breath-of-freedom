@@ -73,6 +73,28 @@ pub struct DrawStrength {
     pub(crate) tuning: Option<BowProfile>,
 }
 
+/// Per-actor deterministic stream for bow spread.
+///
+/// The seed is authored with the actor archetype, never derived from `Entity`
+/// or wall-clock time. Keeping the stream on the actor also makes simultaneous
+/// shooters independent without coupling results to ECS query order.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShotSpreadRng(u32);
+
+impl ShotSpreadRng {
+    pub const PLAYER: Self = Self::seeded(0xB0F0_0001);
+    pub const BOKOBO_ARCHER: Self = Self::seeded(0xB0F0_A001);
+
+    pub const fn seeded(seed: u32) -> Self {
+        Self(seed)
+    }
+
+    fn next_unit(&mut self) -> f32 {
+        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        self.0 as f32 / u32::MAX as f32
+    }
+}
+
 /// Published the tick an arrow leaves the string. Presentation consumes it
 /// for camera kick and `time_control` for full-charge hitstop — same pattern as
 /// `HitImpactMessage`: Combat owns the type, consumers read it without
@@ -164,6 +186,7 @@ type ShootQuery<'a> = (
     &'a CombatIntents,
     &'a CombatState,
     &'a mut DrawStrength,
+    &'a mut ShotSpreadRng,
     Option<&'a crate::movement::stamina::Stamina>,
     Option<&'a CombatContext>,
     Option<&'a MountedCombatProfile>,
@@ -192,7 +215,6 @@ pub fn shoot_drawn_arrow(
     targets: Query<&Transform>,
     mut spawns: MessageWriter<SpawnProjectileMessage>,
     mut fired: MessageWriter<BowFiredMessage>,
-    time: Res<Time>,
     spatial: SpatialQuery,
 ) {
     for (
@@ -202,6 +224,7 @@ pub fn shoot_drawn_arrow(
         intents,
         state,
         mut draw,
+        mut spread_rng,
         stamina,
         context,
         mounted_profile,
@@ -273,27 +296,7 @@ pub fn shoot_drawn_arrow(
         // Maximum spread angle of ~8.5 degrees (0.15 rad) at zero charge,
         // shrinking down to 0.0 degrees (100% accurate) at full charge.
         let spread = (1.0 - factor) * 0.15;
-        let perturbed_direction = if spread > 0.001 {
-            // Perpendicular vectors to perturb along
-            let mut right = direction.cross(Vec3::Y);
-            if right.length_squared() < 0.001 {
-                right = direction.cross(Vec3::Z);
-            }
-            let right = right.normalize();
-            let up = right.cross(direction).normalize();
-
-            // Pseudo-random LCG seeded from time, mixed with the shooter so two
-            // actors firing on the same fixed tick get independent spread
-            // (the tick's `elapsed_secs` is shared across all of them).
-            let mut seed =
-                ((time.elapsed_secs_f64().fract() * 100000.0) as u32) ^ (shooter.to_bits() as u32);
-            let r1 = next_random(&mut seed) * 2.0 - 1.0;
-            let r2 = next_random(&mut seed) * 2.0 - 1.0;
-
-            (direction + right * r1 * spread + up * r2 * spread).normalize()
-        } else {
-            direction
-        };
+        let perturbed_direction = perturb_direction(direction, spread, &mut spread_rng);
 
         let origin = launch_origin + perturbed_direction * ARROW_MUZZLE_FORWARD;
 
@@ -315,9 +318,19 @@ pub fn shoot_drawn_arrow(
     }
 }
 
-fn next_random(seed: &mut u32) -> f32 {
-    *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-    (*seed as f32) / (u32::MAX as f32)
+fn perturb_direction(direction: Vec3, spread: f32, rng: &mut ShotSpreadRng) -> Vec3 {
+    if spread <= 0.001 {
+        return direction;
+    }
+    let mut right = direction.cross(Vec3::Y);
+    if right.length_squared() < 0.001 {
+        right = direction.cross(Vec3::Z);
+    }
+    let right = right.normalize();
+    let up = right.cross(direction).normalize();
+    let r1 = rng.next_unit() * 2.0 - 1.0;
+    let r2 = rng.next_unit() * 2.0 - 1.0;
+    (direction + right * r1 * spread + up * r2 * spread).normalize()
 }
 
 /// The camera-aligned shoulder pivot the crosshair ray starts from.
@@ -555,6 +568,34 @@ mod tests {
             half > profile.damage_min && half < profile.damage_max,
             "half charge must be between min and max, got {half}"
         );
+    }
+
+    #[test]
+    fn spread_is_reproducible_and_independent_per_authored_seed() {
+        let mut first_run = ShotSpreadRng::seeded(42);
+        let mut second_run = ShotSpreadRng::seeded(42);
+        let mut other_actor = ShotSpreadRng::seeded(43);
+
+        let first: Vec<Vec3> = (0..8)
+            .map(|_| perturb_direction(Vec3::NEG_Z, 0.15, &mut first_run))
+            .collect();
+        let replay: Vec<Vec3> = (0..8)
+            .map(|_| perturb_direction(Vec3::NEG_Z, 0.15, &mut second_run))
+            .collect();
+        let independent: Vec<Vec3> = (0..8)
+            .map(|_| perturb_direction(Vec3::NEG_Z, 0.15, &mut other_actor))
+            .collect();
+
+        assert_eq!(first, replay);
+        assert_ne!(first, independent);
+    }
+
+    #[test]
+    fn full_charge_does_not_advance_the_spread_stream() {
+        let mut rng = ShotSpreadRng::seeded(42);
+        let before = rng;
+        assert_eq!(perturb_direction(Vec3::NEG_Z, 0.0, &mut rng), Vec3::NEG_Z);
+        assert_eq!(rng, before);
     }
 
     #[test]

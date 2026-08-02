@@ -136,6 +136,12 @@ pub struct TerrainExtension {
     debug: Vec4,
 }
 
+impl TerrainExtension {
+    pub(crate) fn has_textures(&self) -> bool {
+        self.textures != Handle::default()
+    }
+}
+
 impl MaterialExtension for TerrainExtension {
     fn fragment_shader() -> ShaderRef {
         "shaders/terrain.wgsl".into()
@@ -204,7 +210,7 @@ fn setup_terrain_material(
         material,
         array,
         sources,
-        dirty: true,
+        dirty: false,
     });
 }
 
@@ -271,16 +277,18 @@ fn rebuild_texture_array(
     if !terrain.dirty {
         return;
     }
+    // One attempt per relevant AssetEvent. A missing or invalid source keeps
+    // the colour fallback without retrying every frame; a later event opts in
+    // to another attempt.
+    terrain.dirty = false;
     let Some(array) = collect_source_layers(&terrain.sources, &images) else {
         return;
     };
     let Some(mut target) = images.get_mut(&terrain.array) else {
         warn!("[terrain] texture array asset disappeared; keeping current material");
-        terrain.dirty = false;
         return;
     };
     *target = array;
-    terrain.dirty = false;
     info!(
         "[terrain] packed {} canonical PNGs into one texture array",
         TERRAIN_TEXTURES.len()

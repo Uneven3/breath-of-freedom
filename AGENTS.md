@@ -43,9 +43,3 @@ worktrees separados y sesiones sin memoria compartida entre sí. Por eso:
   `ASSET_PIPELINE.md` y el plan de animación/rig vive en sus docs de dominio.
 - Ningún acuerdo de esta conversación es válido si no quedó escrito en un
   archivo del repo — la coordinación no depende de memoria de sesión.
-
-## Flujo de diseño/implementación
-
-`.agent/skills/` contiene el set de skills para diseñar e implementar
-features (`design-brief`, `implement-feature`, `auditor`, etc.). Leer ahí
-antes de arrancar una feature nueva.

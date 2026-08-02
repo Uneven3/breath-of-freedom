@@ -136,6 +136,7 @@ fn spawn_player(
             crate::combat::motors::attack::ActiveSwing::default(),
             crate::combat::brain::CombatInputCursor::default(),
             crate::combat::motors::aim::DrawStrength::default(),
+            crate::combat::motors::aim::ShotSpreadRng::PLAYER,
         ),
         (
             crate::inventory::Inventory::default(),

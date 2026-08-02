@@ -11,15 +11,11 @@ use bevy::prelude::*;
 
 use super::DebugConfig;
 use super::snapshot::SectionId;
-use crate::visuals::AnimationDebug;
-
 /// Read-only view of which channels are on, so presentation can render state
-/// it is not allowed to mutate (§20). The switches live in two resources; this
-/// hides that split from the UI.
+/// it is not allowed to mutate (§20).
 #[derive(SystemParam)]
 pub struct DebugConfigView<'w> {
     config: Res<'w, DebugConfig>,
-    anim: Res<'w, AnimationDebug>,
 }
 
 impl DebugConfigView<'_> {
@@ -32,7 +28,6 @@ impl DebugConfigView<'_> {
             DebugChannel::LogTransitions => self.config.log_transitions,
             DebugChannel::LogVerbose => self.config.log_verbose,
             DebugChannel::LogFactFlips => self.config.log_fact_flips,
-            DebugChannel::AnimBrowser => self.anim.enabled,
         }
     }
 }
@@ -53,11 +48,10 @@ pub enum DebugChannel {
     LogTransitions,
     LogVerbose,
     LogFactFlips,
-    AnimBrowser,
 }
 
 impl DebugChannel {
-    pub const ALL: [DebugChannel; 8] = [
+    pub const ALL: [DebugChannel; 7] = [
         DebugChannel::Colliders,
         DebugChannel::Casts,
         DebugChannel::LogPerfSamples,
@@ -65,7 +59,6 @@ impl DebugChannel {
         DebugChannel::LogTransitions,
         DebugChannel::LogVerbose,
         DebugChannel::LogFactFlips,
-        DebugChannel::AnimBrowser,
     ];
 
     pub fn label(self) -> &'static str {
@@ -77,7 +70,6 @@ impl DebugChannel {
             DebugChannel::LogTransitions => "Log: transitions",
             DebugChannel::LogVerbose => "Log: per-tick trace",
             DebugChannel::LogFactFlips => "Log: fact flips",
-            DebugChannel::AnimBrowser => "Animation browser",
         }
     }
 
@@ -92,7 +84,6 @@ impl DebugChannel {
             DebugChannel::LogTransitions => "quiet unless state changes",
             DebugChannel::LogVerbose => "~60 lines/s per actor",
             DebugChannel::LogFactFlips => "quiet unless facts flip",
-            DebugChannel::AnimBrowser => "bypasses the state machine",
         }
     }
 }

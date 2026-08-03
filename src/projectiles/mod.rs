@@ -8,7 +8,7 @@ mod simulation;
 // `Arrow`/`ArrowTrailMessage` are the read-only contract the visual layer
 // consumes; the disposable arrow meshes live in `visuals::arrows` so no
 // simulation module depends on presentation (§20).
-pub use data::{Arrow, ArrowTrailMessage, ProjectilesSet, SpawnProjectileMessage};
+pub use data::{ArrowTrailMessage, ProjectileState, ProjectilesSet, SpawnProjectileMessage};
 
 pub struct ProjectilesPlugin;
 

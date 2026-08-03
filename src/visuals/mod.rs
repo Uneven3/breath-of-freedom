@@ -29,6 +29,7 @@ mod terrain;
 pub mod terrain_material;
 pub mod vfx;
 
+pub use bof_domain::visuals::VisualOf;
 pub use catalog::{AppearanceBinding, AppearanceKey, TreeSilhouette, VisualCatalog, VisualSlot};
 pub use player::PlayerVisual;
 
@@ -44,12 +45,6 @@ pub use player::PlayerVisual;
 /// step judge feel on a different curve.
 pub(crate) const INTERPOLATION_SPEED: f32 = 20.0;
 pub(crate) const SNEAK_Y_OFFSET: f32 = -0.4;
-
-/// Uniform link from any visual root back to its simulation actor, so
-/// cross-cutting presentation effects (jelly, hit flash — see
-/// `presentation::juice`) treat player/probe/enemy visuals alike.
-#[derive(Component, Clone, Copy)]
-pub struct VisualOf(pub Entity);
 
 /// Minimal public contract for tools that must ignore the temporary material
 /// representation while the diagnostic view enters or leaves overdraw.

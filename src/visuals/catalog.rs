@@ -5,45 +5,9 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AppearanceKey(pub &'static str);
-
-impl AppearanceKey {
-    pub const COMMON_TREE_1: Self = Self("legacy_tree_common_1");
-    pub const COMMON_TREE_2: Self = Self("legacy_tree_common_2");
-    pub const COMMON_TREE_3: Self = Self("legacy_tree_common_3");
-    pub const COMMON_TREE_4: Self = Self("legacy_tree_common_4");
-    pub const COMMON_TREE_5: Self = Self("legacy_tree_common_5");
-    pub const PINE_1: Self = Self("legacy_tree_pine_1");
-    pub const PINE_2: Self = Self("legacy_tree_pine_2");
-    pub const PINE_3: Self = Self("legacy_tree_pine_3");
-    pub const PINE_4: Self = Self("legacy_tree_pine_4");
-    pub const PINE_5: Self = Self("legacy_tree_pine_5");
-    pub const TREE_PINE_A: Self = Self("tree_pine_a");
-    pub const TWISTED_TREE_1: Self = Self("legacy_tree_twisted_1");
-    pub const TWISTED_TREE_2: Self = Self("legacy_tree_twisted_2");
-    pub const TWISTED_TREE_3: Self = Self("legacy_tree_twisted_3");
-    pub const TWISTED_TREE_4: Self = Self("legacy_tree_twisted_4");
-    pub const TWISTED_TREE_5: Self = Self("legacy_tree_twisted_5");
-}
-
-/// Where a disposable visual is attached relative to its simulation owner.
-/// Equipment visuals will use `MainHand`/`OffHand`; world props use `World`.
-#[allow(dead_code)] // Reserved until the selected FBX/Blend assets are converted to glTF.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum VisualSlot {
-    Body,
-    MainHand,
-    OffHand,
-    World,
-}
-
-/// Lives on a visual root alongside `VisualOf`, never on its simulation owner.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AppearanceBinding {
-    pub key: AppearanceKey,
-    pub slot: VisualSlot,
-}
+pub use bof_domain::visuals::{
+    AppearanceBinding, AppearanceKey, TreeProxy, TreeSilhouette, VisualSlot,
+};
 
 #[derive(Debug, Clone)]
 pub struct VisualRecipe {
@@ -56,13 +20,6 @@ pub struct VisualRecipe {
 /// Coarse tree shape for the cheap graybox proxy. Distinguishes the three
 /// families at a glance without the 15 distinct detailed meshes — graybox does
 /// not need per-variant silhouettes, only readable species.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TreeSilhouette {
-    Rounded,
-    Conical,
-    Gnarled,
-}
-
 /// The cheap representation tier for a tree.
 ///
 /// A semantic tree carries *two* representations: this near-free proxy (the
@@ -70,11 +27,6 @@ pub enum TreeSilhouette {
 /// property of the representation, not of the identity — so the same `TreeKind`
 /// can be a proxy now and an impostor or full mesh later, chosen by budget,
 /// with the simulation none the wiser.
-#[derive(Debug, Clone, Copy)]
-pub struct TreeProxy {
-    pub silhouette: TreeSilhouette,
-}
-
 /// Presentation registry. Quaternius libraries may coexist here even when
 /// they use different source scales, pivots, rigs, or animation catalogs.
 #[derive(Resource)]

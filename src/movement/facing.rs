@@ -12,30 +12,13 @@ use bevy::prelude::*;
 use crate::input::frame::ControlOrientation;
 use crate::movement::state::LocomotionState;
 
+pub use bof_domain::movement::facing::{FacingSource, faces_movement};
+
 /// What governs an actor's body yaw. `Free` leaves the move-relative turn to the
 /// motors; `Look` and `LockOn` decouple facing from movement so the actor can
 /// strafe and back-pedal — the shared basis for aim and lock-on.
 // Look/LockOn are wired by aim and lock-on (roadmap 3b); Free is the only
 // variant set today.
-#[allow(dead_code)]
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum FacingSource {
-    #[default]
-    Free,
-    /// Face the camera look direction (`ControlOrientation.yaw`). Used by aim.
-    Look,
-    /// Face a locked target entity. Used by lock-on.
-    LockOn(Entity),
-}
-
-/// Whether an actor's body should self-rotate toward its movement direction
-/// this step. `Free` (or no `FacingSource`, e.g. AI) rotates in the motor;
-/// `Look`/`LockOn` hand facing entirely to [`resolve_facing`], so the motor
-/// must not fight it.
-pub fn faces_movement(facing: Option<&FacingSource>) -> bool {
-    facing.is_none_or(|source| *source == FacingSource::Free)
-}
-
 /// Slerp rate toward the decoupled facing target — a brisk but smooth turn to
 /// face the enemy on lock-on, not an instant snap.
 const DECOUPLED_TURN_RATE: f32 = 16.0;

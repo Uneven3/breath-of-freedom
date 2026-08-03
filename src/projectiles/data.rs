@@ -9,17 +9,10 @@ pub(super) const FLIGHT_TTL_SECS: f32 = 8.0;
 pub(super) const STUCK_TTL_SECS: f32 = 4.0;
 pub(super) const ARROW_POOL_SIZE: u8 = 64;
 
-#[derive(Message, Debug, Clone, Copy)]
-pub struct SpawnProjectileMessage {
-    pub shooter: Entity,
-    pub origin: Vec3,
-    pub velocity: Vec3,
-    pub damage: f32,
-}
+pub use bof_domain::projectiles::{ArrowTrailMessage, ProjectileState, SpawnProjectileMessage};
 
 #[derive(Component)]
 pub struct Arrow {
-    pub(super) active: bool,
     pub(super) velocity: Vec3,
     pub(super) shooter: Entity,
     pub(super) damage: f32,
@@ -34,7 +27,6 @@ impl Arrow {
         let mut filter = SpatialQueryFilter::default();
         filter.excluded_entities.reserve(1);
         Self {
-            active: false,
             velocity: Vec3::ZERO,
             shooter: Entity::PLACEHOLDER,
             damage: 0.0,
@@ -46,24 +38,14 @@ impl Arrow {
     }
 
     pub(super) fn deactivate(&mut self) {
-        self.active = false;
         self.remaining = 0.0;
         self.stuck = false;
         self.trail_timer = 0.0;
-    }
-
-    /// Whether this pooled slot is a live arrow. The only bit presentation
-    /// needs to decide between showing, moving and hiding its visual.
-    pub fn active(&self) -> bool {
-        self.active
     }
 }
 
 #[derive(Component)]
 pub(super) struct ArrowPoolSlot(pub u8);
-
-#[derive(Message, Clone, Copy)]
-pub struct ArrowTrailMessage(pub Vec3);
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProjectilesSet {

@@ -15,19 +15,29 @@ const TRAIL_EMIT_INTERVAL: f32 = 0.016;
 
 pub(super) fn init_pool(mut commands: Commands) {
     for slot in 0..ARROW_POOL_SIZE {
-        commands.spawn((Arrow::pooled(), ArrowPoolSlot(slot), Transform::default()));
+        commands.spawn((
+            Arrow::pooled(),
+            ProjectileState::default(),
+            ArrowPoolSlot(slot),
+            Transform::default(),
+        ));
     }
 }
 
 pub(super) fn spawn_arrows(
     mut spawns: MessageReader<SpawnProjectileMessage>,
-    mut arrows: Query<(&ArrowPoolSlot, &mut Arrow, &mut Transform)>,
+    mut arrows: Query<(
+        &ArrowPoolSlot,
+        &mut Arrow,
+        &mut ProjectileState,
+        &mut Transform,
+    )>,
 ) {
     for spawn in spawns.read() {
-        let Some((_, mut arrow, mut transform)) = arrows
+        let Some((_, mut arrow, mut state, mut transform)) = arrows
             .iter_mut()
-            .filter(|(_, arrow, _)| !arrow.active)
-            .min_by_key(|(slot, _, _)| slot.0)
+            .filter(|(_, _, state, _)| !state.active())
+            .min_by_key(|(slot, _, _, _)| slot.0)
         else {
             warn!(
                 "arrow pool exhausted; dropping shot from {:?}",
@@ -35,7 +45,7 @@ pub(super) fn spawn_arrows(
             );
             continue;
         };
-        arrow.active = true;
+        state.activate();
         arrow.velocity = spawn.velocity;
         arrow.shooter = spawn.shooter;
         arrow.damage = spawn.damage;
@@ -49,7 +59,7 @@ pub(super) fn spawn_arrows(
     }
 }
 
-type ArrowQuery<'a> = (&'a mut Arrow, &'a mut Transform);
+type ArrowQuery<'a> = (&'a mut Arrow, &'a mut ProjectileState, &'a mut Transform);
 
 #[derive(SystemParam)]
 pub(super) struct HitOutcomes<'w> {
@@ -82,13 +92,14 @@ pub(super) fn fly_arrows(
     mut trails: MessageWriter<ArrowTrailMessage>,
 ) {
     let dt = time.delta_secs();
-    for (mut arrow, mut transform) in &mut arrows {
-        if !arrow.active {
+    for (mut arrow, mut state, mut transform) in &mut arrows {
+        if !state.active() {
             continue;
         }
         arrow.remaining -= dt;
         if arrow.remaining <= 0.0 {
             arrow.deactivate();
+            state.deactivate();
             continue;
         }
         if arrow.stuck {
@@ -116,6 +127,7 @@ pub(super) fn fly_arrows(
                 if struck_actor {
                     resolve_arrow_hit(&arrow, hit.entity, hit_point, &world.targets, &mut outcomes);
                     arrow.deactivate();
+                    state.deactivate();
                 } else {
                     transform.translation = hit_point;
                     arrow.stuck = true;
@@ -243,9 +255,9 @@ mod tests {
         world.run_system_once(spawn_arrows).unwrap();
 
         let active = world
-            .query::<&Arrow>()
+            .query::<&ProjectileState>()
             .iter(&world)
-            .filter(|arrow| arrow.active)
+            .filter(|state| state.active())
             .count();
         assert_eq!(active, ARROW_POOL_SIZE as usize);
         assert_eq!(world.query::<Entity>().iter(&world).count(), entity_count);
@@ -260,7 +272,6 @@ mod tests {
         world.init_resource::<Messages<BodyImpulseMessage>>();
         let shooter = world.spawn_empty().id();
         let mut arrow = Arrow::pooled();
-        arrow.active = true;
         arrow.velocity = Vec3::NEG_Z;
         arrow.shooter = shooter;
         arrow.damage = 10.0;

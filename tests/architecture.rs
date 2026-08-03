@@ -158,3 +158,32 @@ fn the_project_has_no_unsafe_code() {
         "§12 dice que este proyecto no lleva `unsafe`: {offenders:?}"
     );
 }
+
+/// Phase 5: domain is a compile-time data boundary, not a smaller alias for
+/// the full engine facade. Rendering and physics must remain unreachable from
+/// it so both sibling crates can depend on the same contracts without gaining
+/// access to each other's implementation details.
+#[test]
+fn domain_has_no_render_or_physics_dependencies() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = fs::read_to_string(root.join("crates/domain/Cargo.toml"))
+        .expect("domain manifest must be readable");
+    for forbidden in ["bevy =", "avian3d", "bevy_render", "bevy_pbr"] {
+        assert!(
+            !manifest.contains(forbidden),
+            "bof_domain must not declare {forbidden:?}"
+        );
+    }
+
+    let mut files = Vec::new();
+    collect(&root.join("crates/domain/src"), &mut files);
+    let offenders: Vec<_> = files
+        .into_iter()
+        .filter(|(_, source)| source.contains("use bevy::") || source.contains("avian3d"))
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "bof_domain reached the Bevy facade or Avian: {offenders:?}"
+    );
+}

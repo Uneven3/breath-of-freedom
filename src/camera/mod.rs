@@ -99,7 +99,7 @@ fn spawn_camera(
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
         soft_distance_fog(atmosphere_color(time_of_day.hours)),
-        perf.profile.msaa(),
+        crate::perf::data::profile_msaa(perf.profile),
     ));
 }
 

@@ -1,0 +1,29 @@
+[package]
+name = "breath_of_freedom_domain"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "bof_domain"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+expect_used = "deny"
+float_cmp = "deny"
+unwrap_used = "deny"
+wildcard_enum_match_arm = "deny"
+
+[dependencies]
+bevy_ecs = "0.19"
+bevy_math = "0.19"
+bevy_reflect = "0.19"
+
+[build-dependencies]
+gltf = { version = "1.4.1", features = ["extras"] }
+serde_json = "1.0"

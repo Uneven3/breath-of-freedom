@@ -18,12 +18,9 @@ wildcard_enum_match_arm = "deny"
 [dependencies]
 avian3d = { workspace = true }
 bevy = { workspace = true }
+bof_domain = { package = "breath_of_freedom_domain", path = "crates/domain" }
 ron = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-
-[build-dependencies]
-gltf = { version = "1.4.1", features = ["extras"] }
 serde_json = { workspace = true }
 
 [features]

@@ -11,7 +11,7 @@ pub fn apply_mounted_context(
 ) {
     for message in messages.read() {
         if let Ok(mut context) = actors.get_mut(message.actor) {
-            context.mounted = message.mounted;
+            context.set_mounted(message.mounted);
         }
     }
 }

@@ -30,7 +30,7 @@ pub struct PerfPlugin;
 
 impl Plugin for PerfPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(PerfToggles::configured());
+        app.insert_resource(data::configured_toggles());
         app.init_resource::<Benchmark>();
         app.init_resource::<Flythrough>();
         app.init_resource::<ScriptedCameraPose>();

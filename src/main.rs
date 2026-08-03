@@ -31,7 +31,6 @@ mod perf;
 mod player;
 mod presentation;
 mod projectiles;
-mod proposal;
 mod scene;
 mod sfx;
 mod time_control;

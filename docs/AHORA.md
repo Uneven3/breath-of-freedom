@@ -73,7 +73,7 @@ unitarios y 2 de arquitectura, además de `fmt`, `check` y `clippy -D warnings`.
 Tras reiniciar, el juego abrió y cerró limpio sobre Vulkan/Polaris; el usuario
 confirmó que la cápsula se vio bien en juego. Checkpoint cerrado.
 
-## Estado (2026-08-02)
+## Estado (2026-08-03)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/
 glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con percepción
@@ -82,11 +82,15 @@ de dos fases con carga Bannerlord, cápsula graybox como player, mundo 320×320
 con bosque y audio de pasos por superficie. La validación automatizada de esta
 limpieza está verde y la cápsula quedó validada en juego el 2026-08-02.
 
-**CRATES fase 4:** `TerrainAccess` concentra toda lectura de terreno; player,
-Movement, layout, grass, visual y editor ya no codifican el singleton. Fases
-1-3 cerradas; 389 tests unitarios + 2 de arquitectura y Clippy verdes. El juego
-reabrió limpio y releyó `sandbox.ron`; falta esculpir→guardar→reentrar para
-cerrar el checkpoint de persistencia.
+**CRATES fases 4-5 cerradas.** `TerrainAccess` concentra toda lectura de terreno.
+En el checkpoint post-refactor del 2026-08-03 `sandbox.ron` cargó, se esculpió y
+guardó repetidamente, y la ventana cerró sin error/panic. Se eligió el grafo de
+crates **hermanas**: simulation y presentation sólo comparten `bof_domain`.
+El primer corte ya existe y mueve allí contratos de input, Movement, Combat,
+Health, Inventory, Mounts, projectiles, debug/perf y assets. `build.rs` y el
+manifiesto authored también pertenecen a domain. Ese crate declara sólo
+`bevy_ecs`/`bevy_math`/`bevy_reflect`: `cargo tree` no contiene render ni Avian.
+Validación verde: 390 tests unitarios + 3 de arquitectura y Clippy estricto.
 
 **Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
 horneadas en una malla por chunk — 25 entidades, cero trabajo por frame. Medido
@@ -234,19 +238,19 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## Dónde se retoma (2026-08-02)
+## Dónde se retoma (2026-08-03)
 
-1. **Cerrar CRATES fase 4:** esculpir, guardar, volver al menú y reentrar; la
-   abstracción, suite y recarga simple ya están verdes.
-2. **Decidir fase 5:** hermanas (recomendado) o lineal para presentation/simulation.
-3. **CRATES fase 5 — `bof_domain`:** ejecutar el corte de datos puros una vez
-   tomada la decisión anterior.
-4. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
+1. **CRATES fase 6 — `bof_simulation`:** crear el crate headless, mover los
+   sistemas por dueño y apagar las features render/default de Avian. Antes de
+   cerrar: `Mesh`/`StandardMaterial` ausentes y `bevy_input` sólo en input.
+2. **CRATES fase 7 — `bof_presentation` + app:** hermana de simulation; depende
+   sólo de `bof_domain`, y el binario compone ambas.
+3. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
    "acá hay una roca" y guardarlo en el archivo: filas `kind` + posición + yaw +
    escala; presentación resuelve el modelo por catálogo.
-5. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
+4. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
    ver el parche releído del disco.
-6. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
+5. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
    (esculpir en `Traversal`, guardar, reentrar) y la tipografía de la UI.
 
 ## Rendimiento: lo que sigue informando decisiones

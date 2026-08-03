@@ -15,6 +15,8 @@ use bevy::prelude::*;
 use crate::movement::Actor;
 use crate::movement::abilities::{SneakMovement, SprintMovement};
 use crate::movement::body::BodyDimensions;
+#[cfg(test)]
+use crate::movement::body::{crouched_collider, standing_collider};
 use crate::movement::facing::faces_movement;
 use crate::movement::facts::GroundFacts;
 use crate::movement::intents::Intents;
@@ -443,12 +445,12 @@ mod tests {
             StandClearance(clearance),
             Crouched(crouched),
             SneakLock::default(),
-            StandCollider(body.standing_collider()),
-            CrouchCollider(body.crouched_collider()),
+            StandCollider(standing_collider(body)),
+            CrouchCollider(crouched_collider(body)),
             if crouched {
-                body.crouched_collider()
+                crouched_collider(body)
             } else {
-                body.standing_collider()
+                standing_collider(body)
             },
             Transform::from_xyz(0.0, 5.0, 0.0),
             body,

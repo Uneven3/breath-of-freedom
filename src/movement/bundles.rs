@@ -12,7 +12,7 @@ use super::abilities::{
     SprintMovement, StairsMovement, WallJumpMovement,
 };
 use super::attachment::LocomotionEnabled;
-use super::body::BodyDimensions;
+use super::body::{BodyDimensions, crouched_collider, standing_collider};
 use super::constraints::LocomotionConstraintFacts;
 use super::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
 use super::intents::Intents;
@@ -71,7 +71,7 @@ impl KinematicActorBundle {
             locomotion_enabled: LocomotionEnabled,
             transform,
             rigid_body: RigidBody::Kinematic,
-            collider: dimensions.standing_collider(),
+            collider: standing_collider(dimensions),
             // Member of `Actor`, collides with everything: layers don't change
             // physical contacts, they let spatial queries (ledge sensing) mask
             // actors out so no capsule reads as climbable wall.
@@ -133,8 +133,8 @@ impl SneakMovementBundle {
             sneak_lock: SneakLock::default(),
             crouched: Crouched::default(),
             stand_clearance: StandClearance::default(),
-            stand_collider: StandCollider(dimensions.standing_collider()),
-            crouch_collider: CrouchCollider(dimensions.crouched_collider()),
+            stand_collider: StandCollider(standing_collider(dimensions)),
+            crouch_collider: CrouchCollider(crouched_collider(dimensions)),
         }
     }
 }

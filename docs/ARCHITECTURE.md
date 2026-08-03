@@ -172,7 +172,7 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   reportar. Rendimiento exige además escena/build/resolución repetibles y frame
   time antes/después: no se optimiza por intuición ni se acepta porque corre.
 
-## Mapa de módulos (los que existen)
+## Mapa de módulos (contratos reexportados desde `bof_domain`)
 
 | Módulo | Posee | Frontera |
 |---|---|---|

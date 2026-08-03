@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 
 use super::VisualOf;
-use crate::projectiles::{Arrow, ArrowTrailMessage};
+use crate::projectiles::{ArrowTrailMessage, ProjectileState};
 
 const TRAIL_TTL_SECS: f32 = 0.28;
 const TRAIL_PARTICLE_SIZE: f32 = 0.04;
@@ -47,8 +47,8 @@ pub(super) fn init_assets(
 pub(super) fn sync_visuals(
     mut commands: Commands,
     assets: Res<ArrowAssets>,
-    arrows: Query<(Entity, &Arrow, &Transform)>,
-    mut visuals: Query<(Entity, &VisualOf, &mut Transform), Without<Arrow>>,
+    arrows: Query<(Entity, &ProjectileState, &Transform)>,
+    mut visuals: Query<(Entity, &VisualOf, &mut Transform), Without<ProjectileState>>,
 ) {
     for (arrow_entity, arrow, arrow_transform) in &arrows {
         let existing = visuals

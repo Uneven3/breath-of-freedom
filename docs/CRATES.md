@@ -3,7 +3,7 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **fases 1-3 cerradas; fase 4 implementada con checkpoint parcial**. Se
+Estado: **fases 1-5 cerradas; grafo de crates hermanas elegido**. Se
 borra cuando la última fase cierre — igual que `AHORA.md` borra lo cerrado.
 
 ## El problema, medido (2026-08-01)
@@ -49,8 +49,8 @@ Por retorno sobre esfuerzo, no por prolijidad:
 | 1 | Tests de frontera ✅ | C2, §12 | cerrada |
 | 2 | Determinismo ✅ | pilar 5 de `NORTE.md` | cerrada |
 | 3 | Lints ✅ | §8, §9, §13 | cerrada |
-| 4 | Acceso al terreno ◐ | escala del mundo | checkpoint parcial |
-| 5 | `bof_domain` | §19 como frontera | semanas |
+| 4 | Acceso al terreno ✅ | escala del mundo | cerrada |
+| 5 | `bof_domain` ✅ | §19 como frontera | cerrada |
 | 6 | `bof_simulation` | §20, C2 definitivo | semanas |
 | 7 | `bof_presentation` + app | §4 | semanas |
 
@@ -118,8 +118,8 @@ la cardinalidad actual. Player, Movement, layout, grass, visual y editor piden
 o reconstruyen su collider dentro del dueño. No se implementó streaming.
 
 Automatización verde y cero `terrain.single()`/`ground.single()` en `src/`. El
-checkpoint abrió/cerró limpio, ejercitó el reloj y releyó `sandbox.ron`; falta
-esculpir, guardar y reentrar después de este cambio para cerrarlo (§10).
+checkpoint post-refactor abrió/cerró limpio, releyó `sandbox.ron`, permitió
+esculpir y lo guardó repetidamente el 2026-08-03. Fase cerrada (§10).
 
 ---
 
@@ -170,6 +170,15 @@ sin mover lógica. `HitFlash` es igual, o `juice` se funde con `visuals`.
 
 ### Fase 5 — `bof_domain`
 
+Estado: **cerrada el 2026-08-03** con la topología hermanas elegida por el
+usuario. `breath_of_freedom_domain` posee los contratos compartidos de input,
+movimiento, combate, health, inventario, mounts, projectiles, debug/perf y
+assets; los módulos viejos reexportan durante la migración para no mezclar el
+corte de datos con el de sistemas. `build.rs`, `schema.rs` y el manifiesto
+generado se mudaron juntos. El estado visual de flecha se separó del filtro
+físico; las recetas con `Transform` quedaron correctamente en presentation.
+La build post-corte abrió/cerró limpia sobre Vulkan/Polaris.
+
 Es promover §19 ("datos separados de sistemas") de convención de archivos a
 frontera de crate, y la costura ya está hecha: 16 archivos
 `data.rs`/`state.rs`/`intents.rs`/`facts.rs`/`proposal.rs` suman **2 269 LOC** y
@@ -177,7 +186,8 @@ solo uno menciona avian (`projectiles/data.rs`, 1 línea). Se suman
 `movement/{body,stamina,facing,sensing,probe_data,abilities,diag}.rs`,
 `combat/weapon.rs`, `asset_pipeline/schema.rs`, `visuals/catalog.rs`.
 
-Deps: `bevy_ecs`, `bevy_math`, `bevy_reflect`. **No** `bevy`, **no** avian.
+Deps runtime: `bevy_ecs`, `bevy_math`, `bevy_reflect`. **No** `bevy`, **no**
+Avian; test de arquitectura y `cargo tree` fijan que tampoco entra render.
 
 Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 `BodyVelocity`, `BodyDimensions`, los `*Facts`, `Intents`, `LocomotionState`,
@@ -205,12 +215,10 @@ un target headless que dependa solo de `bof_simulation` no linkea `bevy_render`.
 Y paga una deuda que no es de arquitectura: esas features bifurcan nuestro árbol
 de bevy del de los otros juegos y llenan el `build-dir` compartido (`AHORA.md`).
 
-Obstáculo real a resolver primero: **`build.rs` incluye
-`src/asset_pipeline/schema.rs` por `#[path]`** y `generated.rs` hace
-`include!(OUT_DIR/authored_assets.rs)`. Al mover `schema.rs` a `crates/domain/`,
-el `build.rs` se muda con él y el binario consume el resultado ya generado.
+El obstáculo previo de `build.rs` ya se resolvió en fase 5: vive con schema y el
+manifiesto generado en domain; simulation consumirá ese contrato ya compilado.
 
-### Fase 7 — `bof_presentation`, el binario, y la decisión pendiente
+### Fase 7 — `bof_presentation` y el binario (hermanas)
 
 ¿Pila lineal o hermanas?
 
@@ -220,7 +228,7 @@ Hermanas:   domain ← simulation ← app
             domain ← presentation ← app
 ```
 
-**Recomendación: hermanas**, y la razón es de este juego. §20 dice
+**Decisión del usuario 2026-08-03: hermanas.** §20 dice
 "presentación solo READ". Si presentación ve simulación, ve sus funciones y sus
 sistemas, y "solo leer" vuelve a ser disciplina — la misma que hoy falla en 15
 archivos. Si solo ve `domain`, que es dato puro, **leer es lo único que puede
@@ -230,8 +238,8 @@ El impuesto es real: todo lo que presentación lea tiene que ser dato en
 `domain`, así que `domain` crece y el contrato entre capas se vuelve explícito.
 La lista de la fase 5 dice que ya estamos casi ahí.
 
-**Es la decisión que hay que tomar antes de empezar la fase 5**, porque
-determina qué baja a domain.
+Esta decisión ya gobernó fase 5: todo contrato que ambas leen baja a domain;
+funciones, sistemas, render y física permanecen con su dueño.
 
 ---
 
@@ -280,7 +288,7 @@ a 6 líneas del límite.
 | 1 | El test de frontera pasa y su lista de excepciones solo encoge. |
 | 2 ✅ | Dos corridas con la misma semilla dan estado idéntico N ticks; `Entity::to_bits` no aparece en ningún cálculo de resultado. |
 | 3 ✅ | Lints en `deny`, Clippy limpio y checkpoint cerrado. |
-| 4 ◐ | Grep vacío y suite verde; falta checkpoint esculpir→guardar→reentrar. |
-| 5 | `cargo tree -p breath_of_freedom_domain` sin `bevy_render`. |
+| 4 ✅ | Grep vacío, suite verde y checkpoint jugado aceptado. |
+| 5 ✅ | `cargo tree -p breath_of_freedom_domain` sin `bevy_render`; 50 tests propios y frontera automática. |
 | 6 | `grep -rl "Mesh\|StandardMaterial" crates/simulation/src` vacío; `bevy_input` solo en el dueño de input; el test de la fase 1 se borra por redundante; checkpoint jugado. |
 | 7 | `cargo tree` de presentation sin `bof_simulation`; checkpoint jugado; frame time sin regresión contra el baseline de `AHORA.md`. |

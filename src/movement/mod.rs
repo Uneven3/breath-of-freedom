@@ -56,6 +56,31 @@ pub struct Player;
 #[derive(Component)]
 pub struct Actor;
 
+/// Stable simulation identity authored by the actor's spawner.
+///
+/// Bevy's [`Entity`] identifies one allocation in one world; its bits depend on
+/// spawn/despawn order and therefore cannot decide gameplay outcomes. Systems
+/// that need a deterministic tie-break compare this value instead.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ActorId(u32);
+
+impl ActorId {
+    pub const PLAYER: Self = Self(1);
+    pub const HORSE: Self = Self(2);
+    pub const BOKOBO_MELEE: Self = Self(100);
+    pub const BOKOBO_ARCHER: Self = Self(101);
+    pub const TRAVERSAL_PROBE: Self = Self(1_000);
+
+    #[cfg(test)]
+    pub const fn authored(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
 /// Our kinematic body velocity — the analog of `CharacterBody3D.velocity`.
 /// Kept separate from Avian's `LinearVelocity`: we integrate position ourselves
 /// through `move_and_slide`, so the physics engine must not also move us.
@@ -278,3 +303,5 @@ fn arbitrate(mut q: Query<ArbitrationQuery, attachment::LocomotionActorFilter>) 
 mod actor_isolation_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod determinism_tests;

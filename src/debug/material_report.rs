@@ -43,13 +43,15 @@ impl MaterialReportNotice {
 #[derive(PartialEq, Eq, Hash, Debug)]
 struct LookKey {
     base_texture: Option<AssetId<Image>>,
-    color: [u8; 3],
-    roughness: u8,
-    metallic: u8,
+    color: [u32; 3],
+    roughness: u32,
+    metallic: u32,
 }
 
-fn quantise(value: f32, steps: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * steps).round() as u8
+fn quantise(value: f32, steps: f32) -> u32 {
+    // Rounded integers have an exact f32 representation at these small step
+    // counts; their bits are therefore a stable, hashable bucket identity.
+    (value.clamp(0.0, 1.0) * steps).round().to_bits()
 }
 
 fn look_key(material: &StandardMaterial) -> LookKey {

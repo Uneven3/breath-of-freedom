@@ -15,7 +15,7 @@ use bevy::window::PrimaryWindow;
 use super::{EditorTool, SculptFocus, StrokeAnchor, ToolLayer, history::SculptHistory};
 use crate::camera::CameraRig;
 use crate::input::ModalInputFocus;
-use crate::world::{GameLayer, Terrain};
+use crate::world::{GameLayer, Terrain, TerrainAccess};
 
 /// Metres of height change per second at the brush centre while raising.
 const SCULPT_RATE: f32 = 1.5;
@@ -188,7 +188,9 @@ pub(super) fn sculpt_terrain(
     let (Ok(window), Ok((camera, camera_transform))) = (window.single(), camera.single()) else {
         return;
     };
-    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, entity) else {
+    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, |hit| {
+        hit == entity
+    }) else {
         return;
     };
 
@@ -248,13 +250,13 @@ pub(super) fn cursor_terrain_hit(
     window: &Window,
     camera: &Camera,
     camera_transform: &GlobalTransform,
-    terrain: Entity,
+    accepts: impl FnOnce(Entity) -> bool,
 ) -> Option<Vec3> {
     let cursor = window.cursor_position()?;
     let ray = camera.viewport_to_world(camera_transform, cursor).ok()?;
     let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
     let hit = spatial.cast_ray(ray.origin, ray.direction, PICK_DISTANCE, true, &filter)?;
-    if hit.entity != terrain {
+    if !accepts(hit.entity) {
         return None;
     }
     Some(ray.origin + ray.direction * hit.distance)
@@ -272,7 +274,7 @@ pub(super) fn draw_brush_gizmo(
     rig: Query<Entity, With<CameraRig>>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    terrain: Query<(Entity, &Terrain)>,
+    terrain: TerrainAccess,
     mut gizmos: Gizmos,
 ) {
     // Hidden exactly when the brush is deaf, so the ring is an honest read of
@@ -280,12 +282,12 @@ pub(super) fn draw_brush_gizmo(
     if !tool.active || pointer_state(&focus, &owner, &rig) == Pointer::Theirs {
         return;
     }
-    let (Ok(window), Ok((camera, camera_transform)), Ok((entity, _))) =
-        (window.single(), camera.single(), terrain.single())
-    else {
+    let (Ok(window), Ok((camera, camera_transform))) = (window.single(), camera.single()) else {
         return;
     };
-    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, entity) else {
+    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, |hit| {
+        terrain.contains(hit)
+    }) else {
         return;
     };
     let lift = Vec3::Y * GIZMO_LIFT;

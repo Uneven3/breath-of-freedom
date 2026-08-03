@@ -8,15 +8,15 @@
 //! keep their previous `*Facts` — staleness is bounded by
 //! `SensingLodConfig::reduced_interval` ticks.
 //!
-//! Reduced actors are staggered by entity index so a camp of N enemies spreads
-//! its casts across the interval window instead of bursting on the same tick.
+//! Reduced actors are staggered by stable actor identity so a camp of N enemies
+//! spreads its casts across the interval window without depending on spawn order.
 //!
 //! The local player always senses at full rate, as does everyone when no
 //! player exists (a safe default for tests and headless worlds).
 
 use bevy::prelude::*;
 
-use super::{Actor, Player};
+use super::{Actor, ActorId, Player};
 
 /// Tuning for the sensing LOD. World- and encounter-scale dependent, so it is
 /// a resource meant to be tweaked, not a set of scattered constants.
@@ -78,12 +78,12 @@ pub fn assign_sensing_lod(
     config: Res<SensingLodConfig>,
     mut tick: Local<u32>,
     player: Option<PlayerAnchor>,
-    mut actors: Query<(Entity, &Transform, &mut SensingLod, Has<Player>), With<Actor>>,
+    mut actors: Query<(&ActorId, &Transform, &mut SensingLod, Has<Player>), With<Actor>>,
 ) {
     *tick = tick.wrapping_add(1);
     let anchor = player.map(|p| p.translation);
 
-    for (entity, transform, mut lod, is_player) in &mut actors {
+    for (actor_id, transform, mut lod, is_player) in &mut actors {
         let tier = match anchor {
             Some(anchor)
                 if !is_player
@@ -97,17 +97,15 @@ pub fn assign_sensing_lod(
         lod.tier = tier;
         lod.sense_this_tick = match tier {
             SensingTier::Full => true,
-            SensingTier::Reduced => {
-                senses_on(*tick, entity.index().index(), config.reduced_interval)
-            }
+            SensingTier::Reduced => senses_on(*tick, actor_id.value(), config.reduced_interval),
         };
     }
 }
 
-/// Pure stagger rule: a reduced actor senses on the ticks where its
-/// entity-index phase lines up with the interval.
-fn senses_on(tick: u32, entity_index: u32, interval: u32) -> bool {
-    interval <= 1 || tick.wrapping_add(entity_index).is_multiple_of(interval)
+/// Pure stagger rule: a reduced actor senses on the ticks where its authored
+/// identity phase lines up with the interval.
+fn senses_on(tick: u32, actor_id: u32, interval: u32) -> bool {
+    interval <= 1 || tick.wrapping_add(actor_id).is_multiple_of(interval)
 }
 
 #[cfg(test)]
@@ -118,9 +116,9 @@ mod tests {
     #[test]
     fn stagger_fires_once_per_interval_per_actor() {
         let interval = 4;
-        for entity_index in [0, 1, 2, 7] {
+        for actor_id in [0, 1, 2, 7] {
             let fired: Vec<u32> = (0..12)
-                .filter(|&tick| senses_on(tick, entity_index, interval))
+                .filter(|&tick| senses_on(tick, actor_id, interval))
                 .collect();
             assert_eq!(fired.len(), 3, "3 fires in 12 ticks at interval 4");
             assert!(
@@ -132,7 +130,7 @@ mod tests {
 
     #[test]
     fn stagger_spreads_adjacent_actors_across_ticks() {
-        // Two consecutive entity indices must not cast on the same tick.
+        // Two consecutive authored IDs must not cast on the same tick.
         assert_ne!(senses_on(8, 0, 4), senses_on(8, 1, 4));
     }
 
@@ -152,6 +150,7 @@ mod tests {
         let player = world
             .spawn((
                 Actor,
+                ActorId::PLAYER,
                 Player,
                 Transform::from_xyz(0.0, 0.0, 0.0),
                 SensingLod::default(),
@@ -160,6 +159,7 @@ mod tests {
         let near = world
             .spawn((
                 Actor,
+                ActorId::authored(10),
                 Transform::from_xyz(5.0, 0.0, 0.0),
                 SensingLod::default(),
             ))
@@ -167,6 +167,7 @@ mod tests {
         let far = world
             .spawn((
                 Actor,
+                ActorId::authored(11),
                 Transform::from_xyz(50.0, 0.0, 0.0),
                 SensingLod::default(),
             ))
@@ -202,6 +203,7 @@ mod tests {
         let lone = world
             .spawn((
                 Actor,
+                ActorId::authored(12),
                 Transform::from_xyz(1000.0, 0.0, 0.0),
                 SensingLod::default(),
             ))
@@ -221,10 +223,17 @@ mod tests {
             full_rate_radius: 10.0,
             reduced_interval: 4,
         });
-        world.spawn((Actor, Player, Transform::IDENTITY, SensingLod::default()));
+        world.spawn((
+            Actor,
+            ActorId::PLAYER,
+            Player,
+            Transform::IDENTITY,
+            SensingLod::default(),
+        ));
         let far = world
             .spawn((
                 Actor,
+                ActorId::authored(13),
                 Transform::from_xyz(50.0, 0.0, 0.0),
                 SensingLod::default(),
             ))

@@ -73,7 +73,7 @@ mod tests {
 
     fn candidate(x: f32, range: f32) -> (Entity, Vec3, f32) {
         (
-            Entity::from_raw_u32(x as u32 + 1).unwrap(),
+            Entity::from_raw_u32(x.to_bits().wrapping_add(1)).unwrap(),
             Vec3::X * x,
             range,
         )

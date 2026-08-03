@@ -317,9 +317,9 @@ fn finalize(flythrough: &mut Flythrough, toggles: &mut PerfToggles, at: f32, rea
 fn leg_inventory(accum: &LegAccum) -> SceneInventory {
     let n = accum.samples.max(1) as u64;
     SceneInventory {
-        triangles: (accum.tris_sum / n) as usize,
-        draws: (accum.draws_sum / n) as usize,
-        materials: (accum.materials_sum / n) as usize,
+        triangles: usize::try_from(accum.tris_sum / n).unwrap_or(usize::MAX),
+        draws: usize::try_from(accum.draws_sum / n).unwrap_or(usize::MAX),
+        materials: usize::try_from(accum.materials_sum / n).unwrap_or(usize::MAX),
         ..default()
     }
 }

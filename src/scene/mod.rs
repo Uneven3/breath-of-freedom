@@ -180,11 +180,13 @@ impl SceneId {
     ];
 
     pub fn def(self) -> &'static SceneDef {
-        SCENES
-            .iter()
-            .find(|def| def.id == self)
-            // Unreachable while `ALL` and `SCENES` agree, which a test pins.
-            .expect("every SceneId has a row in SCENES")
+        match self {
+            SceneId::Traversal => &SCENES[0],
+            SceneId::Combat => &SCENES[1],
+            SceneId::Grass => &SCENES[2],
+            SceneId::Sandbox => &SCENES[3],
+            SceneId::World => &SCENES[4],
+        }
     }
 }
 

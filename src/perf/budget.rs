@@ -142,9 +142,9 @@ pub(crate) mod static_cost {
 mod tests {
     use super::*;
 
-    fn at_load(load: f64) -> SceneInventory {
+    fn at_percent(load: usize) -> SceneInventory {
         SceneInventory {
-            triangles: (MOBILE_TRIANGLES as f64 * load) as usize,
+            triangles: MOBILE_TRIANGLES * load / 100,
             ..default()
         }
     }
@@ -206,12 +206,18 @@ mod tests {
 
     #[test]
     fn grades_have_stable_and_ordered_boundaries() {
-        assert_eq!(scene_budget_grade(&at_load(0.7)), SceneBudgetGrade::Good);
-        assert_eq!(scene_budget_grade(&at_load(0.71)), SceneBudgetGrade::Medium);
-        assert_eq!(scene_budget_grade(&at_load(1.0)), SceneBudgetGrade::Medium);
-        assert_eq!(scene_budget_grade(&at_load(1.01)), SceneBudgetGrade::Bad);
+        assert_eq!(scene_budget_grade(&at_percent(70)), SceneBudgetGrade::Good);
         assert_eq!(
-            scene_budget_grade(&at_load(1.51)),
+            scene_budget_grade(&at_percent(71)),
+            SceneBudgetGrade::Medium
+        );
+        assert_eq!(
+            scene_budget_grade(&at_percent(100)),
+            SceneBudgetGrade::Medium
+        );
+        assert_eq!(scene_budget_grade(&at_percent(101)), SceneBudgetGrade::Bad);
+        assert_eq!(
+            scene_budget_grade(&at_percent(151)),
             SceneBudgetGrade::Critical
         );
     }

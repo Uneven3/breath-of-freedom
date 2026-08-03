@@ -159,7 +159,7 @@ mod plugin_tests {
     use crate::movement::motors::jump::JumpLocal;
     use crate::movement::sensing::GroundSensing;
     use crate::movement::state::LocomotionState;
-    use crate::movement::{BodyVelocity, MovementPlugin, Player};
+    use crate::movement::{ActorId, BodyVelocity, MovementPlugin, Player};
     use crate::projectiles::SpawnProjectileMessage;
     use crate::world::GameLayer;
 
@@ -206,7 +206,12 @@ mod plugin_tests {
         app.world_mut()
             .spawn((
                 Player,
-                KinematicActorBundle::new(transform, BodyDimensions::PLAYER, GroundSensing::PLAYER),
+                KinematicActorBundle::new(
+                    ActorId::PLAYER,
+                    transform,
+                    BodyDimensions::PLAYER,
+                    GroundSensing::PLAYER,
+                ),
                 CombatContext::default(),
             ))
             .id()
@@ -254,6 +259,7 @@ mod plugin_tests {
             .world_mut()
             .spawn((
                 KinematicActorBundle::new(
+                    ActorId::authored(10_001),
                     Transform::from_xyz(0.0, 20.0, 0.0),
                     BodyDimensions::PLAYER,
                     GroundSensing::PLAYER,

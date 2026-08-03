@@ -12,6 +12,8 @@
 //! aparece un infractor nuevo como si un archivo de la lista deja de serlo sin
 //! sacarlo de ella.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

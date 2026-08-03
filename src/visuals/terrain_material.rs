@@ -226,11 +226,14 @@ fn fallback_array() -> Image {
 }
 
 fn array_image(edge: u32, data: Vec<u8>, format: TextureFormat) -> Image {
+    let Ok(layer_count) = u32::try_from(TERRAIN_TEXTURES.len()) else {
+        panic!("terrain texture array exceeded the u32 layer limit");
+    };
     let mut image = Image::new(
         Extent3d {
             width: edge,
             height: edge,
-            depth_or_array_layers: TERRAIN_TEXTURES.len() as u32,
+            depth_or_array_layers: layer_count,
         },
         TextureDimension::D2,
         data,

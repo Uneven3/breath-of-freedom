@@ -152,7 +152,7 @@ pub fn decide(time: Res<Time>, mut q: Query<DecideQuery, With<Enemy>>) {
 }
 
 type ActQuery<'a> = (
-    Entity,
+    &'a crate::movement::ActorId,
     &'a Transform,
     &'a Home,
     &'a EnemyBrainProfile,
@@ -166,10 +166,10 @@ type ActQuery<'a> = (
 /// every tick, like every brain in the pipeline.
 pub fn act(time: Res<Time>, mut q: Query<ActQuery, With<Enemy>>) {
     let dt = time.delta_secs();
-    for (entity, transform, home, profile, aggro, state, mut local, mut intents) in &mut q {
+    for (actor_id, transform, home, profile, aggro, state, mut local, mut intents) in &mut q {
         let pos = transform.translation;
         *intents = match state {
-            EnemyAiState::Patrol => patrol_intents(entity, pos, home.0, profile, &mut local, dt),
+            EnemyAiState::Patrol => patrol_intents(*actor_id, pos, home.0, profile, &mut local, dt),
             EnemyAiState::Alert => aggro.last_seen.map_or_else(Intents::default, |target| {
                 chase_intents(pos, target, profile)
             }),
@@ -187,7 +187,7 @@ pub fn act(time: Res<Time>, mut q: Query<ActQuery, With<Enemy>>) {
 }
 
 fn patrol_intents(
-    entity: Entity,
+    actor_id: crate::movement::ActorId,
     pos: Vec3,
     home: Vec3,
     profile: &EnemyBrainProfile,
@@ -210,7 +210,7 @@ fn patrol_intents(
         local.waypoint = Some(patrol_waypoint(
             home,
             profile.patrol_radius,
-            entity.index().index(),
+            actor_id.value(),
             local.step,
         ));
     }
@@ -227,7 +227,7 @@ fn chase_intents(pos: Vec3, target: Vec3, profile: &EnemyBrainProfile) -> Intent
 }
 
 /// Deterministic pseudo-random waypoint around `home`: golden-angle sequence
-/// keyed by entity index + step, so paths look organic but replay identically
+/// keyed by stable actor identity + step, so paths look organic but replay identically
 /// (and are testable).
 pub(crate) fn patrol_waypoint(home: Vec3, radius: f32, entity_index: u32, step: u32) -> Vec3 {
     const GOLDEN_ANGLE: f32 = 2.399_963;
@@ -385,6 +385,7 @@ mod tests {
         let enemy = world
             .spawn((
                 Enemy,
+                crate::movement::ActorId::BOKOBO_MELEE,
                 Transform::from_xyz(0.0, 1.0, 0.0),
                 Home(Vec3::new(0.0, 1.0, 0.0)),
                 EnemyBrainProfile::BOKOBO,

@@ -361,8 +361,9 @@ mod tests {
         let n = 5;
         step(&mut app, n);
 
-        assert_eq!(app.world().get::<TickCount>(walker).unwrap().0, n as u32);
-        assert_eq!(app.world().get::<TickCount>(faller).unwrap().0, n as u32);
+        let ticks = u32::try_from(n).expect("test tick count must fit in u32");
+        assert_eq!(app.world().get::<TickCount>(walker).unwrap().0, ticks);
+        assert_eq!(app.world().get::<TickCount>(faller).unwrap().0, ticks);
     }
 
     /// 3. No cross-actor state bleed: actor A jumps (its own `JumpState` arms) while

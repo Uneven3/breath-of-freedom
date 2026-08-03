@@ -294,12 +294,21 @@ pub(super) fn setup_sky(
 /// the ladder and the ramps. One of the pieces a scene row can ask for
 /// (`crate::scene`), so the traversal box can have it without the forest and
 /// the sandbox can have none of it.
-/// The terrain a scene is built on, if it has one yet.
-///
-/// These systems run in [`SceneBuild::Actors`](crate::scene::SceneBuild), after
-/// the ground exists — which is the whole reason that phase is there. A missing
-/// terrain is not an error, it just means every piece keeps its authored `y`.
-type GroundQuery<'w, 's> = Query<'w, 's, &'static super::Terrain>;
+trait GroundHeight {
+    fn sample_height(&self, world_xz: Vec2) -> Option<f32>;
+}
+
+impl GroundHeight for super::Terrain {
+    fn sample_height(&self, world_xz: Vec2) -> Option<f32> {
+        Some(self.height_at(world_xz))
+    }
+}
+
+impl GroundHeight for super::TerrainAccess<'_, '_> {
+    fn sample_height(&self, world_xz: Vec2) -> Option<f32> {
+        self.height_at(world_xz)
+    }
+}
 
 /// Lift an authored position onto the ground beneath it.
 ///
@@ -307,11 +316,13 @@ type GroundQuery<'w, 's> = Query<'w, 's, &'static super::Terrain>;
 /// height at the piece's own XZ. Flat ground samples 0 and the position comes
 /// back unchanged, which is why sculpting a scene cannot silently move a course
 /// that was authored before the terrain existed.
-fn settle(pos: Vec3, anchor: Anchor, ground: Option<&super::Terrain>) -> Vec3 {
+fn settle(pos: Vec3, anchor: Anchor, ground: Option<&impl GroundHeight>) -> Vec3 {
     match (anchor, ground) {
-        (Anchor::Ground, Some(terrain)) => {
-            Vec3::new(pos.x, pos.y + terrain.height_at(pos.xz()), pos.z)
-        }
+        (Anchor::Ground, Some(terrain)) => Vec3::new(
+            pos.x,
+            pos.y + terrain.sample_height(pos.xz()).unwrap_or(0.0),
+            pos.z,
+        ),
         _ => pos,
     }
 }
@@ -321,11 +332,11 @@ pub(super) fn setup_course(
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
-    ground: GroundQuery,
+    ground: super::TerrainAccess,
 ) {
     let m = &mut meshes;
     let scene = *state.get();
-    let ground = ground.single().ok();
+    let ground = Some(&ground);
 
     // --- Declarative tables ---
     for row in BOXES {
@@ -387,9 +398,9 @@ pub(super) fn setup_course(
     // other *and* with the wall they hang on, so the whole assembly takes one
     // lift — sampling each point separately would tilt the climb against a wall
     // that moved as a block.
-    let ladder_lift = ground.map_or(0.0, |terrain| {
-        terrain.height_at(Vec2::new(ladder_x, ladder_wall_z))
-    });
+    let ladder_lift = ground
+        .and_then(|terrain| terrain.sample_height(Vec2::new(ladder_x, ladder_wall_z)))
+        .unwrap_or(0.0);
     let rung = |y: f32, z: f32| Vec3::new(ladder_x, y + ladder_lift, z);
     commands.spawn((
         DespawnOnExit(scene),
@@ -416,11 +427,11 @@ pub(super) fn setup_stairs(
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
-    ground: GroundQuery,
+    ground: super::TerrainAccess,
 ) {
     let m = &mut meshes;
     let scene = *state.get();
-    let ground = ground.single().ok();
+    let ground = Some(&ground);
 
     for row in STAIRS {
         spawn_stair_segment(
@@ -510,10 +521,10 @@ pub(super) fn setup_targets(
     mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
-    ground: GroundQuery,
+    ground: super::TerrainAccess,
 ) {
     let scene = *state.get();
-    let ground = ground.single().ok();
+    let ground = Some(&ground);
     for (name, center) in PRACTICE_TARGETS {
         spawn_practice_target(
             &mut commands,
@@ -533,10 +544,10 @@ pub(super) fn setup_pickups(
     mut meshes: ResMut<Assets<Mesh>>,
     palette: Res<MaterialPalette>,
     state: Res<State<AppState>>,
-    ground: GroundQuery,
+    ground: super::TerrainAccess,
 ) {
     let scene = *state.get();
-    let ground = ground.single().ok();
+    let ground = Some(&ground);
     for row in PICKUPS {
         crate::inventory::spawn_world_item(
             &mut commands,

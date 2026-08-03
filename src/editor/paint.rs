@@ -59,7 +59,9 @@ pub(super) fn paint_terrain(
     let (Ok(window), Ok((camera, camera_transform))) = (window.single(), camera.single()) else {
         return;
     };
-    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, entity) else {
+    let Some(hit) = cursor_terrain_hit(&spatial, window, camera, camera_transform, |hit| {
+        hit == entity
+    }) else {
         return;
     };
 

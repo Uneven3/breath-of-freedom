@@ -246,6 +246,6 @@ pub(crate) fn expected_feet_y(stairs: &StairsFacts, world_pos: Vec3) -> f32 {
     if distance >= total_run {
         return stairs.base.y + stairs.step_count as f32 * stairs.step_rise;
     }
-    let index = (distance / stairs.step_depth).floor() as i32;
-    stairs.base.y + (index + 1) as f32 * stairs.step_rise
+    let index = (distance / stairs.step_depth).floor();
+    stairs.base.y + (index + 1.0) * stairs.step_rise
 }

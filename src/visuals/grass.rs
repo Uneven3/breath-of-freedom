@@ -29,6 +29,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
+use crate::world::TerrainAccess;
 use crate::world::forest::{hash_u32, hash_unit};
 
 /// **The knob that decides how the meadow reads.** Blades per square metre.
@@ -86,7 +87,7 @@ const DENSITY_TIERS: [(f32, &str); 3] = [
 /// Which density preset the meadow is showing.
 #[derive(Resource, Default)]
 pub(super) struct GrassStressState {
-    tier: u8,
+    tier: usize,
 }
 
 /// One baked chunk of the meadow: a single mesh holding all its blades.
@@ -95,8 +96,13 @@ pub(super) struct GrassChunk;
 
 /// Blades per chunk at a given density. Rounded once, here, so the count on
 /// screen and the count in the budget are the same number.
-fn blades_per_chunk(density: f32) -> usize {
-    (CHUNK_METRES * CHUNK_METRES * density).round().max(0.0) as usize
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "density is clamped non-negative and a blade count is an integer bucket"
+)]
+fn blades_per_chunk(density: f32) -> u32 {
+    (CHUNK_METRES * CHUNK_METRES * density).round().max(0.0) as u32
 }
 
 /// Startup: lay down the field at the default density.
@@ -106,17 +112,16 @@ pub(super) fn spawn_meadow(
     mut materials: ResMut<Assets<StandardMaterial>>,
     stress: Res<GrassStressState>,
     scene: Res<State<crate::scene::AppState>>,
-    terrain_query: Query<&crate::world::Terrain>,
+    terrain: TerrainAccess,
 ) {
-    let (density, _) = DENSITY_TIERS[stress.tier as usize];
-    let terrain = terrain_query.single().ok();
+    let (density, _) = DENSITY_TIERS[stress.tier];
     spawn_field(
         &mut commands,
         &mut meshes,
         &mut materials,
         density,
         *scene.get(),
-        terrain,
+        &terrain,
     );
 }
 
@@ -140,7 +145,7 @@ fn spawn_field(
     materials: &mut Assets<StandardMaterial>,
     density: f32,
     scene: crate::scene::AppState,
-    terrain: Option<&crate::world::Terrain>,
+    terrain: &TerrainAccess,
 ) {
     let material = materials.add(grass_material());
     let half = FIELD_CHUNKS / 2;
@@ -153,8 +158,8 @@ fn spawn_field(
             // Seeded by chunk coordinate, not by spawn order: the same chunk
             // grows the same blades every session, and a re-spawn at another
             // density does not reshuffle the whole field.
-            let seed = hash_u32((cx as u32).wrapping_mul(0x9e37_79b9) ^ (cz as u32));
-            let mesh = build_chunk_mesh(centre, per_chunk, seed, terrain);
+            let seed = hash_u32(cx.cast_unsigned().wrapping_mul(0x9e37_79b9) ^ cz.cast_unsigned());
+            let mesh = build_chunk_mesh(centre, per_chunk, seed, Some(terrain));
             blades += mesh.count_vertices() / 4;
             commands.spawn((
                 DespawnOnExit(scene),
@@ -181,20 +186,16 @@ fn spawn_field(
 /// Vertices carry world positions (the chunk entity sits at the origin), so a
 /// blade sits on the ground wherever the terrain put it without the chunk having
 /// to track a height of its own.
-fn build_chunk_mesh(
-    centre: Vec2,
-    count: usize,
-    seed: u32,
-    terrain: Option<&crate::world::Terrain>,
-) -> Mesh {
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(count * 4);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(count * 4);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(count * 4);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(count * 4);
-    let mut indices: Vec<u32> = Vec::with_capacity(count * 6);
+fn build_chunk_mesh(centre: Vec2, count: u32, seed: u32, terrain: Option<&TerrainAccess>) -> Mesh {
+    let capacity = count as usize;
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(capacity * 4);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(capacity * 4);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(capacity * 4);
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(capacity * 4);
+    let mut indices: Vec<u32> = Vec::with_capacity(capacity * 6);
 
     for blade in 0..count {
-        let hash = hash_u32(seed ^ (blade as u32).wrapping_mul(0x0019_6f3d));
+        let hash = hash_u32(seed ^ blade.wrapping_mul(0x0019_6f3d));
         let u1 = hash_unit(hash);
         let u2 = hash_unit(hash ^ 0x1234_5678);
         let u3 = hash_unit(hash ^ 0x8765_4321);
@@ -202,8 +203,8 @@ fn build_chunk_mesh(
         let u5 = hash_unit(hash ^ 0x0f0f_0f0f);
 
         let xz = centre + Vec2::new(u1 - 0.5, u2 - 0.5) * CHUNK_METRES;
-        let ground = terrain.map_or(0.0, |t| t.height_at(xz));
-        let slope = terrain.map_or(0.0, |t| t.slope_deg_at(xz));
+        let ground = terrain.and_then(|t| t.height_at(xz)).unwrap_or(0.0);
+        let slope = terrain.and_then(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
         if slope > MAX_SLOPE_DEG {
             continue;
         }
@@ -223,7 +224,10 @@ fn build_chunk_mesh(
         let base = Vec3::new(xz.x, ground, xz.y);
         let tip = base + Vec3::new(lean.x, height, lean.y);
         let taper = BLADE_TIP_TAPER;
-        let first = positions.len() as u32;
+        let Ok(first) = u32::try_from(positions.len()) else {
+            error!("grass chunk exceeded the u32 mesh-index limit");
+            break;
+        };
 
         positions.push([base.x - side.x, base.y, base.z - side.y]);
         positions.push([base.x + side.x, base.y, base.z + side.y]);
@@ -275,7 +279,7 @@ pub(super) fn handle_grass_stress_toggle(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut state: ResMut<GrassStressState>,
     scene: Res<State<crate::scene::AppState>>,
-    terrain_query: Query<&crate::world::Terrain>,
+    terrain: TerrainAccess,
     chunks: Query<Entity, With<GrassChunk>>,
 ) {
     if !keys.just_pressed(KeyCode::F8) {
@@ -284,9 +288,8 @@ pub(super) fn handle_grass_stress_toggle(
     for entity in &chunks {
         commands.entity(entity).despawn();
     }
-    state.tier = (state.tier + 1) % DENSITY_TIERS.len() as u8;
-    let (density, label) = DENSITY_TIERS[state.tier as usize];
-    let terrain = terrain_query.single().ok();
+    state.tier = (state.tier + 1) % DENSITY_TIERS.len();
+    let (density, label) = DENSITY_TIERS[state.tier];
     info!("[grass-stress] densidad → {label}");
     spawn_field(
         &mut commands,
@@ -294,7 +297,7 @@ pub(super) fn handle_grass_stress_toggle(
         &mut materials,
         density,
         *scene.get(),
-        terrain,
+        &terrain,
     );
 }
 
@@ -309,10 +312,15 @@ mod tests {
         // knob rather than a literal, so tuning the density cannot break the
         // test that guards it — the count must always be area × density.
         let per_chunk = blades_per_chunk(BLADES_PER_SQUARE_METRE);
-        let expected = (CHUNK_METRES * CHUNK_METRES * BLADES_PER_SQUARE_METRE) as usize;
-        assert_eq!(per_chunk, expected, "the knob must reach the ground intact");
+        let expected = (CHUNK_METRES * CHUNK_METRES * BLADES_PER_SQUARE_METRE).round();
+        assert_eq!(
+            (per_chunk as f32).to_bits(),
+            expected.to_bits(),
+            "the knob must reach the ground intact"
+        );
 
         let mesh = build_chunk_mesh(Vec2::ZERO, per_chunk, 7, None);
+        let per_chunk = per_chunk as usize;
         assert_eq!(mesh.count_vertices(), per_chunk * 4);
         let triangles = mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
         assert_eq!(triangles, per_chunk * 2, "a blade is two triangles");
@@ -322,8 +330,8 @@ mod tests {
     fn the_whole_field_stays_inside_the_mobile_triangle_budget() {
         // Grass shares the frame with 32768 triangles of terrain, so the field
         // has to leave room for the ground it grows on.
-        let per_chunk = blades_per_chunk(BLADES_PER_SQUARE_METRE);
-        let chunks = (FIELD_CHUNKS * FIELD_CHUNKS) as usize;
+        let per_chunk = blades_per_chunk(BLADES_PER_SQUARE_METRE) as usize;
+        let chunks = (FIELD_CHUNKS * FIELD_CHUNKS).unsigned_abs() as usize;
         let field_triangles = per_chunk * 2 * chunks;
         let terrain = 128 * 128 * 2;
         assert!(

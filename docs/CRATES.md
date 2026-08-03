@@ -3,8 +3,8 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **fase 1 ejecutada**; C2 y §12 están congeladas por test. Se borra cuando
-la última fase cierre — igual que `AHORA.md` borra lo cerrado.
+Estado: **fases 1-3 cerradas; fase 4 implementada con checkpoint parcial**. Se
+borra cuando la última fase cierre — igual que `AHORA.md` borra lo cerrado.
 
 ## El problema, medido (2026-08-01)
 
@@ -24,8 +24,8 @@ las verifica nadie:
 por defecto sale **limpio, 0 warnings**. Nada de lo anterior es descuido — es la
 distancia entre lo que clippy revisa por defecto y lo que las leyes exigen.
 
-Escala: 167 archivos, 37 122 LOC, 21 módulos, **un solo crate**, 387 tests
-(385 unitarios + 2 de arquitectura).
+Escala: 168 archivos, 37 410 LOC, 21 módulos, **un solo crate**, 391 tests
+(389 unitarios + 2 de arquitectura).
 Cualquier cambio recompila los 38 k: con las dependencias en caché y una sola
 unidad `Compiling breath-of-freedom`, `clippy` tardó **7 min 21 s**.
 
@@ -47,9 +47,9 @@ Por retorno sobre esfuerzo, no por prolijidad:
 | # | Fase | Cierra | Escala |
 |---|---|---|---|
 | 1 | Tests de frontera ✅ | C2, §12 | cerrada |
-| 2 | Determinismo | pilar 5 de `NORTE.md` | días |
-| 3 | Lints | §8, §9, §13 | 1-2 sesiones |
-| 4 | Acceso al terreno | escala del mundo | 1 sesión |
+| 2 | Determinismo ✅ | pilar 5 de `NORTE.md` | cerrada |
+| 3 | Lints ✅ | §8, §9, §13 | cerrada |
+| 4 | Acceso al terreno ◐ | escala del mundo | checkpoint parcial |
 | 5 | `bof_domain` | §19 como frontera | semanas |
 | 6 | `bof_simulation` | §20, C2 definitivo | semanas |
 | 7 | `bof_presentation` + app | §4 | semanas |
@@ -72,18 +72,11 @@ leyes antes del refactor:
 
 ## Fase 2 — Determinismo
 
-Estado: **en curso**. El primer bug quedó cerrado: `ShotSpreadRng` vive por actor,
-recibe una semilla authored y no depende de reloj, `Entity` ni orden de query.
-Dos seeds iguales reproducen ocho disparos idénticos; actores con otra semilla
-tienen un stream independiente. Per-actor evita que dos tiradores se acoplen por
-el orden en que Bevy itera sus arquetipos.
-
-Falta el guardrail general de la fase:
-
-- Ningún resultado futuro puede leer reloj real ni usar `Entity` como semilla.
-- Test: misma escena, mismas semillas, dos corridas, `Transform`/`BodyVelocity`/
-  `LocomotionState` idénticos N ticks. Sin él, "host-autoritativo desde
-  temprano" es una intención y no una propiedad.
+Estado: **cerrada**. `ShotSpreadRng` vive por actor con semilla authored;
+`ActorId` reemplaza a `Entity` en patrullaje, LOD de sensores y desempates de
+percepción. El replay headless ejecuta Movement + Avian reales por 120 ticks,
+invierte el orden de spawn, desplaza los IDs transitorios con 17 entidades dummy
+y exige `Transform`/`BodyVelocity`/`LocomotionState` idénticos por `ActorId`.
 
 ## Fase 3 — Lints
 
@@ -93,6 +86,7 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
+expect_used = "deny"
 unwrap_used = "deny"
 cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
@@ -100,30 +94,32 @@ float_cmp = "deny"
 wildcard_enum_match_arm = "deny"
 ```
 
-Arrancar en `warn` y subir a `deny` por familia. Trabajo esperado: 93
-`unwrap`/`expect` de producción, ~140 casts (`as f32` ×52, `as usize` ×43,
-`as u32` ×19, `as f64` ×13, resto ×13) y 32 brazos `_ =>`. Tests exentos con
-`#![cfg_attr(test, allow(clippy::unwrap_used))]`, como permite §8.
+Estado: los seis lints están en `deny` y `clippy --all-targets -D warnings`
+pasa. El inventario real de Clippy corrigió la medición textual: en producción
+había 3 `expect` y ningún `unwrap`; el conteo de 93 incluía módulos de test. Los
+tests permiten `unwrap`/`expect` y comparaciones exactas de floats para fixtures
+y constantes authored, pero no conversiones truncantes.
 
-`wildcard_enum_match_arm` es la más valiosa: con 47 enums, hace que **agregar
-una variante rompa el build en cada sitio que debía enterarse**. `float_cmp`
-cobra de paso una deuda ya anotada (apilado de comida por igualdad exacta de
-`f32`). Y como Bevy 0.19 permite sistemas falibles, `Result` es la salida de los
-93 `unwrap` sin convertirlos en `if let` mudos.
+Se hicieron exhaustivos 6 matches, se eliminó la única igualdad directa de
+floats en producción y se corrigieron 55 avisos del inventario conjunto. Las
+conversiones enteras se comprueban; terreno concentra el único helper acotado
+f32→índice, y grass conserva como excepción puntual su conteo redondeado de
+briznas. El terreno quedó confirmado visualmente y un test fija el reloj
+`HH:MM`; fase cerrada.
+
+`wildcard_enum_match_arm` hace que agregar una variante rompa cada consumidor
+que debía enterarse; `float_cmp` cobra la igualdad exacta fuera de tests.
 
 ## Fase 4 — El acceso al terreno
 
-`Terrain` es un singleton: `.single()` en `visuals/terrain.rs`,
-`visuals/grass.rs` ×2, `editor/brush.rs`, `editor/mod.rs`. Con 320×320 m
-funciona perfecto y la stop-line contra chunks/streaming está bien puesta.
+Estado: `TerrainAccess` es el único `SystemParam` de lectura y conserva dentro
+la cardinalidad actual. Player, Movement, layout, grass, visual y editor piden
+`height_at`/`kind_at`/pertenencia; las queries directas que quedan mutan el dato
+o reconstruyen su collider dentro del dueño. No se implementó streaming.
 
-Pero el día que el mundo crezca, chunks tocan esos cinco sitios más `height_at`,
-el collider y el remuestreo. **No se implementa streaming** — se cambia el
-*acceso*: nadie hace `terrain.single()`, todos preguntan `height_at(world_pos)` /
-`kind_at(world_pos)` a un `SystemParam`. Misma jugada que ya funcionó con
-`TreeKind → VisualCatalog`: separar la pregunta de quién la responde. Una tarde
-ahora; el refactor que no se hace nunca después. Va antes de los crates porque
-decide si `Terrain` es dato de `domain` o servicio de `simulation`.
+Automatización verde y cero `terrain.single()`/`ground.single()` en `src/`. El
+checkpoint abrió/cerró limpio, ejercitó el reloj y releyó `sandbox.ron`; falta
+esculpir, guardar y reentrar después de este cambio para cerrarlo (§10).
 
 ---
 
@@ -248,9 +244,9 @@ divergen, presentación está escribiendo verdad. Se apoya en la fase 2 — sin
 semilla determinista esa comparación no existe — y el beneficio llega aunque el
 co-op no llegue nunca: tests de simulación sin ventana ni GPU, en segundos.
 
-Falta decidir qué es "estado idéntico" en un mundo abierto con avian:
-probablemente `Transform`/`BodyVelocity`/`LocomotionState` de los actores en una
-escena fija y un número acotado de ticks, no el mundo entero.
+La fase 2 fijó el primer snapshot: `Transform`/`BodyVelocity`/
+`LocomotionState` de cada `ActorId` durante 120 ticks. En fase 7 se corre el
+mismo contrato con y sin presentación para probar que la capa sólo lee.
 
 ## Más allá de los crates: los tipos
 
@@ -282,9 +278,9 @@ a 6 líneas del límite.
 | Fase | Verde cuando |
 |---|---|
 | 1 | El test de frontera pasa y su lista de excepciones solo encoge. |
-| 2 | Dos corridas con la misma semilla dan estado idéntico N ticks; `Entity::to_bits` no aparece en ningún cálculo de resultado. |
-| 3 | `cargo clippy --all-targets -- -D warnings` limpio con los lints en `deny`. |
-| 4 | `grep -rn "terrain.single()" src/` vacío; checkpoint jugado (esculpir, guardar, reentrar). |
+| 2 ✅ | Dos corridas con la misma semilla dan estado idéntico N ticks; `Entity::to_bits` no aparece en ningún cálculo de resultado. |
+| 3 ✅ | Lints en `deny`, Clippy limpio y checkpoint cerrado. |
+| 4 ◐ | Grep vacío y suite verde; falta checkpoint esculpir→guardar→reentrar. |
 | 5 | `cargo tree -p breath_of_freedom_domain` sin `bevy_render`. |
 | 6 | `grep -rl "Mesh\|StandardMaterial" crates/simulation/src` vacío; `bevy_input` solo en el dueño de input; el test de la fase 1 se borra por redundante; checkpoint jugado. |
 | 7 | `cargo tree` de presentation sin `bof_simulation`; checkpoint jugado; frame time sin regresión contra el baseline de `AHORA.md`. |

@@ -23,7 +23,7 @@ use crate::movement::bundles::{
     StairsMovementBundle, StaminaBundle, WallJumpMovementBundle,
 };
 use crate::movement::sensing::{GroundSensing, LedgeCastShape, LedgeSensing};
-use crate::movement::{BodyVelocity, Player};
+use crate::movement::{ActorId, BodyVelocity, Player};
 
 /// Authored spawn point in world XZ; death teleports back here (graybox
 /// respawn). **Only the horizontal position is authored** — the height comes
@@ -65,8 +65,8 @@ impl Plugin for PlayerPlugin {
 /// Where the player's body starts: authored XZ, terrain height plus clearance.
 /// Falls back to the old flat-floor height when there is no terrain, so this
 /// stays correct for a scene that has none.
-fn spawn_position(terrain: Option<&crate::world::Terrain>) -> Vec3 {
-    let ground = terrain.map_or(0.0, |terrain| terrain.height_at(PLAYER_SPAWN_XZ));
+fn spawn_position(ground: Option<f32>) -> Vec3 {
+    let ground = ground.unwrap_or(0.0);
     Vec3::new(
         PLAYER_SPAWN_XZ.x,
         ground + PLAYER_SPAWN_CLEARANCE,
@@ -77,7 +77,7 @@ fn spawn_position(terrain: Option<&crate::world::Terrain>) -> Vec3 {
 fn spawn_player(
     mut commands: Commands,
     state: Res<State<crate::scene::AppState>>,
-    terrain: Query<&crate::world::Terrain>,
+    terrain: crate::world::TerrainAccess,
 ) {
     // The Player is an invisible kinematic collider; the mesh lives on a separate
     // PlayerVisual entity that interpolates toward this body (see `visuals.rs`).
@@ -93,7 +93,8 @@ fn spawn_player(
         lock_on::LockOnInputCursor::default(),
         Name::new("Player"),
         KinematicActorBundle::new(
-            Transform::from_translation(spawn_position(terrain.single().ok())),
+            ActorId::PLAYER,
+            Transform::from_translation(spawn_position(terrain.height_at(PLAYER_SPAWN_XZ))),
             body_dimensions,
             GroundSensing::PLAYER,
         ),
@@ -154,13 +155,13 @@ type RespawnQuery<'a> = (&'a mut Transform, &'a mut BodyVelocity, &'a mut Health
 fn respawn_on_death(
     mut deaths: MessageReader<DeathMessage>,
     mut player: Query<RespawnQuery, With<Player>>,
-    terrain: Query<&crate::world::Terrain>,
+    terrain: crate::world::TerrainAccess,
 ) {
     for death in deaths.read() {
         let Ok((mut transform, mut velocity, mut health)) = player.get_mut(death.entity) else {
             continue;
         };
-        transform.translation = spawn_position(terrain.single().ok());
+        transform.translation = spawn_position(terrain.height_at(PLAYER_SPAWN_XZ));
         velocity.0 = Vec3::ZERO;
         health.heal_full();
         info!("[player] died — respawning at the authored spawn");
@@ -182,7 +183,7 @@ mod spawn_tests {
         let ground = terrain.height_at(PLAYER_SPAWN_XZ);
         assert!(ground > 5.0, "the test hill should be tall: {ground}");
 
-        let spawn = spawn_position(Some(&terrain));
+        let spawn = spawn_position(Some(ground));
         assert!(
             spawn.y > ground,
             "spawn {} must be above the ground {ground}",

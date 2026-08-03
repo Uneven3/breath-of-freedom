@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use crate::visuals::terrain_material::{TerrainMaterialAssets, semantic_vertex_data};
-use crate::world::{NonClimbable, Terrain};
+use crate::world::{NonClimbable, Terrain, TerrainAccess};
 
 /// Marks the single terrain visual entity, so a rebuild replaces its mesh in
 /// place instead of spawning a second one.
@@ -30,23 +30,25 @@ pub(super) fn sync_terrain_visual(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     terrain_material: Res<TerrainMaterialAssets>,
-    terrain: Query<(&Terrain, Has<NonClimbable>), Changed<Terrain>>,
+    terrain: TerrainAccess,
+    non_climbable: Query<(), With<NonClimbable>>,
     existing: Query<&Mesh3d, With<TerrainVisual>>,
 ) {
-    let Ok((terrain, non_climbable)) = terrain.single() else {
+    let Some((entity, terrain)) = terrain.changed().next() else {
         return;
     };
+    let climbable = non_climbable.get(entity).is_err();
     if let Ok(current) = existing.single()
         && let Some(mut mesh) = meshes.get_mut(&current.0)
     {
-        write_terrain_mesh(terrain, !non_climbable, &mut mesh);
+        write_terrain_mesh(terrain, climbable, &mut mesh);
         return;
     }
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
-    write_terrain_mesh(terrain, !non_climbable, &mut mesh);
+    write_terrain_mesh(terrain, climbable, &mut mesh);
     commands.spawn((
         Name::new("TerrainVisual"),
         TerrainVisual,
@@ -104,7 +106,9 @@ fn write_terrain_mesh(terrain: &Terrain, climbable: bool, mesh: &mut Mesh) {
         }
     }
 
-    let count = positions.len() as u32;
+    let Ok(count) = u32::try_from(positions.len()) else {
+        panic!("terrain mesh exceeded the u32 index limit");
+    };
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);

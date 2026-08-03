@@ -89,13 +89,12 @@ impl Plugin for ThemePlugin {
         // seeds it with its own subset when its plugin builds; doing this here,
         // in `build`, lands before any text is laid out — no first frame of
         // boxes, and no system to keep ordered.
-        app.world_mut()
-            .resource_mut::<Assets<Font>>()
-            .insert(
-                AssetId::default(),
-                Font::from_bytes(BODY_FONT_DATA.to_vec()),
-            )
-            .expect("the default font slot always accepts a font");
+        if let Err(error) = app.world_mut().resource_mut::<Assets<Font>>().insert(
+            AssetId::default(),
+            Font::from_bytes(BODY_FONT_DATA.to_vec()),
+        ) {
+            error!("failed to install the embedded UI font: {error}");
+        }
         app.add_systems(PreStartup, load_symbol_fonts);
     }
 }

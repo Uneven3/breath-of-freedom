@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::health::Health;
+use crate::movement::ActorId;
 use crate::movement::abilities::{
     AirborneMovement, GroundMovement, JumpMovement, JumpStaminaCost, SprintMovement, StairsMovement,
 };
@@ -37,6 +38,7 @@ pub fn spawn_horse_bundle() -> impl Bundle {
         Name::new("Horse"),
         Health::new(120.0),
         KinematicActorBundle::new(
+            ActorId::HORSE,
             Transform::from_translation(HORSE_SPAWN),
             HORSE_DIMENSIONS,
             GroundSensing::PLAYER,

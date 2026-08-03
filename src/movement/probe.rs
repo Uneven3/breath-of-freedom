@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 
+use super::ActorId;
 use super::abilities::{
     AirborneMovement, ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement,
     LedgeTraversal, SneakMovement, SprintMovement, StairsMovement, WallJumpMovement,
@@ -77,6 +78,7 @@ pub fn toggle_spawn(
         TraversalProbe,
         Name::new("TraversalProbe"),
         KinematicActorBundle::new(
+            ActorId::TRAVERSAL_PROBE,
             Transform::from_translation(spawn_pos),
             dimensions,
             GroundSensing::PLAYER,
@@ -256,7 +258,15 @@ fn next_stage(
             Some(ProbeStage::JumpOff)
         }
         ProbeStage::JumpOff if state == LocomotionState::Fall => Some(ProbeStage::GlideDown),
-        _ => None,
+        ProbeStage::ApproachWall
+        | ProbeStage::AttachClimb
+        | ProbeStage::AscendClimb
+        | ProbeStage::HoldAtLip
+        | ProbeStage::MantleOntoTop
+        | ProbeStage::SettleOnTop
+        | ProbeStage::TurnAround
+        | ProbeStage::JumpOff
+        | ProbeStage::GlideDown => None,
     }
 }
 

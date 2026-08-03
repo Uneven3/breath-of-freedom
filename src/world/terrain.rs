@@ -21,6 +21,7 @@
 use std::path::Path;
 
 use avian3d::prelude::*;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +67,23 @@ const MAX_RELAX_PER_STEP: f32 = 0.3;
 /// spacing on purpose: per-vertex randomness reads as salt-and-pepper, while
 /// interpolating over ~12 m reads as terrain.
 const NOISE_CELL: f32 = 12.0;
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is clamped to a finite non-negative grid bound before truncation"
+)]
+fn bounded_grid_index(value: f32, last: usize) -> usize {
+    value.clamp(0.0, last as f32) as usize
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "noise coordinates are finite authored world positions; signed bits intentionally wrap"
+)]
+fn noise_coordinate(value: f32) -> u32 {
+    (value.floor() as i32).cast_unsigned()
+}
 
 /// The ground as editable data: a height grid plus what each cell is **made
 /// of**. Authoritative: the collider and the visual mesh are both derived from
@@ -117,6 +135,44 @@ struct TerrainFile {
     /// error. That is what keeps the terrain files already on disk loadable.
     #[serde(default)]
     kinds: Vec<KindRun>,
+}
+
+/// Read-only seam for terrain queries outside the terrain owner.
+///
+/// The current world has one grid, but consumers ask this service for samples
+/// or entity membership instead of encoding that cardinality with
+/// `Query::single`. A future chunk lookup therefore changes here, not in every
+/// player, movement, editor and presentation system.
+#[derive(SystemParam)]
+pub struct TerrainAccess<'w, 's> {
+    terrains: Query<'w, 's, (Entity, &'static Terrain)>,
+    changed: Query<'w, 's, (Entity, &'static Terrain), Changed<Terrain>>,
+}
+
+impl TerrainAccess<'_, '_> {
+    pub fn height_at(&self, world_xz: Vec2) -> Option<f32> {
+        self.primary().map(|terrain| terrain.height_at(world_xz))
+    }
+
+    pub fn kind_at(&self, world_xz: Vec2) -> Option<TerrainKind> {
+        self.primary().map(|terrain| terrain.kind_at(world_xz))
+    }
+
+    pub fn slope_deg_at(&self, world_xz: Vec2) -> Option<f32> {
+        self.primary().map(|terrain| terrain.slope_deg_at(world_xz))
+    }
+
+    pub fn contains(&self, entity: Entity) -> bool {
+        self.terrains.contains(entity)
+    }
+
+    pub fn primary(&self) -> Option<&Terrain> {
+        self.terrains.single().ok().map(|(_, terrain)| terrain)
+    }
+
+    pub fn changed(&self) -> impl Iterator<Item = (Entity, &Terrain)> {
+        self.changed.iter()
+    }
 }
 
 /// `(how many cells, of what)`. Serialises as `(1234, Soil)`.
@@ -193,8 +249,8 @@ impl Terrain {
     /// The cell containing a world XZ, clamped to the grid.
     fn cell_at(&self, xz: Vec2) -> (usize, usize) {
         let cells = self.cells();
-        let last = (cells - 1) as f32;
-        let index = |v: f32| ((v / self.extent + 0.5) * cells as f32).clamp(0.0, last) as usize;
+        let last = cells - 1;
+        let index = |v: f32| bounded_grid_index((v / self.extent + 0.5) * cells as f32, last);
         (index(xz.x), index(xz.y))
     }
 
@@ -239,8 +295,8 @@ impl Terrain {
         let last = (self.points - 1) as f32;
         let fx = ((xz.x / self.extent + 0.5) * last).clamp(0.0, last);
         let fz = ((xz.y / self.extent + 0.5) * last).clamp(0.0, last);
-        let row = (fx.floor() as usize).min(self.points - 2);
-        let col = (fz.floor() as usize).min(self.points - 2);
+        let row = bounded_grid_index(fx.floor(), self.points - 2);
+        let col = bounded_grid_index(fz.floor(), self.points - 2);
         // Position inside the cell, both in `[0, 1]`.
         let u = fx - row as f32;
         let v = fz - col as f32;
@@ -464,11 +520,11 @@ impl Terrain {
         std::ops::RangeInclusive<usize>,
     ) {
         let cells = self.cells();
-        let last = (cells - 1) as f32;
+        let last = cells - 1;
         // Inverse of `cell_centre_xz`: world metres back to a fractional cell
         // index, measured from cell centres (hence the half-cell shift).
         let index = |v: f32| (v / self.extent + 0.5) * cells as f32 - 0.5;
-        let clamp = |v: f32| v.clamp(0.0, last) as usize;
+        let clamp = |v: f32| bounded_grid_index(v, last);
         (
             clamp(index(centre.x - radius).floor())..=clamp(index(centre.x + radius).ceil()),
             clamp(index(centre.y - radius).floor())..=clamp(index(centre.y + radius).ceil()),
@@ -535,12 +591,12 @@ impl Terrain {
         std::ops::RangeInclusive<usize>,
         std::ops::RangeInclusive<usize>,
     ) {
-        let last = (self.points - 1) as f32;
+        let last = self.points - 1;
         // Inverse of `point_xz`: world metres back to a fractional grid index.
-        let index = |v: f32| (v / self.extent + 0.5) * last;
+        let index = |v: f32| (v / self.extent + 0.5) * last as f32;
         let low = from.min(to) - Vec2::splat(radius);
         let high = from.max(to) + Vec2::splat(radius);
-        let clamp = |v: f32| v.clamp(0.0, last) as usize;
+        let clamp = |v: f32| bounded_grid_index(v, last);
         (
             clamp(index(low.x).floor())..=clamp(index(high.x).ceil()),
             clamp(index(low.y).floor())..=clamp(index(high.y).ceil()),
@@ -601,7 +657,9 @@ impl Terrain {
         }
         let file_cells = file.points - 1;
         let file_kinds = decode_kinds(&file.kinds, file_cells)?;
-        if file.points == self.points && file.extent == self.extent {
+        // Exact bits mean the authored and runtime grids share coordinates;
+        // any numerical difference requires the world-space resample below.
+        if file.points == self.points && file.extent.to_bits() == self.extent.to_bits() {
             self.heights = file.heights;
             self.kinds = file_kinds;
         } else {
@@ -629,8 +687,8 @@ impl Terrain {
             self.kinds = (0..cells * cells)
                 .map(|idx| {
                     let xz = self.cell_centre_xz(idx / cells, idx % cells);
-                    let row = source_cell(xz.x) as usize;
-                    let col = source_cell(xz.y) as usize;
+                    let row = bounded_grid_index(source_cell(xz.x), file_cells - 1);
+                    let col = bounded_grid_index(source_cell(xz.y), file_cells - 1);
                     file_kinds[row * file_cells + col]
                 })
                 .collect();
@@ -693,17 +751,18 @@ fn grid_xz(points: usize, extent: f32, idx: usize) -> Vec2 {
 /// Average of a point's four orthogonal neighbours, falling back to the point
 /// itself at the grid edge.
 fn neighbour_average(grid: &[f32], points: usize, idx: usize) -> f32 {
-    let row = (idx / points) as i32;
-    let col = (idx % points) as i32;
+    let row = idx / points;
+    let col = idx % points;
     let mut sum = 0.0;
     let mut count = 0.0;
-    for (dr, dc) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
-        let nr = row + dr;
-        let nc = col + dc;
-        if nr < 0 || nc < 0 || nr >= points as i32 || nc >= points as i32 {
-            continue;
-        }
-        sum += grid[nr as usize * points + nc as usize];
+    let neighbours = [
+        row.checked_sub(1).map(|nr| (nr, col)),
+        (row + 1 < points).then_some((row + 1, col)),
+        col.checked_sub(1).map(|nc| (row, nc)),
+        (col + 1 < points).then_some((row, col + 1)),
+    ];
+    for (nr, nc) in neighbours.into_iter().flatten() {
+        sum += grid[nr * points + nc];
         count += 1.0;
     }
     if count > 0.0 { sum / count } else { grid[idx] }
@@ -730,8 +789,8 @@ fn value_noise(p: Vec2, seed: u32) -> f32 {
     // Smoothstep the interpolation weights so cell borders do not show as creases.
     let w = Vec2::new(f.x * f.x * (3.0 - 2.0 * f.x), f.y * f.y * (3.0 - 2.0 * f.y));
     let corner = |dx: f32, dy: f32| {
-        let x = (cell.x + dx) as i32 as u32;
-        let y = (cell.y + dy) as i32 as u32;
+        let x = noise_coordinate(cell.x + dx);
+        let y = noise_coordinate(cell.y + dy);
         let hash = hash_u32(x.wrapping_mul(0x9e37_79b9) ^ hash_u32(y ^ seed));
         hash as f32 / u32::MAX as f32 * 2.0 - 1.0
     };
@@ -743,8 +802,8 @@ fn value_noise(p: Vec2, seed: u32) -> f32 {
 /// Bilinear sample of a square height grid at fractional grid coordinates.
 fn sample_bilinear(heights: &[f32], points: usize, row: f32, col: f32) -> f32 {
     let last = points - 1;
-    let r0 = (row.floor() as usize).min(last);
-    let c0 = (col.floor() as usize).min(last);
+    let r0 = bounded_grid_index(row.floor(), last);
+    let c0 = bounded_grid_index(col.floor(), last);
     let r1 = (r0 + 1).min(last);
     let c1 = (c0 + 1).min(last);
     let fr = row - r0 as f32;
@@ -829,6 +888,29 @@ pub(super) fn setup_terrain(mut commands: Commands, state: Res<State<crate::scen
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn read_access(terrain: TerrainAccess) -> (Option<f32>, Option<TerrainKind>, usize) {
+        (
+            terrain.height_at(Vec2::ZERO),
+            terrain.kind_at(Vec2::ZERO),
+            terrain.changed().count(),
+        )
+    }
+
+    #[test]
+    fn terrain_access_is_the_single_seam_for_sampling_the_current_grid() {
+        let mut world = World::new();
+        let mut terrain = Terrain::flat();
+        terrain.raise_area(Vec2::ZERO, 8.0, 3.0);
+        terrain.paint_area(Vec2::ZERO, 8.0, TerrainKind::Rock);
+        world.spawn(terrain);
+
+        let (height, kind, changed) = world.run_system_once(read_access).unwrap();
+        assert!(height.is_some_and(|height| height > 0.0));
+        assert_eq!(kind, Some(TerrainKind::Rock));
+        assert_eq!(changed, 1);
+    }
 
     /// Height at the grid point nearest the world origin.
     fn center_height(terrain: &Terrain) -> f32 {
@@ -880,8 +962,8 @@ mod tests {
         terrain.raise_area(Vec2::ZERO, radius, 3.0);
         let mid = terrain.points() / 2;
         let spacing = WORLD_SIZE / CELLS as f32;
-        let inside = (radius / spacing).floor() as usize - 1;
-        let outside = (radius / spacing).ceil() as usize + 1;
+        let inside = bounded_grid_index((radius / spacing).floor(), terrain.points()) - 1;
+        let outside = bounded_grid_index((radius / spacing).ceil(), terrain.points()) + 1;
         assert!(
             terrain.height(mid + inside, mid) > 0.0,
             "a point inside the radius should have moved"

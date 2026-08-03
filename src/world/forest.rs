@@ -148,7 +148,20 @@ fn forest_layout() -> Vec<ForestTreeRow> {
 fn authored_tree_collider(kind: TreeKind, spatial: &SpatialCatalog) -> Option<(f32, f32)> {
     let profile = match kind {
         TreeKind::Pine1 => SpatialProfileKey("tree_pine_trunk"),
-        _ => return None,
+        TreeKind::Common1
+        | TreeKind::Common2
+        | TreeKind::Common3
+        | TreeKind::Common4
+        | TreeKind::Common5
+        | TreeKind::Pine2
+        | TreeKind::Pine3
+        | TreeKind::Pine4
+        | TreeKind::Pine5
+        | TreeKind::Twisted1
+        | TreeKind::Twisted2
+        | TreeKind::Twisted3
+        | TreeKind::Twisted4
+        | TreeKind::Twisted5 => return None,
     };
     spatial
         .cylinder(profile, "UCY_Trunk")

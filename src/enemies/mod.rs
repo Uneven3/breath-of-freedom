@@ -124,6 +124,7 @@ fn toggle_spawn(
 
     spawn_bokobo(
         &mut commands,
+        crate::movement::ActorId::BOKOBO_MELEE,
         "Bokobo",
         MELEE_SPAWN_POSITION,
         brain::EnemyBrainProfile::BOKOBO,
@@ -136,6 +137,7 @@ fn toggle_spawn(
     );
     spawn_bokobo(
         &mut commands,
+        crate::movement::ActorId::BOKOBO_ARCHER,
         "BokoboArcher",
         ARCHER_SPAWN_POSITION,
         brain::EnemyBrainProfile::BOKOBO_ARCHER,
@@ -153,6 +155,7 @@ fn toggle_spawn(
 /// vs. bow + own control orientation — capability is the component).
 fn spawn_bokobo(
     commands: &mut Commands,
+    actor_id: crate::movement::ActorId,
     name: &str,
     home: Vec3,
     profile: brain::EnemyBrainProfile,
@@ -169,6 +172,7 @@ fn spawn_bokobo(
         Name::new(name.to_string()),
         Home(home),
         KinematicActorBundle::new(
+            actor_id,
             Transform::from_translation(home),
             BOKOBO_DIMENSIONS,
             GroundSensing::PLAYER,

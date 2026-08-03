@@ -20,7 +20,7 @@ use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::GroundSensing;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
-use crate::world::{GameLayer, Surface, Terrain};
+use crate::world::{GameLayer, Surface, TerrainAccess};
 
 /// Suppress grounding only while *genuinely launching off* the floor (m/s).
 /// During a jump's first ticks the body is still within probe range of the
@@ -68,7 +68,7 @@ pub fn ground_service(
     >,
     spatial: SpatialQuery,
     surfaces: Query<&Surface>,
-    terrains: Query<&Terrain>,
+    terrains: TerrainAccess,
     mut trace: ResMut<CastTrace>,
 ) {
     for (entity, transform, collider, velocity, sensing, mut facts, state, lod) in &mut q {
@@ -118,9 +118,13 @@ pub fn ground_service(
         // exists. Terrain first, since it is the entity that would otherwise need
         // a `Surface` component lying about the other 16k cells.
         facts.surface = hit
-            .and_then(|h| match terrains.get(h.entity) {
-                Ok(terrain) => Some(terrain.kind_at(h.point1.xz()).surface()),
-                Err(_) => surfaces.get(h.entity).ok().map(|surface| surface.0),
+            .and_then(|h| {
+                terrains
+                    .contains(h.entity)
+                    .then(|| terrains.kind_at(h.point1.xz()))
+                    .flatten()
+                    .map(|kind| kind.surface())
+                    .or_else(|| surfaces.get(h.entity).ok().map(|surface| surface.0))
             })
             .unwrap_or_default();
         // Diagnostic decomposition for the debug HUD/logs.
@@ -250,17 +254,13 @@ const MAX_TERRAIN_PENETRATION: f32 = 0.05;
 /// Runs after the motors move the body, so it corrects the position they
 /// produced rather than the one they started from. Reads the collider's own
 /// scaled shape, so it is right whether the capsule is standing or crouched.
-pub fn lift_actors_out_of_terrain(
-    terrain: Query<&crate::world::Terrain>,
-    mut actors: WalkingActors,
-) {
-    let Ok(terrain) = terrain.single() else {
-        return;
-    };
+pub fn lift_actors_out_of_terrain(terrain: TerrainAccess, mut actors: WalkingActors) {
     for (mut transform, collider) in &mut actors {
         let local_aabb = collider.shape_scaled().compute_local_aabb();
         let feet = transform.translation.y + local_aabb.mins.y;
-        let ground = terrain.height_at(transform.translation.xz());
+        let Some(ground) = terrain.height_at(transform.translation.xz()) else {
+            continue;
+        };
         let penetration = ground - feet;
         if penetration > MAX_TERRAIN_PENETRATION {
             transform.translation.y += penetration;

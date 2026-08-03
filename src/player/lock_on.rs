@@ -102,7 +102,7 @@ pub fn update_lock_on(
     }
     match *facing {
         FacingSource::LockOn(_) => *facing = FacingSource::Free,
-        _ => {
+        FacingSource::Free | FacingSource::Look => {
             if let Some(target) = acquire(transform.translation, orientation, &enemies) {
                 *facing = FacingSource::LockOn(target);
             }

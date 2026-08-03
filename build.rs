@@ -460,7 +460,11 @@ fn count_triangles(key: &str, mesh: &gltf::Mesh<'_>) -> Result<u32, Box<dyn Erro
                 .map(|positions| positions.count())
                 .ok_or_else(|| format!("{key}: a primitive has no positions"))?,
         };
-        total += (corners / 3) as u32;
+        let triangles = u32::try_from(corners / 3)
+            .map_err(|_| format!("{key}: triangle count does not fit in the manifest"))?;
+        total = total
+            .checked_add(triangles)
+            .ok_or_else(|| format!("{key}: total triangle count overflowed the manifest"))?;
     }
     Ok(total)
 }

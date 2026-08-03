@@ -42,7 +42,6 @@ pub enum TerrainKind {
 
 /// Everything that follows from a cell's kind. One row per [`TerrainKind`].
 pub struct KindProps {
-    pub kind: TerrainKind,
     /// What the editor calls it. Spanish, like the rest of the tool's HUD.
     pub label: &'static str,
     /// What it sounds like underfoot. `movement` records it into `GroundFacts`,
@@ -54,30 +53,26 @@ pub struct KindProps {
     pub cuttable: bool,
 }
 
-const KINDS: &[KindProps] = &[
+static KINDS: &[KindProps] = &[
     KindProps {
-        kind: TerrainKind::Soil,
         label: "Tierra",
         surface: SurfaceKind::Dirt,
         flammable: false,
         cuttable: false,
     },
     KindProps {
-        kind: TerrainKind::Rock,
         label: "Roca",
         surface: SurfaceKind::Stone,
         flammable: false,
         cuttable: false,
     },
     KindProps {
-        kind: TerrainKind::TallGrass,
         label: "Pasto largo",
         surface: SurfaceKind::Grass,
         flammable: true,
         cuttable: true,
     },
     KindProps {
-        kind: TerrainKind::Sand,
         label: "Arena",
         surface: SurfaceKind::Sand,
         flammable: false,
@@ -95,11 +90,12 @@ impl TerrainKind {
     ];
 
     pub fn props(self) -> &'static KindProps {
-        KINDS
-            .iter()
-            .find(|props| props.kind == self)
-            // Unreachable while `KINDS` covers the enum, which a test pins.
-            .expect("every TerrainKind has a row in KINDS")
+        match self {
+            TerrainKind::Soil => &KINDS[0],
+            TerrainKind::Rock => &KINDS[1],
+            TerrainKind::TallGrass => &KINDS[2],
+            TerrainKind::Sand => &KINDS[3],
+        }
     }
 
     pub fn label(self) -> &'static str {
@@ -129,13 +125,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_kind_has_exactly_one_row() {
-        // `props` panics on a missing row, and it is called from the ground probe
-        // every tick. A new variant without a row has to fail here, not there.
+    fn every_kind_maps_to_exactly_one_row() {
         assert_eq!(KINDS.len(), TerrainKind::ALL.len());
-        for kind in TerrainKind::ALL {
-            let matches = KINDS.iter().filter(|props| props.kind == kind).count();
-            assert_eq!(matches, 1, "{kind:?} should have exactly one row");
+        for (kind, expected) in TerrainKind::ALL.into_iter().zip(KINDS) {
+            assert!(std::ptr::eq(kind.props(), expected));
         }
     }
 

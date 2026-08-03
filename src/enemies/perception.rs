@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 
 use super::Enemy;
 use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
+use crate::movement::{Actor, ActorId, BodyVelocity};
 use crate::world::GameLayer;
 
 /// Marks an actor enemies can notice. Owned by Perception so spawners opt
@@ -177,6 +177,7 @@ pub(crate) fn hearing_fill_rate(
 
 type TargetQuery<'a> = (
     Entity,
+    &'a ActorId,
     &'a Transform,
     Option<&'a LocomotionState>,
     Option<&'a BodyVelocity>,
@@ -198,19 +199,19 @@ pub fn perceive(
     for (enemy_tf, perception, mut aggro, mut awareness) in &mut enemies {
         let seen = targets
             .iter()
-            .filter(|(_, target_tf, _, _)| {
+            .filter(|(_, _, target_tf, _, _)| {
                 within_sight_cone(enemy_tf, target_tf.translation, *perception)
                     && line_of_sight_clear(&spatial, enemy_tf.translation, target_tf.translation)
             })
-            .min_by(|(a_entity, a_tf, _, _), (b_entity, b_tf, _, _)| {
+            .min_by(|(_, a_id, a_tf, _, _), (_, b_id, b_tf, _, _)| {
                 stable_target_order(
                     enemy_tf.translation,
-                    (*a_entity, a_tf.translation),
-                    (*b_entity, b_tf.translation),
+                    (**a_id, a_tf.translation),
+                    (**b_id, b_tf.translation),
                 )
             });
 
-        if let Some((target, target_tf, locomotion, _)) = seen {
+        if let Some((target, _, target_tf, locomotion, _)) = seen {
             let sneaking = matches!(locomotion, Some(LocomotionState::Sneak));
             let distance = enemy_tf.translation.distance(target_tf.translation);
             let rate = awareness_fill_rate(distance, *perception, sneaking);
@@ -226,7 +227,7 @@ pub fn perceive(
         // around to investigate; only sight completes the detection.
         let heard = targets
             .iter()
-            .filter_map(|(target, target_tf, locomotion, velocity)| {
+            .filter_map(|(target, target_id, target_tf, locomotion, velocity)| {
                 let planar_speed = velocity
                     .map(|v| Vec2::new(v.0.x, v.0.z).length())
                     .unwrap_or(0.0);
@@ -240,20 +241,16 @@ pub fn perceive(
                 let distance = enemy_tf.translation.distance(target_tf.translation);
                 let audible_radius = perception.hearing_range * loudness;
                 hearing_fill_rate(distance, audible_radius, *perception)
-                    .map(|rate| (rate, target, target_tf.translation))
+                    .map(|rate| (rate, target, *target_id, target_tf.translation))
             })
-            .max_by(|(a_rate, a_entity, a_pos), (b_rate, b_entity, b_pos)| {
+            .max_by(|(a_rate, _, a_id, a_pos), (b_rate, _, b_id, b_pos)| {
                 a_rate.total_cmp(b_rate).then_with(|| {
-                    stable_target_order(
-                        enemy_tf.translation,
-                        (*b_entity, *b_pos),
-                        (*a_entity, *a_pos),
-                    )
+                    stable_target_order(enemy_tf.translation, (*b_id, *b_pos), (*a_id, *a_pos))
                 })
             });
 
         match heard {
-            Some((rate, _, noise_pos)) => {
+            Some((rate, _, _, noise_pos)) => {
                 // Fill toward the suspicion ceiling; never *lower* a meter
                 // that is already higher (noise sustains, sight decays).
                 if awareness.0 < Awareness::SUSPICIOUS {
@@ -270,15 +267,15 @@ pub fn perceive(
 }
 
 /// Closest target wins; exact distance ties are broken by world position and
-/// finally entity identity. This policy is independent of archetype/query
-/// iteration order and therefore stable as actors spawn or move archetypes.
-fn stable_target_order(origin: Vec3, a: (Entity, Vec3), b: (Entity, Vec3)) -> Ordering {
+/// finally authored actor identity. This policy is independent of
+/// archetype/query iteration order and transient [`Entity`] allocation.
+fn stable_target_order(origin: Vec3, a: (ActorId, Vec3), b: (ActorId, Vec3)) -> Ordering {
     a.1.distance_squared(origin)
         .total_cmp(&b.1.distance_squared(origin))
         .then_with(|| a.1.x.total_cmp(&b.1.x))
         .then_with(|| a.1.y.total_cmp(&b.1.y))
         .then_with(|| a.1.z.total_cmp(&b.1.z))
-        .then_with(|| a.0.to_bits().cmp(&b.0.to_bits()))
+        .then_with(|| a.0.cmp(&b.0))
 }
 
 /// An unmistakable threat (taking damage) aimed at one enemy: jumps its
@@ -407,17 +404,34 @@ mod tests {
     #[test]
     fn target_policy_is_independent_of_candidate_iteration_order() {
         let origin = Vec3::ZERO;
-        let far = (Entity::from_raw_u32(1).unwrap(), Vec3::new(0.0, 0.0, 8.0));
-        let near = (Entity::from_raw_u32(2).unwrap(), Vec3::new(0.0, 0.0, 2.0));
-        let choose = |candidates: [(Entity, Vec3); 2]| {
+        let far = (ActorId::authored(1), Vec3::new(0.0, 0.0, 8.0));
+        let near = (ActorId::authored(2), Vec3::new(0.0, 0.0, 2.0));
+        let choose = |candidates: [(ActorId, Vec3); 2]| {
             candidates
                 .into_iter()
                 .min_by(|a, b| stable_target_order(origin, *a, *b))
-                .unwrap()
+                .expect("the candidate table is non-empty")
         };
 
         assert_eq!(choose([far, near]), near);
         assert_eq!(choose([near, far]), near);
+    }
+
+    #[test]
+    fn exact_target_ties_use_authored_identity_not_iteration_order() {
+        let origin = Vec3::ZERO;
+        let position = Vec3::new(0.0, 0.0, -3.0);
+        let first = (ActorId::authored(20), position);
+        let stable_winner = (ActorId::authored(10), position);
+        let choose = |candidates: [(ActorId, Vec3); 2]| {
+            candidates
+                .into_iter()
+                .min_by(|a, b| stable_target_order(origin, *a, *b))
+                .expect("the candidate table is non-empty")
+        };
+
+        assert_eq!(choose([first, stable_winner]), stable_winner);
+        assert_eq!(choose([stable_winner, first]), stable_winner);
     }
 
     #[test]

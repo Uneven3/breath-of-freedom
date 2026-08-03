@@ -29,7 +29,7 @@ use bevy::prelude::*;
 
 use crate::input::ModalInputFocusRequest;
 use crate::scene::AppState;
-use crate::world::TerrainKind;
+use crate::world::{TerrainAccess, TerrainKind};
 use brush::BrushKind;
 use history::SculptHistory;
 
@@ -243,12 +243,12 @@ fn switch_layer(
     keys: Res<ButtonInput<KeyCode>>,
     mut tool: ResMut<EditorTool>,
     mut history: ResMut<SculptHistory>,
-    terrain: Query<&crate::world::Terrain>,
+    terrain: TerrainAccess,
 ) {
     if !tool.active || !keys.just_pressed(SWITCH_LAYER_KEY) {
         return;
     }
-    if let Ok(terrain) = terrain.single() {
+    if let Some(terrain) = terrain.primary() {
         history.end_stroke(terrain);
     }
     tool.anchor = None;

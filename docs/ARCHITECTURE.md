@@ -16,14 +16,14 @@ Código que viole estas leyes no se implementa ni mergea.
   sistemas (helpers puros ok).
 - **§7** Cada sistema muta solo lo que posee. Comunicación diferida = `Message`
   (0.19: `MessageReader`/`Writer`); `Event`/observer solo si exige inmediatez.
-- **§8** Evitar `unwrap()`/`expect()`: tipos, no panics en runtime. (Tests exentos.)
+- **§8** Los `[lints]` prohíben `unwrap()`/`expect()` en producción. Tests exentos.
 - **§9** Panic = bug de programador. Todo lo que el juego puede producir
   (asset faltante, input raro, red) se modela con `Result`/`Option`.
 - **§10** *Checkpoint* = comportamiento validado **jugándolo**.
 - **§11** Tests después del checkpoint; invariantes arquitectura/ECS sí se testean
   desde diseño (no-bleed, ordering, overflow, contratos multi-actor).
-- **§12** Sin `unsafe` en el proyecto.
-- **§13** `cargo fmt` + `clippy -D warnings` antes de terminar; `#[allow]`
+- **§12** `unsafe_code = "forbid"` en cada crate.
+- **§13** `[lints]` en `deny` + `cargo fmt` y Clippy antes de terminar; `#[allow]`
   solo con justificación puntual.
 - **§14** Un plugin por sistema, carpeta propia bajo `src/`.
 - **§15** Comentarios solo para invariantes/restricciones/workarounds. Nunca el *qué*.
@@ -66,8 +66,8 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 
 ## Por qué (rationale destilado)
 
-- **Multi-actor por `Actor` + `Intents`.** Todo cuerpo (player, enemigo, horse,
-  futuro jugador remoto) es un `Actor`; IA y red se mueven **solo** escribiendo
+- **Multi-actor por `ActorId` + `Actor` + `Intents`.** Todo cuerpo (player,
+  enemigo, horse, futuro remoto) tiene identidad estable; IA y red mueven **solo**
   `Intents`/`CombatIntents` — nunca `Transform`, `BodyVelocity`,
   `LocomotionState` ni estado privado de motores. Por eso agregar animales/NPCs/
   co-op es un Brain nuevo y cero motores. Los motores despachan por **capacidad**
@@ -190,7 +190,7 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 | `interaction` | Árbitro de `Interact`, `Interactable`, prioridad | Único consumidor de la tecla; emite la decisión por mensaje |
 | `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
 | `player` | Spawn y respawn del jugador | Dueño de la reacción a su muerte |
-| `world` | Geometría, capas, nivel, targets | Sustrato: no lee a nadie |
+| `world` | Geometría, capas, nivel, targets | `TerrainAccess` enruta toda lectura; no lee a nadie |
 | `visuals`, `camera`, `presentation`, `sfx` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20) |
 | `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
 | `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las aplica a lo suyo |

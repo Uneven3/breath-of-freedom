@@ -21,7 +21,7 @@ pub mod terrain;
 pub mod terrain_kind;
 
 pub use forest::TreeKind;
-pub use terrain::{Terrain, TerrainSnapshot, terrain_file};
+pub use terrain::{Terrain, TerrainAccess, TerrainSnapshot, terrain_file};
 pub use terrain_kind::TerrainKind;
 
 use crate::scene::AppState;

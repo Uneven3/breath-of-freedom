@@ -68,10 +68,10 @@ flythrough rechazan arrancar con una vista semántica activa; el loader de
 texturas reintenta sólo ante `AssetEvent`; `material_report` lee el material
 real; y `ARCHITECTURE.md`/`NORTE.md` declaran la excepción PBR del terreno.
 Queda como deuda, no bloqueo: unificar paleta/IDs Rust↔WGSL y dividir
-`terrain_material.rs` (§1, §16). La suite completa cerró en verde: 385 tests
+`terrain_material.rs` (§1, §16). La suite completa cerró en verde: 389 tests
 unitarios y 2 de arquitectura, además de `fmt`, `check` y `clippy -D warnings`.
-El checkpoint visual quedó aplazado porque el host necesita reiniciarse; no se
-declara validada en juego la cápsula nueva hasta ejecutar ese checkpoint.
+Tras reiniciar, el juego abrió y cerró limpio sobre Vulkan/Polaris; el usuario
+confirmó que la cápsula se vio bien en juego. Checkpoint cerrado.
 
 ## Estado (2026-08-02)
 
@@ -80,7 +80,13 @@ glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con percepción
 gradual (melee + arquero), health/muerte/respawn, horse, espada con combos, arco
 de dos fases con carga Bannerlord, cápsula graybox como player, mundo 320×320
 con bosque y audio de pasos por superficie. La validación automatizada de esta
-limpieza está verde; la validación jugada de la cápsula sigue pendiente.
+limpieza está verde y la cápsula quedó validada en juego el 2026-08-02.
+
+**CRATES fase 4:** `TerrainAccess` concentra toda lectura de terreno; player,
+Movement, layout, grass, visual y editor ya no codifican el singleton. Fases
+1-3 cerradas; 389 tests unitarios + 2 de arquitectura y Clippy verdes. El juego
+reabrió limpio y releyó `sandbox.ron`; falta esculpir→guardar→reentrar para
+cerrar el checkpoint de persistencia.
 
 **Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
 horneadas en una malla por chunk — 25 entidades, cero trabajo por frame. Medido
@@ -230,17 +236,17 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-02)
 
-1. **Completar el checkpoint aplazado:** cápsula de pie/agachada, cambio de
-   escena, combate y benchmark. La suite automatizada ya está verde.
-2. **CRATES fase 2 — determinismo:** el spread ya usa un stream por actor con
-   semilla authored; falta el replay de escena por N ticks. Fase 1 congela
-   C2/§12 y esta limpieza redujo C2 a 13 archivos.
-3. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
+1. **Cerrar CRATES fase 4:** esculpir, guardar, volver al menú y reentrar; la
+   abstracción, suite y recarga simple ya están verdes.
+2. **Decidir fase 5:** hermanas (recomendado) o lineal para presentation/simulation.
+3. **CRATES fase 5 — `bof_domain`:** ejecutar el corte de datos puros una vez
+   tomada la decisión anterior.
+4. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
    "acá hay una roca" y guardarlo en el archivo: filas `kind` + posición + yaw +
    escala; presentación resuelve el modelo por catálogo.
-4. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
+5. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
    ver el parche releído del disco.
-5. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
+6. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
    (esculpir en `Traversal`, guardar, reentrar) y la tipografía de la UI.
 
 ## Rendimiento: lo que sigue informando decisiones
@@ -361,9 +367,6 @@ legible que la función. Si sí, migrar `layout.rs` entero.
   2026-08-01: la lista ya sólo encoge). Ya se cobraron `Tab` y el navegador de
   animación. El test de fase 1 ya impide que la lista crezca; falta el dueño
   único que traduzca bindings a acciones tipadas.
-- **Determinismo:** el spread del arco ya no usa tiempo ni `Entity`; cada actor
-  porta `ShotSpreadRng` con semilla authored y tests de replay del stream. Falta
-  el test de dos escenas por N ticks para cerrar `CRATES.md` fase 2.
 - **Audio real:** el paso es un `debug!`; falta cargar `.ogg` y reproducirlo en
   el cue `Step`. Y el timing por **foot-plant**: el acumulador de zancada es un
   stopgap hasta que la animación emita eventos de pisada.

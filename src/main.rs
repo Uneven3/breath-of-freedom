@@ -5,6 +5,16 @@
 //! kinematic `move_and_slide` and spatial queries (see
 //! `docs/ARCHITECTURE.md`).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::expect_used,
+        clippy::float_cmp,
+        clippy::unwrap_used,
+        reason = "tests assert exact authored constants and may panic on broken fixtures"
+    )
+)]
+
 mod asset_pipeline;
 mod camera;
 mod combat;

@@ -340,6 +340,16 @@ fn kilo(n: usize) -> String {
     }
 }
 
+fn format_clock(hours: f32, speed: f32) -> String {
+    let whole_hours = hours.floor();
+    let minutes = ((hours - whole_hours) * 60.0).floor();
+    if speed > 1.0 {
+        format!("{whole_hours:02.0}:{minutes:02.0} x{speed:.0}")
+    } else {
+        format!("{whole_hours:02.0}:{minutes:02.0}")
+    }
+}
+
 /// Frame cost plus the benchmark knobs. Kept in one section so a console line
 /// is self-describing: the numbers and the configuration that produced them
 /// never get separated.
@@ -360,13 +370,7 @@ pub(super) fn collect_perf(
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
 
-    let hours = time_of_day.hours.floor() as u32;
-    let minutes = ((time_of_day.hours - hours as f32) * 60.0).floor() as u32;
-    let clock = if time_of_day.speed > 1.0 {
-        format!("{hours:02}:{minutes:02} x{:.0}", time_of_day.speed)
-    } else {
-        format!("{hours:02}:{minutes:02}")
-    };
+    let clock = format_clock(time_of_day.hours, time_of_day.speed);
 
     let mut fields = vec![
         Field::volatile("fps", format!("{fps:.1}")),
@@ -423,7 +427,7 @@ pub(super) fn collect_toggles(
 
 #[cfg(test)]
 mod tests {
-    use super::kilo;
+    use super::{format_clock, kilo};
 
     #[test]
     fn kilo_keeps_small_counts_exact_and_abbreviates_large_ones() {
@@ -431,5 +435,11 @@ mod tests {
         assert_eq!(kilo(9_999), "9999"); // still exact just under the threshold
         assert_eq!(kilo(10_000), "10.0k"); // first abbreviated value
         assert_eq!(kilo(142_300), "142.3k");
+    }
+
+    #[test]
+    fn clock_keeps_two_digit_hours_and_minutes() {
+        assert_eq!(format_clock(8.5, 1.0), "08:30");
+        assert_eq!(format_clock(18.25, 4.0), "18:15 x4");
     }
 }

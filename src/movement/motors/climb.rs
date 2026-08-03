@@ -111,7 +111,9 @@ pub fn tick_body(
         let lateral_input = match row.intents.climb.lateral {
             ClimbLateralIntent::Left if ledge.has_wall_left => -1.0,
             ClimbLateralIntent::Right if ledge.has_wall_right => 1.0,
-            _ => 0.0,
+            ClimbLateralIntent::Neutral | ClimbLateralIntent::Left | ClimbLateralIntent::Right => {
+                0.0
+            }
         };
         let right_dir = Vec3::Y.cross(climb_normal).normalize_or_zero();
         let lateral_vel = right_dir * lateral_input * movement.speed;

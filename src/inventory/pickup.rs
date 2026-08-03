@@ -116,7 +116,7 @@ pub fn read_interact_pickups(
                     world_item: Some(item_entity),
                 });
             }
-            kind => {
+            kind @ (ItemKind::Material(_) | ItemKind::Food { .. }) => {
                 if inventory.try_add(kind, world_item.stack.quantity).is_ok() {
                     commands.entity(item_entity).despawn();
                 }

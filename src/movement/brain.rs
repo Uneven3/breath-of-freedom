@@ -105,7 +105,7 @@ pub fn read_intents(
                                 (-to.x).atan2(-to.z)
                             })
                             .unwrap_or(orientation.yaw),
-                        _ => orientation.yaw,
+                        FacingSource::Free | FacingSource::Look => orientation.yaw,
                     };
                     let yaw = Quat::from_rotation_y(basis_yaw);
                     let world =
@@ -165,7 +165,15 @@ pub fn reset_climb_toggle(
                     climb.0 = false;
                 }
             }
-            _ => {}
+            LocomotionState::Walk
+            | LocomotionState::Sprint
+            | LocomotionState::Fall
+            | LocomotionState::Jump
+            | LocomotionState::Climb
+            | LocomotionState::Stairs
+            | LocomotionState::Ladder
+            | LocomotionState::Glide
+            | LocomotionState::Sneak => {}
         }
     }
 }
@@ -272,7 +280,9 @@ mod tests {
 
     #[test]
     fn remote_source_actions_are_independent_from_local_source() {
-        let remote = InputSource((MAX_INPUT_SOURCES - 1) as u8);
+        let remote = InputSource(
+            u8::try_from(MAX_INPUT_SOURCES - 1).expect("input source count must fit in u8"),
+        );
         let mut world = World::new();
         let mut actions = ActiveActions::default();
         actions.set_pressed(remote, IntentAction::MoveRight, true);

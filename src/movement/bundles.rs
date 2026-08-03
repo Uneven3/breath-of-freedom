@@ -32,7 +32,7 @@ use super::proposal::ProposalBuffer;
 use super::sensing::GroundSensing;
 use super::stamina::Stamina;
 use super::state::LocomotionState;
-use super::{Actor, BodyVelocity};
+use super::{Actor, ActorId, BodyVelocity};
 use crate::world::GameLayer;
 
 /// Data every kinematic Movement actor needs, independent of who controls it
@@ -40,6 +40,7 @@ use crate::world::GameLayer;
 #[derive(Bundle)]
 pub struct KinematicActorBundle {
     pub actor: Actor,
+    pub actor_id: ActorId,
     pub locomotion_enabled: LocomotionEnabled,
     pub transform: Transform,
     pub rigid_body: RigidBody,
@@ -58,9 +59,15 @@ pub struct KinematicActorBundle {
 }
 
 impl KinematicActorBundle {
-    pub fn new(transform: Transform, dimensions: BodyDimensions, sensing: GroundSensing) -> Self {
+    pub fn new(
+        actor_id: ActorId,
+        transform: Transform,
+        dimensions: BodyDimensions,
+        sensing: GroundSensing,
+    ) -> Self {
         Self {
             actor: Actor,
+            actor_id,
             locomotion_enabled: LocomotionEnabled,
             transform,
             rigid_body: RigidBody::Kinematic,
@@ -256,6 +263,7 @@ mod tests {
         let mut world = World::new();
         let entity = world
             .spawn(KinematicActorBundle::new(
+                ActorId::authored(10_000),
                 Transform::IDENTITY,
                 dimensions,
                 GroundSensing::PLAYER,
@@ -264,6 +272,7 @@ mod tests {
         let actor = world.entity(entity);
 
         assert!(actor.contains::<Actor>());
+        assert_eq!(actor.get::<ActorId>(), Some(&ActorId::authored(10_000)));
         assert!(actor.contains::<Collider>());
         let layers = actor
             .get::<CollisionLayers>()

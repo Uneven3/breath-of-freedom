@@ -60,7 +60,8 @@ mod tests {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
         );
-        let indices: Vec<u32> = (0..(count * 3) as u32).collect();
+        let index_count = u32::try_from(count * 3).expect("test mesh must fit in u32 indices");
+        let indices: Vec<u32> = (0..index_count).collect();
         mesh.insert_indices(Indices::U32(indices));
         mesh
     }

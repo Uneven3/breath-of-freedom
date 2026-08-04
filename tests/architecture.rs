@@ -218,3 +218,46 @@ fn simulation_has_no_render_dependencies() {
         "bof_simulation reached rendering or the Bevy facade: {offenders:?}"
     );
 }
+
+/// Desde la fase 6.8, `bof_simulation` arma su propio grafo: `SimulationPlugin`
+/// registra los once plugins de gameplay y el orden entre ellos. La app agrega
+/// **ese** plugin y ninguno de los de adentro.
+///
+/// Existe porque el compilador no ayuda acá: registrar un plugin dos veces
+/// compila igual y revienta al arrancar (`plugin was already added`). Pasó el
+/// 2026-08-04 con `world::WorldPlugin`, que la app seguía instalando dentro del
+/// suyo; ningún test lo vio porque ninguno arma la app real, y hace falta una
+/// ventana para armarla.
+#[test]
+fn the_app_installs_simulation_only_through_its_root_plugin() {
+    let offenders: Vec<String> = source_files()
+        .into_iter()
+        .filter(|(path, _)| path != "src/main.rs")
+        .filter(|(_, contents)| {
+            production_source(contents)
+                .split("add_plugins")
+                .skip(1)
+                // Sólo los argumentos de la llamada, hasta el cierre del
+                // statement: sin este corte el `split` se lleva el resto del
+                // archivo y cualquier mención posterior al crate es un falso
+                // positivo (le pasó a `scene`, que nombra `spawn_player`).
+                .filter_map(|rest| rest.split_once(");").map(|(argument, _)| argument))
+                .any(|argument| {
+                    // `bof_simulation::SimulationPlugin` es el único permitido, y
+                    // sólo lo agrega `main`. Cualquier otra ruta del crate es un
+                    // plugin interno que `SimulationPlugin` ya instaló.
+                    argument
+                        .split("bof_simulation::")
+                        .skip(1)
+                        .any(|tail| !tail.starts_with("SimulationPlugin"))
+                })
+        })
+        .map(|(path, _)| path)
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "estos archivos instalan un plugin que `SimulationPlugin` ya registra, \
+         y Bevy panickea al arrancar por plugin duplicado: {offenders:#?}"
+    );
+}

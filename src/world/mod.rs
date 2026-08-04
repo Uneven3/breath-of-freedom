@@ -26,7 +26,10 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(bof_simulation::world::WorldPlugin);
+        // El gemelo de simulación lo instala `SimulationPlugin`, no esto: Bevy
+        // panickea ante un plugin repetido, y desde 6.8 el crate arma su propio
+        // grafo. Este plugin es sólo la mitad de presentación y composición.
+        //
         // Scene content, not startup content (`crate::scene`): the sky belongs
         // to every walkable scene, the graybox layout only to the scenes that
         // declare it. Everything spawned here carries `DespawnOnExit`, so

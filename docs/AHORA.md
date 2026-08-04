@@ -249,6 +249,11 @@ Tres decisiones que se apartaron del plan escrito, con su razón:
 - **El reloj sí cruzó, la luz no.** `advance_time` escribe cada tick y
   presentación sólo lee (§20).
 
+**Checkpoint `#[require]` cerrado (2026-08-04).** Jugado tras hacer que `Actor`
+exija su núcleo: locomoción y montura bien, los dos bokobos nacieron completos y
+murieron por la cadena normal (uno con `STEALTH SHOT`), y **F9 movió el reloj**,
+que era la única parte del corte de `day_night` sin evidencia en juego.
+
 **Checkpoint 6.5–6.7 cerrado (2026-08-04).** El usuario jugó Traversal, volvió
 al menú y entró a Terreno: locomoción bien, esculpido y guardado tres veces,
 cero `error`/`panic`. Ese cambio de escena es la prueba del paso de

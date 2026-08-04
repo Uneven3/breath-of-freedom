@@ -240,8 +240,8 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
-1. **CRATES fase 6.2 — servicios chicos:** trasladar `health`, `interaction` y
-   `time_control` a `bof_simulation`, compilable y verde, sin rediseñarlos.
+1. **CRATES fase 6.3:** trasladar `inventory` y `projectiles` a
+   `bof_simulation`, compilable y verde, sin rediseñarlos.
 2. **CRATES fase 7 — `bof_presentation` + app:** hermana de simulation; depende
    sólo de `bof_domain`, y el binario compone ambas.
 3. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar

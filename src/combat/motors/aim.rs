@@ -24,6 +24,8 @@ use crate::input::frame::ControlOrientation;
 use crate::movement::Actor;
 use crate::projectiles::SpawnProjectileMessage;
 
+pub use bof_domain::combat::messages::BowFiredMessage;
+
 /// Aim shoulder pivot the crosshair ray passes through, owned by Combat
 /// (the aim line is simulation — §20). `camera.rs` imports both so the
 /// aim-mode camera orbit matches this ray exactly: pivot height over the
@@ -93,17 +95,6 @@ impl ShotSpreadRng {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         self.0 as f32 / u32::MAX as f32
     }
-}
-
-/// Published the tick an arrow leaves the string. Presentation consumes it
-/// for camera kick and `time_control` for full-charge hitstop — same pattern as
-/// `HitImpactMessage`: Combat owns the type, consumers read it without
-/// Combat knowing they exist.
-#[derive(Message, Debug, Clone, Copy)]
-pub struct BowFiredMessage {
-    pub shooter: Entity,
-    /// Draw charge at release, `0.0..=1.0`.
-    pub charge: f32,
 }
 
 type ProposeQuery<'a> = (

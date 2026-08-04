@@ -6,6 +6,8 @@ use bevy::prelude::*;
 use crate::combat::state::CombatState;
 use crate::combat::weapon::{AttackStep, MAX_COMBO_STEPS, WeaponProfile};
 
+pub use bof_domain::combat::messages::HitImpactMessage;
+
 #[derive(Component, Default)]
 pub struct ComboLocal {
     pub(crate) step: usize,
@@ -87,14 +89,4 @@ pub struct MeleeHitMessage {
     pub target: Entity,
     pub attacker_pos: Vec3,
     pub step: usize,
-}
-
-#[derive(Message, Debug, Clone, Copy)]
-pub struct HitImpactMessage {
-    pub target: Entity,
-    pub attacker: Entity,
-    pub position: Vec3,
-    pub damage: f32,
-    pub critical: bool,
-    pub melee: bool,
 }

@@ -200,13 +200,13 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **en curso; 6.1 cerrada el 2026-08-04**. Cada fila termina compilable y
-verde; primero se traslada sin rediseñar, luego se mejora.
+Estado: **en curso; 6.1–6.2 cerradas el 2026-08-04**. Cada fila termina
+compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
 |---|---|
 | 6.1 ✅ | Esqueleto Cargo + Avian mínimo + smoke test headless. |
-| 6.2 | `health`, `interaction`, `time_control`. |
+| 6.2 ✅ | `health`, `interaction`, `time_control`. |
 | 6.3 | `inventory`, `projectiles`. |
 | 6.4 | Movement: infraestructura, schedules, servicios. |
 | 6.5 | Movement: motores y orquestación; conserva replay determinista. |

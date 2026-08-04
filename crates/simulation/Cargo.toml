@@ -22,8 +22,8 @@ wildcard_enum_match_arm = "deny"
 [dependencies]
 avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel", "xpbd_joints"] }
 bevy_app = "0.19"
-bof_domain = { package = "breath_of_freedom_domain", path = "../domain" }
-
-[dev-dependencies]
+bevy_ecs = "0.19"
+bevy_log = "0.19"
 bevy_time = "0.19"
 bevy_transform = "0.19"
+bof_domain = { package = "breath_of_freedom_domain", path = "../domain" }

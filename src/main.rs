@@ -45,6 +45,11 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SimulationPlugin)
+        // Temporary cross-crate ordering until Projectiles moves in 6.3.
+        .configure_sets(
+            FixedUpdate,
+            health::HealthSet::Apply.after(projectiles::ProjectilesSet::Simulate),
+        )
         // Collider-wireframe rendering; starts disabled, toggled with F1
         // (see `debug.rs`).
         .add_plugins(PhysicsDebugPlugin)

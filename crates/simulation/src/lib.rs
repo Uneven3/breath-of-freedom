@@ -16,6 +16,10 @@
 use avian3d::prelude::PhysicsPlugins;
 use bevy_app::{App, Plugin};
 
+pub mod health;
+pub mod interaction;
+pub mod time_control;
+
 /// Installs the authoritative physics and, progressively, gameplay systems.
 pub struct SimulationPlugin;
 

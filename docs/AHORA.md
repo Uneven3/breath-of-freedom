@@ -13,6 +13,12 @@ lints, crates) está en `CRATES.md`.
 
 - Validación mínima antes de terminar: `cargo fmt` + `cargo clippy
   --all-targets -- -D warnings` + `cargo test`.
+- **Los crates se testean por paquete, no con `--workspace`.** Meter el binario
+  en la misma invocación unifica las features de Avian, y el smoke headless de
+  `bof_simulation` panickea con esa resolución (`CRATES.md`, fase 6). La corrida
+  buena son tres: `cargo test`, `cargo test -p breath_of_freedom_simulation` y
+  `cargo test -p breath_of_freedom_domain`. Con `--workspace` todo lo demás pasa
+  y sólo cae ese smoke: si cae otro, es real.
 - **Medir en `cargo run` (dev), no en release.** Las deps ya compilan en
   `opt-level 3` en dev, y el cuello es GPU: la diferencia de perfil medida en el
   punto menos dependiente de la vista fue 0,38 ms contra deltas de 4-12 ms.
@@ -240,18 +246,21 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
-6.4 cerró: `bof_simulation` posee `MovementSet`, vínculos actor–montura,
-redirección, restricciones, LOD y trazas. Los sensores acoplados a
-`TerrainAccess`/geometría authored esperan al movimiento de `world` en 6.7.
+6.5 cerró: **la locomoción entera es headless.** `bof_simulation` posee los 13
+motores, `motor_common`, los bundles de actor, `brain`, `facing`, la sonda de
+traversal y la arbitración — el único escritor de `LocomotionState`. De
+`src/movement/` quedan los cuatro servicios de sensado, que leen `TerrainAccess`
+y geometría authored y siguen a `world` en 6.7. `expected_feet_y` bajó a
+`StairsFacts` en domain, cerrando uno de los dos pendientes que la fase 5 dejó
+anotados (falta `MovementSet`, que es orden y pertenece a quien arma el
+schedule).
 
-1. **CRATES fase 6.5 — Movement:** trasladar motores y orquestación, conservando
-   el replay determinista de 120 ticks.
-2. **CRATES fase 6.6:** trasladar `combat`, `enemies` y `mounts`.
-3. **CRATES fase 6.7:** trasladar `player`, `input`, `world`, sensores pendientes
+1. **CRATES fase 6.6:** trasladar `combat`, `enemies` y `mounts`.
+2. **CRATES fase 6.7:** trasladar `player`, `input`, `world`, sensores pendientes
    y runtime de assets; los adaptadores de render quedan en la app.
-4. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
+3. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
    checkpoint jugado; luego fase 7 (`bof_presentation` hermana).
-5. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+4. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones

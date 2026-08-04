@@ -7,10 +7,13 @@
 //! here in one place, after the active motor has moved the body. Climb/ladder
 //! force facing toward their wall inside the motor, so they are skipped.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
-use crate::input::frame::ControlOrientation;
 use crate::movement::state::LocomotionState;
+use bof_domain::input::frame::ControlOrientation;
 
 pub use bof_domain::movement::facing::{FacingSource, faces_movement};
 
@@ -73,7 +76,7 @@ pub fn resolve_facing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     fn yaw_of(world: &mut World, entity: Entity) -> f32 {
         world

@@ -7,7 +7,9 @@
 //! `tick` writes `Transform` directly.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::LedgeFacts;
@@ -151,7 +153,7 @@ fn begin_mantle(
 mod tests {
     use super::*;
     use crate::movement::Actor;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn ladder_mantle_requires_explicit_request() {
@@ -164,14 +166,14 @@ mod tests {
                 crate::movement::abilities::WallJumpMovement::PLAYER,
                 Intents {
                     traversal: crate::movement::intents::TraversalActionIntent::Mantle,
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Ladder,
                 LedgeFacts {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
                     mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
-                    ..default()
+                    ..Default::default()
                 },
                 MantleState::default(),
                 ProposalBuffer::default(),
@@ -200,16 +202,16 @@ mod tests {
                 Intents {
                     climb: crate::movement::intents::ClimbIntent {
                         vertical: ClimbVerticalIntent::Up,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Ladder,
                 LedgeFacts {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
                     mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
-                    ..default()
+                    ..Default::default()
                 },
                 MantleState::default(),
                 ProposalBuffer::default(),
@@ -239,9 +241,9 @@ mod tests {
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         pressed: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Climb,
                 crate::movement::abilities::WallJumpMovement::PLAYER,
@@ -249,7 +251,7 @@ mod tests {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
                     mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
-                    ..default()
+                    ..Default::default()
                 },
                 MantleState::default(),
                 crate::movement::motors::wall_jump::WallJumpState::default(),
@@ -286,9 +288,9 @@ mod tests {
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         pressed: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Ladder,
                 crate::movement::abilities::WallJumpMovement::PLAYER,
@@ -296,7 +298,7 @@ mod tests {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
                     mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
-                    ..default()
+                    ..Default::default()
                 },
                 MantleState::default(),
                 crate::movement::motors::wall_jump::WallJumpState::default(),
@@ -329,13 +331,13 @@ mod tests {
                 crate::movement::attachment::LocomotionEnabled,
                 Intents {
                     traversal: crate::movement::intents::TraversalActionIntent::Mantle,
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Climb,
                 LedgeFacts {
                     is_at_mantle_edge: true,
                     lip_height: TALL_ENOUGH_LIP,
-                    ..default()
+                    ..Default::default()
                 },
                 MantleState::default(),
                 ProposalBuffer::default(),

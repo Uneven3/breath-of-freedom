@@ -3,8 +3,9 @@
 //! state is active moves a given body.
 
 use avian3d::prelude::*;
-use bevy::ecs::query::QueryData;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::query::QueryData;
+use bevy_transform::prelude::*;
 
 pub mod auto_vault;
 pub mod climb;

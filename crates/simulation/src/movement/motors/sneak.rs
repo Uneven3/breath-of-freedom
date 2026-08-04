@@ -10,7 +10,10 @@
 //! `motor_common::ground_locomotion_step`.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::abilities::{SneakMovement, SprintMovement};
@@ -270,7 +273,7 @@ fn standing_center(crouched_center: Vec3, body: BodyDimensions) -> Vec3 {
 mod tests {
     use super::*;
     use crate::movement::abilities::SneakMovement;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn standing_sensor_keeps_the_actor_feet_anchored() {
@@ -292,11 +295,11 @@ mod tests {
                 SneakMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     wants_sneak: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Crouched::default(),
                 StandClearance::default(),
@@ -311,11 +314,11 @@ mod tests {
                 crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     wants_sneak: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Crouched::default(),
                 StandClearance::default(),
@@ -354,11 +357,11 @@ mod tests {
                 SneakMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     wants_sneak: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Crouched::default(),
                 StandClearance::default(),
@@ -399,11 +402,11 @@ mod tests {
                 SneakMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     wants_sneak: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Crouched(true),
                 StandClearance(false), // No headroom
@@ -440,7 +443,7 @@ mod tests {
             state,
             Intents {
                 wants_sneak,
-                ..default()
+                ..Default::default()
             },
             StandClearance(clearance),
             Crouched(crouched),

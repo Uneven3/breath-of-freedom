@@ -90,7 +90,7 @@ pub(super) fn draw_sensor_gizmos(
             && sf.on_stairs
         {
             let mut expected = pos;
-            expected.y = crate::movement::motors::stairs::expected_feet_y(sf, pos);
+            expected.y = sf.expected_feet_y(pos);
             gizmos.sphere(expected, 0.08, css::DODGER_BLUE);
         }
     }

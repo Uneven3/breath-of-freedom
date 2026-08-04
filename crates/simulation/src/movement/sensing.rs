@@ -1,7 +1,7 @@
 //! Per-actor physical sensing profiles used by Movement services.
 
 use avian3d::prelude::Collider;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 pub use bof_domain::movement::sensing::{GroundSensing, LedgeSensing};
 

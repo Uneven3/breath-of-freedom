@@ -5,7 +5,8 @@
 //! is the shared `motor_common::ground_locomotion_step`.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::abilities::SprintMovement;
@@ -137,7 +138,7 @@ pub fn tick_body(
 mod tests {
     use super::*;
     use crate::movement::abilities::SprintMovement;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     fn sprint_actor(crouched: bool, clearance: bool) -> impl Bundle {
         (
@@ -146,13 +147,13 @@ mod tests {
             SprintMovement::PLAYER,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             StairsFacts::default(),
             LedgeFacts::default(),
             Intents {
                 wants_sprint: true,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
             Crouched(crouched),
@@ -179,13 +180,13 @@ mod tests {
                 crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 StairsFacts::default(),
                 LedgeFacts::default(),
                 Intents {
                     wants_sprint: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Stamina::default(),
                 Crouched::default(),

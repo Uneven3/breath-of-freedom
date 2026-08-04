@@ -5,7 +5,8 @@
 //! through their individual capability components.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::abilities::{
     GlideMovement, GroundMovement, JumpMovement, LadderMovement, LedgeTraversal, SneakMovement,
@@ -33,7 +34,7 @@ use super::sensing::GroundSensing;
 use super::stamina::Stamina;
 use super::state::LocomotionState;
 use super::{Actor, ActorId, BodyVelocity};
-use crate::world::GameLayer;
+use crate::physics::GameLayer;
 
 /// Data every kinematic Movement actor needs, independent of who controls it
 /// or which locomotion capabilities it receives.
@@ -111,7 +112,7 @@ impl SprintMovementBundle {
     pub fn new(movement: SprintMovement) -> Self {
         Self {
             movement,
-            sprint_lock: default(),
+            sprint_lock: Default::default(),
         }
     }
 }
@@ -151,9 +152,9 @@ impl StairsMovementBundle {
     pub fn new(movement: StairsMovement) -> Self {
         Self {
             movement,
-            facts: default(),
-            local: default(),
-            grace: default(),
+            facts: Default::default(),
+            local: Default::default(),
+            grace: Default::default(),
         }
     }
 }
@@ -173,7 +174,7 @@ impl LadderMovementBundle {
     pub fn new(movement: LadderMovement) -> Self {
         Self {
             movement,
-            facts: default(),
+            facts: Default::default(),
         }
     }
 }
@@ -226,7 +227,7 @@ impl LedgeTraversalBundle {
     pub fn new(traversal: LedgeTraversal) -> Self {
         Self {
             traversal,
-            facts: default(),
+            facts: Default::default(),
             mantle: MantleState::default(),
             vault: VaultState::default(),
         }

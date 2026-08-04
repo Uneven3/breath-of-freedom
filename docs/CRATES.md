@@ -200,7 +200,7 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **en curso; 6.1–6.4 cerradas el 2026-08-04**. Cada fila termina
+Estado: **en curso; 6.1–6.5 cerradas el 2026-08-04**. Cada fila termina
 compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
@@ -209,7 +209,7 @@ compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 | 6.2 ✅ | `health`, `interaction`, `time_control`. |
 | 6.3 ✅ | `inventory`, `projectiles`. |
 | 6.4 ✅ | Movement: schedules, vínculos, restricciones, LOD y diagnóstico. |
-| 6.5 | Movement: motores y orquestación; conserva replay determinista. |
+| 6.5 ✅ | Movement: motores, bundles, brain/facing/probe y arbitración. |
 | 6.6 | `combat`, `enemies`, `mounts`. |
 | 6.7 | `player`, `input`, `world` y runtime de assets; render queda en adaptadores. |
 | 6.8 | Cableado raíz, replay headless, retiro de shims/test redundante y checkpoint. |
@@ -222,6 +222,19 @@ El smoke se corre como paquete aislado: seleccionar también el binario en la
 misma invocación unifica sus features legacy de Avian y deja de medir headless.
 Los sensores que leen `TerrainAccess`/geometría authored esperan a 6.7, cuando
 sus contratos de `world` puedan cruzar la frontera sin invertir dependencias.
+
+**6.5 partió el plugin en dos, no el pipeline.** `MovementMotorsPlugin` (en
+simulation) registra propose/arbitrate/tick, `brain`, `facing` y la sonda; el
+`MovementPlugin` de la app quedó en 45 líneas que sólo cuelgan los cuatro
+servicios de `SenseWorld` y `lift_actors_out_of_terrain`. En 6.7 los servicios
+siguen a `world` y ese plugin desaparece. Dos `pub(crate)` que la frontera
+volvió inalcanzables se resolvieron en su nivel correcto, no abriendo el tipo:
+`expected_feet_y` era el pendiente nombrado en la fase 5 y pasó a
+`StairsFacts::expected_feet_y` en domain — cálculo derivado de los facts, así
+que presentación lo obtiene del dato y no de simulación (§20); y `JumpLocal`
+expone `grant_coyote` para el test de `mounts`, que vuelve a cerrarse en 6.6.
+El crate headless no tiene el prelude de bevy, así que el azúcar `default()` se
+escribe `Default::default()` — no se agregó `bevy_utils` por eso.
 
 ### Fase 7 — `bof_presentation` y el binario (hermanas)
 

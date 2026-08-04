@@ -5,7 +5,8 @@
 //! promoted so timers/flags don't bleed between actors.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::abilities::{JumpMovement, JumpStaminaCost};
 use crate::movement::facing::faces_movement;
@@ -30,6 +31,16 @@ pub struct JumpLocal {
     pub(crate) was_on_floor: bool,
     pub(crate) prev_wants: bool,
     pub(crate) needs_release: bool,
+}
+
+impl JumpLocal {
+    /// Puts the actor inside its coyote window without waiting for the ground to
+    /// leave under it. `mounts` uses this to set up a dismount-then-jump case;
+    /// the rest of the bookkeeping stays private, and this can go back to
+    /// `pub(crate)` once mounts moves into this crate (`CRATES.md`, 6.6).
+    pub fn grant_coyote(&mut self, seconds: f32) {
+        self.coyote = seconds;
+    }
 }
 
 /// State indicating whether the current airtime was initiated by a player jump.
@@ -175,7 +186,7 @@ pub fn tick_body(
 mod tests {
     use super::*;
     use crate::movement::Actor;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn stamina_is_paid_only_for_an_accepted_jump_state() {
@@ -228,14 +239,14 @@ mod tests {
                 crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         held: true,
                         pressed: true,
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 JumpMovement::PLAYER,
                 JumpStaminaCost(20.0),

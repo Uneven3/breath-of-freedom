@@ -5,7 +5,9 @@
 //! bleed between actors.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::GRAVITY;
 use crate::movement::abilities::GlideMovement;

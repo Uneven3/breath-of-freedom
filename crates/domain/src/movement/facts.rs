@@ -79,6 +79,32 @@ pub struct StairsFacts {
     pub step_rise: f32,
 }
 
+impl StairsFacts {
+    /// Horizontal direction from base to top, the axis steps advance along.
+    pub fn axis(&self) -> Vec3 {
+        let d = self.top - self.base;
+        Vec3::new(d.x, 0.0, d.z).normalize_or_zero()
+    }
+
+    /// Height of the step tread under `world_pos`, clamped to the flight's ends.
+    ///
+    /// Derived from the facts alone, so it lives with the data: the stairs motor
+    /// snaps the body to it, and presentation draws where the motor believes the
+    /// feet should be without reaching into simulation (§20).
+    pub fn expected_feet_y(&self, world_pos: Vec3) -> f32 {
+        let distance = (world_pos - self.base).dot(self.axis());
+        if distance <= 0.0 {
+            return self.base.y;
+        }
+        let total_run = self.step_count as f32 * self.step_depth;
+        if distance >= total_run {
+            return self.base.y + self.step_count as f32 * self.step_rise;
+        }
+        let index = (distance / self.step_depth).floor();
+        self.base.y + (index + 1.0) * self.step_rise
+    }
+}
+
 /// Published by `LadderService`.
 #[derive(Component, Debug, Clone, Default)]
 pub struct LadderFacts {

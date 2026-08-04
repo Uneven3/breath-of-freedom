@@ -3,7 +3,10 @@
 //! Stateless: reads `LadderFacts` each frame.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::abilities::LadderMovement;
 use crate::movement::body::BodyDimensions;
@@ -109,7 +112,7 @@ mod tests {
     //! play-tested.
     use super::*;
     use crate::movement::Actor;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     fn proposals(intents: Intents, state: LocomotionState) -> Vec<TransitionProposal> {
         let mut world = World::new();
@@ -122,7 +125,7 @@ mod tests {
                 LadderFacts {
                     on_ladder: true,
                     outward_normal: Vec3::Z,
-                    ..default()
+                    ..Default::default()
                 },
                 intents,
                 state,
@@ -153,9 +156,9 @@ mod tests {
             Intents {
                 jump: crate::movement::intents::JumpIntent {
                     held: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Ladder,
         );
@@ -170,14 +173,14 @@ mod tests {
             Intents {
                 jump: crate::movement::intents::JumpIntent {
                     held: true,
-                    ..default()
+                    ..Default::default()
                 },
                 planar: crate::movement::intents::PlanarMoveIntent {
                     direction: Vec2::new(0.0, 1.0),
                     strength: 1.0,
                     local: Vec2::ZERO,
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Fall,
         );
@@ -193,7 +196,7 @@ mod tests {
                     strength: 1.0,
                     local: Vec2::ZERO,
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Walk,
         );
@@ -206,9 +209,9 @@ mod tests {
             Intents {
                 climb: crate::movement::intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Walk,
         );
@@ -226,14 +229,14 @@ mod tests {
                 BodyDimensions::PLAYER,
                 LadderFacts {
                     on_ladder: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     climb: crate::movement::intents::ClimbIntent {
                         requested: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Walk,
                 Transform::default(),
@@ -265,14 +268,14 @@ mod tests {
                 LadderFacts {
                     on_ladder: true,
                     outward_normal: Vec3::Z,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     climb: crate::movement::intents::ClimbIntent {
                         requested: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Walk,
                 Transform::default(),

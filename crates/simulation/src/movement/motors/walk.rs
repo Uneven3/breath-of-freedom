@@ -7,7 +7,8 @@
 //! `GroundMovement` component. See `docs/ARCHITECTURE.md`.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::abilities::GroundMovement;
@@ -73,7 +74,7 @@ pub fn tick_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn only_ground_movement_actors_propose_walk() {
@@ -85,7 +86,7 @@ mod tests {
                 GroundMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 ProposalBuffer::default(),
             ))
@@ -96,7 +97,7 @@ mod tests {
                 crate::movement::attachment::LocomotionEnabled,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 ProposalBuffer::default(),
             ))

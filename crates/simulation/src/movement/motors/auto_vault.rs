@@ -4,7 +4,9 @@
 //! `motor_common::KinematicArc`.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
@@ -118,7 +120,7 @@ fn begin_vault(
 mod tests {
     use super::*;
     use crate::movement::Actor;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn actor_without_ledge_traversal_cannot_propose_auto_vault() {
@@ -128,15 +130,15 @@ mod tests {
                 Actor,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 LedgeFacts {
                     is_vaultable: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     traversal: crate::movement::intents::TraversalActionIntent::Vault,
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Walk,
                 VaultState::default(),

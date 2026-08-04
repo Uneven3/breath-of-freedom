@@ -284,7 +284,7 @@ mod plugin_tests {
             .entity_mut(actor)
             .get_mut::<JumpLocal>()
             .unwrap()
-            .coyote = 1.0;
+            .grant_coyote(1.0);
 
         app.update();
 

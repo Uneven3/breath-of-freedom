@@ -1,23 +1,66 @@
-//! Headless movement infrastructure shared by every locomotion motor.
+//! Headless movement — the Broker pipeline and every locomotion motor.
+//!
+//! Per-frame flow, expressed as ordered system sets in `FixedUpdate` (pinned to
+//! 60 Hz): read intents → assign sensing LOD → sense world → gather proposals →
+//! arbitrate → tick active motor. The tick phase chains capability-specific
+//! systems whose exact queries keep optional data out of the actor core; each
+//! system gates on its owned `LocomotionState`, so exactly one moves each body.
+//! This is the per-entity contract that lets multiple `Actor`s run independently.
+//! See `docs/ARCHITECTURE.md`.
 
-use bevy_app::{App, FixedUpdate, Plugin, PreUpdate};
+use bevy_app::{App, FixedUpdate, Plugin, PreUpdate, Update};
 use bevy_ecs::prelude::*;
 use bevy_time::{Fixed, Time};
 
 pub mod attachment;
 mod attachment_recovery;
 pub mod attachment_systems;
+pub mod body;
+pub mod brain;
+pub mod bundles;
 pub mod constraints;
 pub mod control;
 pub mod diag;
+pub mod facing;
 pub mod link;
 pub mod lod;
+pub mod motor_common;
+pub mod motors;
+pub mod probe;
+pub mod sensing;
 
+// SPIKE (throwaway, test-only): multi-actor dispatch proof. See spike.rs header.
+#[cfg(test)]
+mod spike;
+
+/// Domain-owned contracts re-exported under their movement path, so motors read
+/// `super::facts` regardless of which crate stores the data (§19).
+pub mod abilities {
+    pub use bof_domain::movement::abilities::*;
+}
+pub mod facts {
+    pub use bof_domain::movement::facts::*;
+}
 pub mod intents {
     pub use bof_domain::movement::intents::*;
 }
+pub mod probe_data {
+    pub use bof_domain::movement::probe_data::*;
+}
+pub mod proposal {
+    pub use bof_domain::movement::proposal::*;
+}
+pub mod stamina {
+    pub use bof_domain::movement::stamina::*;
+}
+pub mod state {
+    pub use bof_domain::movement::state::*;
+}
 
-pub use bof_domain::movement::{Actor, ActorId, BodyVelocity, Player};
+use proposal::ProposalBuffer;
+use state::LocomotionState;
+
+pub use bof_domain::movement::{Actor, ActorId, BodyVelocity, GRAVITY, Player};
 
 /// Ordered phases of the movement broker within `FixedUpdate`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -98,5 +141,129 @@ impl Plugin for MovementInfrastructurePlugin {
     }
 }
 
+/// Installs the motors and the arbitration that drives them.
+///
+/// The world sensors that publish `GroundFacts`/`LedgeFacts`/`StairsFacts`/
+/// `LadderFacts` still live with the app: they read authored geometry and the
+/// terrain, which have not crossed the crate boundary yet (`CRATES.md`, 6.7).
+/// Until they do, whoever adds this plugin also registers them in
+/// [`MovementSet::SenseWorld`].
+pub struct MovementMotorsPlugin;
+
+impl Plugin for MovementMotorsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(MovementInfrastructurePlugin);
+
+        app.add_message::<probe_data::ProbeToggleRequest>();
+        app.add_systems(Update, probe::toggle_spawn);
+
+        app.add_systems(
+            FixedUpdate,
+            (probe::drive_intents, brain::read_intents)
+                .chain()
+                .in_set(MovementSet::ReadIntents),
+        );
+        app.add_systems(
+            FixedUpdate,
+            motors::sneak::update_stand_clearance.in_set(MovementSet::SenseWorld),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                motors::walk::propose,
+                motors::fall::propose,
+                motors::sprint::propose,
+                motors::sneak::propose,
+                motors::jump::propose,
+                motors::glide::propose,
+                motors::climb::propose,
+                motors::mantle::propose,
+                motors::auto_vault::propose,
+                motors::wall_jump::propose,
+                motors::edge_leap::propose,
+                motors::stairs::propose,
+                motors::ladder::propose,
+            )
+                .in_set(MovementSet::GatherProposals),
+        );
+        app.add_systems(FixedUpdate, arbitrate.in_set(MovementSet::Arbitrate));
+        app.add_systems(
+            FixedUpdate,
+            motors::jump::pay_accepted_cost
+                .after(MovementSet::Arbitrate)
+                .before(MovementSet::TickActiveMotor),
+        );
+        // Clear climb intent on the relevant transitions, right after the SSoT
+        // write and before any motor ticks on it.
+        app.add_systems(
+            FixedUpdate,
+            brain::reset_climb_toggle
+                .after(MovementSet::Arbitrate)
+                .before(MovementSet::TickActiveMotor),
+        );
+
+        // Tick phase: exact capability queries chained in state order. Each
+        // body has one active state and therefore one moving system.
+        app.add_systems(
+            FixedUpdate,
+            (
+                motors::stairs::clear_inactive_cache,
+                motors::walk::tick_body,
+                motors::sprint::tick_body,
+                motors::fall::tick_body,
+                motors::jump::tick_body,
+                motors::auto_vault::tick_body,
+                motors::climb::tick_body,
+                motors::mantle::tick_body,
+                motors::stairs::tick_body,
+                motors::ladder::tick_body,
+                motors::glide::tick_body,
+                motors::sneak::tick_body,
+                motors::wall_jump::tick_body,
+                motors::edge_leap::tick_body,
+            )
+                .chain()
+                .in_set(MovementSet::TickActiveMotor),
+        );
+        // Decoupled facing (aim/lock-on) resolves after the active motor has
+        // moved the body, before attachments sync to the final transform.
+        app.add_systems(
+            FixedUpdate,
+            facing::resolve_facing
+                .after(MovementSet::TickActiveMotor)
+                .before(MovementSet::SyncAttachments),
+        );
+
+        // Declarative crouch-capsule swap (orthogonal to the active state, so it
+        // works in Sneak and on Stairs). Runs in FixedUpdate right after the SSoT
+        // write so the active motor ticks with the correct capsule this same frame
+        // (physics never sees a stale collider).
+        app.add_systems(
+            FixedUpdate,
+            motors::sneak::sync_crouch_collider
+                .after(MovementSet::Arbitrate)
+                .before(MovementSet::TickActiveMotor),
+        );
+    }
+}
+
+/// `Arbitrate`: pick the winning proposal, write the SSoT `LocomotionState`, then
+/// clear the buffer for next frame. This is the *only* writer of
+/// `LocomotionState` (see `docs/ARCHITECTURE.md`).
+type ArbitrationQuery<'a> = (&'a mut LocomotionState, &'a mut ProposalBuffer);
+
+fn arbitrate(mut q: Query<ArbitrationQuery, attachment::LocomotionActorFilter>) {
+    for (mut state, mut buffer) in &mut q {
+        let winner = buffer.arbitrate(*state);
+        if *state != winner {
+            *state = winner;
+            // (Activated/Deactivated events land with the motors that need them.)
+        }
+        buffer.clear();
+    }
+}
+
+#[cfg(test)]
+mod actor_isolation_tests;
 #[cfg(test)]
 mod control_tests;

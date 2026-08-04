@@ -5,7 +5,9 @@
 //! each frame.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::GRAVITY;
 use crate::movement::abilities::{GroundMovement, SprintMovement, StairsMovement};
@@ -134,7 +136,7 @@ pub fn tick_body(
             );
         }
 
-        let horiz_axis = stair_axis(effective_stairs);
+        let horiz_axis = effective_stairs.axis();
         let lateral_axis = Vec3::Y.cross(horiz_axis).normalize_or_zero();
         let world_input = Vec3::new(
             row.intents.planar.direction.x,
@@ -200,7 +202,7 @@ pub fn tick_body(
             Vec3::ZERO
         };
         let sample_pos = row.transform.translation + look_ahead;
-        let expected_feet_y = expected_feet_y(effective_stairs, sample_pos);
+        let expected_feet_y = effective_stairs.expected_feet_y(sample_pos);
         let current_feet_y = row.transform.translation.y - half_height;
         let feet_gap = expected_feet_y - current_feet_y;
         let max_snap = effective_stairs.step_rise + GROUND_TOLERANCE;
@@ -230,22 +232,4 @@ pub fn tick_body(
             &mut row.contact,
         );
     }
-}
-
-fn stair_axis(stairs: &StairsFacts) -> Vec3 {
-    let d = stairs.top - stairs.base;
-    Vec3::new(d.x, 0.0, d.z).normalize_or_zero()
-}
-
-pub(crate) fn expected_feet_y(stairs: &StairsFacts, world_pos: Vec3) -> f32 {
-    let distance = (world_pos - stairs.base).dot(stair_axis(stairs));
-    if distance <= 0.0 {
-        return stairs.base.y;
-    }
-    let total_run = stairs.step_count as f32 * stairs.step_depth;
-    if distance >= total_run {
-        return stairs.base.y + stairs.step_count as f32 * stairs.step_rise;
-    }
-    let index = (distance / stairs.step_depth).floor();
-    stairs.base.y + (index + 1.0) * stairs.step_rise
 }

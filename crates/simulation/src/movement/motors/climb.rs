@@ -4,7 +4,9 @@
 //! afresh each frame.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::abilities::ClimbMovement;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
@@ -163,7 +165,7 @@ mod tests {
     //! and are covered by play-testing.
     use super::*;
     use crate::movement::{Actor, Player};
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     /// Spawn a lone player, run `climb::propose`, return its resulting proposals.
     fn propose_with(
@@ -210,16 +212,16 @@ mod tests {
         let out = propose_with(
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             LedgeFacts::default(), // can_climb = false
             Stamina::default(),
             Intents {
                 climb: crate::movement::intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Fall,
         );
@@ -235,15 +237,15 @@ mod tests {
             GroundFacts::default(),
             LedgeFacts {
                 can_climb: true,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
             Intents {
                 climb: crate::movement::intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Fall,
         );
@@ -259,15 +261,15 @@ mod tests {
             GroundFacts::default(),
             LedgeFacts {
                 can_continue_climb: true,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
             Intents {
                 climb: crate::movement::intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Climb,
         );
@@ -284,20 +286,20 @@ mod tests {
         let out = propose_with(
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             LedgeFacts {
                 has_head_hit: false,
                 mantle_ledge_point: Some(Vec3::new(0.0, 1.0, 0.0)),
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
             Intents {
                 climb: crate::movement::intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Climb,
         );
@@ -311,15 +313,15 @@ mod tests {
             GroundFacts::default(),
             LedgeFacts {
                 can_climb: true,
-                ..default()
+                ..Default::default()
             },
             exhausted(),
             Intents {
                 climb: crate::movement::intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Fall,
         );
@@ -332,7 +334,7 @@ mod tests {
             GroundFacts::default(),
             LedgeFacts {
                 can_climb: true,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
             Intents::default(), // climb.requested = false
@@ -351,15 +353,15 @@ mod tests {
                 GroundFacts::default(),
                 LedgeFacts {
                     can_climb: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Stamina::default(),
                 Intents {
                     climb: crate::movement::intents::ClimbIntent {
                         requested: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Fall,
                 ProposalBuffer::default(),

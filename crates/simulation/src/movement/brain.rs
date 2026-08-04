@@ -1,6 +1,8 @@
 //! Movement Brain — translates resolved input actions into per-actor intents.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::Actor;
 use super::facing::FacingSource;
@@ -9,9 +11,9 @@ use super::intents::{
     TraversalActionIntent,
 };
 use super::state::LocomotionState;
-use crate::input::InputConsumeCursor;
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, ControlOrientation, InputControlledBy};
+use bof_domain::input::InputConsumeCursor;
+use bof_domain::input::action::IntentAction;
+use bof_domain::input::frame::{ActiveActions, ControlOrientation, InputControlledBy};
 
 const WISH_DIR_THRESHOLD: f32 = 0.5;
 
@@ -181,9 +183,9 @@ pub fn reset_climb_toggle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::frame::{InputSource, LOCAL_INPUT_SOURCE, MAX_INPUT_SOURCES};
     use crate::movement::intents::ClimbIntent;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
+    use bof_domain::input::frame::{InputSource, LOCAL_INPUT_SOURCE, MAX_INPUT_SOURCES};
 
     fn latch_after(state: LocomotionState, intents: Intents) -> bool {
         let mut world = World::new();
@@ -208,9 +210,9 @@ mod tests {
             Intents {
                 climb: ClimbIntent {
                     lateral: ClimbLateralIntent::Left,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
         ));
     }
@@ -223,9 +225,9 @@ mod tests {
             Intents {
                 climb: ClimbIntent {
                     vertical: ClimbVerticalIntent::Down,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
         ));
     }
@@ -248,7 +250,7 @@ mod tests {
                 InputControlledBy(LOCAL_INPUT_SOURCE),
                 ControlOrientation {
                     yaw: std::f32::consts::FRAC_PI_2,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents::default(),
                 ClimbInputState::default(),
@@ -264,7 +266,7 @@ mod tests {
                 strength: 1.0,
                 local: Vec2::ZERO,
             },
-            ..default()
+            ..Default::default()
         };
         let ai = world.spawn((Actor, ai_intents)).id();
 

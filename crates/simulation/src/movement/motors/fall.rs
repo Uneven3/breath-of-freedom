@@ -4,7 +4,9 @@
 //! (DEFAULT priority).
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::abilities::AirborneMovement;
 use crate::movement::facing::faces_movement;

@@ -10,7 +10,11 @@
 //! start (facing the graybox test wall), independent of where the player is —
 //! the scenario must be reproducible run after run.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::{info, warn};
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::ActorId;
 use super::abilities::{
@@ -171,26 +175,26 @@ fn stage_intents(stage: ProbeStage, state: LocomotionState) -> Intents {
         ProbeStage::AttachClimb | ProbeStage::HoldAtLip => Intents {
             climb: ClimbIntent {
                 requested: true,
-                ..default()
+                ..Default::default()
             },
-            ..default()
+            ..Default::default()
         },
         ProbeStage::AscendClimb => Intents {
             climb: ClimbIntent {
                 requested: true,
                 vertical: ClimbVerticalIntent::Up,
-                ..default()
+                ..Default::default()
             },
-            ..default()
+            ..Default::default()
         },
         // Keep the climb attachment alive while the mantle request arbitrates.
         ProbeStage::MantleOntoTop => Intents {
             climb: ClimbIntent {
                 requested: true,
-                ..default()
+                ..Default::default()
             },
             traversal: TraversalActionIntent::Mantle,
-            ..default()
+            ..Default::default()
         },
         ProbeStage::SettleOnTop => Intents::default(),
         // Positive Y maps to world +Z: back toward the spawn side. The motors
@@ -206,7 +210,7 @@ fn stage_intents(stage: ProbeStage, state: LocomotionState) -> Intents {
                 held: true,
                 pressed: true,
             },
-            ..default()
+            ..Default::default()
         },
         // Request glide only once airborne in Fall/Glide: `glide::propose`
         // needs the fresh-press edge to land *in* Fall — asking during Jump
@@ -228,7 +232,7 @@ fn moving(direction: Vec2) -> Intents {
             strength: 1.0,
             local: Vec2::ZERO,
         },
-        ..default()
+        ..Default::default()
     }
 }
 
@@ -278,7 +282,7 @@ fn stage_bit(stage: ProbeStage) -> u16 {
 mod tests {
     use super::*;
     use crate::movement::{Actor, Player};
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn probe_brain_does_not_overwrite_player_intents() {
@@ -286,7 +290,7 @@ mod tests {
         world.init_resource::<Time>();
         let player_intents = Intents {
             wants_sprint: true,
-            ..default()
+            ..Default::default()
         };
         let player = world.spawn((Actor, Player, player_intents)).id();
         let probe = world
@@ -334,7 +338,7 @@ mod tests {
 
         let climbable_wall = LedgeFacts {
             can_climb: true,
-            ..default()
+            ..Default::default()
         };
         assert_eq!(
             advance(

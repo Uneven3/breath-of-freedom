@@ -21,7 +21,11 @@
 
 use std::time::Duration;
 
-use bevy::prelude::*;
+use bevy_app::{App, FixedUpdate, Plugin};
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::BodyVelocity;
 use super::intents::Intents;
@@ -329,7 +333,7 @@ mod tests {
                     strength: 1.0,
                     local: Vec2::ZERO,
                 },
-                ..default()
+                ..Default::default()
             },
         );
         let faller = spawn_actor(&mut app, false, Intents::default());
@@ -379,9 +383,9 @@ mod tests {
             Intents {
                 jump: crate::movement::intents::JumpIntent {
                     held: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
         );
         let neutral = spawn_actor(&mut app, true, Intents::default());

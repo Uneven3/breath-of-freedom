@@ -6,7 +6,10 @@
 //! the body is moved (see `docs/ARCHITECTURE.md`).
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 use std::f32::consts::PI;
 use std::time::Duration;
 
@@ -17,7 +20,7 @@ use super::facts::{BodyContact, GroundFacts};
 use super::intents::Intents;
 use super::stamina::Stamina;
 use super::state::LocomotionState;
-use crate::world::GameLayer;
+use crate::physics::GameLayer;
 
 /// A surface counts as floor if its normal is within this dot of straight up.
 /// `cos(60°) = 0.5` matches `GroundService`'s `max_slope_angle_deg = 60`.

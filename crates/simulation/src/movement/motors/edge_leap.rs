@@ -3,7 +3,9 @@
 //! Timer/leaping flags live in an `EdgeLeapState` component.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::GRAVITY;
 use crate::movement::abilities::WallJumpMovement;
@@ -144,20 +146,20 @@ mod tests {
     //! needs-release latch. The impulse tick is play-tested.
     use super::*;
     use crate::movement::{Actor, Player};
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     /// Player climbing left while holding jump.
     fn climbing_left() -> Intents {
         Intents {
             jump: crate::movement::intents::JumpIntent {
                 held: true,
-                ..default()
+                ..Default::default()
             },
             climb: crate::movement::intents::ClimbIntent {
                 lateral: ClimbLateralIntent::Left,
-                ..default()
+                ..Default::default()
             },
-            ..default()
+            ..Default::default()
         }
     }
 
@@ -197,7 +199,7 @@ mod tests {
             climbing_left(),
             LedgeFacts {
                 has_wall_left: false,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
         );
@@ -222,7 +224,7 @@ mod tests {
             climbing_left(),
             LedgeFacts {
                 has_wall_left: true,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
         );
@@ -236,7 +238,7 @@ mod tests {
             climbing_left(),
             LedgeFacts {
                 has_wall_left: false,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
         );
@@ -262,7 +264,7 @@ mod tests {
             climbing_left(),
             LedgeFacts {
                 has_wall_left: false,
-                ..default()
+                ..Default::default()
             },
             s,
         );
@@ -282,7 +284,7 @@ mod tests {
                 Stamina::default(),
                 LedgeFacts {
                     has_wall_left: false,
-                    ..default()
+                    ..Default::default()
                 },
                 EdgeLeapState::default(),
                 ProposalBuffer::default(),

@@ -1,4 +1,6 @@
 use super::*;
+use bevy_math::prelude::*;
+
 use crate::movement::abilities::{AirborneMovement, GroundMovement, JumpMovement};
 use crate::movement::facts::{GroundFacts, LedgeFacts, StairsFacts};
 use crate::movement::intents::Intents;
@@ -6,7 +8,7 @@ use crate::movement::motors::jump::{JumpLocal, JumpPhase};
 use crate::movement::motors::sneak::{Crouched, StandClearance};
 use crate::movement::motors::sprint::SprintLock;
 use crate::movement::stamina::Stamina;
-use bevy::ecs::system::RunSystemOnce;
+use bevy_ecs::system::RunSystemOnce;
 
 #[test]
 fn two_actors_resolve_independently_via_real_propose_and_arbitrate() {
@@ -19,7 +21,7 @@ fn two_actors_resolve_independently_via_real_propose_and_arbitrate() {
             JumpMovement::PLAYER,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             LocomotionState::default(),
             ProposalBuffer::default(),
@@ -34,7 +36,7 @@ fn two_actors_resolve_independently_via_real_propose_and_arbitrate() {
             GroundMovement::PLAYER,
             GroundFacts {
                 grounded: false,
-                ..default()
+                ..Default::default()
             },
             LocomotionState::default(),
             ProposalBuffer::default(),
@@ -89,14 +91,14 @@ fn jump_local_state_does_not_bleed_between_actors() {
             JumpMovement::PLAYER,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             Intents {
                 jump: crate::movement::intents::JumpIntent {
                     held: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::default(),
             JumpPhase::default(),
@@ -111,7 +113,7 @@ fn jump_local_state_does_not_bleed_between_actors() {
             JumpMovement::PLAYER,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             Intents::default(),
             LocomotionState::default(),
@@ -175,13 +177,13 @@ fn sprint_stamina_lock_is_per_actor() {
             crate::movement::abilities::SprintMovement::PLAYER,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             StairsFacts::default(),
             LedgeFacts::default(),
             Intents {
                 wants_sprint: true,
-                ..default()
+                ..Default::default()
             },
             exhausted_stamina,
             Crouched::default(),
@@ -197,13 +199,13 @@ fn sprint_stamina_lock_is_per_actor() {
             crate::movement::abilities::SprintMovement::PLAYER,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             StairsFacts::default(),
             LedgeFacts::default(),
             Intents {
                 wants_sprint: true,
-                ..default()
+                ..Default::default()
             },
             Stamina::default(),
             Crouched::default(),
@@ -255,18 +257,18 @@ fn jump_beats_stairs_regardless_of_propose_order() {
                 JumpMovement::PLAYER,
                 GroundFacts {
                     grounded: true,
-                    ..default()
+                    ..Default::default()
                 },
                 StairsFacts {
                     on_stairs: true,
-                    ..default()
+                    ..Default::default()
                 },
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         held: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Stairs,
                 JumpPhase::default(),
@@ -313,9 +315,9 @@ fn edge_leap_beats_mantle_regardless_of_propose_order() {
                     },
                     climb: crate::movement::intents::ClimbIntent {
                         lateral: crate::movement::intents::ClimbLateralIntent::Left,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Climb,
                 LedgeFacts {
@@ -323,7 +325,7 @@ fn edge_leap_beats_mantle_regardless_of_propose_order() {
                     lip_height: 1.5,
                     has_wall_left: false,
                     mantle_target_position: Some(Vec3::new(0.0, 3.0, 0.0)),
-                    ..default()
+                    ..Default::default()
                 },
                 Stamina::default(),
                 motors::mantle::MantleState::default(),
@@ -360,14 +362,14 @@ fn air_and_stairs_motors_require_their_capabilities() {
             crate::movement::attachment::LocomotionEnabled,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             Intents {
                 jump: crate::movement::intents::JumpIntent {
                     held: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Walk,
             JumpPhase::default(),
@@ -383,7 +385,7 @@ fn air_and_stairs_motors_require_their_capabilities() {
             LedgeFacts::default(),
             Intents {
                 glide: crate::movement::intents::GlideIntent::Requested,
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Fall,
             motors::glide::GlideLocal::default(),
@@ -396,11 +398,11 @@ fn air_and_stairs_motors_require_their_capabilities() {
             crate::movement::attachment::LocomotionEnabled,
             GroundFacts {
                 grounded: true,
-                ..default()
+                ..Default::default()
             },
             StairsFacts {
                 on_stairs: true,
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Walk,
             ProposalBuffer::default(),

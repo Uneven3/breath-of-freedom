@@ -4,7 +4,9 @@
 //! `WallJumpState` component.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
 
 use crate::movement::abilities::WallJumpMovement;
 use crate::movement::facts::LedgeFacts;
@@ -160,7 +162,7 @@ pub fn tick_body(
 mod tests {
     use super::*;
     use crate::movement::Actor;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn neutral_jump_press_from_climb_proposes_backward_wall_jump() {
@@ -173,9 +175,9 @@ mod tests {
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         pressed: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Climb,
                 Stamina::default(),
@@ -205,9 +207,9 @@ mod tests {
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         pressed: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Ladder,
                 Stamina::default(),
@@ -238,9 +240,9 @@ mod tests {
                 Intents {
                     jump: crate::movement::intents::JumpIntent {
                         pressed: true,
-                        ..default()
+                        ..Default::default()
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 LocomotionState::Climb,
                 Stamina::default(),

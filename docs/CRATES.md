@@ -200,12 +200,12 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **pendiente**. Son checkpoints/commits, no megacortes: cada fila termina
-compilable y verde; primero se traslada sin rediseñar, luego se mejora.
+Estado: **en curso; 6.1 cerrada el 2026-08-04**. Cada fila termina compilable y
+verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
 |---|---|
-| 6.1 | Esqueleto Cargo + Avian mínimo + smoke test headless. |
+| 6.1 ✅ | Esqueleto Cargo + Avian mínimo + smoke test headless. |
 | 6.2 | `health`, `interaction`, `time_control`. |
 | 6.3 | `inventory`, `projectiles`. |
 | 6.4 | Movement: infraestructura, schedules, servicios. |
@@ -218,6 +218,8 @@ Avian usará `default-features = false` con `3d`, `f32`, `parry-f32`, `parallel`
 y `xpbd_joints`: `debug-plugin` pasa a presentación y `collider-from-mesh` no se
 usa. Así el target headless no linkea `bevy_render` ni bifurca innecesariamente
 el build compartido. `build.rs` ya vive con schema/manifiesto en `bof_domain`.
+El smoke se corre como paquete aislado: seleccionar también el binario en la
+misma invocación unifica sus features legacy de Avian y deja de medir headless.
 
 ### Fase 7 — `bof_presentation` y el binario (hermanas)
 

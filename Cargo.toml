@@ -19,6 +19,7 @@ wildcard_enum_match_arm = "deny"
 avian3d = { workspace = true }
 bevy = { workspace = true }
 bof_domain = { package = "breath_of_freedom_domain", path = "crates/domain" }
+bof_simulation = { package = "breath_of_freedom_simulation", path = "crates/simulation" }
 ron = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

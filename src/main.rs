@@ -39,11 +39,12 @@ mod world;
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use bof_simulation::SimulationPlugin;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(PhysicsPlugins::default())
+        .add_plugins(SimulationPlugin)
         // Collider-wireframe rendering; starts disabled, toggled with F1
         // (see `debug.rs`).
         .add_plugins(PhysicsDebugPlugin)

@@ -1,0 +1,29 @@
+[package]
+name = "breath_of_freedom_simulation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "bof_simulation"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+expect_used = "deny"
+float_cmp = "deny"
+unwrap_used = "deny"
+wildcard_enum_match_arm = "deny"
+
+[dependencies]
+avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel", "xpbd_joints"] }
+bevy_app = "0.19"
+bof_domain = { package = "breath_of_freedom_domain", path = "../domain" }
+
+[dev-dependencies]
+bevy_time = "0.19"
+bevy_transform = "0.19"

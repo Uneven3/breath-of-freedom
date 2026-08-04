@@ -187,3 +187,34 @@ fn domain_has_no_render_or_physics_dependencies() {
         "bof_domain reached the Bevy facade or Avian: {offenders:?}"
     );
 }
+
+/// Phase 6.1: simulation owns physics but must remain runnable without a
+/// window, renderer, or the full Bevy facade (§20).
+#[test]
+fn simulation_has_no_render_dependencies() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = fs::read_to_string(root.join("crates/simulation/Cargo.toml"))
+        .expect("simulation manifest must be readable");
+    for forbidden in ["bevy =", "bevy_render", "bevy_pbr"] {
+        assert!(
+            !manifest.contains(forbidden),
+            "bof_simulation must not declare {forbidden:?}"
+        );
+    }
+
+    let mut files = Vec::new();
+    collect(&root.join("crates/simulation/src"), &mut files);
+    let offenders: Vec<_> = files
+        .into_iter()
+        .filter(|(_, source)| {
+            source.contains("use bevy::")
+                || source.contains("Mesh")
+                || source.contains("StandardMaterial")
+        })
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "bof_simulation reached rendering or the Bevy facade: {offenders:?}"
+    );
+}

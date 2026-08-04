@@ -230,6 +230,10 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
+**Checkpoint fase 7 jugado y aceptado (2026-08-04):** combate con combos (daño
+variable por golpe, o sea el combo avanza), equipar arma, curación, cambio de
+escena y esculpido; el arco del swing se dibuja leyendo el fact nuevo.
+
 **Fase 7 cerrada (2026-08-04): presentación no nombra la simulación.** Cero
 referencias a `bof_simulation` desde `camera`, `debug`, `visuals`,
 `presentation`, `sfx` e `inventory::pickup`, congeladas por un test. No se creó

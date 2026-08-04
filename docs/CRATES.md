@@ -3,7 +3,7 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **fases 1-6 cerradas; queda la 7**. Se borra cuando cierre — igual que
+Estado: **fases 1-6 cerradas; quedan la 7 y la 8**. Se borra cuando cierre — igual que
 `AHORA.md` borra lo cerrado; el detalle de cada fase queda en git.
 
 ## El principio
@@ -27,6 +27,7 @@ funden porque el build ya las cobra.
 | 5 ✅ | `bof_domain` | §19: el dato compartido no declara `bevy` ni Avian |
 | 6 ✅ | `bof_simulation` | §20: no declara `bevy_render`, `bevy_input` ni `bevy_window` |
 | 7 | `bof_presentation` + app | §4 como frontera de crate |
+| 8 | Los tipos | El estado inválido deja de ser representable |
 
 **El test de fase 1 sobrevive a su fecha de vencimiento.** El plan decía que en
 fase 6 lo reemplazaría Cargo. Eso valía sólo si `input` cruzaba a simulación; se
@@ -95,27 +96,76 @@ estado de la app, la pregunta correcta suele ser qué mensaje debería recibir.
 
 ## Fase 7 — `bof_presentation`
 
-Lo que falta es que presentación deje de leer `bof_simulation`. Medido el
-2026-08-04, son ~35 referencias en `camera`, `debug`, `visuals`, `presentation`,
-`sfx` y `inventory::pickup`, en dos grupos muy distintos:
+Presentación deja de ver `bof_simulation`. **Medido el 2026-08-04 y corregido**:
+el primer conteo dijo "ocho tipos de deuda de diseño" y era falso — cuatro ya
+estaban en domain (`BowFiredMessage`, `HitImpactMessage`, `Awareness`,
+`Health`), así que sólo eran renombre. El trabajo real es más chico:
 
-- **Renombre puro** (el tipo ya vive en domain y simulación sólo lo reexporta):
-  `CombatState`, `FacingSource`, `BodyDimensions`, `CastTrace`, `Horse`,
-  `GroundSensing` y todos los `movement::{facts, intents, state, stamina,
-  proposal, probe_data}`. Es cambiar el prefijo.
-- **Deuda de diseño**, ocho tipos que hay que decidir dónde van:
-  `combat::motors::aim::{BowFiredMessage, DrawStrength, BOW_SOCKET_LOCAL}`,
-  `attack::{ComboLocal, HitImpactMessage}`, `motors::sneak::Crouched`,
-  `enemies::{Enemy, Awareness}`, `health::Health` y `MovementSet`. Casi todos
-  son mensajes o componentes de estado, o sea justo lo que domain debería
-  contener; `MovementSet` es orden y pertenece a quien arma el schedule.
+**Mudanzas triviales a domain** (dato puro, sin decisión que tomar):
 
-`ComboLocal::current_step` está `pub` sólo porque `visuals::vfx` dibuja el arco
-del swing con `reach`/`arc_deg`. O el motor publica ese par como fact, o
-`ComboLocal` baja a domain. Es el caso testigo del grupo de arriba.
+| Tipo | Qué es | De regalo |
+|---|---|---|
+| `MovementSet` | enum `SystemSet`; `debug` ordena sus trazas contra las fases del broker, que es un uso legítimo | — |
+| `Crouched` | `bool` por actor | desbloquea `#[require]` en `SneakMovement` |
+| `Enemy` | marcador vacío | — |
+| `DrawStrength` | tres campos públicos de carga del arco | — |
+| `BOW_SOCKET_LOCAL` | una constante `Vec3` | — |
 
-`JumpLocal::grant_coyote` es lo inverso y se puede cerrar ya: existía para un
-test de `mounts` que estaba del otro lado de la frontera, y hoy están juntos.
+**La única decisión real: `ComboLocal`.** `visuals::vfx` dibuja el arco del
+swing y necesita `reach`/`arc_deg` del golpe activo; hoy los saca llamando a
+`current_step`, que tuvo que hacerse `pub`. `ComboLocal` no puede bajar entero:
+es estado del motor con campos privados. La salida de libro es §19 — que el
+motor **publique un fact** (`reach`, `arc_deg` del golpe en curso) y
+presentación lea el dato en vez de llamar a la función.
+
+El resto son ~20 referencias donde sólo cambia el prefijo `bof_simulation::` por
+`bof_domain::`.
+
+`Health` **no es un problema**: vive en domain desde la fase 5, y simulación
+sólo tiene su plugin, su `SystemSet` y `apply_damage`. La confusión salió de
+leer `bof_simulation::health::Health` sin ver que es un reexport.
+
+`JumpLocal::grant_coyote` se puede cerrar en el mismo pase: existía para un test
+de `mounts` que estaba del otro lado de la frontera, y hoy están juntos.
+
+### Por qué ahora y no "cuando duela"
+
+Medido el 2026-08-04: **cero** sistemas de presentación toman `&mut` de un
+componente de simulación, y todo lo que le piden va por mensaje. O sea que §20
+ya se cumple voluntariamente y el crate previene algo que hoy nadie hace.
+
+El argumento a favor no es el riesgo, es el costo: **fase 7 no va a ser más
+barata nunca**. Son ~35 referencias hoy y cada sistema de presentación que se
+agregue suma más. Con el proyecto sin features nuevas en curso, éste es su
+momento de costo mínimo. Y el dolor que evita no es de hoy: es el de dentro de
+seis meses, cuando la regla se olvide y un sistema de visuales "arregle" una
+posición escribiendo el `Transform` de simulación.
+
+## Fase 8 — los tipos
+
+Los crates ordenan *quién ve a quién*; esto ataca el error de runtime que podría
+ser error de compilación. Es aditivo y se paga por módulo.
+
+| # | Trabajo | Dolor que evita |
+|---|---|---|
+| 8.1 | `#[require]` en las nueve capacidades (`SprintMovement` → `SprintLock`, etc.) | Spawnear un actor a medias: ninguna query engancha y el actor no hace nada, **sin un solo error** |
+| 8.2 | Newtypes de unidades en `movement` (141 `f32` crudos, 2 newtypes) | Pasar metros donde van metros/segundo, o un radio donde va una altura: compila y produce un movimiento *casi* bien, que se atribuye al tuning |
+
+**8.1 depende de bajar trece tipos de bookkeeping a domain** (`SprintLock`,
+`JumpLocal`, `JumpPhase`, `GlideLocal`, `StairsLocal`, `StairsGrace`,
+`MantleState`, `VaultState`, `WallJumpState`, `EdgeLeapState`, `SneakLock`,
+`Crouched`, `StandClearance`). Son datos puros por actor, pero con campos
+privados que los motores manipulan: mudarlos obliga a abrirlos. Se abren los que
+no protegen ningún invariante (`SprintLock(bool)` no tiene nada que proteger);
+los que sí tienen lógica real, como `MantleState` con su `KinematicArc`, se
+quedan y su capacidad no lleva `require`.
+
+**8.2 va con checkpoint jugado**: toca el feeling de locomoción.
+
+**Dónde parar.** Los 51 `bool` que podrían ser enums **no** entran: un `bool`
+con nombre claro y un solo escritor no es deuda. Se convierte el que cause un
+bug real. Perseguir los `pub` que quedan por §4 tampoco: es pulido de superficie
+que no previene ningún bug de gameplay.
 
 ## La frontera se prueba, no se declara
 
@@ -133,32 +183,6 @@ que el crate unifica las features de Avian y el smoke deja de ser headless
 (panickea). `cargo test`, `cargo test -p breath_of_freedom_simulation` y
 `cargo test -p breath_of_freedom_domain`, por separado.
 
-## Más allá de los crates: los tipos
-
-Los crates ordenan *quién ve a quién*. Aparte hay error de runtime que podría ser
-error de compilación. Es aditivo: se paga por módulo, empezando por `movement`.
-
-- **229 campos `f32` crudos contra 2 newtypes** (`JumpStaminaCost`,
-  `Awareness`): nada impide sumar metros a metros/segundo, ni pasar un radio
-  donde va una altura. Las unidades de movimiento son el mayor retorno.
-- **122 campos `bool` contra 47 enums**: un `bool` se invierte sin que nadie se
-  entere; un enum de dos variantes con `wildcard_enum_match_arm` convierte cada
-  estado nuevo en un error en todos sus consumidores.
-- **`#[require(...)]` — empezado el 2026-08-04.** `Actor` declara los nueve
-  componentes que el broker necesita, así que spawnear el marcador solo ya trae
-  el cuerpo completo y `KinematicActorBundle` bajó de 17 campos a 8: quedan los
-  que necesitan un valor (identidad, pose, perfiles) o viven en Avian. Un test
-  spawnea `Actor` pelado y lo comprueba.
-
-  **Falta el mismo tratamiento para las capacidades** (`SprintMovement` →
-  `SprintLock`, `JumpMovement` → `JumpPhase`/`JumpLocal`, y siete más). Hoy no
-  se puede: la capacidad vive en domain y su bookkeeping en simulation, así que
-  el `require` invertiría la dependencia. Los trece tipos de bookkeeping son
-  datos puros por actor — §19 ya los quería en domain — pero tienen campos
-  privados que los motores usan, así que mudarlos obliga a abrirlos o a darles
-  API. Es la misma decisión que fase 7 tiene que tomar con `Crouched`, que está
-  en los dos problemas a la vez.
-
 ## Qué pasa con las leyes al terminar
 
 Este plan no agrega leyes: las funde. Al cerrar cada fase, su ley se reescribe
@@ -174,3 +198,4 @@ falle sobre 1000 líneas. Hoy es honor-system.
 |---|---|
 | 6 ✅ | Sin `Mesh`/`StandardMaterial`/`bevy_input` en `crates/simulation/src`; smoke headless levanta el juego entero; checkpoint jugado. |
 | 7 | `cargo tree` de presentation sin `bof_simulation`; checkpoint jugado; frame time sin regresión contra el baseline de `AHORA.md`. |
+| 8 | Spawnear una capacidad sin su bookkeeping es imposible; las unidades de `movement` no se pueden intercambiar; checkpoint jugado. |

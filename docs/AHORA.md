@@ -264,11 +264,16 @@ primer trazo. **Al leer el log, ojo**: sólo `sandbox.ron` existe en disco, y
 sin heightmap arranca plana **y en silencio** — la ausencia de línea no es
 ausencia de escena.
 
-1. **CRATES fase 7:** `bof_presentation` hermana. Lo que la habilita ya está
-   hecho; lo que falta es que presentación deje de leer `bof_simulation`
-   (`ComboLocal::current_step` y los `bof_simulation::movement::*` que quedaron
-   apuntando al crate en vez de a domain).
-2. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+1. **CRATES fase 7:** `bof_presentation` hermana. Cinco mudanzas triviales a
+   domain (`MovementSet`, `Crouched`, `Enemy`, `DrawStrength`,
+   `BOW_SOCKET_LOCAL`), ~20 renombres de prefijo, y **una sola decisión real**:
+   que el motor de ataque publique `reach`/`arc_deg` como fact en vez de que
+   `visuals::vfx` llame a `ComboLocal::current_step`.
+2. **CRATES fase 8 — los tipos:** `#[require]` en las nueve capacidades (pide
+   bajar trece tipos de bookkeeping a domain) y newtypes de unidades en
+   `movement`. Es lo que evita spawnear un actor a medias en silencio y
+   confundir metros con metros/segundo.
+3. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones

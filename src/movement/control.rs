@@ -1,22 +1,3 @@
-use bevy::prelude::*;
+//! Compatibility path for simulation-owned control redirection.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ControlMask {
-    pub planar: bool,
-    pub sprint: bool,
-    pub jump: bool,
-}
-
-impl ControlMask {
-    pub const MOUNT: Self = Self {
-        planar: true,
-        sprint: true,
-        jump: true,
-    };
-}
-
-#[derive(Component, Debug, Clone, Copy)]
-pub struct ControlRedirect {
-    pub controlled: Entity,
-    pub mask: ControlMask,
-}
+pub use bof_simulation::movement::control::*;

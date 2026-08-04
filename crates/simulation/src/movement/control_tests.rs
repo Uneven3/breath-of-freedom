@@ -1,5 +1,6 @@
 use super::*;
-use bevy::ecs::system::RunSystemOnce;
+use bevy_ecs::system::RunSystemOnce;
+use bevy_math::Vec2;
 
 #[test]
 fn redirect_transfers_only_supported_controls_and_neutralizes_controller() {
@@ -25,9 +26,9 @@ fn redirect_transfers_only_supported_controls_and_neutralizes_controller() {
                 },
                 climb: intents::ClimbIntent {
                     requested: true,
-                    ..default()
+                    ..Default::default()
                 },
-                ..default()
+                ..Default::default()
             },
         ))
         .id();
@@ -43,7 +44,7 @@ fn redirect_transfers_only_supported_controls_and_neutralizes_controller() {
             crate::movement::attachment::LocomotionEnabled,
             intents::Intents {
                 wants_sprint: true,
-                ..default()
+                ..Default::default()
             },
         ))
         .id();

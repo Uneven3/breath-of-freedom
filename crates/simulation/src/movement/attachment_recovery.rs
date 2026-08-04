@@ -2,7 +2,9 @@
 //! no validated floor pose.
 
 use avian3d::prelude::{Collider, ColliderDisabled, SpatialQuery, SpatialQueryFilter};
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::Vec3;
+use bevy_transform::components::Transform;
 
 use super::attachment::{KinematicAttachment, LocomotionEnabled, PendingSafeRecovery};
 use super::control::ControlRedirect;

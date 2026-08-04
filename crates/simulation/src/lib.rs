@@ -19,6 +19,7 @@ use bevy_app::{App, Plugin};
 pub mod health;
 pub mod interaction;
 pub mod inventory;
+pub mod movement;
 pub mod physics;
 pub mod projectiles;
 pub mod time_control;

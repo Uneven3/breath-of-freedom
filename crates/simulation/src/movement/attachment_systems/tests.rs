@@ -5,10 +5,12 @@ use crate::movement::intents::{Intents, JumpIntent, PlanarMoveIntent};
 use crate::movement::link::{
     ActorLinkRequestMessage, ActorLinkResultMessage, ActorLinkWorkspace, DetachSafety,
 };
+use bevy_app::{App, FixedUpdate};
+use bevy_math::{Vec2, Vec3};
 
 #[test]
 fn workspace_reserve_accounts_for_existing_entries() {
-    let mut set = bevy::ecs::entity::EntityHashSet::with_capacity(4);
+    let mut set = bevy_ecs::entity::EntityHashSet::with_capacity(4);
     set.insert(Entity::from_raw_u32(1).unwrap());
     set.insert(Entity::from_raw_u32(2).unwrap());
 
@@ -96,7 +98,7 @@ fn app_schedule_attaches_redirects_and_releases_without_rider_motor_tick() {
             held: true,
             pressed: true,
         },
-        ..default()
+        ..Default::default()
     };
     let rider = spawn_actor(&mut app, Transform::default(), rider_intents);
     let carrier = spawn_actor(
@@ -346,7 +348,7 @@ fn link_requests_apply_the_same_tick_they_arrive() {
 
     app.world_mut().entity_mut(controlled).insert(Intents {
         wants_sprint: true,
-        ..default()
+        ..Default::default()
     });
     app.world_mut()
         .write_message(ActorLinkRequestMessage::Neutralize { actor: controlled });

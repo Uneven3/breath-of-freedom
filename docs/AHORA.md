@@ -240,17 +240,19 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
-1. **CRATES fase 6.4 — Movement:** trasladar infraestructura, schedules y
-   servicios a `bof_simulation`, compilable y verde, sin rediseñarlos.
-2. **CRATES fase 7 — `bof_presentation` + app:** hermana de simulation; depende
-   sólo de `bof_domain`, y el binario compone ambas.
-3. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar
-   "acá hay una roca" y guardarlo en el archivo: filas `kind` + posición + yaw +
-   escala; presentación resuelve el modelo por catálogo.
-4. **Cerrar el ciclo de la capa semántica**: entrar, salir al menú y volver, para
-   ver el parche releído del disco.
-5. **Jugar lo que quedó sin validar**: el graybox asentado sobre relieve
-   (esculpir en `Traversal`, guardar, reentrar) y la tipografía de la UI.
+6.4 cerró: `bof_simulation` posee `MovementSet`, vínculos actor–montura,
+redirección, restricciones, LOD y trazas. Los sensores acoplados a
+`TerrainAccess`/geometría authored esperan al movimiento de `world` en 6.7.
+
+1. **CRATES fase 6.5 — Movement:** trasladar motores y orquestación, conservando
+   el replay determinista de 120 ticks.
+2. **CRATES fase 6.6:** trasladar `combat`, `enemies` y `mounts`.
+3. **CRATES fase 6.7:** trasladar `player`, `input`, `world`, sensores pendientes
+   y runtime de assets; los adaptadores de render quedan en la app.
+4. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
+   checkpoint jugado; luego fase 7 (`bof_presentation` hermana).
+5. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+   y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones
 

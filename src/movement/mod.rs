@@ -12,7 +12,7 @@ use bevy::prelude::*;
 
 pub mod abilities;
 pub mod attachment;
-mod attachment_recovery;
+#[cfg(test)]
 pub(crate) mod attachment_systems;
 pub mod body;
 pub mod brain;
@@ -43,74 +43,13 @@ use proposal::ProposalBuffer;
 use state::LocomotionState;
 
 pub use bof_domain::movement::{Actor, ActorId, BodyVelocity, GRAVITY, Player};
-
-/// Ordered phases of the Broker pipeline within `FixedUpdate`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MovementSet {
-    ApplyExternal,
-    ReadIntents,
-    ControlRedirect,
-    SenseWorld,
-    GatherProposals,
-    Arbitrate,
-    TickActiveMotor,
-    SyncAttachments,
-}
+pub use bof_simulation::movement::MovementSet;
 
 pub struct MovementPlugin;
 
 impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
-        // Pinned to 60 Hz (Bevy defaults to 64 Hz).
-        app.insert_resource(Time::<Fixed>::from_hz(60.0));
-        // Sensor-cast capture for the debug gizmos (no-op until enabled).
-        app.init_resource::<diag::CastTrace>();
-        app.add_systems(
-            FixedUpdate,
-            diag::clear_cast_trace
-                .after(MovementSet::ReadIntents)
-                .before(MovementSet::SenseWorld),
-        );
-        // Sensing LOD: decide, per actor, whether SenseWorld casts this tick.
-        app.init_resource::<lod::SensingLodConfig>();
-        app.add_systems(
-            FixedUpdate,
-            lod::assign_sensing_lod
-                .after(MovementSet::ReadIntents)
-                .before(MovementSet::SenseWorld),
-        );
-        // Constraints and impulses requested by other systems (Combat),
-        // applied right before motors propose/tick.
-        app.add_message::<constraints::LocomotionConstraintMessage>();
-        app.add_message::<constraints::BodyImpulseMessage>();
-        app.add_message::<link::ActorLinkRequestMessage>();
-        app.add_message::<link::ActorLinkResultMessage>();
-        app.init_resource::<link::ActorLinkWorkspace>();
-        app.add_systems(PreUpdate, attachment_systems::prepare_actor_link_workspace);
-        app.add_systems(
-            FixedUpdate,
-            (
-                constraints::apply_locomotion_constraints,
-                constraints::apply_body_impulses,
-            )
-                .after(MovementSet::SenseWorld)
-                .before(MovementSet::GatherProposals),
-        );
-
-        app.configure_sets(
-            FixedUpdate,
-            (
-                MovementSet::ApplyExternal,
-                MovementSet::ReadIntents,
-                MovementSet::ControlRedirect,
-                MovementSet::SenseWorld,
-                MovementSet::GatherProposals,
-                MovementSet::Arbitrate,
-                MovementSet::TickActiveMotor,
-                MovementSet::SyncAttachments,
-            )
-                .chain(),
-        );
+        app.add_plugins(bof_simulation::movement::MovementInfrastructurePlugin);
 
         app.add_message::<probe_data::ProbeToggleRequest>();
         app.add_systems(Update, probe::toggle_spawn);
@@ -120,20 +59,6 @@ impl Plugin for MovementPlugin {
             (probe::drive_intents, brain::read_intents)
                 .chain()
                 .in_set(MovementSet::ReadIntents),
-        );
-        app.add_systems(
-            FixedUpdate,
-            (
-                attachment_systems::apply_actor_link_requests,
-                attachment_systems::recover_orphaned_attachments,
-                attachment_systems::recover_pending_safe_poses,
-            )
-                .chain()
-                .in_set(MovementSet::ApplyExternal),
-        );
-        app.add_systems(
-            FixedUpdate,
-            attachment_systems::redirect_controls.in_set(MovementSet::ControlRedirect),
         );
         app.add_systems(
             FixedUpdate,
@@ -214,10 +139,6 @@ impl Plugin for MovementPlugin {
                 .after(MovementSet::TickActiveMotor)
                 .before(MovementSet::SyncAttachments),
         );
-        app.add_systems(
-            FixedUpdate,
-            attachment_systems::sync_attachments.in_set(MovementSet::SyncAttachments),
-        );
         // Decoupled facing (aim/lock-on) resolves after the active motor has
         // moved the body, before attachments sync to the final transform.
         app.add_systems(
@@ -258,7 +179,5 @@ fn arbitrate(mut q: Query<ArbitrationQuery, attachment::LocomotionActorFilter>) 
 
 #[cfg(test)]
 mod actor_isolation_tests;
-#[cfg(test)]
-mod control_tests;
 #[cfg(test)]
 mod determinism_tests;

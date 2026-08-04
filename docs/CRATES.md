@@ -200,7 +200,7 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **en curso; 6.1–6.3 cerradas el 2026-08-04**. Cada fila termina
+Estado: **en curso; 6.1–6.4 cerradas el 2026-08-04**. Cada fila termina
 compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
@@ -208,7 +208,7 @@ compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 | 6.1 ✅ | Esqueleto Cargo + Avian mínimo + smoke test headless. |
 | 6.2 ✅ | `health`, `interaction`, `time_control`. |
 | 6.3 ✅ | `inventory`, `projectiles`. |
-| 6.4 | Movement: infraestructura, schedules, servicios. |
+| 6.4 ✅ | Movement: schedules, vínculos, restricciones, LOD y diagnóstico. |
 | 6.5 | Movement: motores y orquestación; conserva replay determinista. |
 | 6.6 | `combat`, `enemies`, `mounts`. |
 | 6.7 | `player`, `input`, `world` y runtime de assets; render queda en adaptadores. |
@@ -220,6 +220,8 @@ usa. Así el target headless no linkea `bevy_render` ni bifurca innecesariamente
 el build compartido. `build.rs` ya vive con schema/manifiesto en `bof_domain`.
 El smoke se corre como paquete aislado: seleccionar también el binario en la
 misma invocación unifica sus features legacy de Avian y deja de medir headless.
+Los sensores que leen `TerrainAccess`/geometría authored esperan a 6.7, cuando
+sus contratos de `world` puedan cruzar la frontera sin invertir dependencias.
 
 ### Fase 7 — `bof_presentation` y el binario (hermanas)
 

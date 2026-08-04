@@ -234,6 +234,10 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 variable por golpe, o sea el combo avanza), equipar arma, curación, cambio de
 escena y esculpido; el arco del swing se dibuja leyendo el fact nuevo.
 
+**Checkpoint fase 8 jugado y aceptado (2026-08-04):** las capacidades llegan por
+`#[require]` y el juego se comporta igual; combate y sigilo verificados sobre
+actores construidos por el camino nuevo.
+
 **Fase 8 cerrada (2026-08-04): una capacidad sin su estado no existe.** Las
 nueve capacidades declaran `#[require]` sobre su bookkeeping (15 usos en total),
 y los trece tipos de estado de motor bajaron a `bof_domain::movement::motor_state`

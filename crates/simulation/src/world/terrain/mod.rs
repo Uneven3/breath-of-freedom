@@ -30,7 +30,6 @@ use serde::{Deserialize, Serialize};
 
 use super::terrain_kind::TerrainKind;
 use bof_domain::world::WORLD_SIZE;
-use bof_domain::world::hash_u32;
 
 /// Grid cells per side; the heightfield has `CELLS + 1` points per side. Sized
 /// so the brush covers enough vertices to sculpt smooth domes (a coarser grid
@@ -191,8 +190,32 @@ pub struct TerrainSnapshot {
     kinds: Vec<TerrainKind>,
 }
 
+fn grid_xz(points: usize, extent: f32, idx: usize) -> Vec2 {
+    let last = (points - 1) as f32;
+    Vec2::new(
+        ((idx / points) as f32 / last - 0.5) * extent,
+        ((idx % points) as f32 / last - 0.5) * extent,
+    )
+}
+
+fn sample_bilinear(heights: &[f32], points: usize, row: f32, col: f32) -> f32 {
+    let last = points - 1;
+    let r0 = bounded_grid_index(row.floor(), last);
+    let c0 = bounded_grid_index(col.floor(), last);
+    let r1 = (r0 + 1).min(last);
+    let c1 = (c0 + 1).min(last);
+    let fr = row - r0 as f32;
+    let fc = col - c0 as f32;
+    let top = heights[r0 * points + c0].lerp(heights[r0 * points + c1], fc);
+    let bottom = heights[r1 * points + c0].lerp(heights[r1 * points + c1], fc);
+    top.lerp(bottom, fr)
+}
+
+pub mod persist;
+pub mod query;
+pub mod sculpt;
+
 impl Terrain {
-    /// A flat grid at `y = 0`, matching the graybox floor it replaces.
     fn flat() -> Self {
         let points = CELLS + 1;
         Self {
@@ -210,120 +233,6 @@ impl Terrain {
     /// not cross a crate boundary, so the fixture has to ship to be usable.
     pub fn flat_for_test() -> Self {
         Self::flat()
-    }
-
-    pub fn points(&self) -> usize {
-        self.points
-    }
-
-    /// How many times the height grid has changed. Only meaningful compared
-    /// against a previously observed value.
-    pub fn relief_revision(&self) -> u32 {
-        self.relief_revision
-    }
-
-    /// Cells per side — one fewer than [`Terrain::points`], since a cell is the
-    /// quad *between* four corners.
-    pub fn cells(&self) -> usize {
-        self.points - 1
-    }
-
-    pub fn height(&self, row: usize, col: usize) -> f32 {
-        self.heights[row * self.points + col]
-    }
-
-    /// What cell `(row, col)` is made of.
-    pub fn kind(&self, row: usize, col: usize) -> TerrainKind {
-        self.kinds[row * self.cells() + col]
-    }
-
-    /// What the ground is made of at an arbitrary world XZ.
-    ///
-    /// Nearest cell, never interpolated: the answer is "stone" or "sand", and
-    /// there is no blend of the two to return. Read every tick by the ground
-    /// probe, so it stays a couple of divisions and an index.
-    pub fn kind_at(&self, xz: Vec2) -> TerrainKind {
-        let (row, col) = self.cell_at(xz);
-        self.kind(row, col)
-    }
-
-    /// The cell containing a world XZ, clamped to the grid.
-    fn cell_at(&self, xz: Vec2) -> (usize, usize) {
-        let cells = self.cells();
-        let last = cells - 1;
-        let index = |v: f32| bounded_grid_index((v / self.extent + 0.5) * cells as f32, last);
-        (index(xz.x), index(xz.y))
-    }
-
-    /// World XZ of the *centre* of cell `(row, col)` — half a cell past its
-    /// low corner, which is the point a paint brush measures its radius against.
-    fn cell_centre_xz(&self, row: usize, col: usize) -> Vec2 {
-        let spacing = self.extent / self.cells() as f32;
-        self.point_xz(row, col) + Vec2::splat(spacing * 0.5)
-    }
-
-    /// World XZ of grid point `(row, col)`, independent of its height. The one
-    /// mapping the collider and the visual mesh must agree on, so they never
-    /// drift: parry centers the heightfield on the entity origin, spanning
-    /// `[-extent/2, extent/2]`.
-    fn point_xz(&self, row: usize, col: usize) -> Vec2 {
-        grid_xz(self.points, self.extent, row * self.points + col)
-    }
-
-    /// Full world position of grid point `(row, col)`, height included.
-    pub fn point_world_pos(&self, row: usize, col: usize) -> Vec3 {
-        let xz = self.point_xz(row, col);
-        Vec3::new(xz.x, self.height(row, col), xz.y)
-    }
-
-    /// Ground height at an arbitrary world XZ — **on the actual surface**, not
-    /// on a smooth approximation of it.
-    ///
-    /// Anything *placed* in the world needs this the moment the ground stops
-    /// being flat: a spawn point authored as a constant `y` puts an actor
-    /// underground the first time someone sculpts a hill over it, and a
-    /// heightfield is a one-sided surface — from below it does not catch you,
-    /// so you fall forever.
-    ///
-    /// It samples the **triangle**, not a bilinear patch. Both the collider and
-    /// the visual mesh cut each cell into two flat triangles; a bilinear patch
-    /// bulges above that surface inside the quad — by half a metre on 2.5 m cells
-    /// with real relief. Lifting a body onto the bulge is how the player ended up
-    /// hovering above sculpted ground.
-    ///
-    /// **Which diagonal is not ours to choose** — see [`Terrain::to_collider`].
-    pub fn height_at(&self, xz: Vec2) -> f32 {
-        let last = (self.points - 1) as f32;
-        let fx = ((xz.x / self.extent + 0.5) * last).clamp(0.0, last);
-        let fz = ((xz.y / self.extent + 0.5) * last).clamp(0.0, last);
-        let row = bounded_grid_index(fx.floor(), self.points - 2);
-        let col = bounded_grid_index(fz.floor(), self.points - 2);
-        // Position inside the cell, both in `[0, 1]`.
-        let u = fx - row as f32;
-        let v = fz - col as f32;
-        let corner = |dr: usize, dc: usize| self.height(row + dr, col + dc);
-        // The shared diagonal runs where `u + v == 1`, so that sum picks the
-        // triangle; each expression is the plane through its three corners.
-        if u + v <= 1.0 {
-            // The triangle holding the low corner: (0,0), (1,0), (0,1).
-            corner(0, 0) + (corner(1, 0) - corner(0, 0)) * u + (corner(0, 1) - corner(0, 0)) * v
-        } else {
-            // The triangle holding the high corner: (1,1), (0,1), (1,0).
-            corner(1, 1)
-                + (corner(0, 1) - corner(1, 1)) * (1.0 - u)
-                + (corner(1, 0) - corner(1, 1)) * (1.0 - v)
-        }
-    }
-
-    /// Calculate terrain slope angle in degrees at a world coordinate position (x, z).
-    pub fn slope_deg_at(&self, xz: Vec2) -> f32 {
-        let step = 0.5;
-        let h0 = self.height_at(xz);
-        let h_east = self.height_at(xz + Vec2::X * step);
-        let h_north = self.height_at(xz + Vec2::Y * step);
-        let dx = (h_east - h0) / step;
-        let dz = (h_north - h0) / step;
-        (dx * dx + dz * dz).sqrt().atan().to_degrees()
     }
 
     /// The heightfield collider derived from the grid. `scale` maps parry's unit
@@ -357,461 +266,6 @@ impl Terrain {
             .collect();
         Collider::heightfield(rows, Vec3::new(self.extent, 1.0, self.extent))
     }
-
-    /// A copy of both channels, for the editor's undo history.
-    pub fn snapshot(&self) -> TerrainSnapshot {
-        TerrainSnapshot {
-            heights: self.heights.clone(),
-            kinds: self.kinds.clone(),
-        }
-    }
-
-    /// Put a [`Terrain::snapshot`] back. Ignores a snapshot of the wrong size
-    /// (a stale history across a resolution change) rather than panicking.
-    pub fn restore(&mut self, snapshot: &TerrainSnapshot) -> bool {
-        if snapshot.heights.len() != self.heights.len() || snapshot.kinds.len() != self.kinds.len()
-        {
-            return false;
-        }
-        // Compare before copying: undoing a paint-only stroke leaves the relief
-        // untouched, and claiming otherwise would rebuild the collider for a
-        // heightfield that did not move.
-        if self.heights != snapshot.heights {
-            self.heights.copy_from_slice(&snapshot.heights);
-            self.relief_revision = self.relief_revision.wrapping_add(1);
-        }
-        self.kinds.copy_from_slice(&snapshot.kinds);
-        true
-    }
-
-    // ---- brushes: the vocabulary the sculpt tool draws with ----------------
-
-    /// Raise (or lower, with negative `delta`) the grid around `center`, with a
-    /// smooth falloff to `radius`.
-    ///
-    /// The stroke relaxes itself as it lifts (see [`RELAX_PER_METRE`]) — without
-    /// that, holding the button builds a tent with a sharp apex instead of a
-    /// dome, which is exactly how this brush used to feel.
-    pub fn raise_area(&mut self, center: Vec2, radius: f32, delta: f32) {
-        self.brush(center, radius, |_grid, _idx, falloff| delta * falloff);
-        let relax = (delta.abs() * RELAX_PER_METRE).min(MAX_RELAX_PER_STEP);
-        if relax > 0.0 {
-            self.smooth_area(center, radius, relax);
-        }
-    }
-
-    /// Relax the grid around `center` toward each point's neighbour average, to
-    /// erode the spikes a heavy raise leaves. `amount` in `[0, 1]` is how far to
-    /// pull toward the average at full falloff. Reads the pre-stroke snapshot
-    /// `brush` provides, so the pass has no directional bias.
-    pub fn smooth_area(&mut self, center: Vec2, radius: f32, amount: f32) {
-        let points = self.points;
-        self.brush(center, radius, |grid, idx, falloff| {
-            (neighbour_average(grid, points, idx) - grid[idx]) * amount * falloff
-        });
-    }
-
-    /// Pull the grid around `center` toward `target` height — mesas, clearings,
-    /// campsites, anywhere the player needs flat ground to stand and build on.
-    /// `amount` in `[0, 1]` is how far to travel per application.
-    pub fn flatten_area(&mut self, center: Vec2, radius: f32, target: f32, amount: f32) {
-        self.brush(center, radius, |grid, idx, falloff| {
-            (target - grid[idx]) * amount * falloff
-        });
-    }
-
-    /// Pull the ground under the segment `from → to` toward the straight slope
-    /// between the two heights. The connectivity brush: it is how a mesa gets a
-    /// walkable way up instead of a wall the player has to climb.
-    pub fn ramp_area(
-        &mut self,
-        from: Vec2,
-        from_height: f32,
-        to: Vec2,
-        to_height: f32,
-        radius: f32,
-        amount: f32,
-    ) {
-        let points = self.points;
-        let extent = self.extent;
-        let span = to - from;
-        let length_squared = span.length_squared();
-        self.brush_stroke(from, to, radius, |grid, idx, falloff| {
-            let t = if length_squared > f32::EPSILON {
-                ((grid_xz(points, extent, idx) - from).dot(span) / length_squared).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let target = from_height + (to_height - from_height) * t;
-            (target - grid[idx]) * amount * falloff
-        });
-    }
-
-    /// Add interpolated value noise around `center`, `amplitude` metres worth
-    /// per application. Breaks up the artificial evenness a smoothed dome has;
-    /// the noise pattern is deterministic per world position, so holding the
-    /// button deepens the same wrinkles instead of boiling them.
-    pub fn noise_area(&mut self, center: Vec2, radius: f32, amplitude: f32, seed: u32) {
-        let points = self.points;
-        let extent = self.extent;
-        self.brush(center, radius, |_grid, idx, falloff| {
-            let xz = grid_xz(points, extent, idx);
-            value_noise(xz / NOISE_CELL, seed) * amplitude * falloff
-        });
-    }
-
-    /// Quantise heights around `center` onto `step`-metre shelves. Terraces are
-    /// what make a slope readable as a place — flat treads to stand on, honest
-    /// risers between them — and they are the shape BOTW's mesas are built from.
-    pub fn terrace_area(&mut self, center: Vec2, radius: f32, step: f32, amount: f32) {
-        if step <= 0.0 {
-            return;
-        }
-        self.brush(center, radius, |grid, idx, falloff| {
-            let stepped = (grid[idx] / step).round() * step;
-            (stepped - grid[idx]) * amount * falloff
-        });
-    }
-
-    // ---- the semantic layer ------------------------------------------------
-
-    /// Paint `kind` onto every cell whose centre falls within `radius` of
-    /// `centre`. Returns whether anything actually changed.
-    ///
-    /// **No falloff, and no rate.** Both are meaningless here: there is no
-    /// halfway between rock and sand to ease into, and painting the same cell
-    /// twice cannot deepen it. A cell is either inside the circle or it is not,
-    /// which makes a paint stroke idempotent — hold the button still and nothing
-    /// keeps happening, unlike every sculpt brush.
-    ///
-    /// The consequence to know about: the edge of a painted patch is the cell
-    /// grid, 2.5 m at the current resolution. Fine detail is not available at
-    /// this resolution and pretending otherwise with a soft brush would only
-    /// hide it.
-    pub fn paint_area(&mut self, centre: Vec2, radius: f32, kind: TerrainKind) -> bool {
-        if radius <= 0.0 {
-            return false;
-        }
-        let cells = self.cells();
-        let mut changed = false;
-        let (rows, cols) = self.cell_window(centre, radius);
-        for row in rows {
-            for col in cols.clone() {
-                if self.cell_centre_xz(row, col).distance(centre) >= radius {
-                    continue;
-                }
-                let idx = row * cells + col;
-                if self.kinds[idx] != kind {
-                    self.kinds[idx] = kind;
-                    changed = true;
-                }
-            }
-        }
-        changed
-    }
-
-    /// The inclusive cell window a paint stroke of `radius` can reach. Same job
-    /// as [`Terrain::window`] does for grid points, in cell space.
-    fn cell_window(
-        &self,
-        centre: Vec2,
-        radius: f32,
-    ) -> (
-        std::ops::RangeInclusive<usize>,
-        std::ops::RangeInclusive<usize>,
-    ) {
-        let cells = self.cells();
-        let last = cells - 1;
-        // Inverse of `cell_centre_xz`: world metres back to a fractional cell
-        // index, measured from cell centres (hence the half-cell shift).
-        let index = |v: f32| (v / self.extent + 0.5) * cells as f32 - 0.5;
-        let clamp = |v: f32| bounded_grid_index(v, last);
-        (
-            clamp(index(centre.x - radius).floor())..=clamp(index(centre.x + radius).ceil()),
-            clamp(index(centre.y - radius).floor())..=clamp(index(centre.y + radius).ceil()),
-        )
-    }
-
-    // ---- brush plumbing ----------------------------------------------------
-
-    /// Radial brush: a stroke whose two ends coincide.
-    fn brush(&mut self, center: Vec2, radius: f32, delta: impl Fn(&[f32], usize, f32) -> f32) {
-        self.brush_stroke(center, center, radius, delta);
-    }
-
-    /// Shared brush traversal: for every grid point within `radius` of the
-    /// segment `from → to`, add `delta(pre_stroke_snapshot, index, falloff)` to
-    /// its height. The snapshot lets smoothing read unbiased neighbours while
-    /// still writing in place; a plain raise just ignores it.
-    ///
-    /// Taking a *segment* rather than a point is what lets the ramp brush share
-    /// this traversal with the radial ones — a capsule with zero length is a
-    /// circle.
-    fn brush_stroke(
-        &mut self,
-        from: Vec2,
-        to: Vec2,
-        radius: f32,
-        delta: impl Fn(&[f32], usize, f32) -> f32,
-    ) {
-        if radius <= 0.0 {
-            return;
-        }
-        let snapshot = self.heights.clone();
-        self.relief_revision = self.relief_revision.wrapping_add(1);
-        // Only the grid window the stroke can reach. Walking all 16k points to
-        // touch the ~100 under a 6 m brush was pure waste, and it ran every
-        // frame of a stroke — twice, since `raise_area` relaxes as it lifts.
-        let (rows, cols) = self.window(from, to, radius);
-        for row in rows {
-            for col in cols.clone() {
-                let distance = distance_to_segment(self.point_xz(row, col), from, to);
-                if distance >= radius {
-                    continue;
-                }
-                // Smoothstep falloff: full strength at the center, zero at the rim.
-                let t = 1.0 - distance / radius;
-                let falloff = t * t * (3.0 - 2.0 * t);
-                let idx = row * self.points + col;
-                self.heights[idx] = (self.heights[idx] + delta(&snapshot, idx, falloff))
-                    .clamp(MIN_HEIGHT, MAX_HEIGHT);
-            }
-        }
-    }
-
-    /// The inclusive grid window that a stroke of `radius` around the segment
-    /// `from → to` can possibly touch, clamped to the grid. The brush's falloff
-    /// still decides what actually moves; this only avoids visiting points that
-    /// are provably out of reach.
-    fn window(
-        &self,
-        from: Vec2,
-        to: Vec2,
-        radius: f32,
-    ) -> (
-        std::ops::RangeInclusive<usize>,
-        std::ops::RangeInclusive<usize>,
-    ) {
-        let last = self.points - 1;
-        // Inverse of `point_xz`: world metres back to a fractional grid index.
-        let index = |v: f32| (v / self.extent + 0.5) * last as f32;
-        let low = from.min(to) - Vec2::splat(radius);
-        let high = from.max(to) + Vec2::splat(radius);
-        let clamp = |v: f32| bounded_grid_index(v, last);
-        (
-            clamp(index(low.x).floor())..=clamp(index(high.x).ceil()),
-            clamp(index(low.y).floor())..=clamp(index(high.y).ceil()),
-        )
-    }
-
-    // ---- persistence -------------------------------------------------------
-
-    /// Serialise the grid to RON. Resolution and extent ride along so a file
-    /// outlives a `CELLS` change.
-    ///
-    /// Pretty-printed **except** for arrays: the header fields stay readable
-    /// while the 16k heights remain one line instead of 16k. RON over JSON is a
-    /// project-wide choice (it is Bevy's idiomatic data format and it takes
-    /// comments) — it buys little for a numeric matrix like this one, but it is
-    /// the format the *authored* files that follow will want.
-    pub fn to_ron(&self) -> Result<String, String> {
-        let config = ron::ser::PrettyConfig::default().compact_arrays(true);
-        ron::ser::to_string_pretty(
-            &TerrainFile {
-                points: self.points,
-                extent: self.extent,
-                heights: self.heights.clone(),
-                kinds: encode_kinds(&self.kinds),
-            },
-            config,
-        )
-        .map_err(|error| error.to_string())
-    }
-
-    /// Load a grid saved by [`Terrain::to_ron`], resampling bilinearly when the
-    /// file's resolution or world size differs from the current one. Resampling
-    /// rather than rejecting is what lets `CELLS` be tuned later without
-    /// orphaning levels.
-    ///
-    /// The resampling goes **through world space**, using the file's own
-    /// `extent`: a sample lands where the file says it is in metres, not at the
-    /// same fraction of the grid. Stretching a 320 m level over a 640 m world
-    /// would double every slope silently — the ground would look right and walk
-    /// wrong. A file covering less than the current world keeps its edge heights
-    /// outward, which is what clamping the sample does.
-    ///
-    /// Rejects what it cannot honour: this file *is* the level, and a grid with
-    /// a `NaN` in it poisons the collider (parry builds a heightfield that
-    /// swallows anything standing on it) with no error anywhere. Heights that
-    /// are merely out of band are clamped, not refused — a stray peak is a fixed
-    /// level, not a lost one.
-    pub fn apply_ron(&mut self, text: &str) -> Result<(), String> {
-        let file: TerrainFile = ron::from_str(text).map_err(|error| error.to_string())?;
-        if file.points < 2 || file.heights.len() != file.points * file.points {
-            return Err("terrain file is malformed (points/heights mismatch)".into());
-        }
-        if !file.extent.is_finite() || file.extent <= 0.0 {
-            return Err(format!("terrain file has a bad extent ({})", file.extent));
-        }
-        if let Some(bad) = file.heights.iter().find(|height| !height.is_finite()) {
-            return Err(format!("terrain file holds a non-finite height ({bad})"));
-        }
-        let file_cells = file.points - 1;
-        let file_kinds = decode_kinds(&file.kinds, file_cells)?;
-        // Exact bits mean the authored and runtime grids share coordinates;
-        // any numerical difference requires the world-space resample below.
-        if file.points == self.points && file.extent.to_bits() == self.extent.to_bits() {
-            self.heights = file.heights;
-            self.kinds = file_kinds;
-        } else {
-            let source_last = (file.points - 1) as f32;
-            let source_index =
-                |metres: f32| ((metres / file.extent + 0.5) * source_last).clamp(0.0, source_last);
-            self.heights = (0..self.heights.len())
-                .map(|idx| {
-                    let xz = grid_xz(self.points, self.extent, idx);
-                    sample_bilinear(
-                        &file.heights,
-                        file.points,
-                        source_index(xz.x),
-                        source_index(xz.y),
-                    )
-                })
-                .collect();
-            // Nearest cell, not bilinear: there is no value between `Rock` and
-            // `TallGrass` to interpolate to. Copying the height path here would
-            // have invented kinds nobody painted the first time `CELLS` changed.
-            let cells = self.cells();
-            let last = (file_cells - 1) as f32;
-            let source_cell =
-                |metres: f32| ((metres / file.extent + 0.5) * file_cells as f32).clamp(0.0, last);
-            self.kinds = (0..cells * cells)
-                .map(|idx| {
-                    let xz = self.cell_centre_xz(idx / cells, idx % cells);
-                    let row = bounded_grid_index(source_cell(xz.x), file_cells - 1);
-                    let col = bounded_grid_index(source_cell(xz.y), file_cells - 1);
-                    file_kinds[row * file_cells + col]
-                })
-                .collect();
-        }
-        for height in &mut self.heights {
-            *height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
-        }
-        self.relief_revision = self.relief_revision.wrapping_add(1);
-        Ok(())
-    }
-}
-
-/// Run-length encode the semantic layer, cell-major.
-fn encode_kinds(kinds: &[TerrainKind]) -> Vec<KindRun> {
-    let mut runs: Vec<KindRun> = Vec::new();
-    for &kind in kinds {
-        match runs.last_mut() {
-            Some(run) if run.1 == kind => run.0 += 1,
-            _ => runs.push(KindRun(1, kind)),
-        }
-    }
-    runs
-}
-
-/// Expand what [`encode_kinds`] wrote, for a grid of `cells × cells`.
-///
-/// An empty list is not an error: it is how a level saved before this layer
-/// existed reads, and the honest expansion of "no semantic layer" is a level of
-/// the default kind. Anything else must add up exactly — a truncated run list
-/// would otherwise offset every cell after the gap, sliding the whole map's
-/// meaning sideways by a silent amount.
-fn decode_kinds(runs: &[KindRun], cells: usize) -> Result<Vec<TerrainKind>, String> {
-    let expected = cells * cells;
-    if runs.is_empty() {
-        return Ok(vec![TerrainKind::default(); expected]);
-    }
-    let total: u64 = runs.iter().map(|run| u64::from(run.0)).sum();
-    if total != expected as u64 {
-        return Err(format!(
-            "terrain file's semantic layer covers {total} cells, expected {expected}"
-        ));
-    }
-    let mut kinds = Vec::with_capacity(expected);
-    for run in runs {
-        kinds.extend(std::iter::repeat_n(run.1, run.0 as usize));
-    }
-    Ok(kinds)
-}
-
-/// World XZ of a grid index, without needing the terrain itself — brush closures
-/// only get the flat height slice, so they reconstruct positions through this.
-fn grid_xz(points: usize, extent: f32, idx: usize) -> Vec2 {
-    let last = (points - 1) as f32;
-    Vec2::new(
-        ((idx / points) as f32 / last - 0.5) * extent,
-        ((idx % points) as f32 / last - 0.5) * extent,
-    )
-}
-
-/// Average of a point's four orthogonal neighbours, falling back to the point
-/// itself at the grid edge.
-fn neighbour_average(grid: &[f32], points: usize, idx: usize) -> f32 {
-    let row = idx / points;
-    let col = idx % points;
-    let mut sum = 0.0;
-    let mut count = 0.0;
-    let neighbours = [
-        row.checked_sub(1).map(|nr| (nr, col)),
-        (row + 1 < points).then_some((row + 1, col)),
-        col.checked_sub(1).map(|nc| (row, nc)),
-        (col + 1 < points).then_some((row, col + 1)),
-    ];
-    for (nr, nc) in neighbours.into_iter().flatten() {
-        sum += grid[nr * points + nc];
-        count += 1.0;
-    }
-    if count > 0.0 { sum / count } else { grid[idx] }
-}
-
-/// Distance from `point` to the segment `from → to`; the circle case falls out
-/// when the segment has zero length.
-fn distance_to_segment(point: Vec2, from: Vec2, to: Vec2) -> f32 {
-    let span = to - from;
-    let length_squared = span.length_squared();
-    if length_squared <= f32::EPSILON {
-        return point.distance(from);
-    }
-    let t = ((point - from).dot(span) / length_squared).clamp(0.0, 1.0);
-    point.distance(from + span * t)
-}
-
-/// Interpolated value noise in `[-1, 1]`, deterministic per position. Built on
-/// the same scatter hash the forest and the grass meadow use, so the project
-/// keeps one source of pseudo-randomness instead of pulling in a noise crate.
-fn value_noise(p: Vec2, seed: u32) -> f32 {
-    let cell = p.floor();
-    let f = p - cell;
-    // Smoothstep the interpolation weights so cell borders do not show as creases.
-    let w = Vec2::new(f.x * f.x * (3.0 - 2.0 * f.x), f.y * f.y * (3.0 - 2.0 * f.y));
-    let corner = |dx: f32, dy: f32| {
-        let x = noise_coordinate(cell.x + dx);
-        let y = noise_coordinate(cell.y + dy);
-        let hash = hash_u32(x.wrapping_mul(0x9e37_79b9) ^ hash_u32(y ^ seed));
-        hash as f32 / u32::MAX as f32 * 2.0 - 1.0
-    };
-    let top = corner(0.0, 0.0).lerp(corner(1.0, 0.0), w.x);
-    let bottom = corner(0.0, 1.0).lerp(corner(1.0, 1.0), w.x);
-    top.lerp(bottom, w.y)
-}
-
-/// Bilinear sample of a square height grid at fractional grid coordinates.
-fn sample_bilinear(heights: &[f32], points: usize, row: f32, col: f32) -> f32 {
-    let last = points - 1;
-    let r0 = bounded_grid_index(row.floor(), last);
-    let c0 = bounded_grid_index(col.floor(), last);
-    let r1 = (r0 + 1).min(last);
-    let c1 = (c0 + 1).min(last);
-    let fr = row - r0 as f32;
-    let fc = col - c0 as f32;
-    let top = heights[r0 * points + c0].lerp(heights[r0 * points + c1], fc);
-    let bottom = heights[r1 * points + c0].lerp(heights[r1 * points + c1], fc);
-    top.lerp(bottom, fr)
 }
 
 /// Tracks which version of the relief the collider on this entity was built
@@ -887,9 +341,9 @@ pub fn spawn_terrain(commands: &mut Commands, file: Option<&str>) {
         Transform::default(),
     ));
 }
-
 #[cfg(test)]
 mod tests {
+    use super::persist::{decode_kinds, encode_kinds};
     use super::*;
     use bevy_ecs::system::RunSystemOnce;
 

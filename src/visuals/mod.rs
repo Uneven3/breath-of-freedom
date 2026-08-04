@@ -20,7 +20,7 @@ mod diagnostic;
 pub mod enemy;
 pub mod foliage;
 pub mod forest;
-mod grass;
+pub(crate) mod grass;
 pub mod grass_material;
 pub mod horse;
 pub mod player;

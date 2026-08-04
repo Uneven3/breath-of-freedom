@@ -416,6 +416,14 @@ legible que la función. Si sí, migrar `layout.rs` entero.
   2026-08-01: la lista ya sólo encoge). Ya se cobraron `Tab` y el navegador de
   animación. El test de fase 1 ya impide que la lista crezca; falta el dueño
   único que traduzca bindings a acciones tipadas.
+- **La pradera cuesta 52% del presupuesto del Mundo sobre el 0,6% de su área.**
+  Cerrar el hueco del presupuesto (2026-08-04: `meadow_triangles` era privado y
+  no la sumaba nadie) destapó que la escena Mundo declara **106.918 triángulos
+  contra 100.000** — coincide con lo que el medidor de runtime venía gritando.
+  El desglose: pradera 56.250, terreno 32.768, bosque 17.900. La pradera cubre
+  625 m² de 320×320, así que **no escala**: extenderla es imposible sin LOD o
+  densidad por distancia. El exceso está declarado con número en
+  `perf::budget::WORLD_SCENE_OVERSHOOT` y el test falla si crece.
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

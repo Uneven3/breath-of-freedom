@@ -94,6 +94,18 @@ pub(super) struct GrassStressState {
 #[derive(Component)]
 pub(super) struct GrassChunk;
 
+/// Triángulos que la pradera declara a la escena: cada brizna son **dos**.
+///
+/// Público para el presupuesto (`perf::budget`): mientras este número vivió
+/// dentro del módulo, la meadow no la sumaba nadie y una escena con pradera
+/// leía como si el pasto fuera gratis. Es la cuenta a densidad por defecto,
+/// que es la que se hornea al entrar a la escena.
+pub(crate) fn meadow_triangles() -> usize {
+    let chunks = (FIELD_CHUNKS * FIELD_CHUNKS) as usize;
+    let (density, _) = DENSITY_TIERS[0];
+    chunks * blades_per_chunk(density) as usize * 2
+}
+
 /// Blades per chunk at a given density. Rounded once, here, so the count on
 /// screen and the count in the budget are the same number.
 #[expect(

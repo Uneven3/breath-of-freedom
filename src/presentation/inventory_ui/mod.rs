@@ -73,6 +73,35 @@ impl Default for InventoryUiState {
     }
 }
 
+impl InventoryUiState {
+    /// Confirma el slot seleccionado, una sola vez por frame.
+    ///
+    /// El latch no es paranoia: `handle_button_input` y
+    /// `handle_keyboard_navigation` corren los dos en el mismo frame, y `Enter`
+    /// sobre el botón de acción enfocado llega por los dos caminos a la vez.
+    /// Sin esto, una pulsación equipa dos veces — y con comida, la consume dos
+    /// veces. `reset_action_latch` lo baja al principio del frame siguiente.
+    fn confirm_selection(
+        &mut self,
+        actor: Entity,
+        inventory: &Inventory,
+        equip: &mut MessageWriter<EquipSlotRequestMessage>,
+        consume: &mut MessageWriter<ConsumeSlotRequestMessage>,
+    ) {
+        if self.action_sent_this_frame {
+            return;
+        }
+        self.action_sent_this_frame = emit_action(
+            actor,
+            inventory,
+            self.selected_slot,
+            self.category,
+            equip,
+            consume,
+        );
+    }
+}
+
 #[derive(Component)]
 struct InventoryUiRoot;
 
@@ -189,17 +218,9 @@ fn handle_button_input(
     if action
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed)
-        && !state.action_sent_this_frame
         && let Ok((entity, inventory, _)) = actor.single()
     {
-        state.action_sent_this_frame = emit_action(
-            entity,
-            inventory,
-            state.selected_slot,
-            state.category,
-            &mut equip,
-            &mut consume,
-        );
+        state.confirm_selection(entity, inventory, &mut equip, &mut consume);
     }
     if close
         .iter()
@@ -233,15 +254,8 @@ fn handle_keyboard_navigation(
     if slot_delta != 0 {
         select_next_visible(&mut state, inventory, slot_delta as isize);
     }
-    if keys.just_pressed(KeyCode::Enter) && !state.action_sent_this_frame {
-        state.action_sent_this_frame = emit_action(
-            entity,
-            inventory,
-            state.selected_slot,
-            state.category,
-            &mut equip,
-            &mut consume,
-        );
+    if keys.just_pressed(KeyCode::Enter) {
+        state.confirm_selection(entity, inventory, &mut equip, &mut consume);
     }
 }
 

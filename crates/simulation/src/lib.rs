@@ -18,6 +18,9 @@ use bevy_app::{App, Plugin};
 
 pub mod health;
 pub mod interaction;
+pub mod inventory;
+pub mod physics;
+pub mod projectiles;
 pub mod time_control;
 
 /// Installs the authoritative physics and, progressively, gameplay systems.

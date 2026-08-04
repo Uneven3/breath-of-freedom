@@ -10,7 +10,6 @@
 //!   when authoring the map, and the natural seam for a future asset-file
 //!   loader (RON/GLTF) to replace.
 
-use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub mod day_night;
@@ -25,6 +24,8 @@ pub use terrain::{Terrain, TerrainAccess, TerrainSnapshot, terrain_file};
 pub use terrain_kind::TerrainKind;
 
 use crate::scene::AppState;
+
+pub use bof_simulation::physics::GameLayer;
 
 /// Authored uniform straight stair segment. Curved stairs are composed from
 /// adjacent one-step segments with independently oriented trigger volumes.
@@ -64,21 +65,6 @@ pub struct NonClimbable;
 /// turns the recorded surface into a footstep sound (§20).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Surface(pub crate::asset_pipeline::schema::SurfaceKind);
-
-/// Game-wide physics layers. Static world geometry spawns without a
-/// `CollisionLayers` component, which leaves it on `Default` (layer 0);
-/// movement actors declare membership in `Actor` (see
-/// `movement::bundles::KinematicActorBundle`). Physical contacts are
-/// unaffected — bodies still collide across layers. What layers buy us is
-/// *selective sensing*: a spatial query opts into what it can see via
-/// `SpatialQueryFilter::from_mask`, e.g. ledge sensing masks to `Default` so
-/// no actor reads another actor's capsule as a climbable wall.
-#[derive(PhysicsLayer, Default, Clone, Copy, Debug)]
-pub enum GameLayer {
-    #[default]
-    Default,
-    Actor,
-}
 
 impl Ladder {
     pub fn contains(&self, p: Vec3) -> bool {

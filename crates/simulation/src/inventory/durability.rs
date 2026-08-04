@@ -4,10 +4,11 @@
 //! bow shot or a charge would wear down the equipped melee weapon, because
 //! `attacker` is the same actor in all three paths.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::info;
 
-use crate::combat::motors::attack::HitImpactMessage;
-use crate::combat::weapon::WeaponProfile;
+use bof_domain::combat::messages::HitImpactMessage;
+use bof_domain::combat::weapon::WeaponProfile;
 
 use super::data::{WeaponBrokeMessage, WeaponDurability};
 
@@ -58,9 +59,10 @@ pub fn unequip_broken_weapons(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
+    use bevy_math::Vec3;
 
-    use crate::inventory::data::WeaponItem;
+    use bof_domain::inventory::WeaponItem;
 
     fn impact(attacker: Entity, target: Entity, melee: bool) -> HitImpactMessage {
         HitImpactMessage {

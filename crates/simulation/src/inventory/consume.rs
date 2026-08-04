@@ -2,12 +2,12 @@
 //! (`health::HealRequestMessage`), Inventory only decides which stack to
 //! spend.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
-use crate::health::HealRequestMessage;
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, InputControlledBy};
-use crate::movement::Player;
+use bof_domain::health::HealRequestMessage;
+use bof_domain::input::action::IntentAction;
+use bof_domain::input::frame::{ActiveActions, InputControlledBy};
+use bof_domain::movement::Player;
 
 use super::data::{ConsumeSlotRequestMessage, Inventory, InventoryInputCursor};
 
@@ -58,10 +58,10 @@ pub fn read_consume_slot_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
-    use crate::input::frame::LOCAL_INPUT_SOURCE;
-    use crate::inventory::data::ItemKind;
+    use bof_domain::input::frame::LOCAL_INPUT_SOURCE;
+    use bof_domain::inventory::{ItemKind, MaterialKind, WeaponItem};
 
     #[test]
     fn use_item_consumes_food_and_requests_a_heal() {
@@ -136,7 +136,7 @@ mod tests {
         world.init_resource::<Messages<HealRequestMessage>>();
         let mut inventory = Inventory::default();
         inventory
-            .try_add(ItemKind::Material(crate::inventory::MaterialKind::Wood), 2)
+            .try_add(ItemKind::Material(MaterialKind::Wood), 2)
             .unwrap();
         inventory
             .try_add(
@@ -177,10 +177,7 @@ mod tests {
         world.init_resource::<Messages<HealRequestMessage>>();
         let mut inventory = Inventory::default();
         inventory
-            .try_add(
-                ItemKind::Weapon(crate::inventory::WeaponItem::LOOTABLE_CLUB),
-                1,
-            )
+            .try_add(ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB), 1)
             .unwrap();
         let actor = world.spawn(inventory).id();
         world.write_message(ConsumeSlotRequestMessage { actor, slot: 0 });

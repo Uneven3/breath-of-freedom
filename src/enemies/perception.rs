@@ -18,6 +18,8 @@ use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, ActorId, BodyVelocity};
 use crate::world::GameLayer;
 
+pub use bof_domain::enemies::perception::{Awareness, DirectThreatMessage};
+
 /// Marks an actor enemies can notice. Owned by Perception so spawners opt
 /// in explicitly (player today; horse, animals, allies as the game grows)
 /// instead of `Player` doubling as a perception proxy — a faction component
@@ -62,28 +64,6 @@ impl Perception {
         hearing_range: 9.0,
         wall_muffle: 0.5,
     };
-}
-
-/// How aware this enemy is of a threat, `0.0..=1.0`. Written only by
-/// `perceive`. This is the contract Combat reads for the stealth rules: a
-/// non-alerted enemy takes bonus damage from arrows and sneak strikes; an
-/// alerted one has "full threat" and cannot be sneak-struck.
-#[derive(Component, Default)]
-pub struct Awareness(pub f32);
-
-impl Awareness {
-    /// At or above this the enemy is fully alerted (full threat, chases).
-    pub const ALERTED: f32 = 1.0;
-    /// At or above this the enemy is suspicious (investigates the stimulus).
-    pub const SUSPICIOUS: f32 = 0.35;
-
-    pub fn is_alerted(&self) -> bool {
-        self.0 >= Self::ALERTED
-    }
-
-    pub fn is_suspicious(&self) -> bool {
-        self.0 >= Self::SUSPICIOUS
-    }
 }
 
 /// Output of `perceive`, per enemy. `in_sight` holds the target currently in
@@ -276,17 +256,6 @@ fn stable_target_order(origin: Vec3, a: (ActorId, Vec3), b: (ActorId, Vec3)) -> 
         .then_with(|| a.1.y.total_cmp(&b.1.y))
         .then_with(|| a.1.z.total_cmp(&b.1.z))
         .then_with(|| a.0.cmp(&b.0))
-}
-
-/// An unmistakable threat (taking damage) aimed at one enemy: jumps its
-/// meter straight to `ALERTED` and marks where it came from, bypassing the
-/// senses. Owned by Enemies; Health/Combat emit it when they exist (the
-/// receiving system owns the message type, same pattern as
-/// `health::DamageRequestMessage`).
-#[derive(Message, Debug, Clone, Copy)]
-pub struct DirectThreatMessage {
-    pub enemy: Entity,
-    pub threat_position: Vec3,
 }
 
 /// Runs between `perceive` and `brain::decide`, so a hit this tick alerts

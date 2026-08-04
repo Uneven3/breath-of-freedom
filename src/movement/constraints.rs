@@ -11,6 +11,8 @@ use bevy::prelude::*;
 
 use super::Actor;
 
+pub use bof_domain::movement::constraints::BodyImpulseMessage;
+
 /// A semantic restriction on an actor's locomotion. Combat emits these from
 /// its committed states (see `docs/ARCHITECTURE.md`);
 /// consumed one tick later, in Movement's frame (~16 ms, accepted).
@@ -29,16 +31,6 @@ pub enum LocomotionConstraintMessage {
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct LocomotionConstraintFacts {
     pub forbid_sprint: bool,
-}
-
-/// A one-shot velocity impulse on an actor's body (knockback on hit).
-/// Movement owns the type (receiver owns the contract); Combat emits it. The
-/// impulse adds to `BodyVelocity` once and then the active motor's normal
-/// friction/acceleration reabsorbs it — a shove, not a state.
-#[derive(Message, Debug, Clone, Copy)]
-pub struct BodyImpulseMessage {
-    pub entity: Entity,
-    pub impulse: Vec3,
 }
 
 /// Runs alongside `apply_locomotion_constraints`, before motors tick.

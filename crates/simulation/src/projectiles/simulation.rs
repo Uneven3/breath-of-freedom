@@ -1,15 +1,19 @@
 //! Fixed-step arrow pool, ballistic flight and authoritative hit outcomes.
 
-use avian3d::prelude::*;
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
+use avian3d::prelude::{CollisionLayers, SpatialQuery};
+use bevy_ecs::{name::Name, prelude::*, system::SystemParam};
+use bevy_log::{info, warn};
+use bevy_math::{Dir3, Vec3};
+use bevy_time::Time;
+use bevy_transform::components::Transform;
 
 use super::data::*;
-use crate::combat::motors::attack::HitImpactMessage;
-use crate::enemies::perception::{Awareness, DirectThreatMessage};
-use crate::movement::GRAVITY;
-use crate::movement::constraints::BodyImpulseMessage;
-use crate::world::GameLayer;
+use crate::physics::GameLayer;
+use bof_domain::combat::messages::HitImpactMessage;
+use bof_domain::enemies::perception::{Awareness, DirectThreatMessage};
+use bof_domain::health::{DamageRequestMessage, HostileInteractionImmunity};
+use bof_domain::movement::GRAVITY;
+use bof_domain::movement::constraints::BodyImpulseMessage;
 
 const TRAIL_EMIT_INTERVAL: f32 = 0.016;
 
@@ -63,7 +67,7 @@ type ArrowQuery<'a> = (&'a mut Arrow, &'a mut ProjectileState, &'a mut Transform
 
 #[derive(SystemParam)]
 pub(super) struct HitOutcomes<'w> {
-    damage: MessageWriter<'w, crate::health::DamageRequestMessage>,
+    damage: MessageWriter<'w, DamageRequestMessage>,
     impacts: MessageWriter<'w, HitImpactMessage>,
     threats: MessageWriter<'w, DirectThreatMessage>,
     impulses: MessageWriter<'w, BodyImpulseMessage>,
@@ -79,7 +83,7 @@ pub(super) struct BallisticWorld<'w, 's> {
         (
             Option<&'static Awareness>,
             Option<&'static Name>,
-            Option<&'static crate::health::HostileInteractionImmunity>,
+            Option<&'static HostileInteractionImmunity>,
         ),
     >,
 }
@@ -163,7 +167,7 @@ fn resolve_arrow_hit(
     targets: &Query<(
         Option<&Awareness>,
         Option<&Name>,
-        Option<&crate::health::HostileInteractionImmunity>,
+        Option<&HostileInteractionImmunity>,
     )>,
     outcomes: &mut HitOutcomes,
 ) {
@@ -179,7 +183,7 @@ fn resolve_arrow_hit(
             name.map(Name::as_str).unwrap_or("target")
         );
     }
-    outcomes.damage.write(crate::health::DamageRequestMessage {
+    outcomes.damage.write(DamageRequestMessage {
         target,
         amount: damage,
         source: Some(arrow.shooter),
@@ -206,7 +210,7 @@ fn resolve_arrow_hit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[derive(Component)]
     struct TestTarget;
@@ -216,7 +220,7 @@ mod tests {
         targets: Query<(
             Option<&Awareness>,
             Option<&Name>,
-            Option<&crate::health::HostileInteractionImmunity>,
+            Option<&HostileInteractionImmunity>,
         )>,
         target: Single<Entity, With<TestTarget>>,
         mut outcomes: HitOutcomes,
@@ -266,7 +270,7 @@ mod tests {
     #[test]
     fn hostile_immunity_blocks_all_arrow_outcomes() {
         let mut world = World::new();
-        world.init_resource::<Messages<crate::health::DamageRequestMessage>>();
+        world.init_resource::<Messages<DamageRequestMessage>>();
         world.init_resource::<Messages<HitImpactMessage>>();
         world.init_resource::<Messages<DirectThreatMessage>>();
         world.init_resource::<Messages<BodyImpulseMessage>>();
@@ -277,16 +281,13 @@ mod tests {
         arrow.damage = 10.0;
         arrow.remaining = 1.0;
         world.spawn(arrow);
-        world.spawn((
-            TestTarget,
-            crate::health::HostileInteractionImmunity(shooter),
-        ));
+        world.spawn((TestTarget, HostileInteractionImmunity(shooter)));
 
         world.run_system_once(resolve_test_arrow).unwrap();
 
         assert!(
             world
-                .resource::<Messages<crate::health::DamageRequestMessage>>()
+                .resource::<Messages<DamageRequestMessage>>()
                 .is_empty()
         );
         assert!(world.resource::<Messages<HitImpactMessage>>().is_empty());

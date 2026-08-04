@@ -1,7 +1,8 @@
 //! Pure projectile state, messages and schedule contracts.
 
-use avian3d::prelude::*;
-use bevy::prelude::*;
+use avian3d::prelude::SpatialQueryFilter;
+use bevy_ecs::prelude::*;
+use bevy_math::Vec3;
 
 pub(super) const ARROW_STEALTH_MULT: f32 = 4.0;
 pub(super) const ARROW_KNOCKBACK: f32 = 2.5;

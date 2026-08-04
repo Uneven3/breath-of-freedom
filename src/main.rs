@@ -45,10 +45,27 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SimulationPlugin)
-        // Temporary cross-crate ordering until Projectiles moves in 6.3.
         .configure_sets(
             FixedUpdate,
-            health::HealthSet::Apply.after(projectiles::ProjectilesSet::Simulate),
+            (
+                combat::CombatSet::EmitConstraints,
+                projectiles::ProjectilesSet::Simulate,
+                health::HealthSet::Apply,
+            )
+                .chain(),
+        )
+        // Temporary cross-crate ordering until Movement and Combat migrate.
+        .configure_sets(
+            FixedUpdate,
+            inventory::InventorySet::Collect.after(movement::MovementSet::SyncAttachments),
+        )
+        .configure_sets(
+            FixedUpdate,
+            inventory::InventorySet::Consume.before(combat::CombatSet::ApplyContext),
+        )
+        .configure_sets(
+            FixedUpdate,
+            inventory::InventorySet::Durability.after(combat::CombatSet::EmitConstraints),
         )
         // Collider-wireframe rendering; starts disabled, toggled with F1
         // (see `debug.rs`).

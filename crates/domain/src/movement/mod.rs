@@ -3,6 +3,7 @@ use bevy_math::Vec3;
 
 pub mod abilities;
 pub mod body;
+pub mod constraints;
 pub mod diag;
 pub mod facing;
 pub mod facts;
@@ -12,6 +13,8 @@ pub mod proposal;
 pub mod sensing;
 pub mod stamina;
 pub mod state;
+
+pub const GRAVITY: f32 = 9.8;
 
 /// Marker for the local player entity.
 #[derive(Component)]

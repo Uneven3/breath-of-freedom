@@ -1,12 +1,12 @@
 //! Equip: the swap contract `combat::weapon` already anticipates — "equip
 //! inserts/retires `WeaponProfile`; the component IS the armed boolean."
 
-use bevy::ecs::message::MessageCursor;
-use bevy::prelude::*;
+use bevy_ecs::{message::MessageCursor, prelude::*};
+use bevy_log::{info, warn};
 
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, InputControlledBy};
-use crate::movement::Player;
+use bof_domain::input::action::IntentAction;
+use bof_domain::input::frame::{ActiveActions, InputControlledBy};
+use bof_domain::movement::Player;
 
 use super::data::{
     EquipRequestMessage, EquipSlotRequestMessage, Inventory, InventoryInputCursor, ItemKind,
@@ -115,11 +115,11 @@ pub fn read_cycle_weapon_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
-    use crate::combat::weapon::WeaponProfile;
-    use crate::input::frame::LOCAL_INPUT_SOURCE;
-    use crate::inventory::data::WeaponItem;
+    use bof_domain::combat::weapon::WeaponProfile;
+    use bof_domain::input::frame::LOCAL_INPUT_SOURCE;
+    use bof_domain::inventory::{MaterialKind, WeaponItem};
 
     #[test]
     fn equipping_an_unarmed_actor_inserts_profile_and_durability() {
@@ -304,7 +304,7 @@ mod tests {
         world.init_resource::<Messages<EquipRequestMessage>>();
         let mut inventory = Inventory::default();
         inventory
-            .try_add(ItemKind::Material(crate::inventory::MaterialKind::Wood), 2)
+            .try_add(ItemKind::Material(MaterialKind::Wood), 2)
             .unwrap();
         inventory
             .try_add(ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB), 1)
@@ -337,7 +337,7 @@ mod tests {
         world.init_resource::<Messages<EquipRequestMessage>>();
         let mut inventory = Inventory::default();
         inventory
-            .try_add(ItemKind::Material(crate::inventory::MaterialKind::Wood), 2)
+            .try_add(ItemKind::Material(MaterialKind::Wood), 2)
             .unwrap();
         let actor = world.spawn(inventory).id();
         world.write_message(EquipSlotRequestMessage { actor, slot: 0 });

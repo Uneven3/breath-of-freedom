@@ -42,10 +42,7 @@ mod spike;
 use proposal::ProposalBuffer;
 use state::LocomotionState;
 
-pub use bof_domain::movement::{Actor, ActorId, BodyVelocity, Player};
-
-/// World gravity magnitude (Earth gravity, 9.8 m/s²).
-pub const GRAVITY: f32 = 9.8;
+pub use bof_domain::movement::{Actor, ActorId, BodyVelocity, GRAVITY, Player};
 
 /// Ordered phases of the Broker pipeline within `FixedUpdate`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]

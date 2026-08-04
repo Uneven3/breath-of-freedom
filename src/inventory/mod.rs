@@ -3,7 +3,6 @@
 pub mod data;
 mod pickup;
 
-pub use bof_simulation::inventory::{InventoryPlugin, InventorySet};
 pub use data::{
     ConsumeSlotRequestMessage, EquipSlotRequestMessage, Inventory, ItemKind, ItemStack,
     MaterialKind, PickupMode, WeaponDurability, WeaponItem,

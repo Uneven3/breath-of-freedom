@@ -7,8 +7,8 @@
 
 use bevy::prelude::*;
 
-use crate::combat::motors::attack::ComboLocal;
-use crate::combat::state::CombatState;
+use bof_simulation::combat::motors::attack::ComboLocal;
+use bof_simulation::combat::state::CombatState;
 
 const SWING_VFX_SECS: f32 = 0.16;
 

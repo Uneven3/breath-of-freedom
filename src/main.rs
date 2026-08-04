@@ -17,21 +17,14 @@
 
 mod asset_pipeline;
 mod camera;
-mod combat;
 mod debug;
 mod editor;
-mod enemies;
-mod health;
 mod input;
-mod interaction;
 mod inventory;
-mod mounts;
 mod perf;
 mod presentation;
-mod projectiles;
 mod scene;
 mod sfx;
-mod time_control;
 mod visuals;
 mod world;
 
@@ -43,29 +36,6 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SimulationPlugin)
-        .configure_sets(
-            FixedUpdate,
-            (
-                combat::CombatSet::EmitConstraints,
-                projectiles::ProjectilesSet::Simulate,
-                health::HealthSet::Apply,
-            )
-                .chain(),
-        )
-        // Temporary cross-crate ordering until Movement and Combat migrate.
-        .configure_sets(
-            FixedUpdate,
-            inventory::InventorySet::Collect
-                .after(bof_simulation::movement::MovementSet::SyncAttachments),
-        )
-        .configure_sets(
-            FixedUpdate,
-            inventory::InventorySet::Consume.before(combat::CombatSet::ApplyContext),
-        )
-        .configure_sets(
-            FixedUpdate,
-            inventory::InventorySet::Durability.after(combat::CombatSet::EmitConstraints),
-        )
         // Collider-wireframe rendering; starts disabled, toggled with F1
         // (see `debug.rs`).
         .add_plugins(PhysicsDebugPlugin)
@@ -73,25 +43,12 @@ fn main() {
         .add_plugins((
             world::WorldPlugin,
             input::InputPlugin,
-            bof_simulation::movement::MovementPlugin,
-            mounts::MountsPlugin,
-            combat::CombatPlugin,
-            projectiles::ProjectilesPlugin,
-            health::HealthPlugin,
-            inventory::InventoryPlugin,
-            enemies::EnemiesPlugin,
-            bof_simulation::player::PlayerPlugin,
             camera::CameraPlugin,
             visuals::VisualsPlugin,
             debug::DebugPlugin,
             presentation::PresentationPlugin,
             sfx::SfxPlugin,
-        ))
-        // Separate call: `add_plugins` tuples cap at 15 elements.
-        .add_plugins((
             perf::PerfPlugin,
-            interaction::InteractionPlugin,
-            time_control::TimeControlPlugin,
             editor::EditorPlugin,
             scene::ScenePlugin,
         ))

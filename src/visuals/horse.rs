@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, VisualOf};
 use crate::asset_pipeline::MaterialPalette;
-use crate::mounts::data::Horse;
+use bof_simulation::mounts::data::Horse;
 use bof_simulation::movement::body::BodyDimensions;
 
 #[derive(Component)]

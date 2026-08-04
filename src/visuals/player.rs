@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, VisualOf};
 use crate::asset_pipeline::MaterialPalette;
-use crate::combat::state::CombatState;
+use bof_simulation::combat::state::CombatState;
 use bof_simulation::movement::Player;
 use bof_simulation::movement::body::BodyDimensions;
 use bof_simulation::movement::motors::sneak::Crouched;
@@ -66,10 +66,10 @@ pub(super) fn spawn_visual(
                         BowVisualRoot,
                         Name::new("BowVisualRoot"),
                         Visibility::Hidden,
-                        Transform::from_translation(crate::combat::motors::aim::BOW_SOCKET_LOCAL)
-                            .with_rotation(
-                                Quat::from_rotation_y(0.12) * Quat::from_rotation_z(-0.18),
-                            ),
+                        Transform::from_translation(
+                            bof_simulation::combat::motors::aim::BOW_SOCKET_LOCAL,
+                        )
+                        .with_rotation(Quat::from_rotation_y(0.12) * Quat::from_rotation_z(-0.18)),
                     ))
                     .with_children(|bow_parent| {
                         let wood_material = palette.handle("Wood");
@@ -183,7 +183,13 @@ pub(super) fn interpolate_visual(
 
 #[allow(clippy::type_complexity)]
 pub(super) fn animate_bow_visual(
-    player: Single<(&CombatState, &crate::combat::motors::aim::DrawStrength), With<Player>>,
+    player: Single<
+        (
+            &CombatState,
+            &bof_simulation::combat::motors::aim::DrawStrength,
+        ),
+        With<Player>,
+    >,
     mut bow_root: Query<(&mut Visibility, &Children), With<BowVisualRoot>>,
     mut arrow: Query<
         (&mut Visibility, &mut Transform),

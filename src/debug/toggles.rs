@@ -14,9 +14,9 @@ use super::channel::{
     DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle, HudSectionToggle,
 };
 use super::snapshot::HudVisibility;
-use crate::enemies::BokoboSpawnRequest;
-use crate::mounts::data::HorseSpawnRequest;
 use crate::world::day_night::TimeOfDayRequest;
+use bof_simulation::enemies::BokoboSpawnRequest;
+use bof_simulation::mounts::data::HorseSpawnRequest;
 use bof_simulation::movement::diag::CastTrace;
 
 pub(super) fn apply_initial_toggles(

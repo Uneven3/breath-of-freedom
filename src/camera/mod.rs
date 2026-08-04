@@ -12,7 +12,7 @@ use crate::world::day_night::{TimeOfDay, atmosphere_color};
 use bof_simulation::movement::Player;
 use bof_simulation::movement::state::LocomotionState;
 
-use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
+use bof_simulation::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
 mod crosshair;
 mod data;
@@ -169,8 +169,8 @@ fn follow_player(
             Entity,
             &Transform,
             &ControlOrientation,
-            Option<&crate::combat::state::CombatState>,
-            Option<&crate::combat::motors::aim::DrawStrength>,
+            Option<&bof_simulation::combat::state::CombatState>,
+            Option<&bof_simulation::combat::motors::aim::DrawStrength>,
             Option<&bof_simulation::movement::facing::FacingSource>,
         ),
         FollowFilter,
@@ -203,7 +203,7 @@ fn follow_player(
     // Blend toward the aim camera while the bow is drawn.
     let aiming = matches!(
         combat_state,
-        Some(crate::combat::state::CombatState::Aiming)
+        Some(bof_simulation::combat::state::CombatState::Aiming)
     );
     let aim_target = if aiming { 1.0 } else { 0.0 };
     rig.aim_blend

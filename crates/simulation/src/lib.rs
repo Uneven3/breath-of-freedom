@@ -14,7 +14,8 @@
 )]
 
 use avian3d::prelude::PhysicsPlugins;
-use bevy_app::{App, Plugin};
+use bevy_app::{App, FixedUpdate, Plugin};
+use bevy_ecs::prelude::*;
 
 pub mod combat;
 pub mod enemies;
@@ -29,12 +30,65 @@ pub mod projectiles;
 pub mod time_control;
 pub mod world;
 
-/// Installs the authoritative physics and, progressively, gameplay systems.
+/// Installs the authoritative simulation: physics, every gameplay domain, and
+/// the ordering between them.
+///
+/// The order below is the part that used to live in the app's `main`, where it
+/// read as five unexplained `configure_sets` calls. It belongs here: only this
+/// crate knows why constraints must be emitted before projectiles advance and
+/// both before damage lands. What stays composition — which scene builds what,
+/// and when — is still the app's.
 pub struct SimulationPlugin;
 
 impl Plugin for SimulationPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(PhysicsPlugins::default());
+        // The intent frame has to exist even when nobody fills it: headless
+        // runs have no input layer, and a missing resource is a panic, not an
+        // idle actor. The app's `input` is the only writer.
+        app.init_resource::<bof_domain::input::frame::ActiveActions>();
+
+        app.add_plugins((
+            world::WorldPlugin,
+            movement::MovementPlugin,
+            mounts::MountsPlugin,
+            combat::CombatPlugin,
+            projectiles::ProjectilesPlugin,
+            health::HealthPlugin,
+            inventory::InventoryPlugin,
+            enemies::EnemiesPlugin,
+            player::PlayerPlugin,
+            interaction::InteractionPlugin,
+            time_control::TimeControlPlugin,
+        ));
+
+        // Damage is resolved once, at the end: a constraint is emitted, the
+        // projectile it may have launched advances, and only then health
+        // applies what landed.
+        app.configure_sets(
+            FixedUpdate,
+            (
+                combat::CombatSet::EmitConstraints,
+                projectiles::ProjectilesSet::Simulate,
+                health::HealthSet::Apply,
+            )
+                .chain(),
+        );
+        // The inventory touches three domains, so it declares itself against
+        // each: it collects after bodies have moved, consumes before combat
+        // reads the loadout, and spends durability after combat committed.
+        app.configure_sets(
+            FixedUpdate,
+            inventory::InventorySet::Collect.after(movement::MovementSet::SyncAttachments),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            inventory::InventorySet::Consume.before(combat::CombatSet::ApplyContext),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            inventory::InventorySet::Durability.after(combat::CombatSet::EmitConstraints),
+        );
     }
 }
 

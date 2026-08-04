@@ -13,16 +13,16 @@ use bevy::window::PrimaryWindow;
 
 use super::snapshot::{DebugSnapshot, Field, SectionId};
 use super::{DebugConfig, SimTick};
-use crate::combat::motors::aim::DrawStrength;
-use crate::combat::state::CombatState;
-use crate::health::Health;
 use crate::inventory::{Inventory, ItemKind, WeaponDurability};
-use crate::mounts::data::{Horse, HorseCharge, RiddenBy};
 use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
 use crate::visuals::DiagnosticViewState;
 use crate::visuals::terrain_material::TerrainMaterial;
 use crate::world::day_night::TimeOfDay;
+use bof_simulation::combat::motors::aim::DrawStrength;
+use bof_simulation::combat::state::CombatState;
+use bof_simulation::health::Health;
+use bof_simulation::mounts::data::{Horse, HorseCharge, RiddenBy};
 use bof_simulation::movement::facing::FacingSource;
 use bof_simulation::movement::facts::{
     BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts,

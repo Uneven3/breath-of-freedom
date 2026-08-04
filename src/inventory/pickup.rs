@@ -3,9 +3,9 @@
 use bevy::prelude::*;
 
 use crate::asset_pipeline::MaterialPalette;
-use crate::interaction::{Interactable, InteractionKind};
 use crate::inventory::data::WorldItem;
 use crate::inventory::{ItemKind, ItemStack, PickupMode};
+use bof_simulation::interaction::{Interactable, InteractionKind};
 
 const INTERACT_PICKUP_RANGE: f32 = 2.5;
 

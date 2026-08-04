@@ -164,7 +164,7 @@ pub(super) fn spawn_practice_target(
             DespawnOnExit(scene),
             Name::new(name.to_string()),
             PracticeTarget,
-            crate::health::Health::new(PRACTICE_TARGET_HP),
+            bof_simulation::health::Health::new(PRACTICE_TARGET_HP),
             Mesh3d(meshes.add(Cuboid::new(
                 PRACTICE_TARGET_DIMS.x,
                 PRACTICE_TARGET_DIMS.y,

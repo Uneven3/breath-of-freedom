@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 
 use super::VisualOf;
-use crate::projectiles::{ArrowTrailMessage, ProjectileState};
+use bof_simulation::projectiles::{ArrowTrailMessage, ProjectileState};
 
 const TRAIL_TTL_SECS: f32 = 0.28;
 const TRAIL_PARTICLE_SIZE: f32 = 0.04;

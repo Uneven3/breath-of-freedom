@@ -51,7 +51,7 @@ Por retorno sobre esfuerzo, no por prolijidad:
 | 3 | Lints ✅ | §8, §9, §13 | cerrada |
 | 4 | Acceso al terreno ✅ | escala del mundo | cerrada |
 | 5 | `bof_domain` ✅ | §19 como frontera | cerrada |
-| 6 | `bof_simulation` | §20, C2 definitivo | semanas |
+| 6 | `bof_simulation` ✅ | §20, C2 definitivo | cerrada |
 | 7 | `bof_presentation` + app | §4 | semanas |
 
 Las fases 1-4 no tocan la estructura y cada una termina jugable (§10) con
@@ -200,7 +200,7 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **en curso; 6.1–6.7 cerradas el 2026-08-04**. Cada fila termina
+Estado: **cerrada el 2026-08-04**. Cada fila termina
 compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
@@ -212,7 +212,7 @@ compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 | 6.5 ✅ | Movement: motores, bundles, brain/facing/probe y arbitración. |
 | 6.6 ✅ | `combat`, `enemies`, `mounts`; los gates de escena van a `scene`. |
 | 6.7 ✅ | `player`, `world` (terreno, tipos, reloj) y los sensores; `input` se queda. |
-| 6.8 | Cableado raíz, replay headless, retiro de shims/test redundante y checkpoint. |
+| 6.8 ✅ | Cableado raíz y retiro de shims. El test de frontera **se queda**. |
 
 Avian usará `default-features = false` con `3d`, `f32`, `parry-f32`, `parallel`
 y `xpbd_joints`: `debug-plugin` pasa a presentación y `collider-from-mesh` no se
@@ -235,6 +235,15 @@ que presentación lo obtiene del dato y no de simulación (§20); y `JumpLocal`
 expone `grant_coyote` para el test de `mounts`, que vuelve a cerrarse en 6.6.
 El crate headless no tiene el prelude de bevy, así que el azúcar `default()` se
 escribe `Default::default()` — no se agregó `bevy_utils` por eso.
+
+**6.8 puso el cableado donde se explica.** Los cinco `configure_sets` que
+vivían en `main` sin decir por qué ahora están en `SimulationPlugin`, que es
+quien sabe que una restricción se emite antes de que el proyectil avance y ambos
+antes de que el daño aterrice. `main` quedó en 10 plugins de presentación y
+composición más `SimulationPlugin`. El smoke headless dejó de levantar una
+esfera: levanta **el juego entero sin ventana**, que es la prueba que fase 6
+existía para conseguir. `ActiveActions` se inicializa en simulación aunque su
+único escritor sea la app — un recurso ausente es un panic, no un actor quieto.
 
 **6.7 cambió dos cosas del plan, con razón.** (a) **`input` se queda en la app.**
 Este reparto se escribió antes de elegir hermanas y antes de ver que `input`

@@ -246,7 +246,10 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
-6.5, 6.6 y 6.7 cerraron: **el juego entero corre sin pantalla.** `bof_simulation`
+**Fase 6 cerrada: el juego entero corre sin pantalla.** El smoke headless ya no
+levanta una esfera con gravedad, levanta `SimulationPlugin` completo. `src/`
+quedó en 14.952 LOC de presentación y composición contra 18.910 de simulación, y
+`main` en diez plugins más uno. `bof_simulation`
 posee locomoción (13 motores, sensores y arbitración), combate, enemigos,
 monturas, el player, el terreno y el reloj del mundo; el replay determinista de
 120 ticks corre headless dentro del crate. En `src/` quedan presentación,
@@ -262,14 +265,20 @@ Tres decisiones que se apartaron del plan escrito, con su razón:
 - **El reloj sí cruzó, la luz no.** `advance_time` escribe cada tick y
   presentación sólo lee (§20).
 
-Jugado el 2026-08-04 en la caja Terreno (antes de 6.6/6.7): arranque y cierre
-limpios, esculpido y guardado repetidos, cero `error`/`panic`. **Salvedad:** ese
-checkpoint no ejercitó los motores a fondo, así que lo validado es que no rompen
-el juego, no el feeling. **6.7 no está jugada todavía** — mueve terreno, player
-y el ciclo de vida de escena, así que pide su propio checkpoint.
+**Checkpoint 6.5–6.7 cerrado (2026-08-04).** El usuario jugó Traversal, volvió
+al menú y entró a Terreno: locomoción bien, esculpido y guardado tres veces,
+cero `error`/`panic`. Ese cambio de escena es la prueba del paso de
+`DespawnOnExit` a `SceneScoped`: si el terreno de la primera escena hubiera
+sobrevivido, `TerrainAccess` —que exige cardinalidad única— habría fallado en el
+primer trazo. **Al leer el log, ojo**: sólo `sandbox.ron` existe en disco, y
+`spawn_terrain` únicamente loguea cuando encuentra archivo, así que una escena
+sin heightmap arranca plana **y en silencio** — la ausencia de línea no es
+ausencia de escena.
 
-1. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
-   checkpoint jugado; luego fase 7 (`bof_presentation` hermana).
+1. **CRATES fase 7:** `bof_presentation` hermana. Lo que la habilita ya está
+   hecho; lo que falta es que presentación deje de leer `bof_simulation`
+   (`ComboLocal::current_step` y los `bof_simulation::movement::*` que quedaron
+   apuntando al crate en vez de a domain).
 2. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 

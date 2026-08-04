@@ -3,8 +3,8 @@
 use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, VisualOf};
-use crate::enemies::Enemy;
-use crate::enemies::perception::Awareness;
+use bof_simulation::enemies::Enemy;
+use bof_simulation::enemies::perception::Awareness;
 use bof_simulation::movement::body::BodyDimensions;
 
 #[derive(Component)]

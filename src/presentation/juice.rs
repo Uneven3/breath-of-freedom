@@ -16,8 +16,8 @@
 use bevy::prelude::*;
 
 use crate::camera::CameraShake;
-use crate::combat::motors::attack::HitImpactMessage;
 use crate::visuals::VisualOf;
+use bof_simulation::combat::motors::attack::HitImpactMessage;
 use bof_simulation::movement::state::LocomotionState;
 use bof_simulation::movement::{Actor, Player};
 
@@ -413,7 +413,7 @@ fn fade_screen_flash(
 // ---------------------------------------------------------------------------
 
 fn bow_fire_feedback(
-    mut fired: MessageReader<crate::combat::motors::aim::BowFiredMessage>,
+    mut fired: MessageReader<bof_simulation::combat::motors::aim::BowFiredMessage>,
     player: Query<Entity, With<Player>>,
     mut shake: ResMut<CameraShake>,
 ) {
@@ -433,7 +433,7 @@ fn bow_fire_feedback(
 
 #[allow(clippy::type_complexity)]
 fn animate_crosshair_charge(
-    player: Single<&crate::combat::motors::aim::DrawStrength, With<Player>>,
+    player: Single<&bof_simulation::combat::motors::aim::DrawStrength, With<Player>>,
     rig: Single<&crate::camera::CameraRig>,
     mut ring: Single<&mut Node, With<crate::camera::CrosshairRing>>,
 ) {

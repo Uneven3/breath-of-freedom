@@ -8,9 +8,9 @@ use bevy::prelude::*;
 
 use super::DebugConfig;
 use crate::world::{Ladder, Stairs};
-use bof_simulation::movement::diag::CastTrace;
-use bof_simulation::movement::facts::{BodyContact, GroundFacts, StairsFacts};
-use bof_simulation::movement::{Actor, BodyVelocity};
+use bof_domain::movement::diag::CastTrace;
+use bof_domain::movement::facts::{BodyContact, GroundFacts, StairsFacts};
+use bof_domain::movement::{Actor, BodyVelocity};
 
 /// Draw the sensor casts recorded by the services this fixed tick, the
 /// stairs/ladder trigger volumes, and per-actor state arrows.
@@ -25,7 +25,7 @@ pub(super) fn draw_sensor_gizmos(
             &BodyVelocity,
             &GroundFacts,
             &BodyContact,
-            &bof_simulation::movement::body::BodyDimensions,
+            &bof_domain::movement::body::BodyDimensions,
             Option<&StairsFacts>,
         ),
         With<Actor>,

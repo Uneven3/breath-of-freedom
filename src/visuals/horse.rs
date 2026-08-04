@@ -5,8 +5,8 @@ use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, VisualOf};
 use crate::asset_pipeline::MaterialPalette;
-use bof_simulation::mounts::data::Horse;
-use bof_simulation::movement::body::BodyDimensions;
+use bof_domain::mounts::Horse;
+use bof_domain::movement::body::BodyDimensions;
 
 #[derive(Component)]
 pub(super) struct HorseVisual {

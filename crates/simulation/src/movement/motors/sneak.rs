@@ -37,11 +37,7 @@ pub struct SneakLock(pub bool);
 
 const SNEAK_RECHARGE_THRESHOLD: f32 = 20.0;
 
-/// Whether the crouch capsule is currently applied. Lets `sync_crouch_collider`
-/// rebuild the collider only when the desired crouch actually changes, and lets
-/// other ground motors (e.g. Stairs) read the physical form without recomputing it.
-#[derive(Component, Default)]
-pub struct Crouched(pub bool);
+pub use bof_domain::movement::state::Crouched;
 
 /// Reusable standing capsule for the overhead-clearance sensor. Keeping it on
 /// the actor avoids constructing collision geometry in `FixedUpdate`.

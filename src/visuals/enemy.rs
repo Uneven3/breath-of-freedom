@@ -3,9 +3,9 @@
 use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, VisualOf};
-use bof_simulation::enemies::Enemy;
-use bof_simulation::enemies::perception::Awareness;
-use bof_simulation::movement::body::BodyDimensions;
+use bof_domain::enemies::Enemy;
+use bof_domain::enemies::perception::Awareness;
+use bof_domain::movement::body::BodyDimensions;
 
 #[derive(Component)]
 pub(super) struct EnemyVisual {

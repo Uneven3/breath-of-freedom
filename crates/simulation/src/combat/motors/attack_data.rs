@@ -11,6 +11,9 @@ use crate::combat::weapon::{AttackStep, MAX_COMBO_STEPS, WeaponProfile};
 pub use bof_domain::combat::messages::HitImpactMessage;
 
 #[derive(Component, Default)]
+// Si un actor puede encadenar golpes, publica el arco del que esté activo: el
+// fact no puede faltarle a nadie que ataque.
+#[require(bof_domain::combat::state::SwingFacts)]
 pub struct ComboLocal {
     pub(crate) step: usize,
     pub(crate) phase_elapsed: f32,
@@ -22,11 +25,10 @@ pub struct ComboLocal {
 impl ComboLocal {
     /// The step this actor is swinging right now, or `None` between attacks.
     ///
-    /// Public because presentation draws the swing arc from `reach`/`arc_deg`
-    /// — a read, never a write (§20). In fase 7 this becomes a fact the motor
-    /// publishes, or `ComboLocal` itself moves to domain; presentation cannot
-    /// keep calling into simulation once the crates are siblings.
-    pub fn current_step(&self) -> Option<&AttackStep> {
+    /// Interno otra vez: presentación ya no llama acá, lee `SwingFacts`, que
+    /// [`publish_swing_facts`](super::attack::publish_swing_facts) escribe con
+    /// la geometría del golpe (§19).
+    pub(crate) fn current_step(&self) -> Option<&AttackStep> {
         self.snapshot.as_ref()?.step(self.step)
     }
 }

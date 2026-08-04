@@ -19,19 +19,17 @@ use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
 use crate::visuals::DiagnosticViewState;
 use crate::visuals::terrain_material::TerrainMaterial;
 use crate::world::day_night::TimeOfDay;
-use bof_simulation::combat::motors::aim::DrawStrength;
-use bof_simulation::combat::state::CombatState;
-use bof_simulation::health::Health;
-use bof_simulation::mounts::data::{Horse, HorseCharge, RiddenBy};
-use bof_simulation::movement::facing::FacingSource;
-use bof_simulation::movement::facts::{
-    BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts,
-};
-use bof_simulation::movement::intents::Intents;
-use bof_simulation::movement::probe_data::TraversalProbe;
-use bof_simulation::movement::stamina::Stamina;
-use bof_simulation::movement::state::LocomotionState;
-use bof_simulation::movement::{BodyVelocity, Player};
+use bof_domain::combat::state::CombatState;
+use bof_domain::combat::state::DrawStrength;
+use bof_domain::health::Health;
+use bof_domain::mounts::{Horse, HorseCharge, RiddenBy};
+use bof_domain::movement::facing::FacingSource;
+use bof_domain::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
+use bof_domain::movement::intents::Intents;
+use bof_domain::movement::probe_data::TraversalProbe;
+use bof_domain::movement::stamina::Stamina;
+use bof_domain::movement::state::LocomotionState;
+use bof_domain::movement::{BodyVelocity, Player};
 
 // Each section has its own focused producer (§1): a system reads exactly the
 // components its slot needs and writes only that slot (§7). Adding a debug datum

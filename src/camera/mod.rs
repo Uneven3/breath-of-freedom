@@ -9,10 +9,10 @@ use bevy::prelude::*;
 use crate::input::frame::ControlOrientation;
 use crate::visuals::PlayerVisual;
 use crate::world::day_night::{TimeOfDay, atmosphere_color};
-use bof_simulation::movement::Player;
-use bof_simulation::movement::state::LocomotionState;
+use bof_domain::movement::Player;
+use bof_domain::movement::state::LocomotionState;
 
-use bof_simulation::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
+use bof_domain::combat::state::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
 mod crosshair;
 mod data;
@@ -169,9 +169,9 @@ fn follow_player(
             Entity,
             &Transform,
             &ControlOrientation,
-            Option<&bof_simulation::combat::state::CombatState>,
-            Option<&bof_simulation::combat::motors::aim::DrawStrength>,
-            Option<&bof_simulation::movement::facing::FacingSource>,
+            Option<&bof_domain::combat::state::CombatState>,
+            Option<&bof_domain::combat::state::DrawStrength>,
+            Option<&bof_domain::movement::facing::FacingSource>,
         ),
         FollowFilter,
     >,
@@ -203,7 +203,7 @@ fn follow_player(
     // Blend toward the aim camera while the bow is drawn.
     let aiming = matches!(
         combat_state,
-        Some(bof_simulation::combat::state::CombatState::Aiming)
+        Some(bof_domain::combat::state::CombatState::Aiming)
     );
     let aim_target = if aiming { 1.0 } else { 0.0 };
     rig.aim_blend
@@ -233,7 +233,7 @@ fn follow_player(
     // so releasing eases back out instead of snapping to wherever the mouse
     // drifted. Pitch stays player-controlled.
     let lock_target_pos = match facing {
-        Some(bof_simulation::movement::facing::FacingSource::LockOn(target)) => {
+        Some(bof_domain::movement::facing::FacingSource::LockOn(target)) => {
             targets.get(*target).ok().map(|t| t.translation)
         }
         _ => None,

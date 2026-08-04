@@ -29,6 +29,7 @@ use bof_domain::input::frame::ControlOrientation;
 
 pub use bof_domain::combat::messages::BowFiredMessage;
 
+pub use bof_domain::combat::state::BOW_SOCKET_LOCAL;
 /// Aim shoulder pivot the crosshair ray passes through, owned by Combat
 /// (the aim line is simulation — §20). `camera.rs` imports both so the
 /// aim-mode camera orbit matches this ray exactly: pivot height over the
@@ -38,13 +39,7 @@ pub use bof_domain::combat::messages::BowFiredMessage;
 /// Keeping this close to `BOW_SOCKET_LOCAL` keeps the convergence between
 /// the crosshair line and the arrow's actual path shallow — a large gap
 /// makes arrows fly visibly diagonal and clip cover the camera sees over.
-pub const AIM_PIVOT_HEIGHT: f32 = 0.7;
-pub const AIM_SHOULDER_OFFSET: f32 = 0.72;
-/// Bow socket relative to the body (shoulder level — where a drawn bow is
-/// held — slightly right and forward). The projectile origin is simulation
-/// (§20); `visuals.rs` places the bow mesh at this same offset so the arrow
-/// visibly leaves the bow.
-pub const BOW_SOCKET_LOCAL: Vec3 = Vec3::new(0.35, 0.4, -0.55);
+pub use bof_domain::combat::state::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 /// Forward nudge so the arrow doesn't spawn intersecting the body capsule.
 const ARROW_MUZZLE_FORWARD: f32 = 0.3;
 /// Max distance of the crosshair aim ray; with no hit inside this range the
@@ -63,20 +58,7 @@ const DRAW_STAMINA_DRAIN_PER_SEC: f32 = 14.0;
 /// Delay (seconds) after firing before you can draw or shoot again.
 const RELOAD_COOLDOWN_SECS: f32 = 0.6;
 
-/// Per-actor draw charge. Resets when leaving `Aiming`. Presentation reads
-/// this to contract the crosshair, tint the bow, etc.
-#[derive(Component, Default)]
-pub struct DrawStrength {
-    /// 0.0 = uncharged, 1.0 = full draw.
-    pub factor: f32,
-    /// Whether the player is actively holding the attack button to charge.
-    pub charging: bool,
-    /// Delay after firing before you can notch and pull another arrow.
-    pub cooldown: f32,
-    /// Effective tuning captured on the first charging tick. Context changes
-    /// cannot retune a draw already in progress.
-    pub(crate) tuning: Option<BowProfile>,
-}
+pub use bof_domain::combat::state::DrawStrength;
 
 /// Per-actor deterministic stream for bow spread.
 ///

@@ -63,18 +63,7 @@ use state::LocomotionState;
 
 pub use bof_domain::movement::{Actor, ActorId, BodyVelocity, GRAVITY, Player};
 
-/// Ordered phases of the movement broker within `FixedUpdate`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MovementSet {
-    ApplyExternal,
-    ReadIntents,
-    ControlRedirect,
-    SenseWorld,
-    GatherProposals,
-    Arbitrate,
-    TickActiveMotor,
-    SyncAttachments,
-}
+pub use bof_domain::movement::MovementSet;
 
 /// Installs scheduling and services that are independent from concrete motors.
 pub struct MovementInfrastructurePlugin;

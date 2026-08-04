@@ -261,3 +261,37 @@ fn the_app_installs_simulation_only_through_its_root_plugin() {
          y Bevy panickea al arrancar por plugin duplicado: {offenders:#?}"
     );
 }
+
+/// Los módulos de presentación: dibujan, oyen y muestran, pero no simulan.
+const PRESENTATION: &[&str] = &[
+    "src/camera/",
+    "src/debug/",
+    "src/presentation/",
+    "src/sfx/",
+    "src/visuals/",
+];
+
+/// §20 con el grafo de crates hermanas: presentación sólo ve `bof_domain`, que
+/// es dato puro, así que **leer es lo único que puede hacer**.
+///
+/// Mientras `bof_presentation` no sea un crate propio, Cargo no lo cobra: los
+/// módulos viven en el binario, que sí ve la simulación. Este test ocupa ese
+/// lugar. Medido el 2026-08-04, presentación ya cumplía la ley a mano — cero
+/// `&mut` sobre componentes de simulación, todo pedido por mensaje — y el corte
+/// de la fase 7 dejó la lista en cero. Sólo puede seguir en cero.
+#[test]
+fn presentation_never_names_the_simulation_crate() {
+    let offenders: Vec<String> = source_files()
+        .into_iter()
+        .filter(|(path, _)| PRESENTATION.iter().any(|prefix| path.starts_with(prefix)))
+        .filter(|(_, contents)| contents.contains("bof_simulation"))
+        .map(|(path, _)| path)
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "presentación sólo puede leer `bof_domain`; si necesita algo de \
+         simulación, ese algo es dato y baja a domain, o se pide por mensaje: \
+         {offenders:#?}"
+    );
+}

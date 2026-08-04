@@ -7,8 +7,7 @@
 
 use bevy::prelude::*;
 
-use bof_simulation::combat::motors::attack::ComboLocal;
-use bof_simulation::combat::state::CombatState;
+use bof_domain::combat::state::SwingFacts;
 
 const SWING_VFX_SECS: f32 = 0.16;
 
@@ -17,19 +16,17 @@ pub(super) struct SwingVfx {
     remaining: f32,
 }
 
-type SwingSourceQuery<'a> = (&'a Transform, &'a ComboLocal, &'a CombatState);
+type SwingSourceQuery<'a> = (&'a Transform, &'a SwingFacts);
 
 pub(super) fn spawn_swing_vfx(
     mut commands: Commands,
-    attackers: Query<SwingSourceQuery, Changed<CombatState>>,
+    attackers: Query<SwingSourceQuery, Changed<SwingFacts>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (transform, combo, state) in &attackers {
-        if *state != CombatState::Active {
-            continue;
-        }
-        let Some(step) = combo.current_step() else {
+    for (transform, swing) in &attackers {
+        // El arco lo publica el motor de ataque; presentación sólo lo lee.
+        let Some(arc) = swing.0 else {
             continue;
         };
         // `CircularSector` is an XY-plane fan opening along +Y: tilt it flat
@@ -40,7 +37,7 @@ pub(super) fn spawn_swing_vfx(
                 remaining: SWING_VFX_SECS,
             },
             Name::new("SwingVfx"),
-            Mesh3d(meshes.add(CircularSector::from_degrees(step.reach, step.arc_deg))),
+            Mesh3d(meshes.add(CircularSector::from_degrees(arc.reach, arc.arc_deg))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: Color::srgba(0.95, 0.95, 0.7, 0.45),
                 unlit: true,

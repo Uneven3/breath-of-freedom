@@ -22,6 +22,7 @@ use crate::combat::state::CombatState;
 use crate::combat::weapon::WeaponProfile;
 use crate::movement::Actor;
 use crate::physics::GameLayer;
+use bof_domain::combat::state::{SwingArc, SwingFacts};
 
 pub use super::attack_data::{
     ActiveSwing, ComboLocal, HitImpactMessage, MeleeHitMessage, MeleeSweepShapes,
@@ -158,6 +159,28 @@ type SweepAttackerQuery<'a> = (
 /// `GameLayer::Actor` — the exact inverse of Movement's sensing masks (hits
 /// only see bodies, sensors only see world). Candidates inside the swing arc
 /// become `MeleeHitMessage`s, once per swing.
+/// Publica la geometría del golpe activo para que presentación dibuje el arco
+/// sin preguntarle nada al motor (§19, §20).
+///
+/// Escribe sólo cuando el valor cambia: así `Changed<SwingFacts>` dispara una
+/// vez por golpe, que es lo que el VFX necesita, y no una vez por tick.
+pub fn publish_swing_facts(
+    mut attackers: Query<(&CombatState, &ComboLocal, &mut SwingFacts), With<Actor>>,
+) {
+    for (state, local, mut facts) in &mut attackers {
+        let arc = (*state == CombatState::Active)
+            .then(|| local.current_step())
+            .flatten()
+            .map(|step| SwingArc {
+                reach: step.reach,
+                arc_deg: step.arc_deg,
+            });
+        if facts.0 != arc {
+            facts.0 = arc;
+        }
+    }
+}
+
 pub fn sweep_active_swings(
     spatial: SpatialQuery,
     shapes: Res<MeleeSweepShapes>,

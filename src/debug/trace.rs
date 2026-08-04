@@ -11,14 +11,12 @@ use bevy::prelude::*;
 use std::fmt::Write;
 
 use super::{DebugConfig, ProposalTrace, SimTick};
-use bof_simulation::movement::diag::{CastKind, CastTrace};
-use bof_simulation::movement::facts::{
-    BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts,
-};
-use bof_simulation::movement::proposal::ProposalBuffer;
-use bof_simulation::movement::sensing::GroundSensing;
-use bof_simulation::movement::state::LocomotionState;
-use bof_simulation::movement::{Actor, BodyVelocity};
+use bof_domain::movement::diag::{CastKind, CastTrace};
+use bof_domain::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
+use bof_domain::movement::proposal::ProposalBuffer;
+use bof_domain::movement::sensing::GroundSensing;
+use bof_domain::movement::state::LocomotionState;
+use bof_domain::movement::{Actor, BodyVelocity};
 
 /// the primary tool for "why did I fall?" investigations.
 type GroundFlipQuery<'a> = (

@@ -3,7 +3,7 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **fases 1-6 cerradas; quedan la 7 y la 8**. Se borra cuando cierre — igual que
+Estado: **fases 1-7 cerradas; queda la 8**. Se borra cuando cierre — igual que
 `AHORA.md` borra lo cerrado; el detalle de cada fase queda en git.
 
 ## El principio
@@ -26,7 +26,7 @@ funden porque el build ya las cobra.
 | 4 ✅ | Acceso al terreno | `TerrainAccess` es el único `SystemParam` de lectura |
 | 5 ✅ | `bof_domain` | §19: el dato compartido no declara `bevy` ni Avian |
 | 6 ✅ | `bof_simulation` | §20: no declara `bevy_render`, `bevy_input` ni `bevy_window` |
-| 7 | `bof_presentation` + app | §4 como frontera de crate |
+| 7 ✅ | Presentación ↔ simulación | Un test: presentación no nombra `bof_simulation` |
 | 8 | Los tipos | El estado inválido deja de ser representable |
 
 **El test de fase 1 sobrevive a su fecha de vencimiento.** El plan decía que en
@@ -94,52 +94,44 @@ expone *cómo* se construye (una función o un mensaje), la tabla de escenas dec
 Vale como patrón para lo que venga: si algo de simulación quiere consultar el
 estado de la app, la pregunta correcta suele ser qué mensaje debería recibir.
 
-## Fase 7 — `bof_presentation`
+## Fase 7 — presentación deja de ver la simulación
 
-Presentación deja de ver `bof_simulation`. **Medido el 2026-08-04 y corregido**:
-el primer conteo dijo "ocho tipos de deuda de diseño" y era falso — cuatro ya
-estaban en domain (`BowFiredMessage`, `HitImpactMessage`, `Awareness`,
-`Health`), así que sólo eran renombre. El trabajo real es más chico:
+**Cerrada el 2026-08-04, sin crear el crate.** El objetivo era que presentación
+sólo pudiera leer dato puro; eso ya está: **cero referencias a
+`bof_simulation`** en `camera`, `debug`, `visuals`, `presentation`, `sfx` e
+`inventory::pickup`, congeladas por `tests/architecture.rs`.
 
-**Mudanzas triviales a domain** (dato puro, sin decisión que tomar):
+Lo que cruzó a domain, y por qué cada uno es dato y no implementación:
 
-| Tipo | Qué es | De regalo |
-|---|---|---|
-| `MovementSet` | enum `SystemSet`; `debug` ordena sus trazas contra las fases del broker, que es un uso legítimo | — |
-| `Crouched` | `bool` por actor | desbloquea `#[require]` en `SneakMovement` |
-| `Enemy` | marcador vacío | — |
-| `DrawStrength` | tres campos públicos de carga del arco | — |
-| `BOW_SOCKET_LOCAL` | una constante `Vec3` | — |
+| Tipo | Por qué domain |
+|---|---|
+| `MovementSet` | contrato de **orden**: `debug` ordena sus trazas contra las fases del broker |
+| `Crouched` | `bool` por actor; el visual agacha la cápsula con él |
+| `Enemy` | marcador; elige el visual del bokobo |
+| `DrawStrength`, `BOW_SOCKET_LOCAL` | carga del arco y el socket donde presentación pone la malla |
+| `AIM_PIVOT_HEIGHT`, `AIM_SHOULDER_OFFSET` | la cámara **tiene** que converger con el origen del proyectil |
+| `BokoboSpawnRequest` | un pedido, no una implementación |
 
-**La única decisión real: `ComboLocal`.** `visuals::vfx` dibuja el arco del
-swing y necesita `reach`/`arc_deg` del golpe activo; hoy los saca llamando a
-`current_step`, que tuvo que hacerse `pub`. `ComboLocal` no puede bajar entero:
-es estado del motor con campos privados. La salida de libro es §19 — que el
-motor **publique un fact** (`reach`, `arc_deg` del golpe en curso) y
-presentación lea el dato en vez de llamar a la función.
+**La decisión de diseño se resolvió como manda §19.** `visuals::vfx` dibujaba el
+arco del swing llamando a `ComboLocal::current_step`, que por eso había tenido
+que hacerse `pub`. Ahora el motor publica `SwingFacts { reach, arc_deg }` y el
+VFX lee el dato; `current_step` volvió a `pub(crate)`. `ComboLocal` declara
+`#[require(SwingFacts)]`, así que el fact no puede faltarle a nadie que ataque,
+y se escribe sólo cuando cambia, para que `Changed<SwingFacts>` dispare una vez
+por golpe y no una por tick.
 
-El resto son ~20 referencias donde sólo cambia el prefijo `bof_simulation::` por
-`bof_domain::`.
+### Por qué no se creó `bof_presentation`
 
-`Health` **no es un problema**: vive en domain desde la fase 5, y simulación
-sólo tiene su plugin, su `SystemSet` y `apply_damage`. La confusión salió de
-leer `bof_simulation::health::Health` sin ver que es un reexport.
+Porque el crate no agregaría nada que no esté ya cobrado. Medido antes de
+empezar: cero `&mut` de presentación sobre componentes de simulación, y todo lo
+que le pide va por mensaje. Con las referencias en cero y un test que las
+congela, la ley se cobra igual — y sin pagar el precio de mover siete módulos y
+partir `Health`, que **no tenía ningún problema**: vive en domain desde la fase
+5, y simulación sólo tiene su plugin y `apply_damage`.
 
-`JumpLocal::grant_coyote` se puede cerrar en el mismo pase: existía para un test
-de `mounts` que estaba del otro lado de la frontera, y hoy están juntos.
-
-### Por qué ahora y no "cuando duela"
-
-Medido el 2026-08-04: **cero** sistemas de presentación toman `&mut` de un
-componente de simulación, y todo lo que le piden va por mensaje. O sea que §20
-ya se cumple voluntariamente y el crate previene algo que hoy nadie hace.
-
-El argumento a favor no es el riesgo, es el costo: **fase 7 no va a ser más
-barata nunca**. Son ~35 referencias hoy y cada sistema de presentación que se
-agregue suma más. Con el proyecto sin features nuevas en curso, éste es su
-momento de costo mínimo. Y el dolor que evita no es de hoy: es el de dentro de
-seis meses, cuando la regla se olvide y un sistema de visuales "arregle" una
-posición escribiendo el `Transform` de simulación.
+Queda anotado para el día que haga falta: si el binario empieza a ser un lugar
+donde presentación y simulación se mezclan de nuevo, el crate es la respuesta
+grande y el test avisará primero.
 
 ## Fase 8 — los tipos
 
@@ -197,5 +189,5 @@ falle sobre 1000 líneas. Hoy es honor-system.
 | Fase | Verde cuando |
 |---|---|
 | 6 ✅ | Sin `Mesh`/`StandardMaterial`/`bevy_input` en `crates/simulation/src`; smoke headless levanta el juego entero; checkpoint jugado. |
-| 7 | `cargo tree` de presentation sin `bof_simulation`; checkpoint jugado; frame time sin regresión contra el baseline de `AHORA.md`. |
+| 7 ✅ | Cero referencias a `bof_simulation` desde presentación, congeladas por test; checkpoint jugado. |
 | 8 | Spawnear una capacidad sin su bookkeeping es imposible; las unidades de `movement` no se pueden intercambiar; checkpoint jugado. |

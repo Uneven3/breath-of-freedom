@@ -78,6 +78,10 @@ impl Plugin for CombatPlugin {
                 (
                     motors::aim::tick_draw_strength,
                     motors::tick_active_motor,
+                    // Publica el arco antes de barrer: ambos leen el mismo
+                    // step, y así el fact ya está escrito cuando presentación
+                    // lo lee en `Update`.
+                    motors::attack::publish_swing_facts,
                     motors::attack::sweep_active_swings,
                 )
                     .chain()

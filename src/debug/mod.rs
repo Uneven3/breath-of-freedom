@@ -40,8 +40,8 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
 
-use bof_simulation::movement::MovementSet;
-use bof_simulation::movement::proposal::ProposalBuffer;
+use bof_domain::movement::MovementSet;
+use bof_domain::movement::proposal::ProposalBuffer;
 
 /// Which debug channels are active. Mirrored into `CastTrace.enabled` and
 /// avian's `PhysicsGizmos` by `handle_toggles`.

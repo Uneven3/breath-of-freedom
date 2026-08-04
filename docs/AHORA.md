@@ -230,6 +230,14 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
+**Fase 7 cerrada (2026-08-04): presentación no nombra la simulación.** Cero
+referencias a `bof_simulation` desde `camera`, `debug`, `visuals`,
+`presentation`, `sfx` e `inventory::pickup`, congeladas por un test. No se creó
+`bof_presentation`: con las referencias en cero y la ley en un test, el crate no
+agregaba nada que no estuviera cobrado. El caso testigo se resolvió como manda
+§19 — el motor de ataque publica `SwingFacts { reach, arc_deg }` y el VFX lee el
+dato en vez de llamar a `ComboLocal::current_step`, que volvió a ser interno.
+
 **Fase 6 cerrada: el juego entero corre sin pantalla.** El smoke headless ya no
 levanta una esfera con gravedad, levanta `SimulationPlugin` completo. `src/`
 quedó en 14.952 LOC de presentación y composición contra 18.910 de simulación, y
@@ -264,16 +272,11 @@ primer trazo. **Al leer el log, ojo**: sólo `sandbox.ron` existe en disco, y
 sin heightmap arranca plana **y en silencio** — la ausencia de línea no es
 ausencia de escena.
 
-1. **CRATES fase 7:** `bof_presentation` hermana. Cinco mudanzas triviales a
-   domain (`MovementSet`, `Crouched`, `Enemy`, `DrawStrength`,
-   `BOW_SOCKET_LOCAL`), ~20 renombres de prefijo, y **una sola decisión real**:
-   que el motor de ataque publique `reach`/`arc_deg` como fact en vez de que
-   `visuals::vfx` llame a `ComboLocal::current_step`.
-2. **CRATES fase 8 — los tipos:** `#[require]` en las nueve capacidades (pide
+1. **CRATES fase 8 — los tipos:** `#[require]` en las nueve capacidades (pide
    bajar trece tipos de bookkeeping a domain) y newtypes de unidades en
    `movement`. Es lo que evita spawnear un actor a medias en silencio y
    confundir metros con metros/segundo.
-3. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+2. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones

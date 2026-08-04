@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Component;
+use bevy_ecs::prelude::{Component, SystemSet};
 use bevy_math::Vec3;
 
 pub mod abilities;
@@ -16,6 +16,25 @@ pub mod stamina;
 pub mod state;
 
 pub const GRAVITY: f32 = 9.8;
+
+/// Ordered phases of the movement broker within `FixedUpdate`.
+///
+/// Vive en domain porque es un **contrato de orden**, no una implementación:
+/// quien quiera correr antes de que se lean los intents, o después de que el
+/// motor activo movió el cuerpo, necesita nombrar la fase. `debug` ordena así
+/// sus trazas para observar el pipeline tick a tick, y con las capas hermanas
+/// no puede nombrar nada de simulación.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MovementSet {
+    ApplyExternal,
+    ReadIntents,
+    ControlRedirect,
+    SenseWorld,
+    GatherProposals,
+    Arbitrate,
+    TickActiveMotor,
+    SyncAttachments,
+}
 
 /// Marker for the local player entity.
 #[derive(Component)]

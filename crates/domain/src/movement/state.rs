@@ -88,3 +88,10 @@ const _: () = {
 /// it without every system having to ask.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct LocomotionEnabled;
+
+/// Whether the crouch capsule is currently applied. Lets `sync_crouch_collider`
+/// rebuild the collider only when the desired crouch actually changes, and lets
+/// other ground motors (e.g. Stairs) read the physical form without recomputing
+/// it. Presentación lo lee para agachar la cápsula visual.
+#[derive(Component, Default)]
+pub struct Crouched(pub bool);

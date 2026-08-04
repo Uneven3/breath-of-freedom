@@ -34,9 +34,7 @@ use crate::movement::bundles::{
 };
 use crate::movement::sensing::GroundSensing;
 
-/// Marker for an AI-controlled actor, analogous to `Player`.
-#[derive(Component)]
-pub struct Enemy;
+pub use bof_domain::enemies::Enemy;
 
 /// The world-space point this enemy patrols around and returns to.
 #[derive(Component, Clone, Copy)]
@@ -92,17 +90,7 @@ impl Plugin for EnemiesPlugin {
     }
 }
 
-/// Debug: spawns or despawns the graybox pair — a melee bokobo and an archer
-/// bokobo — at their authored homes. Owned by enemies; the debug hub writes
-/// [`BokoboSpawnRequest`], which replaced a bare F7 key (one owner, one
-/// message, and it shows up in the F1 panel).
-#[derive(Message, Debug, Clone, Copy)]
-pub enum BokoboSpawnRequest {
-    /// A scene requires the pair; leave an existing pair alone.
-    Ensure,
-    /// The debug hub explicitly flips the pair's current presence.
-    Toggle,
-}
+pub use bof_domain::enemies::BokoboSpawnRequest;
 
 /// Ask for the graybox pair when a scene that wants enemies starts.
 fn process_spawn_requests(

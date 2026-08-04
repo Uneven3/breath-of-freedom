@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::asset_pipeline::MaterialPalette;
 use crate::inventory::data::WorldItem;
 use crate::inventory::{ItemKind, ItemStack, PickupMode};
-use bof_simulation::interaction::{Interactable, InteractionKind};
+use bof_domain::interaction::{Interactable, InteractionKind};
 
 const INTERACT_PICKUP_RANGE: f32 = 2.5;
 

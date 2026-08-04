@@ -5,8 +5,9 @@
 //! compiler-checked "exactly one motor owns each state" invariant, from day
 //! one (the lesson already paid for in `docs/ARCHITECTURE.md`).
 
-use bevy::ecs::query::QueryData;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::query::QueryData;
+use bevy_time::prelude::*;
 
 pub mod aim;
 pub mod attack;

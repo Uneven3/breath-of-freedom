@@ -1,13 +1,16 @@
 use avian3d::prelude::*;
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemParam;
+use bevy_log::warn;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::combat::motors::attack::HitImpactMessage;
 use crate::enemies::Enemy;
 use crate::health::{DamageRequestMessage, HostileInteractionImmunity};
 use crate::movement::constraints::BodyImpulseMessage;
 use crate::movement::{BodyVelocity, intents::Intents};
-use crate::world::GameLayer;
+use crate::physics::GameLayer;
 
 use super::charge_data::{ChargeHitKey, ChargeHitLedger, ChargeShape};
 use super::data::{Horse, HorseCharge};
@@ -246,8 +249,11 @@ fn occluded_by_world(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
-    use bevy::time::TimeUpdateStrategy;
+    use bevy_app::{App, TaskPoolPlugin};
+    use bevy_ecs::system::RunSystemOnce;
+    use bevy_time::TimePlugin;
+    use bevy_time::TimeUpdateStrategy;
+    use bevy_transform::TransformPlugin;
     use std::time::Duration;
 
     fn emit_twice(
@@ -272,11 +278,10 @@ mod tests {
     fn spatial_charge_outcome_counts(enemy_position: Vec3, wall: bool) -> (usize, usize, usize) {
         let mut app = App::new();
         app.add_plugins((
-            MinimalPlugins,
+            TaskPoolPlugin::default(),
+            TimePlugin,
             TransformPlugin,
             PhysicsPlugins::default(),
-            bevy::asset::AssetPlugin::default(),
-            bevy::mesh::MeshPlugin,
         ));
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
             1.0 / 60.0,
@@ -294,7 +299,7 @@ mod tests {
             BodyVelocity(Vec3::X * 12.0),
             Intents {
                 wants_sprint: true,
-                ..default()
+                ..Default::default()
             },
             HorseCharge::new(Vec3::ZERO),
             RigidBody::Kinematic,

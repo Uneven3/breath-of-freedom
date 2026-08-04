@@ -1,6 +1,9 @@
 //! Authoritative consequences of accepted melee sweep candidates.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::info;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::attack_data::{ComboLocal, HitImpactMessage, MeleeHitMessage};
 use crate::enemies::perception::{Awareness, DirectThreatMessage};

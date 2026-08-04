@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 pub use super::context_data::{
     BowProfile, CombatContext, MountedCombatProfile, SetMountedCombatMessage,
@@ -42,7 +42,7 @@ pub fn effective_bow(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn context_switch_never_replaces_the_base_weapon() {

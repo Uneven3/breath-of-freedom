@@ -56,10 +56,6 @@ pub mod abilities {
 pub mod attachment {
     pub use bof_simulation::movement::attachment::*;
 }
-#[cfg(test)]
-pub mod attachment_systems {
-    pub use bof_simulation::movement::attachment_systems::*;
-}
 pub mod body {
     pub use bof_simulation::movement::body::*;
 }
@@ -68,12 +64,6 @@ pub mod brain {
 }
 pub mod bundles {
     pub use bof_simulation::movement::bundles::*;
-}
-pub mod constraints {
-    pub use bof_simulation::movement::constraints::*;
-}
-pub mod control {
-    pub use bof_simulation::movement::control::*;
 }
 pub mod diag {
     pub use bof_simulation::movement::diag::*;
@@ -86,9 +76,6 @@ pub mod facts {
 }
 pub mod intents {
     pub use bof_simulation::movement::intents::*;
-}
-pub mod link {
-    pub use bof_simulation::movement::link::*;
 }
 pub mod lod {
     pub use bof_simulation::movement::lod::*;

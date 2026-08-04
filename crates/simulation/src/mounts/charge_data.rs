@@ -1,5 +1,5 @@
 use avian3d::prelude::Collider;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 pub const CHARGE_RADIUS: f32 = 0.9;
 const MAX_CHARGE_HITS: usize = 256;

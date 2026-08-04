@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 use super::data::{
     Horse, HorseSpawnRequest, MountTransitionRequest, PendingHorseDespawn, RiddenBy,

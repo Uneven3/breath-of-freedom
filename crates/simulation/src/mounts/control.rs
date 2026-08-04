@@ -1,5 +1,7 @@
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemParam;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::control::ControlMask;
 use crate::movement::link::{ActorLinkRequestMessage, DetachSafety};

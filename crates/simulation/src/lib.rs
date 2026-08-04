@@ -16,9 +16,12 @@
 use avian3d::prelude::PhysicsPlugins;
 use bevy_app::{App, Plugin};
 
+pub mod combat;
+pub mod enemies;
 pub mod health;
 pub mod interaction;
 pub mod inventory;
+pub mod mounts;
 pub mod movement;
 pub mod physics;
 pub mod projectiles;

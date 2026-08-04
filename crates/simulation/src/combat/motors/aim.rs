@@ -13,16 +13,19 @@
 //! construction.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::combat::context::effective_bow;
 use crate::combat::context_data::{BowProfile, CombatContext, MountedCombatProfile};
 use crate::combat::intent::CombatIntents;
 use crate::combat::proposal::{CombatProposalBuffer, Priority, TransitionProposal, weight};
 use crate::combat::state::CombatState;
-use crate::input::frame::ControlOrientation;
 use crate::movement::Actor;
 use crate::projectiles::SpawnProjectileMessage;
+use bof_domain::input::frame::ControlOrientation;
 
 pub use bof_domain::combat::messages::BowFiredMessage;
 
@@ -417,7 +420,7 @@ pub(crate) fn aim_direction(orientation: &ControlOrientation) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn aim_direction_matches_yaw_and_pitch() {
@@ -503,7 +506,7 @@ mod tests {
                 Actor,
                 CombatIntents {
                     wants_aim: true,
-                    ..default()
+                    ..Default::default()
                 },
                 CombatState::Idle,
                 CombatProposalBuffer::default(),
@@ -514,7 +517,7 @@ mod tests {
                 Actor,
                 CombatIntents {
                     wants_aim: true,
-                    ..default()
+                    ..Default::default()
                 },
                 CombatState::Windup,
                 CombatProposalBuffer::default(),
@@ -605,7 +608,7 @@ mod tests {
                         pressed: true,
                         held: true,
                     },
-                    ..default()
+                    ..Default::default()
                 },
                 CombatState::Aiming,
                 DrawStrength::default(),

@@ -246,21 +246,25 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
-6.5 cerró: **la locomoción entera es headless.** `bof_simulation` posee los 13
-motores, `motor_common`, los bundles de actor, `brain`, `facing`, la sonda de
-traversal y la arbitración — el único escritor de `LocomotionState`. De
+6.5 y 6.6 cerraron: **la locomoción y el combate enteros son headless.**
+`bof_simulation` (15.468 LOC) posee los 13 motores de movimiento, la
+arbitración, `brain`/`facing`/sonda, y ahora `combat`, `enemies` y `mounts`. De
 `src/movement/` quedan los cuatro servicios de sensado, que leen `TerrainAccess`
-y geometría authored y siguen a `world` en 6.7. `expected_feet_y` bajó a
-`StairsFacts` en domain, cerrando uno de los dos pendientes que la fase 5 dejó
-anotados (falta `MovementSet`, que es orden y pertenece a quien arma el
-schedule).
+y geometría authored y siguen a `world` en 6.7. Dos cosas se resolvieron en su
+nivel en vez de abrir tipos: `expected_feet_y` bajó a `StairsFacts` en domain
+(quedaba pendiente de fase 5; falta `MovementSet`, que es orden y pertenece a
+quien arma el schedule), y los gates de escena de enemigos/caballo se mudaron al
+`ScenePlugin` — simulación construye, la tabla de escenas decide quién lo tiene.
+Jugado el 2026-08-04 en la caja Terreno: arranque y cierre limpios, esculpido y
+guardado repetidos, cero `error`/`panic`. **Salvedad anotada:** ese checkpoint
+no ejercitó los motores a fondo (el usuario los va a retocar igual), así que lo
+validado es que no rompen el juego, no el feeling.
 
-1. **CRATES fase 6.6:** trasladar `combat`, `enemies` y `mounts`.
-2. **CRATES fase 6.7:** trasladar `player`, `input`, `world`, sensores pendientes
+1. **CRATES fase 6.7:** trasladar `player`, `input`, `world`, sensores pendientes
    y runtime de assets; los adaptadores de render quedan en la app.
-3. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
+2. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
    checkpoint jugado; luego fase 7 (`bof_presentation` hermana).
-4. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+3. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones

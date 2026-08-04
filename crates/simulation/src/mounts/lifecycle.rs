@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 use bof_domain::scene::SceneScoped;
 
 use crate::health::Health;

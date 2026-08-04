@@ -7,7 +7,11 @@
 //! cues and enemy aggro.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::error;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::combat::context::effective_weapon;
 use crate::combat::context_data::{CombatContext, MountedCombatProfile};
@@ -17,7 +21,7 @@ use crate::combat::proposal::{CombatProposalBuffer, Priority, TransitionProposal
 use crate::combat::state::CombatState;
 use crate::combat::weapon::WeaponProfile;
 use crate::movement::Actor;
-use crate::world::GameLayer;
+use crate::physics::GameLayer;
 
 pub use super::attack_data::{
     ActiveSwing, ComboLocal, HitImpactMessage, MeleeHitMessage, MeleeSweepShapes,

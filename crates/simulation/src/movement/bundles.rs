@@ -1,7 +1,7 @@
 //! Construction bundles for movement-capable actors.
 //!
 //! These bundles only compose data. They do not enable systems: movement
-//! systems remain registered by [`super::MovementPlugin`] and select actors
+//! systems remain registered by [`super::MovementMotorsPlugin`] and select actors
 //! through their individual capability components.
 
 use avian3d::prelude::*;

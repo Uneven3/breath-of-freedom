@@ -8,7 +8,10 @@
 //! `SpawnProjectileMessage`, writes `CombatState`, or touches another
 //! actor's components.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::Enemy;
 use super::brain::{EnemyBrainProfile, planar_distance_sq};
@@ -17,7 +20,7 @@ use super::state::EnemyAiState;
 use crate::combat::intent::{AttackIntent, CombatIntents};
 use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, DrawStrength};
 use crate::combat::weapon::WeaponProfile;
-use crate::input::frame::ControlOrientation;
+use bof_domain::input::frame::ControlOrientation;
 
 /// The archer releases once the string reaches this charge (0..=1): strong
 /// enough to arc across its shooting range, short enough to keep pressure.
@@ -123,7 +126,7 @@ pub(crate) fn yaw_pitch_toward(direction: Vec3) -> (f32, f32) {
 mod tests {
     use super::*;
     use crate::combat::motors::aim::aim_direction;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn yaw_pitch_toward_is_the_inverse_of_aim_direction() {
@@ -229,7 +232,7 @@ mod tests {
         let charged = world
             .spawn(archer(DrawStrength {
                 factor: ARCHER_RELEASE_CHARGE + 0.05,
-                ..default()
+                ..Default::default()
             }))
             .id();
 

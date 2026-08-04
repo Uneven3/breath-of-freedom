@@ -1,6 +1,7 @@
 use super::*;
 use avian3d::collider_tree::ColliderTrees;
 use avian3d::prelude::*;
+use bevy_app::{App, FixedUpdate};
 
 use crate::combat::CombatSet;
 use crate::combat::context;
@@ -273,7 +274,7 @@ fn despawned_rider_clears_inverse_relation_and_neutralizes_horse() {
             local: Vec2::ZERO,
         },
         wants_sprint: true,
-        ..default()
+        ..Default::default()
     });
 
     app.world_mut().entity_mut(rider).despawn();

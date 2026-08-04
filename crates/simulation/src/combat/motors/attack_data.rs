@@ -1,7 +1,9 @@
 //! Pure per-actor melee state and message contracts.
 
 use avian3d::prelude::Collider;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_log::warn;
+use bevy_math::prelude::*;
 
 use crate::combat::state::CombatState;
 use crate::combat::weapon::{AttackStep, MAX_COMBO_STEPS, WeaponProfile};
@@ -18,7 +20,13 @@ pub struct ComboLocal {
 }
 
 impl ComboLocal {
-    pub(crate) fn current_step(&self) -> Option<&AttackStep> {
+    /// The step this actor is swinging right now, or `None` between attacks.
+    ///
+    /// Public because presentation draws the swing arc from `reach`/`arc_deg`
+    /// — a read, never a write (§20). In fase 7 this becomes a fact the motor
+    /// publishes, or `ComboLocal` itself moves to domain; presentation cannot
+    /// keep calling into simulation once the crates are siblings.
+    pub fn current_step(&self) -> Option<&AttackStep> {
         self.snapshot.as_ref()?.step(self.step)
     }
 }

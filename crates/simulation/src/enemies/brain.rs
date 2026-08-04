@@ -4,7 +4,10 @@
 //! into `Intents`, the same contract the player's hardware brain writes. The
 //! brain never touches `Transform`, `BodyVelocity`, or `LocomotionState`.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 
 use super::perception::{AggroTarget, Awareness};
 use super::state::EnemyAiState;
@@ -252,7 +255,7 @@ fn walk_toward(pos: Vec3, target: Vec3, stop_radius: f32, wants_sprint: bool) ->
             local: Vec2::ZERO,
         },
         wants_sprint,
-        ..default()
+        ..Default::default()
     }
 }
 
@@ -264,7 +267,7 @@ pub(crate) fn planar_distance_sq(a: Vec3, b: Vec3) -> f32 {
 mod tests {
     use super::*;
     use crate::movement::{Actor, Player};
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn full_threat_always_wins_and_alert_degrades_to_search() {
@@ -378,7 +381,7 @@ mod tests {
                 Player,
                 Intents {
                     wants_sprint: true,
-                    ..default()
+                    ..Default::default()
                 },
             ))
             .id();

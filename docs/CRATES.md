@@ -200,7 +200,7 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **en curso; 6.1–6.5 cerradas el 2026-08-04**. Cada fila termina
+Estado: **en curso; 6.1–6.6 cerradas el 2026-08-04**. Cada fila termina
 compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
@@ -210,7 +210,7 @@ compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 | 6.3 ✅ | `inventory`, `projectiles`. |
 | 6.4 ✅ | Movement: schedules, vínculos, restricciones, LOD y diagnóstico. |
 | 6.5 ✅ | Movement: motores, bundles, brain/facing/probe y arbitración. |
-| 6.6 | `combat`, `enemies`, `mounts`. |
+| 6.6 ✅ | `combat`, `enemies`, `mounts`; los gates de escena van a `scene`. |
 | 6.7 | `player`, `input`, `world` y runtime de assets; render queda en adaptadores. |
 | 6.8 | Cableado raíz, replay headless, retiro de shims/test redundante y checkpoint. |
 
@@ -235,6 +235,20 @@ que presentación lo obtiene del dato y no de simulación (§20); y `JumpLocal`
 expone `grant_coyote` para el test de `mounts`, que vuelve a cerrarse en 6.6.
 El crate headless no tiene el prelude de bevy, así que el azúcar `default()` se
 escribe `Default::default()` — no se agregó `bevy_utils` por eso.
+
+**6.6 mostró dónde estaba la costura de escena.** `enemies` y `mounts` traían
+un `for id in SceneId::ALL` que gateaba su spawn, y `scene` es composición: se
+queda en el binario. Pero cada gate era una función de una línea que escribe un
+mensaje (`BokoboSpawnRequest::Ensure`, `HorseSpawnRequest::Ensure`), así que las
+dos se mudaron al `ScenePlugin` — simulación decide **cómo** se construye un
+enemigo o un caballo, la tabla de escenas decide **cuál las tiene**, y sigue
+habiendo un solo camino de spawn (el mismo mensaje que escribe el hub de debug).
+Ahí la frontera cobró un resto de C2: el test de `mounts` sembraba
+`ButtonInput<KeyCode>` en su app aunque ya no quedaba ningún lector de hardware
+en esos módulos. Deuda que sí queda anotada: `ComboLocal::current_step` pasó a
+`pub` porque `visuals::vfx` dibuja el arco del swing con `reach`/`arc_deg`; en
+fase 7 eso tiene que ser un fact publicado o `ComboLocal` baja a domain, porque
+presentación no podrá llamar a simulación.
 
 ### Fase 7 — `bof_presentation` y el binario (hermanas)
 

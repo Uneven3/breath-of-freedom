@@ -3,7 +3,7 @@
 //! never reaches `arbitrate` empty and expired phases decay to `Idle` by
 //! silence.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 use crate::combat::proposal::{CombatProposalBuffer, Priority, TransitionProposal, weight};
 use crate::combat::state::CombatState;

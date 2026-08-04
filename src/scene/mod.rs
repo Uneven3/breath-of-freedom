@@ -233,6 +233,17 @@ impl Plugin for ScenePlugin {
                 OnEnter(AppState::Scene(id)),
                 (SceneBuild::Ground, SceneBuild::Actors).chain(),
             );
+            // Simulation owns *how* an enemy or a horse is built; this table
+            // owns *which scene gets one*. It asks through the same request the
+            // debug hub writes, so there is one spawn path, not two.
+            app.add_systems(
+                OnEnter(AppState::Scene(id)),
+                (
+                    request_scene_enemies.run_if(scene_has(|c| c.enemies)),
+                    request_scene_horse.run_if(scene_has(|c| c.horse)),
+                )
+                    .in_set(SceneBuild::Actors),
+            );
         }
         app.add_systems(OnEnter(AppState::MainMenu), release_cursor);
         app.add_systems(OnExit(AppState::MainMenu), capture_cursor);
@@ -245,6 +256,14 @@ impl Plugin for ScenePlugin {
         // into the domain/simulation boundary.
         app.add_systems(PostUpdate, bind_scene_scoped_entities);
     }
+}
+
+fn request_scene_enemies(mut requests: MessageWriter<bof_simulation::enemies::BokoboSpawnRequest>) {
+    requests.write(bof_simulation::enemies::BokoboSpawnRequest::Ensure);
+}
+
+fn request_scene_horse(mut requests: MessageWriter<bof_simulation::mounts::HorseSpawnRequest>) {
+    requests.write(bof_simulation::mounts::HorseSpawnRequest::Ensure);
 }
 
 fn bind_scene_scoped_entities(

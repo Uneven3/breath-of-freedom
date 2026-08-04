@@ -1,6 +1,8 @@
 use super::attack::*;
 use super::attack_resolution::{SNEAKSTRIKE_MULT, final_damage};
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::combat::context_data::{CombatContext, MountedCombatProfile};
 use crate::combat::intent::CombatIntents;
@@ -10,7 +12,7 @@ use crate::combat::weapon::WeaponProfile;
 use crate::enemies::perception::DirectThreatMessage;
 use crate::movement::Actor;
 use crate::movement::state::LocomotionState;
-use bevy::ecs::system::RunSystemOnce;
+use bevy_ecs::system::RunSystemOnce;
 
 fn armed_actor(state: CombatState, mut local: ComboLocal, pressed: bool) -> impl Bundle {
     if state != CombatState::Idle && local.snapshot.is_none() {
@@ -23,7 +25,7 @@ fn armed_actor(state: CombatState, mut local: ComboLocal, pressed: bool) -> impl
                 pressed,
                 held: pressed,
             },
-            ..default()
+            ..Default::default()
         },
         state,
         WeaponProfile::GRAYBOX_SWORD,
@@ -112,7 +114,7 @@ fn windup_holds_then_advances_to_active() {
             CombatState::Windup,
             ComboLocal {
                 phase_elapsed: step0.windup_secs * 0.5,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -122,7 +124,7 @@ fn windup_holds_then_advances_to_active() {
             CombatState::Windup,
             ComboLocal {
                 phase_elapsed: step0.windup_secs,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -153,7 +155,7 @@ fn recovery_chains_only_buffered_inside_the_window() {
             ComboLocal {
                 buffered: true,
                 phase_elapsed: step0.chain_window_secs * 0.5,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -165,7 +167,7 @@ fn recovery_chains_only_buffered_inside_the_window() {
             ComboLocal {
                 buffered: true,
                 phase_elapsed: step0.chain_window_secs + 0.01,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -202,7 +204,7 @@ fn finisher_never_chains_and_expired_recovery_goes_silent() {
                 step: finisher_index,
                 buffered: true,
                 phase_elapsed: 0.01,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -212,7 +214,7 @@ fn finisher_never_chains_and_expired_recovery_goes_silent() {
             CombatState::Recovery,
             ComboLocal {
                 phase_elapsed: finisher.recovery_secs + 1.0,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -244,7 +246,7 @@ fn combo_state_does_not_bleed_between_actors() {
                 step: 1,
                 buffered: false,
                 phase_elapsed: 0.05,
-                ..default()
+                ..Default::default()
             },
             false,
         ))
@@ -351,7 +353,7 @@ fn hostile_immunity_blocks_all_melee_outcomes() {
             Actor,
             ComboLocal {
                 snapshot: Some(WeaponProfile::GRAYBOX_SWORD),
-                ..default()
+                ..Default::default()
             },
             LocomotionState::Walk,
             Name::new("Owner"),

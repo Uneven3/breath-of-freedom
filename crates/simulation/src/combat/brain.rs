@@ -3,13 +3,13 @@
 //! AI actors omit `InputControlledBy` and get their `CombatIntents` from
 //! `EnemyBrain` (ticket `enemies-combat`).
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
 
 use super::intent::{AttackIntent, CombatIntents};
-use crate::input::InputConsumeCursor;
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, InputControlledBy};
 use crate::movement::Actor;
+use bof_domain::input::InputConsumeCursor;
+use bof_domain::input::action::IntentAction;
+use bof_domain::input::frame::{ActiveActions, InputControlledBy};
 
 /// Combat's own trigger cursor. A newtype, not the raw `InputConsumeCursor`:
 /// Movement already owns one on the same actor, and two consumers sharing one
@@ -42,8 +42,8 @@ pub fn read_intents(actions: Res<ActiveActions>, mut q: Query<BrainQuery, With<A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::frame::LOCAL_INPUT_SOURCE;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
+    use bof_domain::input::frame::LOCAL_INPUT_SOURCE;
 
     #[test]
     fn attack_edge_is_consumed_once_and_held_persists() {

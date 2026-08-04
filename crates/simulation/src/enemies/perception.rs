@@ -10,13 +10,16 @@
 //! `docs/ARCHITECTURE.md`).
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_time::prelude::*;
+use bevy_transform::prelude::*;
 use std::cmp::Ordering;
 
 use super::Enemy;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, ActorId, BodyVelocity};
-use crate::world::GameLayer;
+use crate::physics::GameLayer;
 
 pub use bof_domain::enemies::perception::{Awareness, DirectThreatMessage};
 
@@ -453,7 +456,7 @@ mod tests {
 
     #[test]
     fn direct_threat_alerts_only_the_addressed_enemy() {
-        use bevy::ecs::system::RunSystemOnce;
+        use bevy_ecs::system::RunSystemOnce;
 
         let mut world = World::new();
         world.init_resource::<Messages<DirectThreatMessage>>();

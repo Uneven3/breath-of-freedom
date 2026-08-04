@@ -56,10 +56,24 @@ const HARDWARE_DEBT: &[&str] = &[
 ];
 
 /// Los tests sí pueden fabricar input: simular una tecla es la única forma de
-/// probar un sistema que la consume. El corte es el primer `#[cfg(test)]` del
-/// archivo, que es donde este repo pone sus módulos de test.
+/// probar un sistema que la consume. El corte es **el módulo de tests**, no el
+/// primer `#[cfg(test)]` que aparezca.
+///
+/// La diferencia importa y costó un falso negativo: `world/forest.rs` tiene un
+/// `#[cfg(test)]` sobre una función a media altura, y con el corte anterior
+/// todo lo que venía después quedaba invisible para este test y para el de
+/// `unsafe`. Un atributo suelto arriba del archivo alcanzaba para cegar la ley
+/// entera — justo lo que una ley automatizada no puede permitirse.
 fn production_source(contents: &str) -> &str {
-    match contents.find("#[cfg(test)]") {
+    let module = [
+        "#[cfg(test)]\nmod ",
+        "#[cfg(test)]\npub mod ",
+        "#[cfg(test)]\npub(crate) mod ",
+    ]
+    .iter()
+    .filter_map(|marker| contents.find(marker))
+    .min();
+    match module {
         Some(index) => &contents[..index],
         None => contents,
     }

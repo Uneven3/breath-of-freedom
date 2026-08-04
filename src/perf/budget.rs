@@ -194,9 +194,14 @@ mod tests {
             if scene.contents.meadow {
                 triangles += meadow;
             }
+            use crate::scene::SceneId;
             let ceiling = match scene.id {
-                crate::scene::SceneId::World => MOBILE_TRIANGLES + WORLD_SCENE_OVERSHOOT,
-                _ => MOBILE_TRIANGLES,
+                SceneId::World => MOBILE_TRIANGLES + WORLD_SCENE_OVERSHOOT,
+                // Exhaustivo a propósito (`wildcard_enum_match_arm`): una caja
+                // nueva tiene que decidir su techo acá, no heredarlo callada.
+                SceneId::Traversal | SceneId::Combat | SceneId::Grass | SceneId::Sandbox => {
+                    MOBILE_TRIANGLES
+                }
             };
             assert!(
                 triangles <= ceiling,

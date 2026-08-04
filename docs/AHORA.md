@@ -44,6 +44,8 @@ lints, crates) está en `CRATES.md`.
   secas devuelve el spam de `wgpu`/`naga`. Si hace falta:
   `RUST_LOG=wgpu=error,naga=warn,breath_of_freedom=debug`.
 - **Antes de bindear una tecla, `grep -rhoE "KeyCode::[A-Za-z0-9]+" src/`.**
+  Basta con `src/`: `crates/` no tiene ni una ocurrencia y no puede tenerla
+  (simulación no declara `bevy_input`), verificado el 2026-08-04.
   Nadie arbitra colisiones (varias capas leen el hardware directo, hallazgo C2),
   así que una tecla ya usada no da error: da una función que "no hace nada". Al
   2026-07-26 solo quedan libres **F7, F9, F11, F12**.
@@ -61,42 +63,22 @@ lints, crates) está en `CRATES.md`.
   compartiendo o devolver cada proyecto a su target local, que hace `cargo
   clean` predecible — y nunca `rm -rf` sobre lo que Cargo administra.
 
-## Limpieza pre-push (2026-08-02)
-
-Se retiraron el elfo, sus fuentes sin licencia y la herramienta de reskin. El
-player volvió a graybox: una cápsula procedural construida con el mismo
-`BodyDimensions` y el mismo estado `Crouched` que el collider. No hay rig,
-modelo ni controlador de animación activos; ese dominio se retoma cuando exista
-un personaje propio o con procedencia compatible.
-
-Los otros bloqueantes de la auditoría también quedaron resueltos: benchmark y
-flythrough rechazan arrancar con una vista semántica activa; el loader de
-texturas reintenta sólo ante `AssetEvent`; `material_report` lee el material
-real; y `ARCHITECTURE.md`/`NORTE.md` declaran la excepción PBR del terreno.
-Queda como deuda, no bloqueo: unificar paleta/IDs Rust↔WGSL y dividir
-`terrain_material.rs` (§1, §16). La suite completa cerró en verde: 389 tests
-unitarios y 2 de arquitectura, además de `fmt`, `check` y `clippy -D warnings`.
-Tras reiniciar, el juego abrió y cerró limpio sobre Vulkan/Polaris; el usuario
-confirmó que la cápsula se vio bien en juego. Checkpoint cerrado.
-
-## Estado (2026-08-03)
+## Estado (2026-08-04)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/
 glide/climb/ladder/mantle/vault/wall-jump/stairs), enemigos con percepción
 gradual (melee + arquero), health/muerte/respawn, horse, espada con combos, arco
 de dos fases con carga Bannerlord, cápsula graybox como player, mundo 320×320
-con bosque y audio de pasos por superficie. La validación automatizada de esta
-limpieza está verde y la cápsula quedó validada en juego el 2026-08-02.
+con bosque y audio de pasos por superficie. El player es graybox a propósito: no
+hay rig ni controlador de animación hasta que exista un personaje propio o con
+procedencia compatible.
 
-**CRATES fases 4-5 cerradas.** `TerrainAccess` concentra toda lectura de terreno.
-En el checkpoint post-refactor del 2026-08-03 `sandbox.ron` cargó, se esculpió y
-guardó repetidamente, y la ventana cerró sin error/panic. Se eligió el grafo de
-crates **hermanas**: simulation y presentation sólo comparten `bof_domain`.
-El primer corte ya existe y mueve allí contratos de input, Movement, Combat,
-Health, Inventory, Mounts, projectiles, debug/perf y assets. `build.rs` y el
-manifiesto authored también pertenecen a domain. Ese crate declara sólo
-`bevy_ecs`/`bevy_math`/`bevy_reflect`: `cargo tree` no contiene render ni Avian.
-Validación verde: 390 tests unitarios + 3 de arquitectura y Clippy estricto.
+**CRATES fase 6 cerrada: el juego entero corre sin pantalla.** Tres crates
+hermanas (`bof_domain`, `bof_simulation`, y el binario), 18.910 LOC de simulación
+contra 14.952 de presentación y composición. `main` son diez plugins más
+`SimulationPlugin`. El smoke headless levanta el juego completo sin ventana ni
+GPU. Suite: 86 tests del binario + 4 de arquitectura, 258 de simulation, 50 de
+domain, Clippy estricto en todo. Detalle y lo que falta (fase 7) en `CRATES.md`.
 
 **Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
 horneadas en una malla por chunk — 25 entidades, cero trabajo por frame. Medido
@@ -147,8 +129,10 @@ decide cómo se ve (el patrón que ya funciona con `TreeKind` → `VisualCatalog
 Orden de las capas de autoría, que es también el orden en que se construyen:
 **relieve (hecho) → semántica (hecha) → instancias (siguiente)**.
 
-Ubicación: dato en `world/terrain.rs`, malla en `visuals/terrain.rs`, autoría en
-`editor/` (`brush` + `paint` + `history` + `persist` + `hud`).
+Ubicación tras el corte en crates: dato en
+`crates/simulation/src/world/terrain.rs`, malla en `src/visuals/terrain.rs`,
+autoría en `src/editor/` (`brush` + `paint` + `history` + `persist` + `hud`), y
+qué archivo carga cada escena en `src/scene/`.
 
 ### Relieve
 
@@ -393,6 +377,12 @@ legible que la función. Si sí, migrar `layout.rs` entero.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
+- **Paleta/IDs Rust↔WGSL sin unificar, y `terrain_material.rs` sin dividir**
+  (§1, §16). Viene de la auditoría del 2026-08-02; no bloquea, pero cada color
+  nuevo hay que escribirlo en dos lados que nadie obliga a coincidir.
+- **`InventorySet` y `MountsSet::PostMove` ya comparten crate.** Su orden mutuo
+  seguía sin declarar cuando estaban separados; ahora que ambos viven en
+  `SimulationPlugin`, declararlo es una línea al lado de las otras cuatro.
 - **C1 — allocation en `FixedUpdate`:** `rebuild_terrain_collider` arma un
   `Vec<Vec<f32>>` que Avian vuelve a aplanar, ~130 allocations por tick
   esculpido. La vía barata exige `parry` como dep directa.
@@ -420,8 +410,5 @@ legible que la función. Si sí, migrar `layout.rs` entero.
 - **Respawn no restaura arma:** morir desarmado sin repuesto deja al jugador
   incapaz de atacar hasta encontrar otra. Decidir si el respawn garantiza un
   arma mínima.
-- **`InventorySet` y `MountsSet::PostMove` sin orden explícito entre sí:**
-  comparten banda sobre componentes hoy disjuntos; el primer feature que cruce
-  ambos dominios (alforjas, loot al desmontar) hereda un orden no declarado.
 - **Apilado de comida por igualdad exacta de `f32`:** una fuente futura que
   calcule `heal` en runtime puede fallar el apilado por redondeo.

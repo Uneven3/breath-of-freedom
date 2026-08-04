@@ -242,9 +242,9 @@ Limitando el ángulo máximo de inclinación del tobillo a $\le 35^\circ$ para e
 ## Plan Paso a Paso de Implementación
 
 ### Paso 1: Mapeo y Estandarización de Jerarquía de Huesos
-- **Tarea:** Crear el módulo `src/visuals/ik.rs` y definir las estructuras de componentes `FootIkTargets`, `HandIkTargets`, `LegIkChain` y `ArmIkChain`.
+- **Tarea:** Crear el módulo `src/visuals/ik.rs` (aún sin crear) y definir las estructuras de componentes `FootIkTargets`, `HandIkTargets`, `LegIkChain` y `ArmIkChain`.
 - **Entregables:**
-  - Estructuras puros en `src/visuals/ik.rs`.
+  - Estructuras puros en `src/visuals/ik.rs` (aún sin crear).
   - Mapeador que detecta la jerarquía de huesos al instanciar el esqueleto en `Update` y calcula `ankle_rest_y_offset`.
 - **Validación:** Test unitario en `visuals/ik.rs` que verifica la extracción correcta de las cadenas de 2 huesos.
 
@@ -263,7 +263,7 @@ Limitando el ángulo máximo de inclinación del tobillo a $\le 35^\circ$ para e
 - **Validación:** Tests unitarios matemáticos verificando triangulación exacta con cosenos en casos límite (cadena estirada, doblada a $90^\circ$, colapsada).
 
 ### Paso 4: Exposición de Normales en Terreno e IK Híbrido de Pies en `PostUpdate`
-- **Tarea:** Extender `src/world/terrain.rs` con `Terrain::height_and_normal_at(xz) -> (f32, Vec3)` e implementar la lectura de `FootingFacts` y el clamping de `Hips Lowering` a $-0.35\text{ m}$ en `src/visuals/ik.rs`.
+- **Tarea:** Extender `crates/simulation/src/world/terrain.rs` con `Terrain::height_and_normal_at(xz) -> (f32, Vec3)` e implementar la lectura de `FootingFacts` y el clamping de `Hips Lowering` a $-0.35\text{ m}$ en `src/visuals/ik.rs` (aún sin crear).
 - **Entregables:**
   - Método `height_and_normal_at` en `world/terrain.rs`.
   - Detección `Has<Terrain>` vs datos de piso `FootingFacts`.

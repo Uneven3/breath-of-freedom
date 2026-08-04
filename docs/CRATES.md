@@ -3,31 +3,8 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **fases 1-5 cerradas; grafo de crates hermanas elegido**. Se
-borra cuando la última fase cierre — igual que `AHORA.md` borra lo cerrado.
-
-## El problema, medido (2026-08-01)
-
-`ARCHITECTURE.md` fija 21 leyes. Varias son verificables por máquina y hoy no
-las verifica nadie:
-
-| Ley | Dice | Estado real |
-|---|---|---|
-| §4 | APIs públicas mínimas | 1392 `pub` contra 74 `pub(crate)`. En un crate único `pub` no restringe nada. |
-| §8/§9 | Evitar `unwrap`/`expect`; panic = bug | **93** fuera de `#[cfg(test)]`. |
-| §12 | Sin `unsafe` | Cierto hoy; nada lo impide mañana. |
-| §13 | `clippy -D warnings` | Cero líneas de `[lints]` en `Cargo.toml`. |
-| §20 | Simulación nunca depende de visuales | 5 archivos de simulación nombran `Mesh`/`StandardMaterial`. |
-| C2 | Solo `input` lee hardware | **13 archivos fuera de `input`**, congelados por `tests/architecture.rs` (eran 15 el 2026-08-01). |
-
-**El código no está sucio: el listón está bajo.** `cargo clippy` con los lints
-por defecto sale **limpio, 0 warnings**. Nada de lo anterior es descuido — es la
-distancia entre lo que clippy revisa por defecto y lo que las leyes exigen.
-
-Escala: 168 archivos, 37 410 LOC, 21 módulos, **un solo crate**, 391 tests
-(389 unitarios + 2 de arquitectura).
-Cualquier cambio recompila los 38 k: con las dependencias en caché y una sola
-unidad `Compiling breath-of-freedom`, `clippy` tardó **7 min 21 s**.
+Estado: **fases 1-6 cerradas; queda la 7**. Se borra cuando cierre — igual que
+`AHORA.md` borra lo cerrado; el detalle de cada fase queda en git.
 
 ## El principio
 
@@ -37,100 +14,33 @@ vivió sólo en prosa; el test ahora obliga a que su lista sólo pueda encoger.
 
 Corolario para este repo: **no se agregan leyes.** 21 es más de lo que se
 recuerda al escribir código. Lo que sale de aquí es al revés — leyes que se
-funden porque el build ya las cobra (§8, §12 y la mitad de §13 caben en un
-bloque `[lints]`; §4 pasa a ser la frontera de un crate).
+funden porque el build ya las cobra.
 
-## Orden de trabajo
+## Lo cerrado, y con qué mecanismo quedó cobrado
 
-Por retorno sobre esfuerzo, no por prolijidad:
+| # | Fase | La cobra ahora |
+|---|---|---|
+| 1 ✅ | Tests de frontera | `tests/architecture.rs`: hardware fuera de `input` y `unsafe`. **No se borra** (ver abajo) |
+| 2 ✅ | Determinismo | Replay headless de 120 ticks por `ActorId`, dentro de `bof_simulation` |
+| 3 ✅ | Lints | Los `[lints]` de cada `Cargo.toml`: §8, §9, §12, §13 |
+| 4 ✅ | Acceso al terreno | `TerrainAccess` es el único `SystemParam` de lectura |
+| 5 ✅ | `bof_domain` | §19: el dato compartido no declara `bevy` ni Avian |
+| 6 ✅ | `bof_simulation` | §20: no declara `bevy_render`, `bevy_input` ni `bevy_window` |
+| 7 | `bof_presentation` + app | §4 como frontera de crate |
 
-| # | Fase | Cierra | Escala |
-|---|---|---|---|
-| 1 | Tests de frontera ✅ | C2, §12 | cerrada |
-| 2 | Determinismo ✅ | pilar 5 de `NORTE.md` | cerrada |
-| 3 | Lints ✅ | §8, §9, §13 | cerrada |
-| 4 | Acceso al terreno ✅ | escala del mundo | cerrada |
-| 5 | `bof_domain` ✅ | §19 como frontera | cerrada |
-| 6 | `bof_simulation` ✅ | §20, C2 definitivo | cerrada |
-| 7 | `bof_presentation` + app | §4 | semanas |
+**El test de fase 1 sobrevive a su fecha de vencimiento.** El plan decía que en
+fase 6 lo reemplazaría Cargo. Eso valía sólo si `input` cruzaba a simulación; se
+quedó en la app (abajo), así que Cargo cobra que *simulación* no lea hardware,
+pero dentro de la app no llega nadie. Sus 13 entradas siguen ahí y sólo pueden
+encoger.
 
-Las fases 1-4 no tocan la estructura y cada una termina jugable (§10) con
-`fmt` + `clippy` + `test` verdes.
-
----
-
-## Fase 1 — Los tests que no esperan al refactor
-
-`tests/architecture.rs` recorre el árbol sin depender del juego y congela dos
-leyes antes del refactor:
-
-- Falla ante `ButtonInput`/`MouseMotion`/`MouseWheel` fuera de
-  `src/input/`, con una **lista de excepciones conocidas que solo puede
-  encoger**. Entró verde y la deuda dejó de crecer.
-- El mismo test cubre §12 (`unsafe`).
-- Provisional a propósito: en la fase 6 lo hace Cargo y el test se borra.
-
-## Fase 2 — Determinismo
-
-Estado: **cerrada**. `ShotSpreadRng` vive por actor con semilla authored;
-`ActorId` reemplaza a `Entity` en patrullaje, LOD de sensores y desempates de
-percepción. El replay headless ejecuta Movement + Avian reales por 120 ticks,
-invierte el orden de spawn, desplaza los IDs transitorios con 17 entidades dummy
-y exige `Transform`/`BodyVelocity`/`LocomotionState` idénticos por `ActorId`.
-
-## Fase 3 — Lints
-
-```toml
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-all = { level = "deny", priority = -1 }
-expect_used = "deny"
-unwrap_used = "deny"
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-float_cmp = "deny"
-wildcard_enum_match_arm = "deny"
-```
-
-Estado: los seis lints están en `deny` y `clippy --all-targets -D warnings`
-pasa. El inventario real de Clippy corrigió la medición textual: en producción
-había 3 `expect` y ningún `unwrap`; el conteo de 93 incluía módulos de test. Los
-tests permiten `unwrap`/`expect` y comparaciones exactas de floats para fixtures
-y constantes authored, pero no conversiones truncantes.
-
-Se hicieron exhaustivos 6 matches, se eliminó la única igualdad directa de
-floats en producción y se corrigieron 55 avisos del inventario conjunto. Las
-conversiones enteras se comprueban; terreno concentra el único helper acotado
-f32→índice, y grass conserva como excepción puntual su conteo redondeado de
-briznas. El terreno quedó confirmado visualmente y un test fija el reloj
-`HH:MM`; fase cerrada.
-
-`wildcard_enum_match_arm` hace que agregar una variante rompa cada consumidor
-que debía enterarse; `float_cmp` cobra la igualdad exacta fuera de tests.
-
-## Fase 4 — El acceso al terreno
-
-Estado: `TerrainAccess` es el único `SystemParam` de lectura y conserva dentro
-la cardinalidad actual. Player, Movement, layout, grass, visual y editor piden
-`height_at`/`kind_at`/pertenencia; las queries directas que quedan mutan el dato
-o reconstruyen su collider dentro del dueño. No se implementó streaming.
-
-Automatización verde y cero `terrain.single()`/`ground.single()` en `src/`. El
-checkpoint post-refactor abrió/cerró limpio, releyó `sandbox.ron`, permitió
-esculpir y lo guardó repetidamente el 2026-08-03. Fase cerrada (§10).
-
----
-
-## El corte en crates (fases 5-7)
+## El corte en crates
 
 ```text
-breath-of-freedom (bin)   composición: main.rs, wiring de plugins, scene
+breath-of-freedom (bin)   composición: main.rs, scene, world::layout/spawn, input
    ├── bof_presentation   visuals, camera, presentation, sfx, debug, perf, editor
-   ├── bof_simulation     movement, combat, mounts, projectiles, health,
-   │                      inventory, enemies, world, interaction, time_control,
-   │                      player, input, asset_pipeline
+   ├── bof_simulation     movement, combat, mounts, enemies, player, world,
+   │                      projectiles, health, inventory, interaction, time_control
    └── bof_domain         datos puros: tipos, unidades, Intents, estados, facts
 ```
 
@@ -141,151 +51,7 @@ corto por `[lib] name`):
 bof_domain = { package = "breath_of_freedom_domain", path = "crates/domain" }
 ```
 
-Reparto de los 21 módulos (LOC entre paréntesis):
-
-- **Solo presentation**: `visuals` (4 285), `presentation` (2 779), `debug`
-  (2 130), `perf` (2 014), `editor` (1 299), `camera` (749), `sfx` (162). De
-  `debug` y `perf` bajan a domain el `DebugSnapshot` y las perillas: son dato
-  puro. `editor` escribe en `world` por mensaje.
-- **Solo simulation**: `player` (395), `time_control` (86) — dueño de
-  `Time<Virtual>`, que es simulación y no presentación (§20).
-- **Partidos domain + simulation** (los `data.rs`/`state.rs` arriba, los
-  sistemas abajo): `movement` (9 986), `world` (3 489, con `GameLayer` y los
-  tipos en domain), `combat` (2 251), `mounts` (1 884), `inventory` (1 689),
-  `enemies` (1 482), `input` (681, `ActiveActions` en domain y el muestreo de
-  hardware como **único** que declara `bevy_input`), `projectiles` (387),
-  `interaction` (352), `health` (341).
-- **Solo domain**: `asset_pipeline` (956, `schema.rs` es SoT con `build.rs`) y
-  `proposal`, el núcleo genérico de arbitración.
-- **Al binario**: `scene` (510) — decide qué existe y cuándo, es composición.
-
-El grafo de `crate::X` **ya es casi un DAG**. Los únicos ciclos son de una línea:
-
-- `world/spawn.rs:189` → `crate::visuals::VisualOf(target)`
-- `visuals/enemy.rs:47` → `crate::presentation::juice::HitFlash` en un `Without<>`
-- `world/terrain.rs:9-10` → solo doc-links
-
-`VisualOf` es el contrato actor↔visual: baja a `domain` y el ciclo desaparece
-sin mover lógica. `HitFlash` es igual, o `juice` se funde con `visuals`.
-
-### Fase 5 — `bof_domain`
-
-Estado: **cerrada el 2026-08-03** con la topología hermanas elegida por el
-usuario. `breath_of_freedom_domain` posee los contratos compartidos de input,
-movimiento, combate, health, inventario, mounts, projectiles, debug/perf y
-assets; los módulos viejos reexportan durante la migración para no mezclar el
-corte de datos con el de sistemas. `build.rs`, `schema.rs` y el manifiesto
-generado se mudaron juntos. El estado visual de flecha se separó del filtro
-físico; las recetas con `Transform` quedaron correctamente en presentation.
-La build post-corte abrió/cerró limpia sobre Vulkan/Polaris.
-
-Es promover §19 ("datos separados de sistemas") de convención de archivos a
-frontera de crate, y la costura ya está hecha: 16 archivos
-`data.rs`/`state.rs`/`intents.rs`/`facts.rs`/`proposal.rs` suman **2 269 LOC** y
-solo uno menciona avian (`projectiles/data.rs`, 1 línea). Se suman
-`movement/{body,stamina,facing,sensing,probe_data,abilities,diag}.rs`,
-`combat/weapon.rs`, `asset_pipeline/schema.rs`, `visuals/catalog.rs`.
-
-Deps runtime: `bevy_ecs`, `bevy_math`, `bevy_reflect`. **No** `bevy`, **no**
-Avian; test de arquitectura y `cargo tree` fijan que tampoco entra render.
-
-Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
-`BodyVelocity`, `BodyDimensions`, los `*Facts`, `Intents`, `LocomotionState`,
-`Stamina`, `FacingSource`, `GroundSensing`, `TraversalProbe`, `ProposalBuffer`,
-`CastTrace`). Dos excepciones a resolver a mano:
-
-- `motors::stairs::expected_feet_y` — una función. O helper puro en domain, o el
-  visual lee un fact que el motor ya publica.
-- `MovementSet` — un `SystemSet`; el orden pertenece a quien arma el schedule.
-
-### Fase 6 — `bof_simulation`
-
-Estado: **cerrada el 2026-08-04**. Cada fila termina
-compilable y verde; primero se traslada sin rediseñar, luego se mejora.
-
-| Corte | Movimiento de código |
-|---|---|
-| 6.1 ✅ | Esqueleto Cargo + Avian mínimo + smoke test headless. |
-| 6.2 ✅ | `health`, `interaction`, `time_control`. |
-| 6.3 ✅ | `inventory`, `projectiles`. |
-| 6.4 ✅ | Movement: schedules, vínculos, restricciones, LOD y diagnóstico. |
-| 6.5 ✅ | Movement: motores, bundles, brain/facing/probe y arbitración. |
-| 6.6 ✅ | `combat`, `enemies`, `mounts`; los gates de escena van a `scene`. |
-| 6.7 ✅ | `player`, `world` (terreno, tipos, reloj) y los sensores; `input` se queda. |
-| 6.8 ✅ | Cableado raíz y retiro de shims. El test de frontera **se queda**. |
-
-Avian usará `default-features = false` con `3d`, `f32`, `parry-f32`, `parallel`
-y `xpbd_joints`: `debug-plugin` pasa a presentación y `collider-from-mesh` no se
-usa. Así el target headless no linkea `bevy_render` ni bifurca innecesariamente
-el build compartido. `build.rs` ya vive con schema/manifiesto en `bof_domain`.
-El smoke se corre como paquete aislado: seleccionar también el binario en la
-misma invocación unifica sus features legacy de Avian y deja de medir headless.
-Los sensores que leen `TerrainAccess`/geometría authored esperan a 6.7, cuando
-sus contratos de `world` puedan cruzar la frontera sin invertir dependencias.
-
-**6.5 partió el plugin en dos, no el pipeline.** `MovementMotorsPlugin` (en
-simulation) registra propose/arbitrate/tick, `brain`, `facing` y la sonda; el
-`MovementPlugin` de la app quedó en 45 líneas que sólo cuelgan los cuatro
-servicios de `SenseWorld` y `lift_actors_out_of_terrain`. En 6.7 los servicios
-siguen a `world` y ese plugin desaparece. Dos `pub(crate)` que la frontera
-volvió inalcanzables se resolvieron en su nivel correcto, no abriendo el tipo:
-`expected_feet_y` era el pendiente nombrado en la fase 5 y pasó a
-`StairsFacts::expected_feet_y` en domain — cálculo derivado de los facts, así
-que presentación lo obtiene del dato y no de simulación (§20); y `JumpLocal`
-expone `grant_coyote` para el test de `mounts`, que vuelve a cerrarse en 6.6.
-El crate headless no tiene el prelude de bevy, así que el azúcar `default()` se
-escribe `Default::default()` — no se agregó `bevy_utils` por eso.
-
-**6.8 puso el cableado donde se explica.** Los cinco `configure_sets` que
-vivían en `main` sin decir por qué ahora están en `SimulationPlugin`, que es
-quien sabe que una restricción se emite antes de que el proyectil avance y ambos
-antes de que el daño aterrice. `main` quedó en 10 plugins de presentación y
-composición más `SimulationPlugin`. El smoke headless dejó de levantar una
-esfera: levanta **el juego entero sin ventana**, que es la prueba que fase 6
-existía para conseguir. `ActiveActions` se inicializa en simulación aunque su
-único escritor sea la app — un recurso ausente es un panic, no un actor quieto.
-
-**6.7 cambió dos cosas del plan, con razón.** (a) **`input` se queda en la app.**
-Este reparto se escribió antes de elegir hermanas y antes de ver que `input`
-también maneja el cursor de la ventana. Dejándolo afuera, `bof_simulation` no
-declara `bevy_input` ni `bevy_window`, y la ley pasa de disciplina a
-imposibilidad: la simulación no *puede* leer hardware. No pierde nada, porque
-`ActiveActions`/`ControlOrientation`/`IntentAction` ya son domain. (b) **El test
-de frontera de fase 1 no se borra.** Era redundante sólo si `input` cruzaba;
-como se queda, sigue siendo lo único que impide que la deuda C2 crezca *dentro
-de la app*, donde Cargo no llega. Sus 13 entradas están todas ahí.
-
-`world` se partió por lo que cada mitad hace, no por tamaño: cruzan el
-heightfield, la semántica por celda, los marcadores authored (`Stairs`,
-`Ladder`, `NonClimbable`, `Surface`, `PracticeTarget`) y **el reloj**; se quedan
-`layout`, `spawn`, `forest` y la iluminación. El corte del reloj es el que menos
-se ve y el más necesario: `advance_time` **escribe** cada tick, y presentación
-sólo lee (§20), así que en fase 7 no podía terminar ahí. `WORLD_SIZE` y el hash
-de scatter bajaron a `bof_domain::world` porque el terreno y la pradera tienen
-que coincidir sin llamarse.
-
-Tres sistemas nombraban `AppState` para spawnear (terreno, player y, desde 6.6,
-enemigos y caballo). Todos siguen la misma costura: **simulación construye, la
-tabla de escenas decide cuándo**, y la entidad declara su vida con `SceneScoped`
-en vez de `DespawnOnExit`, que la app bindea a su propio estado.
-
-**6.6 mostró dónde estaba la costura de escena.** `enemies` y `mounts` traían
-un `for id in SceneId::ALL` que gateaba su spawn, y `scene` es composición: se
-queda en el binario. Pero cada gate era una función de una línea que escribe un
-mensaje (`BokoboSpawnRequest::Ensure`, `HorseSpawnRequest::Ensure`), así que las
-dos se mudaron al `ScenePlugin` — simulación decide **cómo** se construye un
-enemigo o un caballo, la tabla de escenas decide **cuál las tiene**, y sigue
-habiendo un solo camino de spawn (el mismo mensaje que escribe el hub de debug).
-Ahí la frontera cobró un resto de C2: el test de `mounts` sembraba
-`ButtonInput<KeyCode>` en su app aunque ya no quedaba ningún lector de hardware
-en esos módulos. Deuda que sí queda anotada: `ComboLocal::current_step` pasó a
-`pub` porque `visuals::vfx` dibuja el arco del swing con `reach`/`arc_deg`; en
-fase 7 eso tiene que ser un fact publicado o `ComboLocal` baja a domain, porque
-presentación no podrá llamar a simulación.
-
-### Fase 7 — `bof_presentation` y el binario (hermanas)
-
-¿Pila lineal o hermanas?
+### Hermanas, no pila
 
 ```text
 Lineal:     domain ← simulation ← presentation ← app
@@ -293,39 +59,84 @@ Hermanas:   domain ← simulation ← app
             domain ← presentation ← app
 ```
 
-**Decisión del usuario 2026-08-03: hermanas.** §20 dice
-"presentación solo READ". Si presentación ve simulación, ve sus funciones y sus
-sistemas, y "solo leer" vuelve a ser disciplina — la misma que hoy falla en 15
-archivos. Si solo ve `domain`, que es dato puro, **leer es lo único que puede
-hacer**.
+**Decisión del usuario 2026-08-03: hermanas.** §20 dice "presentación solo
+READ". Si presentación ve simulación, ve sus funciones y sus sistemas, y "solo
+leer" vuelve a ser disciplina. Si sólo ve `domain`, que es dato puro, **leer es
+lo único que puede hacer**. El impuesto es real y ya se está pagando: todo lo que
+presentación lea tiene que ser dato en `domain`.
 
-El impuesto es real: todo lo que presentación lea tiene que ser dato en
-`domain`, así que `domain` crece y el contrato entre capas se vuelve explícito.
-La lista de la fase 5 dice que ya estamos casi ahí.
+### Tres cosas que el reparto original decía mal
 
-Esta decisión ya gobernó fase 5: todo contrato que ambas leen baja a domain;
-funciones, sistemas, render y física permanecen con su dueño.
+Se escribió antes de elegir hermanas y antes de ver el código de cerca:
 
----
+- **`input` se queda en la app.** Lee hardware *y* maneja el cursor de la
+  ventana. Afuera, la simulación no *puede* leer teclado; adentro habría
+  arrastrado `bevy_window`. No pierde nada: `ActiveActions`,
+  `ControlOrientation` e `IntentAction` ya son domain.
+- **`world::layout` y `world::spawn` se quedan en el binario.** Son composición,
+  como `scene`. El binario es la única capa que ve simulación y presentación a la
+  vez, así que es el único lugar donde armar collider **y** malla en la misma
+  función es legal. Del resto de `world` cruzó todo: heightfield, semántica por
+  celda, marcadores authored y el reloj.
+- **De `day_night` cruzó el reloj, no la luz.** `advance_time` escribe cada tick
+  y presentación sólo lee, así que no podía terminar en el crate equivocado
+  aunque hoy nadie de gameplay consulte la hora.
+
+### La costura que se repitió cinco veces
+
+Terreno, player, enemigos, caballo y el reloj estaban todos acoplados a `scene`
+por lo mismo: **cuándo** nacen. La respuesta fue siempre igual — simulación
+expone *cómo* se construye (una función o un mensaje), la tabla de escenas decide
+*cuándo*, y la entidad declara su vida con `SceneScoped`, que la app bindea a
+`DespawnOnExit`. Ningún sistema de simulación nombra `AppState`.
+
+Vale como patrón para lo que venga: si algo de simulación quiere consultar el
+estado de la app, la pregunta correcta suele ser qué mensaje debería recibir.
+
+## Fase 7 — `bof_presentation`
+
+Lo que falta es que presentación deje de leer `bof_simulation`. Medido el
+2026-08-04, son ~35 referencias en `camera`, `debug`, `visuals`, `presentation`,
+`sfx` y `inventory::pickup`, en dos grupos muy distintos:
+
+- **Renombre puro** (el tipo ya vive en domain y simulación sólo lo reexporta):
+  `CombatState`, `FacingSource`, `BodyDimensions`, `CastTrace`, `Horse`,
+  `GroundSensing` y todos los `movement::{facts, intents, state, stamina,
+  proposal, probe_data}`. Es cambiar el prefijo.
+- **Deuda de diseño**, ocho tipos que hay que decidir dónde van:
+  `combat::motors::aim::{BowFiredMessage, DrawStrength, BOW_SOCKET_LOCAL}`,
+  `attack::{ComboLocal, HitImpactMessage}`, `motors::sneak::Crouched`,
+  `enemies::{Enemy, Awareness}`, `health::Health` y `MovementSet`. Casi todos
+  son mensajes o componentes de estado, o sea justo lo que domain debería
+  contener; `MovementSet` es orden y pertenece a quien arma el schedule.
+
+`ComboLocal::current_step` está `pub` sólo porque `visuals::vfx` dibuja el arco
+del swing con `reach`/`arc_deg`. O el motor publica ese par como fact, o
+`ComboLocal` baja a domain. Es el caso testigo del grupo de arriba.
+
+`JumpLocal::grant_coyote` es lo inverso y se puede cerrar ya: existía para un
+test de `mounts` que estaba del otro lado de la frontera, y hoy están juntos.
 
 ## La frontera se prueba, no se declara
 
 Cargo prohíbe la dependencia inversa, pero no prueba que la simulación siga
-siendo la misma sin pantalla. Eso solo se prueba corriéndola: **el mismo
-escenario headless y renderizado, exigiendo estado idéntico tick a tick**. Si
-divergen, presentación está escribiendo verdad. Se apoya en la fase 2 — sin
-semilla determinista esa comparación no existe — y el beneficio llega aunque el
-co-op no llegue nunca: tests de simulación sin ventana ni GPU, en segundos.
+siendo la misma sin pantalla. Eso sólo se prueba corriéndola. El smoke headless
+ya no levanta una esfera con gravedad: levanta `SimulationPlugin` entero, sin
+ventana ni GPU, en segundos.
 
-La fase 2 fijó el primer snapshot: `Transform`/`BodyVelocity`/
-`LocomotionState` de cada `ActorId` durante 120 ticks. En fase 7 se corre el
-mismo contrato con y sin presentación para probar que la capa sólo lee.
+La fase 2 fijó el snapshot: `Transform`/`BodyVelocity`/`LocomotionState` de cada
+`ActorId` durante 120 ticks. En fase 7 se corre el mismo contrato con y sin
+presentación para probar que la capa sólo lee.
+
+**Los crates se testean por paquete.** Meter el binario en la misma invocación
+que el crate unifica las features de Avian y el smoke deja de ser headless
+(panickea). `cargo test`, `cargo test -p breath_of_freedom_simulation` y
+`cargo test -p breath_of_freedom_domain`, por separado.
 
 ## Más allá de los crates: los tipos
 
-Los crates ordenan *quién ve a quién*. Aparte hay error de runtime que podría
-ser error de compilación. Es aditivo: se paga por módulo, empezando por
-`movement`, cuando ese módulo ya esté en su crate.
+Los crates ordenan *quién ve a quién*. Aparte hay error de runtime que podría ser
+error de compilación. Es aditivo: se paga por módulo, empezando por `movement`.
 
 - **229 campos `f32` crudos contra 2 newtypes** (`JumpStaminaCost`,
   `Awareness`): nada impide sumar metros a metros/segundo, ni pasar un radio
@@ -338,22 +149,16 @@ ser error de compilación. Es aditivo: se paga por módulo, empezando por
 
 ## Qué pasa con las leyes al terminar
 
-`ARCHITECTURE.md` está en 200/200 líneas y los cuatro core suman **994 de 1000**.
 Este plan no agrega leyes: las funde. Al cerrar cada fase, su ley se reescribe
-como una línea que **nombra su mecanismo** (§8/§12/§13 → "los `[lints]` de cada
-`Cargo.toml`"; §4 → "la frontera del crate"; §20 → "`bof_simulation` no declara
-`bevy`"), y el espacio liberado paga el techo. Que además debería cobrarse solo:
-un test que sume los cuatro core y falle sobre 1000. Hoy es honor-system, y está
-a 6 líneas del límite.
+como una línea que **nombra su mecanismo**, y el espacio liberado paga el techo
+de `ARCHITECTURE.md` (200/200, al límite). Ya se hizo con §4, §14, §19 y §20.
+
+Ese techo debería cobrarse solo: un test que sume los cuatro documentos core y
+falle sobre 1000 líneas. Hoy es honor-system.
 
 ## Criterios de aceptación
 
 | Fase | Verde cuando |
 |---|---|
-| 1 | El test de frontera pasa y su lista de excepciones solo encoge. |
-| 2 ✅ | Dos corridas con la misma semilla dan estado idéntico N ticks; `Entity::to_bits` no aparece en ningún cálculo de resultado. |
-| 3 ✅ | Lints en `deny`, Clippy limpio y checkpoint cerrado. |
-| 4 ✅ | Grep vacío, suite verde y checkpoint jugado aceptado. |
-| 5 ✅ | `cargo tree -p breath_of_freedom_domain` sin `bevy_render`; 50 tests propios y frontera automática. |
-| 6 | `grep -rl "Mesh\|StandardMaterial" crates/simulation/src` vacío; `bevy_input` solo en el dueño de input; el test de la fase 1 se borra por redundante; checkpoint jugado. |
+| 6 ✅ | Sin `Mesh`/`StandardMaterial`/`bevy_input` en `crates/simulation/src`; smoke headless levanta el juego entero; checkpoint jugado. |
 | 7 | `cargo tree` de presentation sin `bof_simulation`; checkpoint jugado; frame time sin regresión contra el baseline de `AHORA.md`. |

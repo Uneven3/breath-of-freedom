@@ -53,7 +53,7 @@ PostUpdate   [ Animación e IK ] ──► bevy::animation::animate_targets ─�
 
 ### A. Motores Implementados y Validados (14)
 
-| Motor | Archivo (`src/movement/motors/`) | `LocomotionState` | Propósito |
+| Motor | Archivo (`crates/simulation/src/movement/motors/`) | `LocomotionState` | Propósito |
 |---|---|---|---|
 | **Walk** | `walk.rs` | `Walk` | Caminata plana guiada por aceleración e inercia. |
 | **Sprint** | `sprint.rs` | `Sprint` | Carrera rápida con consumo de Stamina. |
@@ -211,11 +211,11 @@ Lo que este documento aporta al IK:
 
 ### Fase 1 — Volúmenes de Agua (`WaterVolume`), Motores (`Swim`/`Dive`), Estado de Carga Ortogonal y Árbitros
 - [ ] **Definir Volúmenes de Agua (`world/water.rs`):** Crear el componente delimitado `WaterVolume` (sensor AABB/Collider) y calcular `WaterFacts` en `MovementSet::SenseWorld` (`pool_depth >= 1.2m` AND `immersion_depth >= 1.0m`).
-- [ ] **Actualizar Enums y Guards Exhaustivos (`src/movement/state.rs`):**
+- [ ] **Actualizar Enums y Guards Exhaustivos (`bof_domain::movement::state`):**
   - Agregar `Swim`, `Dive`, `ShieldSurf`, `SlopeSlide` a `LocomotionState`.
   - Crear `ObjectManipulationState { Carry(Entity), PushPull(Entity) }` y el árbitro `arbitrate_manipulation` en `FixedUpdate` (§7).
   - Actualizar `LocomotionState::ALL` y `assert_all_is_exhaustive`.
-- [ ] **Implementar Motores `Swim` y `Dive` (`src/movement/motors/`):** Flotabilidad en `WaterVolume`, stamina/oxígeno y ascenso automático.
+- [ ] **Implementar Motores `Swim` y `Dive` (`crates/simulation/src/movement/motors/`):** Flotabilidad en `WaterVolume`, stamina/oxígeno y ascenso automático.
 - [ ] **Implementar Carga y Empuje Desacoplados con Matemática Física (§20):** `RigidBody::Kinematic` posicionado matemáticamente en `FixedUpdate` y acople de malla visual a `SKT_Carry_Overhead` en `PostUpdate`.
 - [ ] **Crear Resolvedor de Animación (`src/visuals/animation.rs`):**
   - Agregar `AnimationRole::{Swim, Dive, Push, Pull, CarryIdle, CarryWalk}`.

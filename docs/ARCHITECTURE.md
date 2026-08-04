@@ -10,7 +10,8 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§1** Responsabilidad única por plugin/sistema/componente.
 - **§2** Extender agregando sistemas/componentes, no editando lógica ajena.
 - **§3** Un trait implementado honra lo que el trait promete.
-- **§4** APIs públicas mínimas: solo lo que el llamador necesita.
+- **§4** APIs públicas mínimas: lo `pub` es lo que cruza la frontera de su
+  crate. Dentro, `pub(crate)` — Cargo lo cobra.
 - **§5** Depender de componentes/mensajes expuestos, jamás de internals.
 - **§6** Components/Resources/Messages son datos puros; la lógica va en
   sistemas (helpers puros ok).
@@ -25,21 +26,20 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§12** `unsafe_code = "forbid"` en cada crate.
 - **§13** `[lints]` en `deny` + `cargo fmt` y Clippy antes de terminar; `#[allow]`
   solo con justificación puntual.
-- **§14** Un plugin por sistema, carpeta propia bajo `src/`.
+- **§14** Un plugin por sistema, carpeta propia en su crate.
 - **§15** Comentarios solo para invariantes/restricciones/workarounds. Nunca el *qué*.
 - **§16** ~300 líneas es señal de dividir, no bloqueo.
 - **§17** Dependencia nueva en `Cargo.toml` requiere OK humano previo.
 - **§18** Sin allocations en el hot path de `FixedUpdate`.
-- **§19** Datos separados de sistemas (`state.rs`/`intents.rs` vs `mod.rs`/motores).
-- **§20** Simulación nunca depende de visuales; cámara/HUD/interpolación/cues
+- **§19** Datos separados de sistemas: el dato compartido vive en `bof_domain`,
+  que no declara `bevy` ni Avian.
+- **§20** Simulación nunca depende de visuales: `bof_simulation` no declara
+  `bevy_render`, `bevy_input` ni `bevy_window`. Cámara/HUD/interpolación/cues
   viven en `Update` y solo **leen**.
 - **§21** **No construir lo que el motor va a dar — ni planear sobre lo que
-  todavía no da.** `bevy_scene` 0.19 trae el macro `bsn!` con parches por campo:
-  la dirección es migrar hacia ahí, no ampliar andamiaje que lo duplique, y
-  `world/layout.rs` es un BSN artesanal (candidato #1). Pero **verificado en las
-  fuentes el 2026-07-26: el formato `.bsn` no existe y un `Scene` no se
-  serializa**, así que BSN no puede ser un formato de archivo. Nuestro: estados y
-  ciclo de vida, contenido procedural, y datos numéricos (heightfield, semántica).
+  todavía no da.** `bsn!` es la dirección para componer entidades; el formato
+  `.bsn` no existe y un `Scene` no se serializa (verificado en las fuentes de
+  0.19), así que no puede ser el archivo de nivel. Detalle en `AHORA.md`.
 
 ## El pipeline seleccionado
 
@@ -74,7 +74,7 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
   (`GroundMovement`, `JumpMovement`, …), no por identidad: el horse es un actor
   con otro set de capacidades, no un caso especial.
 - **Árbitro central por sistema.** Motores *proponen* transiciones a un
-  `ProposalBuffer` de capacidad fija (núcleo compartido `src/proposal.rs`,
+  `ProposalBuffer` de capacidad fija (núcleo compartido `bof_domain::proposal`,
   prioridad → peso → orden); un solo sistema arbitra y es el único escritor
   de `LocomotionState`/`CombatState`. Nada de estados concurrentes ni
   motores escribiéndose entre sí. Tests `arbitration_matrix` fijan que cada
@@ -176,12 +176,12 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 
 | Módulo | Posee | Frontera |
 |---|---|---|
-| `input` | `ActiveActions`, `ControlOrientation`, bindings, foco modal | Nadie lee hardware salvo él (ley hoy violada en 13 archivos: C2); resuelve en PreUpdate |
-| `scene` | `AppState`, tabla `SCENES`, `SceneBuild`, ciclo de vida | Decide *qué existe y cuándo*; `DespawnOnExit` en todo contenido de escena |
+| `input` (app) | bindings, foco modal, cursor | Nadie lee hardware salvo él (deuda C2: 13 archivos, congelada por `tests/architecture.rs`); simulación no *puede*: no declara `bevy_input` |
+| `scene` (app) | `AppState`, tabla `SCENES`, `SceneBuild`, ciclo de vida | Decide *qué existe y cuándo*; simulación declara `SceneScoped` y esto lo bindea a `DespawnOnExit` |
 | `editor` | Autoría in-engine: pinceles de relieve, pintura semántica, historial, persistencia | Decide *dónde y cuándo*; el **cómo** cambia el dato es de `world` |
 | `asset_pipeline` | Manifiesto build-time, `MaterialPalette`, `SpatialCatalog`, `schema.rs` | Única autoridad espacial de lo authored; SoT compartida con `build.rs` |
 | `movement` | `Intents`, `LocomotionState`, motores, facts, attachment/link | Brains escriben Intents; Combat pide por mensaje |
-| `proposal` | Núcleo genérico de arbitración | Type-aliases por sistema |
+| `proposal` (domain) | Núcleo genérico de arbitración | Type-aliases por sistema |
 | `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |
 | `projectiles` | Pool fijo de flechas: vuelo/impacto | Simulación sin visuales; Update sincroniza representación |
 | `health` | `Health`, inmunidad, aplicación autoritativa de daño | Único que resta HP; muerte por mensaje |
@@ -190,7 +190,7 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 | `interaction` | Árbitro de `Interact`, `Interactable`, prioridad | Único consumidor de la tecla; emite la decisión por mensaje |
 | `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
 | `player` | Spawn y respawn del jugador | Dueño de la reacción a su muerte |
-| `world` | Geometría, capas, nivel, targets | `TerrainAccess` enruta toda lectura; no lee a nadie |
+| `world` | Heightfield, semántica por celda, marcadores authored, reloj | `TerrainAccess` enruta toda lectura; `layout`/`spawn` se quedan en el binario porque arman collider **y** malla |
 | `visuals`, `camera`, `presentation`, `sfx` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20) |
 | `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
 | `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las aplica a lo suyo |

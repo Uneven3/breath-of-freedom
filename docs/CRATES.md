@@ -200,23 +200,24 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Aquí se cobran §20 y C2 de forma definitiva: sin `bevy` declarado, los 5
-archivos que tocan `Mesh` no compilan hasta ceder eso a presentación, y
-`KeyCode` deja de ser alcanzable fuera de su dueño.
+Estado: **pendiente**. Son checkpoints/commits, no megacortes: cada fila termina
+compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
-**avian3d no es el obstáculo que parecía.** Declara `bevy` con
-`default-features = false` y solo `["std", "bevy_log"]`, así que
-`bevy_render` entra solo por sus features `debug-plugin` y `collider-from-mesh`,
-ambas en `default` y ambas prescindibles: `collider-from-mesh` no se usa (**0**
-llamadas a `from_mesh`/`trimesh_from`/`convex_hull_from`) y `debug-plugin` se
-muda a presentación con `PhysicsDebugPlugin`, que ya vive en `main.rs`. Con
-`default-features = false, features = ["3d","f32","parry-f32","parallel","xpbd_joints"]`,
-un target headless que dependa solo de `bof_simulation` no linkea `bevy_render`.
-Y paga una deuda que no es de arquitectura: esas features bifurcan nuestro árbol
-de bevy del de los otros juegos y llenan el `build-dir` compartido (`AHORA.md`).
+| Corte | Movimiento de código |
+|---|---|
+| 6.1 | Esqueleto Cargo + Avian mínimo + smoke test headless. |
+| 6.2 | `health`, `interaction`, `time_control`. |
+| 6.3 | `inventory`, `projectiles`. |
+| 6.4 | Movement: infraestructura, schedules, servicios. |
+| 6.5 | Movement: motores y orquestación; conserva replay determinista. |
+| 6.6 | `combat`, `enemies`, `mounts`. |
+| 6.7 | `player`, `input`, `world` y runtime de assets; render queda en adaptadores. |
+| 6.8 | Cableado raíz, replay headless, retiro de shims/test redundante y checkpoint. |
 
-El obstáculo previo de `build.rs` ya se resolvió en fase 5: vive con schema y el
-manifiesto generado en domain; simulation consumirá ese contrato ya compilado.
+Avian usará `default-features = false` con `3d`, `f32`, `parry-f32`, `parallel`
+y `xpbd_joints`: `debug-plugin` pasa a presentación y `collider-from-mesh` no se
+usa. Así el target headless no linkea `bevy_render` ni bifurca innecesariamente
+el build compartido. `build.rs` ya vive con schema/manifiesto en `bof_domain`.
 
 ### Fase 7 — `bof_presentation` y el binario (hermanas)
 

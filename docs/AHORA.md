@@ -238,11 +238,11 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## Dónde se retoma (2026-08-03)
+## Dónde se retoma (2026-08-04)
 
-1. **CRATES fase 6 — `bof_simulation`:** crear el crate headless, mover los
-   sistemas por dueño y apagar las features render/default de Avian. Antes de
-   cerrar: `Mesh`/`StandardMaterial` ausentes y `bevy_input` sólo en input.
+1. **CRATES fase 6 — `bof_simulation`:** ejecutar los cortes 6.1–6.8 de
+   `CRATES.md`, todos compilables y verdes; comienza por el esqueleto headless y
+   Avian mínimo, sin mezclar traslado con rediseño.
 2. **CRATES fase 7 — `bof_presentation` + app:** hermana de simulation; depende
    sólo de `bof_domain`, y el binario compone ambas.
 3. **Instancias discretas**: la tercera capa de autoría. Colocar/mover/borrar

@@ -390,6 +390,19 @@ legible que la función. Si sí, migrar `layout.rs` entero.
   2026-08-01: la lista ya sólo encoge). Ya se cobraron `Tab` y el navegador de
   animación. El test de fase 1 ya impide que la lista crezca; falta el dueño
   único que traduzca bindings a acciones tipadas.
+- **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
+  resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
+  correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.
+  Encontrado el 2026-08-04 investigando la montura. Es el enganche natural de
+  "la lluvia moja y afecta el agarre" (`NORTE.md`) y de la tracción por
+  superficie; la tabla `KINDS` ya tiene dónde colgar el dato. Toca el feeling de
+  locomoción, así que no entra sin checkpoint jugado.
+- **El HUD de locomoción miente mientras montás.** Al montar, el player pierde
+  `LocomotionEnabled` y los servicios dejan de actualizar sus facts, pero la
+  sección sigue mostrando los últimos valores a pie **sin marcarlos como
+  congelados**. El caballo ya tiene los suyos (`grounded`/`surface` en la
+  sección Mount, 2026-08-04); falta que la del player diga que está en pausa en
+  vez de mostrar un dato viejo como si fuera de ahora.
 - **Audio real:** el paso es un `debug!`; falta cargar `.ogg` y reproducirlo en
   el cue `Step`. Y el timing por **foot-plant**: el acumulador de zancada es un
   stopgap hasta que la animación emita eventos de pisada.

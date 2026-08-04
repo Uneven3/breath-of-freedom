@@ -18,36 +18,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, we
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
-/// Persistent jump bookkeeping, per-actor.
-///
-/// Fields are `pub(crate)`, not private: the multi-actor-migration invariant
-/// test (`super::super::actor_isolation_tests`) asserts on them directly to
-/// confirm no cross-actor bleed, mirroring the same-module test pattern
-/// already used by `MantleState`/`EdgeLeapState` but from outside this file.
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq)]
-pub struct JumpLocal {
-    pub(crate) coyote: f32,
-    pub(crate) buffer: f32,
-    pub(crate) was_on_floor: bool,
-    pub(crate) prev_wants: bool,
-    pub(crate) needs_release: bool,
-}
-
-impl JumpLocal {
-    /// Puts the actor inside its coyote window without waiting for the ground to
-    /// leave under it. `mounts` uses this to set up a dismount-then-jump case;
-    /// the rest of the bookkeeping stays private, and this can go back to
-    /// `pub(crate)` once mounts moves into this crate (`CRATES.md`, 6.6).
-    pub fn grant_coyote(&mut self, seconds: f32) {
-        self.coyote = seconds;
-    }
-}
-
-/// State indicating whether the current airtime was initiated by a player jump.
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct JumpPhase {
-    pub is_player_jump: bool,
-}
+pub use bof_domain::movement::motor_state::{JumpLocal, JumpPhase};
 
 type ProposeQuery<'a> = (
     &'a GroundFacts,

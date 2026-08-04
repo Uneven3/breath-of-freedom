@@ -10,7 +10,6 @@ use bevy_ecs::prelude::*;
 use bevy_math::prelude::*;
 use bevy_time::prelude::*;
 use bevy_transform::prelude::*;
-use std::f32::consts::PI;
 use std::time::Duration;
 
 use super::BodyVelocity;
@@ -330,46 +329,7 @@ pub(crate) fn drive_planar_velocity(
     )
 }
 
-/// Position-lerped arc shared by Mantle and AutoVault: smoothstep from `start`
-/// to `target` with a sinusoidal height bump.
-#[derive(Default)]
-pub struct KinematicArc {
-    pub running: bool,
-    elapsed: f32,
-    duration: f32,
-    start: Vec3,
-    target: Vec3,
-}
-
-impl KinematicArc {
-    pub fn begin(&mut self, start: Vec3, target: Vec3, duration: f32) {
-        self.start = start;
-        self.target = target;
-        self.duration = duration;
-        self.elapsed = 0.0;
-        self.running = true;
-    }
-
-    /// Advance by `dt` and return the next body position; on the final step
-    /// this lands exactly on `target` and clears `running`.
-    pub fn step(&mut self, dt: f32, arc_height: f32) -> Vec3 {
-        self.elapsed = (self.elapsed + dt).min(self.duration);
-        let raw = self.elapsed / self.duration;
-        if raw >= 1.0 {
-            self.running = false;
-            return self.target;
-        }
-        let mut next = self.start.lerp(self.target, smoothstep(raw));
-        next.y += (raw * PI).sin() * arc_height;
-        next
-    }
-}
-
-/// `smoothstep(0, 1, x)` = x²(3 − 2x).
-fn smoothstep(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    x * x * (3.0 - 2.0 * x)
-}
+pub use bof_domain::movement::motor_state::KinematicArc;
 
 /// Keep the climb/wall-jump cap this far below a detected ledge lip, forcing a
 /// Mantle instead of letting the body float over the edge.

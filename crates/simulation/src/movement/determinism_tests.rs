@@ -10,12 +10,10 @@ use super::abilities::{
     AirborneMovement, GroundMovement, JumpMovement, JumpStaminaCost, SprintMovement,
 };
 use super::body::BodyDimensions;
-use super::bundles::{
-    GroundMovementBundle, JumpMovementBundle, KinematicActorBundle, SprintMovementBundle,
-    StaminaBundle,
-};
+use super::bundles::KinematicActorBundle;
 use super::intents::{Intents, JumpIntent, PlanarMoveIntent};
 use super::sensing::GroundSensing;
+use super::stamina::Stamina;
 use super::state::LocomotionState;
 use super::{ActorId, BodyVelocity, MovementPlugin};
 
@@ -56,11 +54,11 @@ fn spawn_actor(app: &mut App, id: ActorId, position: Vec3) {
             BodyDimensions::PLAYER,
             GroundSensing::PLAYER,
         ),
-        GroundMovementBundle::new(GroundMovement::PLAYER),
-        SprintMovementBundle::new(SprintMovement::PLAYER),
-        StaminaBundle::default(),
+        GroundMovement::PLAYER,
+        SprintMovement::PLAYER,
+        Stamina::default(),
         AirborneMovement::PLAYER,
-        JumpMovementBundle::new(JumpMovement::PLAYER),
+        JumpMovement::PLAYER,
         JumpStaminaCost(20.0),
     ));
 }

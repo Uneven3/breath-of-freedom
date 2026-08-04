@@ -2,6 +2,8 @@
 
 use bevy_ecs::prelude::*;
 
+use super::{facts, motor_state, state};
+
 /// Data-driven ground-body response shared by all terrestrial capabilities.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundDriveProfile {
@@ -24,12 +26,14 @@ pub struct GroundMovement {
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(motor_state::SprintLock)]
 pub struct SprintMovement {
     pub drive: GroundDriveProfile,
     pub recharge_threshold: f32,
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(motor_state::SneakLock, state::Crouched, motor_state::StandClearance)]
 pub struct SneakMovement {
     pub drive: GroundDriveProfile,
     pub sprinting_stamina_factor: f32,
@@ -37,6 +41,7 @@ pub struct SneakMovement {
 
 /// Tuning for traversal along authored stair geometry.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(facts::StairsFacts, motor_state::StairsLocal, motor_state::StairsGrace)]
 pub struct StairsMovement {
     pub ascend_speed: f32,
     pub descend_speed: f32,
@@ -205,6 +210,7 @@ impl AirborneMovement {
 
 /// Enables a basic jump and configures its impulse, grace windows, and turn speed.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(motor_state::JumpPhase, motor_state::JumpLocal)]
 pub struct JumpMovement {
     pub impulse: f32,
     pub coyote_time: f32,
@@ -234,6 +240,7 @@ impl JumpMovement {
 
 /// Enables gliding and configures its air-control and stamina recovery profile.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(motor_state::GlideLocal)]
 pub struct GlideMovement {
     pub fall_speed: f32,
     pub gravity_multiplier: f32,
@@ -274,6 +281,7 @@ impl ClimbMovement {
 
 /// Enables authored ladder traversal and configures its vertical speed.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(facts::LadderFacts)]
 pub struct LadderMovement {
     pub speed: f32,
 }
@@ -299,6 +307,7 @@ pub struct VaultTraversal {
 
 /// Enables traversal over ledges and configures Mantle and AutoVault.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(facts::LedgeFacts, motor_state::MantleState, motor_state::VaultState)]
 pub struct LedgeTraversal {
     pub mantle: MantleTraversal,
     pub vault: VaultTraversal,
@@ -345,6 +354,7 @@ pub struct EdgeLeapTraversal {
 
 /// Enables wall-launched traversal and configures WallJump and EdgeLeap.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(motor_state::WallJumpState, motor_state::EdgeLeapState)]
 pub struct WallJumpMovement {
     pub wall_jump: WallJumpTraversal,
     pub edge_leap: EdgeLeapTraversal,

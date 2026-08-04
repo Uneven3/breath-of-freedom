@@ -17,16 +17,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, we
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
-#[derive(Component, Default)]
-pub struct WallJumpState {
-    is_jumping: bool,
-    timer: f32,
-    needs_release: bool,
-    /// Armed by `propose`, consumed by `tick`'s first active frame (the launch
-    /// impulse). An explicit flag, not a `timer == JUMP_DURATION` float
-    /// comparison — the timer value can't reliably identify "first tick".
-    launch_pending: bool,
-}
+pub use bof_domain::movement::motor_state::WallJumpState;
 
 type ProposeQuery<'a> = (
     &'a Intents,

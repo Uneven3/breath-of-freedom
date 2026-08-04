@@ -28,11 +28,9 @@ use crate::movement::abilities::{
     AirborneMovement, GroundMovement, SprintMovement, StairsMovement,
 };
 use crate::movement::body::BodyDimensions;
-use crate::movement::bundles::{
-    GroundMovementBundle, KinematicActorBundle, SprintMovementBundle, StairsMovementBundle,
-    StaminaBundle,
-};
+use crate::movement::bundles::KinematicActorBundle;
 use crate::movement::sensing::GroundSensing;
+use crate::movement::stamina::Stamina;
 
 pub use bof_domain::enemies::Enemy;
 
@@ -187,10 +185,10 @@ fn spawn_bokobo(
             GroundSensing::PLAYER,
         ),
         (
-            GroundMovementBundle::new(ground),
-            SprintMovementBundle::new(sprint),
-            StairsMovementBundle::new(StairsMovement::PLAYER),
-            StaminaBundle::default(),
+            ground,
+            sprint,
+            StairsMovement::PLAYER,
+            Stamina::default(),
             AirborneMovement::PLAYER,
         ),
         perception::Perception::BOKOBO,

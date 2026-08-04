@@ -9,11 +9,9 @@ use crate::movement::abilities::{
     AirborneMovement, GroundMovement, JumpMovement, JumpStaminaCost, SprintMovement, StairsMovement,
 };
 use crate::movement::body::BodyDimensions;
-use crate::movement::bundles::{
-    GroundMovementBundle, JumpMovementBundle, KinematicActorBundle, SprintMovementBundle,
-    StairsMovementBundle, StaminaBundle,
-};
+use crate::movement::bundles::KinematicActorBundle;
 use crate::movement::sensing::GroundSensing;
+use crate::movement::stamina::Stamina;
 
 use super::data::{
     Horse, HorseCharge, HorseOwner, MountTransitionRequest, MountedOn, PendingHorseDespawn,
@@ -47,11 +45,11 @@ pub fn spawn_horse_bundle() -> impl Bundle {
             HORSE_DIMENSIONS,
             GroundSensing::PLAYER,
         ),
-        GroundMovementBundle::new(GroundMovement::HORSE),
-        SprintMovementBundle::new(SprintMovement::HORSE),
-        StairsMovementBundle::new(StairsMovement::HORSE),
-        StaminaBundle::default(),
-        JumpMovementBundle::new(JumpMovement::HORSE),
+        GroundMovement::HORSE,
+        SprintMovement::HORSE,
+        StairsMovement::HORSE,
+        Stamina::default(),
+        JumpMovement::HORSE,
         JumpStaminaCost(20.0),
         AirborneMovement::HORSE,
     )

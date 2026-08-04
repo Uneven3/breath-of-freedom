@@ -68,17 +68,9 @@ pub fn propose(mut q: Query<ProposeQuery, ProposeFilter>) {
     }
 }
 
-/// Last valid `StairsFacts` seen while Stairs was active, per-actor. Bridges
-/// the grace window where `on_stairs` flickers false between treads (the
-/// trigger AABB misses the gap): the propose system keeps `state == Stairs`,
-/// but the service zeroes `StairsFacts`, so the tick keeps snapping against
-/// this cached geometry instead. Was a `Local<HashMap<Entity, StairsFacts>>`;
-/// promoted to a component like every other per-actor motor latch.
-#[derive(Component, Default)]
-pub struct StairsLocal(pub(crate) Option<StairsFacts>);
+pub use bof_domain::movement::motor_state::StairsLocal;
 
-#[derive(Component, Default)]
-pub struct StairsGrace(pub(crate) u32);
+pub use bof_domain::movement::motor_state::StairsGrace;
 
 pub fn clear_inactive_cache(
     mut actors: Query<(&LocomotionState, &mut StairsLocal), With<StairsMovement>>,

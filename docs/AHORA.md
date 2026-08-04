@@ -234,6 +234,15 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 variable por golpe, o sea el combo avanza), equipar arma, curación, cambio de
 escena y esculpido; el arco del swing se dibuja leyendo el fact nuevo.
 
+**Fase 8 cerrada (2026-08-04): una capacidad sin su estado no existe.** Las
+nueve capacidades declaran `#[require]` sobre su bookkeeping (15 usos en total),
+y los trece tipos de estado de motor bajaron a `bof_domain::movement::motor_state`
+para poder declararlo. Se retiraron nueve bundles que sólo repetían a mano lo
+que ahora exige el tipo. **Los newtypes de unidades se midieron y se
+descartaron**: en todo `movement` hay 4 funciones con dos o más `f32`, y en dos
+de ellas los parámetros comparten unidad — el riesgo que justificaba envolver
+141 campos no existe. Detalle en `CRATES.md`.
+
 **Fase 7 cerrada (2026-08-04): presentación no nombra la simulación.** Cero
 referencias a `bof_simulation` desde `camera`, `debug`, `visuals`,
 `presentation`, `sfx` e `inventory::pickup`, congeladas por un test. No se creó
@@ -276,11 +285,7 @@ primer trazo. **Al leer el log, ojo**: sólo `sandbox.ron` existe en disco, y
 sin heightmap arranca plana **y en silencio** — la ausencia de línea no es
 ausencia de escena.
 
-1. **CRATES fase 8 — los tipos:** `#[require]` en las nueve capacidades (pide
-   bajar trece tipos de bookkeeping a domain) y newtypes de unidades en
-   `movement`. Es lo que evita spawnear un actor a medias en silencio y
-   confundir metros con metros/segundo.
-2. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+1. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones

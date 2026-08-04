@@ -142,14 +142,12 @@ mod plugin_tests {
     };
     use crate::movement::attachment::{LocomotionEnabled, PendingSafeRecovery};
     use crate::movement::body::BodyDimensions;
-    use crate::movement::bundles::{
-        GroundMovementBundle, JumpMovementBundle, KinematicActorBundle, SprintMovementBundle,
-        StairsMovementBundle, StaminaBundle,
-    };
+    use crate::movement::bundles::KinematicActorBundle;
     use crate::movement::control::ControlRedirect;
     use crate::movement::intents::{Intents, JumpIntent};
     use crate::movement::motors::jump::JumpLocal;
     use crate::movement::sensing::GroundSensing;
+    use crate::movement::stamina::Stamina;
     use crate::movement::state::LocomotionState;
     use crate::movement::{ActorId, BodyVelocity, MovementPlugin, Player};
     use crate::physics::GameLayer;
@@ -258,11 +256,11 @@ mod plugin_tests {
                     BodyDimensions::PLAYER,
                     GroundSensing::PLAYER,
                 ),
-                GroundMovementBundle::new(GroundMovement::PLAYER),
-                SprintMovementBundle::new(SprintMovement::PLAYER),
-                StairsMovementBundle::new(StairsMovement::PLAYER),
-                JumpMovementBundle::new(JumpMovement::PLAYER),
-                StaminaBundle::default(),
+                GroundMovement::PLAYER,
+                SprintMovement::PLAYER,
+                StairsMovement::PLAYER,
+                JumpMovement::PLAYER,
+                Stamina::default(),
                 JumpStaminaCost(20.0),
                 AirborneMovement::PLAYER,
             ))

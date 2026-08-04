@@ -9,6 +9,7 @@ pub mod facing;
 pub mod facts;
 pub mod intents;
 pub mod lod;
+pub mod motor_state;
 pub mod probe_data;
 pub mod proposal;
 pub mod sensing;

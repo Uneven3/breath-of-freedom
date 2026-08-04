@@ -3,7 +3,8 @@
 Plan para que las leyes de `ARCHITECTURE.md` dejen de depender de que alguien se
 acuerde (**≤300 líneas**). **Los crates son la última fase, no la primera**: lo
 que se puede cerrar con un test esta semana no espera a un refactor de seis.
-Estado: **fases 1-7 cerradas; queda la 8**. Se borra cuando cierre — igual que
+Estado: **fases 1-8 cerradas**. Queda borrar este documento cuando su
+contenido vivo termine de mudarse a `ARCHITECTURE.md` y `AHORA.md`. Se borra cuando cierre — igual que
 `AHORA.md` borra lo cerrado; el detalle de cada fase queda en git.
 
 ## El principio
@@ -27,7 +28,7 @@ funden porque el build ya las cobra.
 | 5 ✅ | `bof_domain` | §19: el dato compartido no declara `bevy` ni Avian |
 | 6 ✅ | `bof_simulation` | §20: no declara `bevy_render`, `bevy_input` ni `bevy_window` |
 | 7 ✅ | Presentación ↔ simulación | Un test: presentación no nombra `bof_simulation` |
-| 8 | Los tipos | El estado inválido deja de ser representable |
+| 8 ✅ | Los tipos | `#[require]`: una capacidad sin su estado no existe |
 
 **El test de fase 1 sobrevive a su fecha de vencimiento.** El plan decía que en
 fase 6 lo reemplazaría Cargo. Eso valía sólo si `input` cruzaba a simulación; se
@@ -135,29 +136,45 @@ grande y el test avisará primero.
 
 ## Fase 8 — los tipos
 
-Los crates ordenan *quién ve a quién*; esto ataca el error de runtime que podría
-ser error de compilación. Es aditivo y se paga por módulo.
+**8.1 cerrada el 2026-08-04: el estado de motor no se puede olvidar.** Las nueve
+capacidades declaran `#[require]` sobre su bookkeeping, así que agregar
+`SprintMovement` trae `SprintLock`, `JumpMovement` trae sus dos latches, y así.
+Antes lo hacía un bundle por capacidad: una convención que había que recordar.
+Olvidarla no daba error — la query no enganchaba y el motor no andaba, en
+silencio. Los nueve bundles redundantes se retiraron; sobreviven
+`KinematicActorBundle` (identidad, pose, cuerpo físico, perfiles) y
+`SneakMovementBundle`, que necesita las dimensiones para sus dos cápsulas.
 
-| # | Trabajo | Dolor que evita |
-|---|---|---|
-| 8.1 | `#[require]` en las nueve capacidades (`SprintMovement` → `SprintLock`, etc.) | Spawnear un actor a medias: ninguna query engancha y el actor no hace nada, **sin un solo error** |
-| 8.2 | Newtypes de unidades en `movement` (141 `f32` crudos, 2 newtypes) | Pasar metros donde van metros/segundo, o un radio donde va una altura: compila y produce un movimiento *casi* bien, que se atribuye al tuning |
+Para declararlo hubo que bajar trece tipos de bookkeeping a
+`bof_domain::movement::motor_state`: la capacidad vive en domain y no puede
+apuntar hacia arriba. Sus campos son `pub` porque no protegen ningún invariante
+— son latches y contadores. La excepción es `KinematicArc`, que sí tiene uno
+(`elapsed <= duration`) y bajó con sus campos privados y su API intacta.
 
-**8.1 depende de bajar trece tipos de bookkeeping a domain** (`SprintLock`,
-`JumpLocal`, `JumpPhase`, `GlideLocal`, `StairsLocal`, `StairsGrace`,
-`MantleState`, `VaultState`, `WallJumpState`, `EdgeLeapState`, `SneakLock`,
-`Crouched`, `StandClearance`). Son datos puros por actor, pero con campos
-privados que los motores manipulan: mudarlos obliga a abrirlos. Se abren los que
-no protegen ningún invariante (`SprintLock(bool)` no tiene nada que proteger);
-los que sí tienen lógica real, como `MantleState` con su `KinematicArc`, se
-quedan y su capacidad no lleva `require`.
+Van 15 usos de `#[require]`.
 
-**8.2 va con checkpoint jugado**: toca el feeling de locomoción.
+### 8.2 — newtypes de unidades: **medido y descartado**
 
-**Dónde parar.** Los 51 `bool` que podrían ser enums **no** entran: un `bool`
-con nombre claro y un solo escritor no es deuda. Se convierte el que cause un
-bug real. Perseguir los `pub` que quedan por §4 tampoco: es pulido de superficie
-que no previene ningún bug de gameplay.
+El plan decía que los 141 `f32` crudos eran el mayor retorno de tipado, contra
+2 newtypes. El número asustaba y era engañoso. Medido el 2026-08-04:
+
+**En todo `movement` hay 4 funciones con dos o más parámetros `f32`** — el único
+lugar donde intercambiar dos valores compila y produce un bug callado. Y de esas
+cuatro, dos toman parámetros de la **misma** unidad (`move_toward(from, to,
+delta)`, `stair(base_x, center_x)`), donde un tipo de unidad no distingue nada.
+Quedan dos casos reales: `KinematicArc::step(dt, arc_height)` y
+`apply_locomotion_rotation(…, dt, speed)`.
+
+Los 141 campos no son 141 oportunidades de error: viven dentro de structs con
+nombre (`GroundMovement { max_forward_speed, acceleration, … }`), los lee su
+propio motor y nunca cruzan una frontera donde puedan confundirse. Envolverlos
+exigiría implementar aritmética en cada newtype o salpicar `.0` por cada
+fórmula, y todo lo que toque `Vec3`/`Transform` vuelve a `f32` igual, porque
+glam no tiene unidades.
+
+Es el mismo criterio con el que el medidor decide una técnica de render: **dice
+cuándo vale la pena, no se aplica siempre**. Acá dijo que no. Si algún día
+aparece un bug de unidades real, se tipa esa unidad y no las seis.
 
 ## La frontera se prueba, no se declara
 
@@ -190,4 +207,4 @@ falle sobre 1000 líneas. Hoy es honor-system.
 |---|---|
 | 6 ✅ | Sin `Mesh`/`StandardMaterial`/`bevy_input` en `crates/simulation/src`; smoke headless levanta el juego entero; checkpoint jugado. |
 | 7 ✅ | Cero referencias a `bof_simulation` desde presentación, congeladas por test; checkpoint jugado. |
-| 8 | Spawnear una capacidad sin su bookkeeping es imposible; las unidades de `movement` no se pueden intercambiar; checkpoint jugado. |
+| 8 ✅ | Spawnear una capacidad sin su bookkeeping es imposible; los newtypes de unidades quedaron descartados por medición; checkpoint jugado. |

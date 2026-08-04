@@ -21,11 +21,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, we
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
-/// Per-actor stamina-lock latch: set when stamina hits zero, cleared once it
-/// recovers past `SPRINT_RECHARGE_THRESHOLD`. Was a `Local<bool>`; promoted to
-/// a component so it doesn't bleed across actors.
-#[derive(Component, Default)]
-pub struct SprintLock(pub bool);
+pub use bof_domain::movement::motor_state::SprintLock;
 
 /// Propose SPRINT at PLAYER_REQUESTED priority while grounded, holding sprint,
 /// and not stamina-locked. Abstains on stairs (StairsMotor owns the climb), on

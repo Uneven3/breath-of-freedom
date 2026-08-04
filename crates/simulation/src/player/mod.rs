@@ -21,12 +21,9 @@ use crate::movement::abilities::{
 };
 use crate::movement::body::BodyDimensions;
 use crate::movement::brain::ClimbInputState;
-use crate::movement::bundles::{
-    GlideMovementBundle, GroundMovementBundle, JumpMovementBundle, KinematicActorBundle,
-    LadderMovementBundle, LedgeTraversalBundle, SneakMovementBundle, SprintMovementBundle,
-    StairsMovementBundle, StaminaBundle, WallJumpMovementBundle,
-};
+use crate::movement::bundles::{KinematicActorBundle, SneakMovementBundle};
 use crate::movement::sensing::{GroundSensing, LedgeCastShape, LedgeSensing};
+use crate::movement::stamina::Stamina;
 use crate::movement::{ActorId, BodyVelocity, Player};
 
 /// Authored spawn point in world XZ; death teleports back here (graybox
@@ -97,18 +94,18 @@ pub fn spawn_player(mut commands: Commands, terrain: crate::world::TerrainAccess
             GroundSensing::PLAYER,
         ),
         (
-            GroundMovementBundle::new(GroundMovement::PLAYER),
-            SprintMovementBundle::new(SprintMovement::PLAYER),
+            GroundMovement::PLAYER,
+            SprintMovement::PLAYER,
             SneakMovementBundle::new(SneakMovement::PLAYER, body_dimensions),
-            StairsMovementBundle::new(StairsMovement::PLAYER),
-            StaminaBundle::default(),
+            StairsMovement::PLAYER,
+            Stamina::default(),
             AirborneMovement::PLAYER,
-            JumpMovementBundle::new(JumpMovement::PLAYER),
-            GlideMovementBundle::new(GlideMovement::PLAYER),
+            JumpMovement::PLAYER,
+            GlideMovement::PLAYER,
             ClimbMovement::PLAYER,
-            LadderMovementBundle::new(LadderMovement::PLAYER),
-            LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
-            WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
+            LadderMovement::PLAYER,
+            LedgeTraversal::PLAYER,
+            WallJumpMovement::PLAYER,
             (
                 LedgeSensing::PLAYER,
                 LedgeCastShape::new(LedgeSensing::PLAYER),

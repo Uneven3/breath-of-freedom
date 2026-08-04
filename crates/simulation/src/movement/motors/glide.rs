@@ -20,11 +20,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, we
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
-#[derive(Component, Default)]
-pub struct GlideLocal {
-    prev_wants: bool,
-    was_glide: bool,
-}
+pub use bof_domain::movement::motor_state::GlideLocal;
 
 type ProposeQuery<'a> = (
     &'a GroundFacts,

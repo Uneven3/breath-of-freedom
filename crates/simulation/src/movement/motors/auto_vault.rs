@@ -11,7 +11,7 @@ use bevy_time::prelude::*;
 use crate::movement::abilities::LedgeTraversal;
 use crate::movement::facts::{GroundFacts, LedgeFacts};
 use crate::movement::intents::{Intents, TraversalActionIntent};
-use crate::movement::motor_common::{KinematicArc, body_move_and_slide};
+use crate::movement::motor_common::body_move_and_slide;
 use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::state::LocomotionState;
@@ -19,10 +19,7 @@ use crate::movement::state::LocomotionState;
 const MIN_SPEED: f32 = 0.01;
 const MIN_DURATION: f32 = 0.1;
 
-#[derive(Component, Default)]
-pub struct VaultState {
-    pub(crate) arc: KinematicArc,
-}
+pub use bof_domain::movement::motor_state::VaultState;
 
 type ProposeQuery<'a> = (
     &'a GroundFacts,

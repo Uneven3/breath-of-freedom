@@ -30,10 +30,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, we
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
-/// Per-actor sneak stamina-lock latch: set when stamina hits zero, cleared once it
-/// recovers past `SNEAK_RECHARGE_THRESHOLD`.
-#[derive(Component, Default)]
-pub struct SneakLock(pub bool);
+pub use bof_domain::movement::motor_state::SneakLock;
 
 const SNEAK_RECHARGE_THRESHOLD: f32 = 20.0;
 
@@ -49,9 +46,7 @@ pub struct StandCollider(pub Collider);
 #[derive(Component)]
 pub struct CrouchCollider(pub Collider);
 
-/// Whether the crouched actor has room to restore its standing capsule.
-#[derive(Component, Default)]
-pub struct StandClearance(pub bool);
+pub use bof_domain::movement::motor_state::StandClearance;
 
 /// Update the stand-up clearance before proposal arbitration. A crouched actor
 /// keeps Sneak active after the player releases the button until its full-height

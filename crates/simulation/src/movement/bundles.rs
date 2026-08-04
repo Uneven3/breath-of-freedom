@@ -8,25 +8,10 @@ use avian3d::prelude::*;
 use bevy_ecs::prelude::*;
 use bevy_transform::prelude::*;
 
-use super::abilities::{
-    GlideMovement, GroundMovement, JumpMovement, LadderMovement, LedgeTraversal, SneakMovement,
-    SprintMovement, StairsMovement, WallJumpMovement,
-};
+use super::abilities::SneakMovement;
 use super::body::{BodyDimensions, crouched_collider, standing_collider};
-use super::facts::{LadderFacts, LedgeFacts, StairsFacts};
-use super::motors::{
-    auto_vault::VaultState,
-    edge_leap::EdgeLeapState,
-    glide::GlideLocal,
-    jump::{JumpLocal, JumpPhase},
-    mantle::MantleState,
-    sneak::{CrouchCollider, Crouched, SneakLock, StandClearance, StandCollider},
-    sprint::SprintLock,
-    stairs::{StairsGrace, StairsLocal},
-    wall_jump::WallJumpState,
-};
+use super::motors::sneak::{CrouchCollider, Crouched, SneakLock, StandClearance, StandCollider};
 use super::sensing::GroundSensing;
-use super::stamina::Stamina;
 use super::{Actor, ActorId};
 use crate::physics::GameLayer;
 
@@ -73,32 +58,6 @@ impl KinematicActorBundle {
 }
 
 #[derive(Bundle)]
-pub struct GroundMovementBundle {
-    pub movement: GroundMovement,
-}
-
-impl GroundMovementBundle {
-    pub fn new(movement: GroundMovement) -> Self {
-        Self { movement }
-    }
-}
-
-#[derive(Bundle)]
-pub struct SprintMovementBundle {
-    pub movement: SprintMovement,
-    pub sprint_lock: SprintLock,
-}
-
-impl SprintMovementBundle {
-    pub fn new(movement: SprintMovement) -> Self {
-        Self {
-            movement,
-            sprint_lock: Default::default(),
-        }
-    }
-}
-
-#[derive(Bundle)]
 pub struct SneakMovementBundle {
     pub movement: SneakMovement,
     pub sneak_lock: SneakLock,
@@ -121,123 +80,19 @@ impl SneakMovementBundle {
     }
 }
 
-#[derive(Bundle)]
-pub struct StairsMovementBundle {
-    pub movement: StairsMovement,
-    pub facts: StairsFacts,
-    pub local: StairsLocal,
-    pub grace: StairsGrace,
-}
-
-impl StairsMovementBundle {
-    pub fn new(movement: StairsMovement) -> Self {
-        Self {
-            movement,
-            facts: Default::default(),
-            local: Default::default(),
-            grace: Default::default(),
-        }
-    }
-}
-
-#[derive(Bundle, Default)]
-pub struct StaminaBundle {
-    pub stamina: Stamina,
-}
-
-#[derive(Bundle)]
-pub struct LadderMovementBundle {
-    pub movement: LadderMovement,
-    pub facts: LadderFacts,
-}
-
-impl LadderMovementBundle {
-    pub fn new(movement: LadderMovement) -> Self {
-        Self {
-            movement,
-            facts: Default::default(),
-        }
-    }
-}
-
-/// Jump capability and its coyote-time/input-buffer bookkeeping.
-#[derive(Bundle)]
-pub struct JumpMovementBundle {
-    pub movement: JumpMovement,
-    pub phase: JumpPhase,
-    pub local: JumpLocal,
-}
-
-impl JumpMovementBundle {
-    pub fn new(movement: JumpMovement) -> Self {
-        Self {
-            movement,
-            phase: JumpPhase::default(),
-            local: JumpLocal::default(),
-        }
-    }
-}
-
-/// Glide capability and its per-actor press-memory bookkeeping.
-#[derive(Bundle)]
-pub struct GlideMovementBundle {
-    pub movement: GlideMovement,
-    pub local: GlideLocal,
-}
-
-impl GlideMovementBundle {
-    pub fn new(movement: GlideMovement) -> Self {
-        Self {
-            movement,
-            local: GlideLocal::default(),
-        }
-    }
-}
-
-/// Ledge traversal capability and the independent Mantle and AutoVault phase
-/// machines that use it.
-#[derive(Bundle)]
-pub struct LedgeTraversalBundle {
-    pub traversal: LedgeTraversal,
-    pub facts: LedgeFacts,
-    pub mantle: MantleState,
-    pub vault: VaultState,
-}
-
-impl LedgeTraversalBundle {
-    pub fn new(traversal: LedgeTraversal) -> Self {
-        Self {
-            traversal,
-            facts: Default::default(),
-            mantle: MantleState::default(),
-            vault: VaultState::default(),
-        }
-    }
-}
-
-/// Wall-jump capability and the separate WallJump and EdgeLeap phase
-/// machines that use it.
-#[derive(Bundle)]
-pub struct WallJumpMovementBundle {
-    pub movement: WallJumpMovement,
-    pub wall_jump: WallJumpState,
-    pub edge_leap: EdgeLeapState,
-}
-
-impl WallJumpMovementBundle {
-    pub fn new(movement: WallJumpMovement) -> Self {
-        Self {
-            movement,
-            wall_jump: WallJumpState::default(),
-            edge_leap: EdgeLeapState::default(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::abilities::ClimbMovement;
+    use crate::movement::abilities::{
+        ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LedgeTraversal, SneakMovement,
+        SprintMovement, StairsMovement, WallJumpMovement,
+    };
+    use crate::movement::facts::{LadderFacts, LedgeFacts, StairsFacts};
+    use crate::movement::motors::{
+        auto_vault::VaultState, edge_leap::EdgeLeapState, glide::GlideLocal, jump::JumpLocal,
+        jump::JumpPhase, mantle::MantleState, sneak::Crouched, sprint::SprintLock,
+        stairs::StairsGrace, stairs::StairsLocal, wall_jump::WallJumpState,
+    };
     // Los trae `Actor` por `#[require]`, no este bundle: el test comprueba
     // justamente que aparezcan sin que nadie los liste.
     use crate::movement::BodyVelocity;
@@ -316,20 +171,24 @@ mod tests {
         assert_eq!(actor.get::<GroundSensing>(), Some(&GroundSensing::PLAYER));
     }
 
+    /// Una capacidad trae su propio bookkeeping. Antes lo hacía un bundle por
+    /// capacidad; ahora lo declara el tipo, así que agregar `SprintMovement` y
+    /// olvidarse de `SprintLock` dejó de ser posible — que era el bug callado:
+    /// la query no enganchaba y el sprint no andaba, sin ningún error.
     #[test]
-    fn capability_bundles_supply_only_their_motor_state() {
+    fn each_capability_brings_its_own_motor_state() {
         let dimensions = BodyDimensions::PLAYER;
         let mut world = World::new();
         let entity = world
             .spawn((
-                GroundMovementBundle::new(GroundMovement::PLAYER),
-                SprintMovementBundle::new(SprintMovement::PLAYER),
+                GroundMovement::PLAYER,
+                SprintMovement::PLAYER,
                 SneakMovementBundle::new(SneakMovement::PLAYER, dimensions),
-                StairsMovementBundle::new(StairsMovement::PLAYER),
-                JumpMovementBundle::new(JumpMovement::PLAYER),
-                GlideMovementBundle::new(GlideMovement::PLAYER),
-                LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
-                WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
+                StairsMovement::PLAYER,
+                JumpMovement::PLAYER,
+                GlideMovement::PLAYER,
+                LedgeTraversal::PLAYER,
+                WallJumpMovement::PLAYER,
             ))
             .id();
         let actor = world.entity(entity);
@@ -340,6 +199,9 @@ mod tests {
         assert!(actor.contains::<JumpMovement>());
         assert!(actor.contains::<JumpPhase>());
         assert!(actor.contains::<JumpLocal>());
+        assert!(actor.contains::<StairsFacts>());
+        assert!(actor.contains::<StairsLocal>());
+        assert!(actor.contains::<StairsGrace>());
         assert!(actor.contains::<GlideMovement>());
         assert!(actor.contains::<GlideLocal>());
         assert!(actor.contains::<LedgeTraversal>());

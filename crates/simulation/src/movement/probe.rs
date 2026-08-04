@@ -22,11 +22,7 @@ use super::abilities::{
     LedgeTraversal, SneakMovement, SprintMovement, StairsMovement, WallJumpMovement,
 };
 use super::body::BodyDimensions;
-use super::bundles::{
-    GlideMovementBundle, GroundMovementBundle, JumpMovementBundle, KinematicActorBundle,
-    LadderMovementBundle, LedgeTraversalBundle, SneakMovementBundle, SprintMovementBundle,
-    StairsMovementBundle, StaminaBundle, WallJumpMovementBundle,
-};
+use super::bundles::{KinematicActorBundle, SneakMovementBundle};
 use super::facts::LedgeFacts;
 use super::intents::{
     ClimbIntent, ClimbVerticalIntent, GlideIntent, Intents, JumpIntent, PlanarMoveIntent,
@@ -34,6 +30,7 @@ use super::intents::{
 };
 use super::probe_data::{ProbeCoverage, ProbeScript, ProbeStage, TraversalProbe};
 use super::sensing::{GroundSensing, LedgeCastShape, LedgeSensing};
+use super::stamina::Stamina;
 use super::state::LocomotionState;
 
 const STAGE_TIMEOUT_SECS: f32 = 8.0;
@@ -88,18 +85,18 @@ pub fn toggle_spawn(
             GroundSensing::PLAYER,
         ),
         (
-            GroundMovementBundle::new(ground),
-            SprintMovementBundle::new(sprint),
+            ground,
+            sprint,
             SneakMovementBundle::new(sneak, dimensions),
-            StairsMovementBundle::new(StairsMovement::PLAYER),
-            StaminaBundle::default(),
+            StairsMovement::PLAYER,
+            Stamina::default(),
             AirborneMovement::PLAYER,
-            JumpMovementBundle::new(JumpMovement::PLAYER),
-            GlideMovementBundle::new(GlideMovement::PLAYER),
+            JumpMovement::PLAYER,
+            GlideMovement::PLAYER,
             ClimbMovement::PLAYER,
-            LadderMovementBundle::new(LadderMovement::PLAYER),
-            LedgeTraversalBundle::new(LedgeTraversal::PLAYER),
-            WallJumpMovementBundle::new(WallJumpMovement::PLAYER),
+            LadderMovement::PLAYER,
+            LedgeTraversal::PLAYER,
+            WallJumpMovement::PLAYER,
             (
                 LedgeSensing::PLAYER,
                 LedgeCastShape::new(LedgeSensing::PLAYER),

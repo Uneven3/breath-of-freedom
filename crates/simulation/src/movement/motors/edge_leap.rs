@@ -17,15 +17,7 @@ use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, we
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
 
-#[derive(Component, Default)]
-pub struct EdgeLeapState {
-    is_leaping: bool,
-    timer: f32,
-    needs_release: bool,
-    /// Armed by `propose`, consumed by `tick`'s first active frame (the launch
-    /// impulse). See `WallJumpState::launch_pending`.
-    launch_pending: bool,
-}
+pub use bof_domain::movement::motor_state::EdgeLeapState;
 
 type ProposeQuery<'a> = (
     &'a Intents,

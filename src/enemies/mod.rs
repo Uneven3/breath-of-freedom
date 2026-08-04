@@ -11,6 +11,7 @@
 //! `enemies-combat` tickets.
 
 use bevy::prelude::*;
+use bof_domain::scene::SceneScoped;
 
 pub mod brain;
 pub mod combat;
@@ -62,8 +63,8 @@ pub struct EnemiesPlugin;
 impl Plugin for EnemiesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<perception::DirectThreatMessage>();
-        app.add_message::<SpawnBokobosRequest>();
-        app.add_systems(Update, toggle_spawn);
+        app.add_message::<BokoboSpawnRequest>();
+        app.add_systems(Update, process_spawn_requests);
         // Scenes that declare enemies get the graybox pair on entry, through the
         // same request the debug hub writes — one spawn path, not two.
         for id in crate::scene::SceneId::ALL {
@@ -95,60 +96,85 @@ impl Plugin for EnemiesPlugin {
 
 /// Debug: spawns or despawns the graybox pair — a melee bokobo and an archer
 /// bokobo — at their authored homes. Owned by enemies; the debug hub writes
-/// [`SpawnBokobosRequest`], which replaced a bare F7 key (one owner, one
+/// [`BokoboSpawnRequest`], which replaced a bare F7 key (one owner, one
 /// message, and it shows up in the F1 panel).
 #[derive(Message, Debug, Clone, Copy)]
-pub struct SpawnBokobosRequest;
-
-/// Ask for the graybox pair when a scene that wants enemies starts.
-fn request_scene_enemies(mut requests: MessageWriter<SpawnBokobosRequest>) {
-    requests.write(SpawnBokobosRequest);
+pub enum BokoboSpawnRequest {
+    /// A scene requires the pair; leave an existing pair alone.
+    Ensure,
+    /// The debug hub explicitly flips the pair's current presence.
+    Toggle,
 }
 
-fn toggle_spawn(
-    mut requests: MessageReader<SpawnBokobosRequest>,
+/// Ask for the graybox pair when a scene that wants enemies starts.
+fn request_scene_enemies(mut requests: MessageWriter<BokoboSpawnRequest>) {
+    requests.write(BokoboSpawnRequest::Ensure);
+}
+
+fn process_spawn_requests(
+    mut requests: MessageReader<BokoboSpawnRequest>,
     mut commands: Commands,
-    existing: Query<Entity, With<Enemy>>,
+    existing: Query<(Entity, &crate::movement::ActorId), With<Enemy>>,
 ) {
-    if requests.read().count() == 0 {
+    let exists = !existing.is_empty();
+    let mut wanted = exists;
+    let mut received = false;
+    for request in requests.read().copied() {
+        received = true;
+        match request {
+            BokoboSpawnRequest::Ensure => wanted = true,
+            BokoboSpawnRequest::Toggle => wanted = !wanted,
+        }
+    }
+    if !received || (!wanted && !exists) {
         return;
     }
 
-    if !existing.is_empty() {
-        for entity in &existing {
+    if !wanted {
+        for (entity, _) in &existing {
             commands.entity(entity).despawn();
         }
         info!("[debug] Bokobos despawned");
         return;
     }
 
-    spawn_bokobo(
-        &mut commands,
-        crate::movement::ActorId::BOKOBO_MELEE,
-        "Bokobo",
-        MELEE_SPAWN_POSITION,
-        brain::EnemyBrainProfile::BOKOBO,
-        MELEE_BOKOBO_HP,
-        (
-            crate::combat::weapon::WeaponProfile::BOKOBO_CLUB,
-            crate::combat::motors::attack::ComboLocal::default(),
-            crate::combat::motors::attack::ActiveSwing::default(),
-        ),
-    );
-    spawn_bokobo(
-        &mut commands,
-        crate::movement::ActorId::BOKOBO_ARCHER,
-        "BokoboArcher",
-        ARCHER_SPAWN_POSITION,
-        brain::EnemyBrainProfile::BOKOBO_ARCHER,
-        ARCHER_BOKOBO_HP,
-        (
-            crate::combat::motors::aim::DrawStrength::default(),
-            crate::combat::motors::aim::ShotSpreadRng::BOKOBO_ARCHER,
-            crate::input::frame::ControlOrientation::default(),
-        ),
-    );
-    info!("[debug] Bokobo pair spawned: melee + archer");
+    let has_melee = existing
+        .iter()
+        .any(|(_, actor_id)| *actor_id == crate::movement::ActorId::BOKOBO_MELEE);
+    let has_archer = existing
+        .iter()
+        .any(|(_, actor_id)| *actor_id == crate::movement::ActorId::BOKOBO_ARCHER);
+    if !has_melee {
+        spawn_bokobo(
+            &mut commands,
+            crate::movement::ActorId::BOKOBO_MELEE,
+            "Bokobo",
+            MELEE_SPAWN_POSITION,
+            brain::EnemyBrainProfile::BOKOBO,
+            MELEE_BOKOBO_HP,
+            (
+                crate::combat::weapon::WeaponProfile::BOKOBO_CLUB,
+                crate::combat::motors::attack::ComboLocal::default(),
+                crate::combat::motors::attack::ActiveSwing::default(),
+            ),
+        );
+    }
+    if !has_archer {
+        spawn_bokobo(
+            &mut commands,
+            crate::movement::ActorId::BOKOBO_ARCHER,
+            "BokoboArcher",
+            ARCHER_SPAWN_POSITION,
+            brain::EnemyBrainProfile::BOKOBO_ARCHER,
+            ARCHER_BOKOBO_HP,
+            (
+                crate::combat::motors::aim::DrawStrength::default(),
+                crate::combat::motors::aim::ShotSpreadRng::BOKOBO_ARCHER,
+                crate::input::frame::ControlOrientation::default(),
+            ),
+        );
+    }
+    info!("[debug] Bokobo pair ensured: melee + archer");
 }
 
 /// The shared bokobo chassis; `loadout` is the combat archetype (club combo
@@ -168,6 +194,7 @@ fn spawn_bokobo(
     sprint.drive.max_forward_speed = 6.5;
 
     commands.spawn((
+        SceneScoped,
         Enemy,
         Name::new(name.to_string()),
         Home(home),
@@ -215,5 +242,61 @@ fn despawn_dead(
             name.map(Name::as_str).unwrap_or("enemy")
         );
         commands.entity(death.entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_message::<BokoboSpawnRequest>();
+        app.add_systems(Update, process_spawn_requests);
+        app
+    }
+
+    fn enemy_count(app: &mut App) -> usize {
+        app.world_mut()
+            .query_filtered::<Entity, With<Enemy>>()
+            .iter(app.world())
+            .count()
+    }
+
+    #[test]
+    fn scene_ensure_is_idempotent_and_debug_toggle_is_explicit() {
+        let mut app = app();
+
+        app.world_mut().write_message(BokoboSpawnRequest::Ensure);
+        app.update();
+        assert_eq!(enemy_count(&mut app), 2);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, (With<Enemy>, With<SceneScoped>)>()
+                .iter(app.world())
+                .count(),
+            2
+        );
+
+        app.world_mut().write_message(BokoboSpawnRequest::Ensure);
+        app.update();
+        assert_eq!(enemy_count(&mut app), 2, "Ensure must not toggle them off");
+
+        let melee = app
+            .world_mut()
+            .query_filtered::<(Entity, &crate::movement::ActorId), With<Enemy>>()
+            .iter(app.world())
+            .find_map(|(entity, actor_id)| {
+                (*actor_id == crate::movement::ActorId::BOKOBO_MELEE).then_some(entity)
+            })
+            .unwrap();
+        app.world_mut().entity_mut(melee).despawn();
+        app.world_mut().write_message(BokoboSpawnRequest::Ensure);
+        app.update();
+        assert_eq!(enemy_count(&mut app), 2, "Ensure must replenish the pair");
+
+        app.world_mut().write_message(BokoboSpawnRequest::Toggle);
+        app.update();
+        assert_eq!(enemy_count(&mut app), 0);
     }
 }

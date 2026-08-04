@@ -14,7 +14,7 @@ use crate::combat::CombatSet;
 use crate::health::HealthSet;
 use crate::movement::MovementSet;
 use crate::projectiles::ProjectilesSet;
-use data::{MountDebugRequest, MountTransitionRequest};
+use data::{HorseSpawnRequest, MountTransitionRequest};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MountsSet {
@@ -29,13 +29,13 @@ pub enum MountsSet {
 pub struct MountsPlugin;
 
 /// Ask for a horse when a scene that wants one starts.
-fn request_scene_horse(mut requests: MessageWriter<MountDebugRequest>) {
-    requests.write(MountDebugRequest::ToggleHorse);
+fn request_scene_horse(mut requests: MessageWriter<HorseSpawnRequest>) {
+    requests.write(HorseSpawnRequest::Ensure);
 }
 
 impl Plugin for MountsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<MountDebugRequest>();
+        app.add_message::<HorseSpawnRequest>();
         app.add_message::<MountTransitionRequest>();
         // Scenes that declare a horse get one on entry, through the same
         // request the debug hub writes — one spawn path, not two.
@@ -83,7 +83,7 @@ impl Plugin for MountsPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                debug::process_toggle_requests,
+                debug::process_spawn_requests,
                 lifecycle::read_interact_requests,
                 lifecycle::reconcile_relationships,
             )
@@ -142,7 +142,7 @@ mod plugin_tests {
     use crate::enemies::perception::DirectThreatMessage;
     use crate::health::{DamageRequestMessage, DeathMessage};
     use crate::input::frame::ActiveActions;
-    use crate::mounts::data::{MountDebugRequest, MountTransitionRequest, MountedOn};
+    use crate::mounts::data::{HorseSpawnRequest, MountTransitionRequest, MountedOn};
     use crate::mounts::lifecycle::spawn_horse_bundle;
     use crate::movement::abilities::{
         AirborneMovement, GroundMovement, JumpMovement, JumpStaminaCost, SprintMovement,
@@ -324,8 +324,7 @@ mod plugin_tests {
         }
         app.update();
         app.update();
-        app.world_mut()
-            .write_message(MountDebugRequest::ToggleHorse);
+        app.world_mut().write_message(HorseSpawnRequest::Toggle);
 
         app.update();
 

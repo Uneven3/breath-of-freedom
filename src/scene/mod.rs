@@ -30,6 +30,7 @@
 pub mod menu;
 
 use bevy::prelude::*;
+use bof_domain::scene::SceneScoped;
 
 use crate::input::SetCursorGrab;
 
@@ -239,6 +240,24 @@ impl Plugin for ScenePlugin {
             Update,
             leave_scene.run_if(not(in_state(AppState::MainMenu))),
         );
+        // Simulation only declares that an entity is scene-scoped. This app
+        // adapter binds it to the concrete state without leaking `AppState`
+        // into the domain/simulation boundary.
+        app.add_systems(PostUpdate, bind_scene_scoped_entities);
+    }
+}
+
+fn bind_scene_scoped_entities(
+    mut commands: Commands,
+    state: Res<State<AppState>>,
+    unbound: Query<Entity, (With<SceneScoped>, Without<DespawnOnExit<AppState>>)>,
+) {
+    let current = *state.get();
+    if !matches!(current, AppState::Scene(_)) {
+        return;
+    }
+    for entity in &unbound {
+        commands.entity(entity).insert(DespawnOnExit(current));
     }
 }
 
@@ -334,5 +353,33 @@ mod tests {
                 || contents.horse),
             "the sandbox must stay bare"
         );
+    }
+
+    #[test]
+    fn scene_scoped_content_dies_before_the_sandbox_starts() {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.init_state::<AppState>();
+        app.add_systems(PostUpdate, bind_scene_scoped_entities);
+
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Scene(SceneId::World));
+        app.update();
+
+        let actor = app.world_mut().spawn(SceneScoped).id();
+        app.update();
+        assert!(
+            app.world()
+                .entity(actor)
+                .contains::<DespawnOnExit<AppState>>()
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Scene(SceneId::Sandbox));
+        app.update();
+
+        assert!(app.world().get_entity(actor).is_err());
     }
 }

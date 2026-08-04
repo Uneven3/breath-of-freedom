@@ -36,8 +36,11 @@ pub struct HorseOwner(pub Option<Entity>);
 pub struct PendingHorseDespawn;
 
 #[derive(Message, Clone, Copy)]
-pub enum MountDebugRequest {
-    ToggleHorse,
+pub enum HorseSpawnRequest {
+    /// A scene requires a horse; leave an existing one alone.
+    Ensure,
+    /// The debug hub explicitly flips the current presence.
+    Toggle,
 }
 
 #[derive(Message, Clone, Copy)]

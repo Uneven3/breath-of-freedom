@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bof_domain::scene::SceneScoped;
 
 use crate::health::Health;
 use crate::movement::ActorId;
@@ -31,6 +32,7 @@ pub(super) const FLOOR_MIN_UP_DOT: f32 = 0.5;
 
 pub fn spawn_horse_bundle() -> impl Bundle {
     (
+        SceneScoped,
         Horse,
         HorseCharge::new(HORSE_SPAWN),
         RiddenBy::default(),

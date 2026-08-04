@@ -7,7 +7,7 @@ use crate::combat::context;
 use crate::combat::context_data::{CombatContext, SetMountedCombatMessage};
 use crate::health::{DeathMessage, HealthSet, HostileInteractionImmunity};
 use crate::mounts::MountsSet;
-use crate::mounts::data::MountDebugRequest;
+use crate::mounts::data::HorseSpawnRequest;
 use crate::mounts::debug;
 use crate::movement::MovementSet;
 use crate::movement::attachment::{KinematicAttachment, LocomotionEnabled};
@@ -20,7 +20,7 @@ use crate::movement::{Actor, BodyVelocity, Player};
 fn app() -> App {
     let mut app = App::new();
     app.init_resource::<ColliderTrees>();
-    app.add_message::<MountDebugRequest>();
+    app.add_message::<HorseSpawnRequest>();
     app.add_message::<MountTransitionRequest>();
     app.add_message::<ActorLinkRequestMessage>();
     app.add_message::<ActorLinkResultMessage>();
@@ -46,7 +46,7 @@ fn app() -> App {
     );
     app.add_systems(
         FixedUpdate,
-        (debug::process_toggle_requests, reconcile_relationships)
+        (debug::process_spawn_requests, reconcile_relationships)
             .chain()
             .in_set(MountsSet::Request),
     );
@@ -121,6 +121,46 @@ fn spawn_horse(app: &mut App) -> Entity {
             Intents::default(),
         ))
         .id()
+}
+
+#[test]
+fn scene_ensure_is_idempotent_and_debug_toggle_is_explicit() {
+    let mut app = app();
+
+    app.world_mut().write_message(HorseSpawnRequest::Ensure);
+    app.world_mut().run_schedule(FixedUpdate);
+    let horses: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<Horse>>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(horses.len(), 1);
+    assert!(
+        app.world()
+            .entity(horses[0])
+            .contains::<bof_domain::scene::SceneScoped>()
+    );
+
+    app.world_mut().write_message(HorseSpawnRequest::Ensure);
+    app.world_mut().run_schedule(FixedUpdate);
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, With<Horse>>()
+            .iter(app.world())
+            .count(),
+        1,
+        "Ensure must not toggle the horse off"
+    );
+
+    app.world_mut().write_message(HorseSpawnRequest::Toggle);
+    app.world_mut().run_schedule(FixedUpdate);
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, With<Horse>>()
+            .iter(app.world())
+            .count(),
+        0
+    );
 }
 
 fn mount(app: &mut App, rider: Entity, horse: Entity) {
@@ -266,8 +306,7 @@ fn voluntary_dismount_without_floor_is_rejected_but_f8_forces_safe_release() {
     assert!(app.world().entity(rider).contains::<MountedOn>());
     assert!(app.world().entity(horse).contains::<Horse>());
 
-    app.world_mut()
-        .write_message(MountDebugRequest::ToggleHorse);
+    app.world_mut().write_message(HorseSpawnRequest::Toggle);
     app.world_mut().run_schedule(FixedUpdate);
 
     assert_safely_detached(&app, rider);

@@ -14,8 +14,8 @@ use super::channel::{
     DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle, HudSectionToggle,
 };
 use super::snapshot::HudVisibility;
-use crate::enemies::SpawnBokobosRequest;
-use crate::mounts::data::MountDebugRequest;
+use crate::enemies::BokoboSpawnRequest;
+use crate::mounts::data::HorseSpawnRequest;
 use crate::movement::diag::CastTrace;
 use crate::world::day_night::TimeOfDayRequest;
 
@@ -80,8 +80,8 @@ pub(super) fn apply_debug_actions(
     mut requests: MessageReader<DebugActionRequest>,
     mut time_of_day: MessageWriter<TimeOfDayRequest>,
     mut probe: MessageWriter<crate::movement::probe_data::ProbeToggleRequest>,
-    mut bokobos: MessageWriter<SpawnBokobosRequest>,
-    mut horse: MessageWriter<MountDebugRequest>,
+    mut bokobos: MessageWriter<BokoboSpawnRequest>,
+    mut horse: MessageWriter<HorseSpawnRequest>,
 ) {
     for DebugActionRequest(action) in requests.read().copied() {
         match action {
@@ -97,10 +97,10 @@ pub(super) fn apply_debug_actions(
                 time_of_day.write(TimeOfDayRequest::ToggleSpeed);
             }
             DebugAction::ToggleBokobos => {
-                bokobos.write(SpawnBokobosRequest);
+                bokobos.write(BokoboSpawnRequest::Toggle);
             }
             DebugAction::ToggleHorse => {
-                horse.write(MountDebugRequest::ToggleHorse);
+                horse.write(HorseSpawnRequest::Toggle);
             }
             // Self-contained diagnostic; owns its own scan in `material_report`.
             DebugAction::MaterialBreakdown => {}

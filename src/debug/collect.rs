@@ -183,6 +183,7 @@ type HorseReport<'a> = (
     &'a Health,
     &'a Stamina,
     &'a RiddenBy,
+    &'a GroundFacts,
 );
 
 /// The mount is a separate actor, so the player-focused producers never saw it —
@@ -195,9 +196,9 @@ pub(super) fn collect_mount(
 ) {
     let report = horses
         .iter()
-        .find(|(.., ridden)| ridden.0.is_some())
+        .find(|(.., ridden, _)| ridden.0.is_some())
         .or_else(|| horses.iter().next());
-    let Some((state, vel, charge, hp, stamina, ridden)) = report else {
+    let Some((state, vel, charge, hp, stamina, ridden, ground)) = report else {
         snapshot.clear(SectionId::Mount);
         return;
     };
@@ -207,6 +208,12 @@ pub(super) fn collect_mount(
         vec![
             Field::flag("ridden", ridden.0.is_some()),
             Field::new("state", format!("{state:?}")),
+            // El caballo sensa el suelo como cualquier actor, pero el `surface`
+            // de la sección de locomoción es el del **player**, que al montar
+            // pierde `LocomotionEnabled` y deja de actualizarse: montado se lee
+            // congelado en el último paso a pie. Éste es el del caballo.
+            Field::flag("grounded", ground.grounded),
+            Field::new("surface", format!("{:?}", ground.surface)),
             Field::volatile("speed", format!("{:.2}", Vec3::new(v.x, 0.0, v.z).length())),
             Field::flag("charge", charge.active),
             Field::new("charge_gen", charge.generation.to_string()),

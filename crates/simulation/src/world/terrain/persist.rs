@@ -6,7 +6,6 @@
 //! mismo archivo, y una lista de runs que no suma se **rechaza** en vez de
 //! correr el mapa de lugar en silencio.
 
-
 use super::{
     KindRun, MAX_HEIGHT, MIN_HEIGHT, Terrain, TerrainFile, TerrainSnapshot, bounded_grid_index,
     grid_xz, sample_bilinear,

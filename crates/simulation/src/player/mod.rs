@@ -6,7 +6,11 @@
 //! the same pieces an AI or network controller composes differently (see
 //! `docs/ARCHITECTURE.md`).
 
-use bevy::prelude::*;
+use bevy_app::{App, FixedUpdate, Plugin};
+use bevy_ecs::prelude::*;
+use bevy_log::info;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 mod lock_on;
 
@@ -42,13 +46,9 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         // Scene content: a player is built when a scene is entered and dies
-        // with it (`crate::scene`).
-        for id in crate::scene::SceneId::ALL {
-            app.add_systems(
-                OnEnter(crate::scene::AppState::Scene(id)),
-                spawn_player.in_set(crate::scene::SceneBuild::Actors),
-            );
-        }
+        // with it. *When* that happens is composition, so the app runs
+        // [`spawn_player`] on entry; this plugin only owns the rules that follow
+        // the body around.
         // Death consequences belong to the actor's owner (`docs/ARCHITECTURE.md`): the
         // graybox player respawns at the authored spawn with full health.
         app.add_systems(FixedUpdate, respawn_on_death.after(HealthSet::Apply));
@@ -74,21 +74,19 @@ fn spawn_position(ground: Option<f32>) -> Vec3 {
     )
 }
 
-fn spawn_player(
-    mut commands: Commands,
-    state: Res<State<crate::scene::AppState>>,
-    terrain: crate::world::TerrainAccess,
-) {
+pub fn spawn_player(mut commands: Commands, terrain: crate::world::TerrainAccess) {
     // The Player is an invisible kinematic collider; the mesh lives on a separate
     // PlayerVisual entity that interpolates toward this body (see `visuals.rs`).
     // Capsule dimensions live in `body` (shared with services and motors).
     let body_dimensions = BodyDimensions::PLAYER;
     commands.spawn((
-        DespawnOnExit(*state.get()),
+        // Lifetime declared, not bound: the app maps `SceneScoped` onto its own
+        // state, so simulation never names `AppState`.
+        bof_domain::scene::SceneScoped,
         Player,
         crate::enemies::perception::Perceivable,
-        crate::input::frame::InputControlledBy(crate::input::frame::LOCAL_INPUT_SOURCE),
-        crate::input::frame::ControlOrientation::default(),
+        bof_domain::input::frame::InputControlledBy(bof_domain::input::frame::LOCAL_INPUT_SOURCE),
+        bof_domain::input::frame::ControlOrientation::default(),
         crate::movement::facing::FacingSource::default(),
         lock_on::LockOnInputCursor::default(),
         Name::new("Player"),
@@ -117,7 +115,7 @@ fn spawn_player(
             ),
             ClimbInputState::default(),
             (
-                crate::input::InputConsumeCursor::default(),
+                bof_domain::input::InputConsumeCursor::default(),
                 crate::interaction::InteractionInputCursor::default(),
             ),
         ),

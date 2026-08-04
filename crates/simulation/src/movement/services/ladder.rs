@@ -2,7 +2,9 @@
 //!
 //! Same AABB-overlap approach as the stairs service.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::attachment::LocomotionActorFilter;
 use crate::movement::facts::LadderFacts;

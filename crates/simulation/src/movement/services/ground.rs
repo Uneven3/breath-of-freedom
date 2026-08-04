@@ -11,7 +11,9 @@
 //! reads the body's *current* transform (no one-frame contact latency).
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::GroundFacts;
@@ -271,6 +273,8 @@ pub fn lift_actors_out_of_terrain(terrain: TerrainAccess, mut actors: WalkingAct
 #[cfg(test)]
 mod terrain_clearance_tests {
     use super::*;
+    use bevy_app::{App, Update};
+
     use crate::movement::attachment::LocomotionEnabled;
     use crate::world::Terrain;
 

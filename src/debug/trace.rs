@@ -11,12 +11,14 @@ use bevy::prelude::*;
 use std::fmt::Write;
 
 use super::{DebugConfig, ProposalTrace, SimTick};
-use crate::movement::diag::{CastKind, CastTrace};
-use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
-use crate::movement::proposal::ProposalBuffer;
-use crate::movement::sensing::GroundSensing;
-use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, BodyVelocity};
+use bof_simulation::movement::diag::{CastKind, CastTrace};
+use bof_simulation::movement::facts::{
+    BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts,
+};
+use bof_simulation::movement::proposal::ProposalBuffer;
+use bof_simulation::movement::sensing::GroundSensing;
+use bof_simulation::movement::state::LocomotionState;
+use bof_simulation::movement::{Actor, BodyVelocity};
 
 /// the primary tool for "why did I fall?" investigations.
 type GroundFlipQuery<'a> = (

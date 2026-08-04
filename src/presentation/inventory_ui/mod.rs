@@ -8,7 +8,7 @@ use crate::inventory::{
     ConsumeSlotRequestMessage, EquipSlotRequestMessage, Inventory, ItemKind, ItemStack,
     MaterialKind, WeaponDurability,
 };
-use crate::movement::Player;
+use bof_simulation::movement::Player;
 
 mod view;
 

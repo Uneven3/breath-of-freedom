@@ -18,18 +18,20 @@ use crate::combat::state::CombatState;
 use crate::health::Health;
 use crate::inventory::{Inventory, ItemKind, WeaponDurability};
 use crate::mounts::data::{Horse, HorseCharge, RiddenBy};
-use crate::movement::facing::FacingSource;
-use crate::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
-use crate::movement::intents::Intents;
-use crate::movement::probe_data::TraversalProbe;
-use crate::movement::stamina::Stamina;
-use crate::movement::state::LocomotionState;
-use crate::movement::{BodyVelocity, Player};
 use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
 use crate::visuals::DiagnosticViewState;
 use crate::visuals::terrain_material::TerrainMaterial;
 use crate::world::day_night::TimeOfDay;
+use bof_simulation::movement::facing::FacingSource;
+use bof_simulation::movement::facts::{
+    BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts,
+};
+use bof_simulation::movement::intents::Intents;
+use bof_simulation::movement::probe_data::TraversalProbe;
+use bof_simulation::movement::stamina::Stamina;
+use bof_simulation::movement::state::LocomotionState;
+use bof_simulation::movement::{BodyVelocity, Player};
 
 // Each section has its own focused producer (§1): a system reads exactly the
 // components its slot needs and writes only that slot (§7). Adding a debug datum

@@ -30,3 +30,4 @@ pub mod projectiles;
 pub mod proposal;
 pub mod scene;
 pub mod visuals;
+pub mod world;

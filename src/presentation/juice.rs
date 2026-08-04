@@ -17,9 +17,9 @@ use bevy::prelude::*;
 
 use crate::camera::CameraShake;
 use crate::combat::motors::attack::HitImpactMessage;
-use crate::movement::state::LocomotionState;
-use crate::movement::{Actor, Player};
 use crate::visuals::VisualOf;
+use bof_simulation::movement::state::LocomotionState;
+use bof_simulation::movement::{Actor, Player};
 
 const HIT_FLASH_SECS: f32 = 0.12;
 const HIT_FLASH_COLOR: Color = Color::srgb(2.5, 2.5, 2.5);

@@ -7,10 +7,10 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::input::frame::ControlOrientation;
-use crate::movement::Player;
-use crate::movement::state::LocomotionState;
 use crate::visuals::PlayerVisual;
 use crate::world::day_night::{TimeOfDay, atmosphere_color};
+use bof_simulation::movement::Player;
+use bof_simulation::movement::state::LocomotionState;
 
 use crate::combat::motors::aim::{AIM_PIVOT_HEIGHT, AIM_SHOULDER_OFFSET};
 
@@ -171,7 +171,7 @@ fn follow_player(
             &ControlOrientation,
             Option<&crate::combat::state::CombatState>,
             Option<&crate::combat::motors::aim::DrawStrength>,
-            Option<&crate::movement::facing::FacingSource>,
+            Option<&bof_simulation::movement::facing::FacingSource>,
         ),
         FollowFilter,
     >,
@@ -233,7 +233,7 @@ fn follow_player(
     // so releasing eases back out instead of snapping to wherever the mouse
     // drifted. Pitch stays player-controlled.
     let lock_target_pos = match facing {
-        Some(crate::movement::facing::FacingSource::LockOn(target)) => {
+        Some(bof_simulation::movement::facing::FacingSource::LockOn(target)) => {
             targets.get(*target).ok().map(|t| t.translation)
         }
         _ => None,

@@ -6,7 +6,9 @@
 //! lands in `LedgeFacts`.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::body::BodyDimensions;

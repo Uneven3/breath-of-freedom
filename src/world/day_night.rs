@@ -5,6 +5,8 @@
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 
+pub use bof_simulation::world::day_night::{TimeOfDay, TimeOfDayRequest};
+
 use crate::perf::PerfToggles;
 
 /// Below this illuminance a directional light contributes nothing visible, so
@@ -17,9 +19,6 @@ const SHADOW_CASTING_LUX: f32 = 1.0;
 fn casts_shadows(illuminance: f32) -> bool {
     illuminance >= SHADOW_CASTING_LUX
 }
-
-/// One full in-game day per this many real minutes (BotW pacing).
-const REAL_MINUTES_PER_GAME_DAY: f32 = 24.0;
 
 /// Sun tilt off the east-west arc, so shadows never collapse to a line.
 const SUN_ARC_TILT: f32 = 0.35;
@@ -66,49 +65,6 @@ const DUSK_END: f32 = 20.0;
 /// drifted and grew as you moved. On a Zelda-sized map that would be grotesque.
 const DISC_ORBIT_RADIUS: f32 = 420.0;
 
-/// Simulation clock: `hours` in `0.0..24.0`, advanced on the fixed step.
-/// `speed` is a debug affordance (F9 fast-forward); 1.0 in normal play.
-#[derive(Resource)]
-pub struct TimeOfDay {
-    pub hours: f32,
-    pub speed: f32,
-}
-
-impl Default for TimeOfDay {
-    fn default() -> Self {
-        Self {
-            hours: 9.0,
-            speed: 1.0,
-        }
-    }
-}
-
-/// External request to alter the world-owned simulation clock. Debug/UI may
-/// emit it, but only World mutates `TimeOfDay` (§7).
-#[derive(Message, Debug, Clone, Copy)]
-pub enum TimeOfDayRequest {
-    AdvanceHour,
-    ToggleSpeed,
-}
-
-pub(super) fn apply_time_requests(
-    mut requests: MessageReader<TimeOfDayRequest>,
-    mut time_of_day: ResMut<TimeOfDay>,
-) {
-    for request in requests.read() {
-        match request {
-            TimeOfDayRequest::AdvanceHour => {
-                time_of_day.hours = (time_of_day.hours + 1.0).rem_euclid(24.0);
-                info!("[debug] time jump: {:05.2}h", time_of_day.hours);
-            }
-            TimeOfDayRequest::ToggleSpeed => {
-                time_of_day.speed = if time_of_day.speed > 1.0 { 1.0 } else { 120.0 };
-                info!("[debug] time speed: x{}", time_of_day.speed);
-            }
-        }
-    }
-}
-
 /// Marker for the directional light the cycle drives.
 #[derive(Component)]
 pub struct Sun;
@@ -125,12 +81,6 @@ pub struct SunDisc;
 /// Marker for the visible moon disc, opposite the sun.
 #[derive(Component)]
 pub struct MoonDisc;
-
-pub(super) fn advance_time(time: Res<Time>, mut tod: ResMut<TimeOfDay>) {
-    let game_hours_per_real_second = 24.0 / (REAL_MINUTES_PER_GAME_DAY * 60.0);
-    tod.hours =
-        (tod.hours + time.delta_secs() * game_hours_per_real_second * tod.speed).rem_euclid(24.0);
-}
 
 pub(super) fn setup_moon_light(mut commands: Commands, state: Res<State<crate::scene::AppState>>) {
     commands.spawn((
@@ -411,7 +361,6 @@ pub(super) fn apply_cascade_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
 
     #[test]
     fn cascade_parser_rejects_malformed_and_out_of_range_values() {
@@ -460,34 +409,6 @@ mod tests {
         assert!(sun_direction(12.0).y > 0.9, "12:00 is near zenith");
         assert!(sun_direction(18.0).y.abs() < 1e-4, "18:00 is sunset");
         assert!(sun_direction(0.0).y < -0.9, "00:00 is deep night");
-    }
-
-    #[test]
-    fn time_advances_and_wraps_at_midnight() {
-        let mut world = World::new();
-        world.init_resource::<Time>();
-        world
-            .resource_mut::<Time>()
-            .advance_by(std::time::Duration::from_secs_f32(1.0));
-        world.insert_resource(TimeOfDay {
-            hours: 23.99,
-            speed: 1.0,
-        });
-
-        world.run_system_once(advance_time).unwrap();
-
-        let tod = world.resource::<TimeOfDay>();
-        let expected_step = 24.0 / (REAL_MINUTES_PER_GAME_DAY * 60.0);
-        assert!(tod.hours < expected_step + 1e-4, "must wrap past 24:00");
-
-        // Debug fast-forward multiplies the same step.
-        world.insert_resource(TimeOfDay {
-            hours: 0.0,
-            speed: 60.0,
-        });
-        world.run_system_once(advance_time).unwrap();
-        let tod = world.resource::<TimeOfDay>();
-        assert!((tod.hours - expected_step * 60.0).abs() < 1e-4);
     }
 
     #[test]

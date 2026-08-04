@@ -1,8 +1,10 @@
 //! Stairs service — reports whether the body overlaps an authored stair volume.
 
+use bevy_ecs::prelude::*;
 #[cfg(test)]
-use bevy::ecs::system::RunSystemOnce;
-use bevy::prelude::*;
+use bevy_ecs::system::RunSystemOnce;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::movement::Actor;
 use crate::movement::abilities::StairsMovement;

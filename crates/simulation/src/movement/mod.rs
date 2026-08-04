@@ -28,6 +28,7 @@ pub mod motor_common;
 pub mod motors;
 pub mod probe;
 pub mod sensing;
+pub mod services;
 
 // SPIKE (throwaway, test-only): multi-actor dispatch proof. See spike.rs header.
 #[cfg(test)]
@@ -141,16 +142,10 @@ impl Plugin for MovementInfrastructurePlugin {
     }
 }
 
-/// Installs the motors and the arbitration that drives them.
-///
-/// The world sensors that publish `GroundFacts`/`LedgeFacts`/`StairsFacts`/
-/// `LadderFacts` still live with the app: they read authored geometry and the
-/// terrain, which have not crossed the crate boundary yet (`CRATES.md`, 6.7).
-/// Until they do, whoever adds this plugin also registers them in
-/// [`MovementSet::SenseWorld`].
-pub struct MovementMotorsPlugin;
+/// Installs the whole broker: sensors, motors, and the arbitration between them.
+pub struct MovementPlugin;
 
-impl Plugin for MovementMotorsPlugin {
+impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MovementInfrastructurePlugin);
 
@@ -165,7 +160,14 @@ impl Plugin for MovementMotorsPlugin {
         );
         app.add_systems(
             FixedUpdate,
-            motors::sneak::update_stand_clearance.in_set(MovementSet::SenseWorld),
+            (
+                services::ground::ground_service,
+                services::ledge::ledge_service,
+                services::stairs::stairs_service,
+                services::ladder::ladder_service,
+                motors::sneak::update_stand_clearance,
+            )
+                .in_set(MovementSet::SenseWorld),
         );
         app.add_systems(
             FixedUpdate,
@@ -225,6 +227,16 @@ impl Plugin for MovementMotorsPlugin {
                 .chain()
                 .in_set(MovementSet::TickActiveMotor),
         );
+        // After the motors move the body, before attachments follow it: an actor
+        // that ended up inside the terrain is lifted back onto the surface. The
+        // downward probe cannot catch this — it finds ground right there and
+        // reports the body comfortably grounded while it sits under the floor.
+        app.add_systems(
+            FixedUpdate,
+            services::ground::lift_actors_out_of_terrain
+                .after(MovementSet::TickActiveMotor)
+                .before(MovementSet::SyncAttachments),
+        );
         // Decoupled facing (aim/lock-on) resolves after the active motor has
         // moved the body, before attachments sync to the final transform.
         app.add_systems(
@@ -267,3 +279,5 @@ fn arbitrate(mut q: Query<ArbitrationQuery, attachment::LocomotionActorFilter>) 
 mod actor_isolation_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod determinism_tests;

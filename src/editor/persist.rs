@@ -10,7 +10,8 @@ use bevy::prelude::*;
 use super::EditorTool;
 use super::history::SculptHistory;
 use crate::scene::AppState;
-use crate::world::{Terrain, terrain_file};
+use crate::scene::terrain_file;
+use crate::world::Terrain;
 
 /// Ctrl+S saves, Ctrl+L reloads from disk (discarding unsaved sculpting, but
 /// filed in the undo history first so it is not a one-way door).

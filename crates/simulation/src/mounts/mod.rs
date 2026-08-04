@@ -151,7 +151,7 @@ mod plugin_tests {
     use crate::movement::motors::jump::JumpLocal;
     use crate::movement::sensing::GroundSensing;
     use crate::movement::state::LocomotionState;
-    use crate::movement::{ActorId, BodyVelocity, MovementMotorsPlugin, Player};
+    use crate::movement::{ActorId, BodyVelocity, MovementPlugin, Player};
     use crate::physics::GameLayer;
     use crate::projectiles::SpawnProjectileMessage;
     use bof_domain::input::frame::ActiveActions;
@@ -186,10 +186,10 @@ mod plugin_tests {
         app.add_message::<SpawnProjectileMessage>();
         match order {
             PluginOrder::MovementFirst => {
-                app.add_plugins((MovementMotorsPlugin, MountsPlugin, CombatPlugin));
+                app.add_plugins((MovementPlugin, MountsPlugin, CombatPlugin));
             }
             PluginOrder::MountsFirst => {
-                app.add_plugins((MountsPlugin, CombatPlugin, MovementMotorsPlugin));
+                app.add_plugins((MountsPlugin, CombatPlugin, MovementPlugin));
             }
         }
         app.finish();

@@ -4,9 +4,9 @@ use bevy::prelude::*;
 
 use super::{INTERPOLATION_SPEED, SNEAK_Y_OFFSET, VisualOf};
 use crate::asset_pipeline::MaterialPalette;
-use crate::movement::body::BodyDimensions;
-use crate::movement::probe_data::TraversalProbe;
-use crate::movement::state::LocomotionState;
+use bof_simulation::movement::body::BodyDimensions;
+use bof_simulation::movement::probe_data::TraversalProbe;
+use bof_simulation::movement::state::LocomotionState;
 
 #[derive(Component)]
 pub(super) struct TraversalProbeVisual {

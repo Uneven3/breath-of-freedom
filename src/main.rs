@@ -26,9 +26,7 @@ mod input;
 mod interaction;
 mod inventory;
 mod mounts;
-mod movement;
 mod perf;
-mod player;
 mod presentation;
 mod projectiles;
 mod scene;
@@ -57,7 +55,8 @@ fn main() {
         // Temporary cross-crate ordering until Movement and Combat migrate.
         .configure_sets(
             FixedUpdate,
-            inventory::InventorySet::Collect.after(movement::MovementSet::SyncAttachments),
+            inventory::InventorySet::Collect
+                .after(bof_simulation::movement::MovementSet::SyncAttachments),
         )
         .configure_sets(
             FixedUpdate,
@@ -74,14 +73,14 @@ fn main() {
         .add_plugins((
             world::WorldPlugin,
             input::InputPlugin,
-            movement::MovementPlugin,
+            bof_simulation::movement::MovementPlugin,
             mounts::MountsPlugin,
             combat::CombatPlugin,
             projectiles::ProjectilesPlugin,
             health::HealthPlugin,
             inventory::InventoryPlugin,
             enemies::EnemiesPlugin,
-            player::PlayerPlugin,
+            bof_simulation::player::PlayerPlugin,
             camera::CameraPlugin,
             visuals::VisualsPlugin,
             debug::DebugPlugin,

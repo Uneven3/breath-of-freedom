@@ -6,14 +6,16 @@
 //! owner of decoupled facing. The camera (roadmap 3c) will read the same
 //! `FacingSource` to frame the target.
 
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 
 use crate::enemies::Enemy;
-use crate::input::InputConsumeCursor;
-use crate::input::action::IntentAction;
-use crate::input::frame::{ActiveActions, ControlOrientation, InputControlledBy};
 use crate::movement::Player;
 use crate::movement::facing::FacingSource;
+use bof_domain::input::InputConsumeCursor;
+use bof_domain::input::action::IntentAction;
+use bof_domain::input::frame::{ActiveActions, ControlOrientation, InputControlledBy};
 
 /// Max distance to acquire a lock.
 const ACQUIRE_RANGE: f32 = 30.0;
@@ -113,8 +115,8 @@ pub fn update_lock_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::frame::LOCAL_INPUT_SOURCE;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
+    use bof_domain::input::frame::LOCAL_INPUT_SOURCE;
 
     fn spawn_player(world: &mut World) -> Entity {
         world

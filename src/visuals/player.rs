@@ -9,9 +9,9 @@ use bevy::prelude::*;
 use super::{INTERPOLATION_SPEED, VisualOf};
 use crate::asset_pipeline::MaterialPalette;
 use crate::combat::state::CombatState;
-use crate::movement::Player;
-use crate::movement::body::BodyDimensions;
-use crate::movement::motors::sneak::Crouched;
+use bof_simulation::movement::Player;
+use bof_simulation::movement::body::BodyDimensions;
+use bof_simulation::movement::motors::sneak::Crouched;
 
 #[derive(Component)]
 pub struct PlayerVisual;

@@ -200,7 +200,7 @@ Lo que presentación lee hoy de `movement` es casi todo dato puro (`Actor`,
 
 ### Fase 6 — `bof_simulation`
 
-Estado: **en curso; 6.1–6.6 cerradas el 2026-08-04**. Cada fila termina
+Estado: **en curso; 6.1–6.7 cerradas el 2026-08-04**. Cada fila termina
 compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 
 | Corte | Movimiento de código |
@@ -211,7 +211,7 @@ compilable y verde; primero se traslada sin rediseñar, luego se mejora.
 | 6.4 ✅ | Movement: schedules, vínculos, restricciones, LOD y diagnóstico. |
 | 6.5 ✅ | Movement: motores, bundles, brain/facing/probe y arbitración. |
 | 6.6 ✅ | `combat`, `enemies`, `mounts`; los gates de escena van a `scene`. |
-| 6.7 | `player`, `input`, `world` y runtime de assets; render queda en adaptadores. |
+| 6.7 ✅ | `player`, `world` (terreno, tipos, reloj) y los sensores; `input` se queda. |
 | 6.8 | Cableado raíz, replay headless, retiro de shims/test redundante y checkpoint. |
 
 Avian usará `default-features = false` con `3d`, `f32`, `parry-f32`, `parallel`
@@ -235,6 +235,30 @@ que presentación lo obtiene del dato y no de simulación (§20); y `JumpLocal`
 expone `grant_coyote` para el test de `mounts`, que vuelve a cerrarse en 6.6.
 El crate headless no tiene el prelude de bevy, así que el azúcar `default()` se
 escribe `Default::default()` — no se agregó `bevy_utils` por eso.
+
+**6.7 cambió dos cosas del plan, con razón.** (a) **`input` se queda en la app.**
+Este reparto se escribió antes de elegir hermanas y antes de ver que `input`
+también maneja el cursor de la ventana. Dejándolo afuera, `bof_simulation` no
+declara `bevy_input` ni `bevy_window`, y la ley pasa de disciplina a
+imposibilidad: la simulación no *puede* leer hardware. No pierde nada, porque
+`ActiveActions`/`ControlOrientation`/`IntentAction` ya son domain. (b) **El test
+de frontera de fase 1 no se borra.** Era redundante sólo si `input` cruzaba;
+como se queda, sigue siendo lo único que impide que la deuda C2 crezca *dentro
+de la app*, donde Cargo no llega. Sus 13 entradas están todas ahí.
+
+`world` se partió por lo que cada mitad hace, no por tamaño: cruzan el
+heightfield, la semántica por celda, los marcadores authored (`Stairs`,
+`Ladder`, `NonClimbable`, `Surface`, `PracticeTarget`) y **el reloj**; se quedan
+`layout`, `spawn`, `forest` y la iluminación. El corte del reloj es el que menos
+se ve y el más necesario: `advance_time` **escribe** cada tick, y presentación
+sólo lee (§20), así que en fase 7 no podía terminar ahí. `WORLD_SIZE` y el hash
+de scatter bajaron a `bof_domain::world` porque el terreno y la pradera tienen
+que coincidir sin llamarse.
+
+Tres sistemas nombraban `AppState` para spawnear (terreno, player y, desde 6.6,
+enemigos y caballo). Todos siguen la misma costura: **simulación construye, la
+tabla de escenas decide cuándo**, y la entidad declara su vida con `SceneScoped`
+en vez de `DespawnOnExit`, que la app bindea a su propio estado.
 
 **6.6 mostró dónde estaba la costura de escena.** `enemies` y `mounts` traían
 un `for id in SceneId::ALL` que gateaba su spawn, y `scene` es composición: se

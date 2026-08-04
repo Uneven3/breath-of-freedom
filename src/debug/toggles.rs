@@ -16,8 +16,8 @@ use super::channel::{
 use super::snapshot::HudVisibility;
 use crate::enemies::BokoboSpawnRequest;
 use crate::mounts::data::HorseSpawnRequest;
-use crate::movement::diag::CastTrace;
 use crate::world::day_night::TimeOfDayRequest;
+use bof_simulation::movement::diag::CastTrace;
 
 pub(super) fn apply_initial_toggles(
     config: Res<DebugConfig>,
@@ -79,7 +79,7 @@ pub(super) fn apply_channel_toggles(
 pub(super) fn apply_debug_actions(
     mut requests: MessageReader<DebugActionRequest>,
     mut time_of_day: MessageWriter<TimeOfDayRequest>,
-    mut probe: MessageWriter<crate::movement::probe_data::ProbeToggleRequest>,
+    mut probe: MessageWriter<bof_simulation::movement::probe_data::ProbeToggleRequest>,
     mut bokobos: MessageWriter<BokoboSpawnRequest>,
     mut horse: MessageWriter<HorseSpawnRequest>,
 ) {
@@ -88,7 +88,7 @@ pub(super) fn apply_debug_actions(
             // Each owning module holds the entity and its request type; debug
             // only translates the hub click into the message it already reads.
             DebugAction::ToggleProbe => {
-                probe.write(crate::movement::probe_data::ProbeToggleRequest);
+                probe.write(bof_simulation::movement::probe_data::ProbeToggleRequest);
             }
             DebugAction::AdvanceHour => {
                 time_of_day.write(TimeOfDayRequest::AdvanceHour);

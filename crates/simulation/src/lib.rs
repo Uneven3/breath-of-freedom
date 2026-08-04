@@ -24,8 +24,10 @@ pub mod inventory;
 pub mod mounts;
 pub mod movement;
 pub mod physics;
+pub mod player;
 pub mod projectiles;
 pub mod time_control;
+pub mod world;
 
 /// Installs the authoritative physics and, progressively, gameplay systems.
 pub struct SimulationPlugin;

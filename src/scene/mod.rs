@@ -233,12 +233,18 @@ impl Plugin for ScenePlugin {
                 OnEnter(AppState::Scene(id)),
                 (SceneBuild::Ground, SceneBuild::Actors).chain(),
             );
-            // Simulation owns *how* an enemy or a horse is built; this table
-            // owns *which scene gets one*. It asks through the same request the
-            // debug hub writes, so there is one spawn path, not two.
+            // Simulation owns *how* the ground, a player, an enemy or a horse
+            // is built; this table owns *when and which scene gets one*. The
+            // spawn requests go through the same messages the debug hub writes,
+            // so there is one spawn path, not two.
+            app.add_systems(
+                OnEnter(AppState::Scene(id)),
+                setup_terrain.in_set(SceneBuild::Ground),
+            );
             app.add_systems(
                 OnEnter(AppState::Scene(id)),
                 (
+                    bof_simulation::player::spawn_player,
                     request_scene_enemies.run_if(scene_has(|c| c.enemies)),
                     request_scene_horse.run_if(scene_has(|c| c.horse)),
                 )
@@ -256,6 +262,16 @@ impl Plugin for ScenePlugin {
         // into the domain/simulation boundary.
         app.add_systems(PostUpdate, bind_scene_scoped_entities);
     }
+}
+
+/// Each scene names its own heightmap in [`SCENES`]; that file *is* the level.
+/// Simulation loads and rebuilds it, this decides which one.
+pub fn terrain_file(state: &State<AppState>) -> Option<&'static str> {
+    current_scene(state).map(|def| def.terrain_file)
+}
+
+fn setup_terrain(mut commands: Commands, state: Res<State<AppState>>) {
+    bof_simulation::world::spawn_terrain(&mut commands, terrain_file(&state));
 }
 
 fn request_scene_enemies(mut requests: MessageWriter<bof_simulation::enemies::BokoboSpawnRequest>) {

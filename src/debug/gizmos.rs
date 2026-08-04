@@ -7,10 +7,10 @@ use bevy::color::palettes::css;
 use bevy::prelude::*;
 
 use super::DebugConfig;
-use crate::movement::diag::CastTrace;
-use crate::movement::facts::{BodyContact, GroundFacts, StairsFacts};
-use crate::movement::{Actor, BodyVelocity};
 use crate::world::{Ladder, Stairs};
+use bof_simulation::movement::diag::CastTrace;
+use bof_simulation::movement::facts::{BodyContact, GroundFacts, StairsFacts};
+use bof_simulation::movement::{Actor, BodyVelocity};
 
 /// Draw the sensor casts recorded by the services this fixed tick, the
 /// stairs/ladder trigger volumes, and per-actor state arrows.
@@ -25,7 +25,7 @@ pub(super) fn draw_sensor_gizmos(
             &BodyVelocity,
             &GroundFacts,
             &BodyContact,
-            &crate::movement::body::BodyDimensions,
+            &bof_simulation::movement::body::BodyDimensions,
             Option<&StairsFacts>,
         ),
         With<Actor>,

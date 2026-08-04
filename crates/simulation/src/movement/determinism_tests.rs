@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
-use bevy::time::TimeUpdateStrategy;
+use bevy_app::{App, TaskPoolPlugin};
+use bevy_math::prelude::*;
+use bevy_time::{TimePlugin, TimeUpdateStrategy};
+use bevy_transform::{TransformPlugin, prelude::Transform};
 
 use super::abilities::{
     AirborneMovement, GroundMovement, JumpMovement, JumpStaminaCost, SprintMovement,
@@ -34,14 +36,13 @@ struct ActorSnapshot {
 fn headless_app() -> App {
     let mut app = App::new();
     app.add_plugins((
-        MinimalPlugins,
+        TaskPoolPlugin::default(),
+        TimePlugin,
         TransformPlugin,
         PhysicsPlugins::default(),
-        bevy::asset::AssetPlugin::default(),
-        bevy::mesh::MeshPlugin,
     ));
     app.insert_resource(TimeUpdateStrategy::ManualDuration(FIXED_STEP));
-    app.init_resource::<crate::input::frame::ActiveActions>();
+    app.init_resource::<bof_domain::input::frame::ActiveActions>();
     app.add_plugins(MovementPlugin);
     app.finish();
     app
@@ -83,7 +84,7 @@ fn scripted_intents(seed: u32, actor: ActorId, tick: u32) -> Intents {
             held: jumping,
             pressed: tick == 60,
         },
-        ..default()
+        ..Default::default()
     }
 }
 

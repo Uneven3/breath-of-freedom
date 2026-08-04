@@ -12,8 +12,6 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use action::IntentAction;
 use frame::{ActiveActions, ControlOrientation, InputControlledBy, LOCAL_INPUT_SOURCE};
 
-pub use frame::InputConsumeCursor;
-
 /// Shared with the debug freecam so its look feel matches the player's.
 pub(crate) const MOUSE_SENSITIVITY: f32 = 0.003;
 const PITCH_MIN: f32 = -1.2;

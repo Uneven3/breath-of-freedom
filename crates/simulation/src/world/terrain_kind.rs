@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::asset_pipeline::schema::SurfaceKind;
+use bof_domain::asset_pipeline::schema::SurfaceKind;
 
 /// What a terrain cell is made of.
 ///

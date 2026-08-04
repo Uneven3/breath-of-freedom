@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use super::{INTERPOLATION_SPEED, VisualOf};
 use crate::enemies::Enemy;
 use crate::enemies::perception::Awareness;
-use crate::movement::body::BodyDimensions;
+use bof_simulation::movement::body::BodyDimensions;
 
 #[derive(Component)]
 pub(super) struct EnemyVisual {

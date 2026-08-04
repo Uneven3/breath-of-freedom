@@ -2,11 +2,11 @@ use bevy::prelude::*;
 
 pub mod components;
 
-use crate::movement::Actor;
-use crate::movement::BodyVelocity;
-use crate::movement::facts::GroundFacts;
-use crate::movement::stamina::Stamina;
 use crate::presentation::cues::{CueId, CueKind, CueMessage};
+use bof_simulation::movement::Actor;
+use bof_simulation::movement::BodyVelocity;
+use bof_simulation::movement::facts::GroundFacts;
+use bof_simulation::movement::stamina::Stamina;
 use components::{ContinuousSfxTracker, StrideAccumulator};
 
 /// Log a modulation update only when the change is audible-sized. Stamina

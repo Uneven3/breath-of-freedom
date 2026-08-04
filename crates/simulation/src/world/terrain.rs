@@ -21,13 +21,16 @@
 use std::path::Path;
 
 use avian3d::prelude::*;
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemParam;
+use bevy_log::{info, warn};
+use bevy_math::prelude::*;
+use bevy_transform::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::forest::hash_u32;
-use super::layout::WORLD_SIZE;
 use super::terrain_kind::TerrainKind;
+use bof_domain::world::WORLD_SIZE;
+use bof_domain::world::hash_u32;
 
 /// Grid cells per side; the heightfield has `CELLS + 1` points per side. Sized
 /// so the brush covers enough vertices to sculpt smooth domes (a coarser grid
@@ -36,14 +39,11 @@ use super::terrain_kind::TerrainKind;
 /// (chunking) start to matter — deferred for now.
 const CELLS: usize = 128;
 
-/// Each scene names its own heightmap in `crate::scene::SCENES`. **That file is
-/// the level**: the editor writes it and [`setup_terrain`] loads it on entry, so
-/// a scene starts on the ground the last session shaped — and sculpting one
-/// scene cannot disturb another. Paths are relative to the working directory,
-/// like `assets/`.
-pub fn terrain_file(state: &State<crate::scene::AppState>) -> Option<&'static str> {
-    crate::scene::current_scene(state).map(|def| def.terrain_file)
-}
+// Each scene names its own heightmap. **That file is the level**: the editor
+// writes it and `spawn_terrain` loads it on entry, so a scene starts on the
+// ground the last session shaped — and sculpting one scene cannot disturb
+// another. Which file belongs to which scene is composition, so the app looks
+// it up in its own table and passes the path here.
 
 /// Heights are clamped to this band. Not a design limit — a guard so a stuck
 /// mouse button cannot push the ground somewhere the camera and the physics
@@ -204,10 +204,11 @@ impl Terrain {
         }
     }
 
-    /// A flat grid for tests outside this module (the editor's history tests
-    /// need a terrain, and only `world` may construct one).
-    #[cfg(test)]
-    pub(crate) fn flat_for_test() -> Self {
+    /// A flat grid for tests in other crates (the editor's history tests, the
+    /// terrain mesh tests and the polygon budget all need one, and only this
+    /// module may construct a `Terrain`). Not `#[cfg(test)]`: a `cfg` flag does
+    /// not cross a crate boundary, so the fixture has to ship to be usable.
+    pub fn flat_for_test() -> Self {
         Self::flat()
     }
 
@@ -850,9 +851,9 @@ pub(super) fn rebuild_terrain_collider(
 ///
 /// The saved level, if there is one, *is* the starting ground — a missing file
 /// is the normal first-run case, not an error.
-pub(super) fn setup_terrain(mut commands: Commands, state: Res<State<crate::scene::AppState>>) {
+pub fn spawn_terrain(commands: &mut Commands, file: Option<&str>) {
     let mut terrain = Terrain::flat();
-    if let Some(file) = terrain_file(&state)
+    if let Some(file) = file
         && Path::new(file).exists()
     {
         match std::fs::read_to_string(file)
@@ -866,7 +867,9 @@ pub(super) fn setup_terrain(mut commands: Commands, state: Res<State<crate::scen
     let collider = terrain.to_collider();
     let revision = ColliderRevision(terrain.relief_revision());
     commands.spawn((
-        DespawnOnExit(*state.get()),
+        // The lifetime is declared, not bound: the app turns `SceneScoped` into
+        // its own state-specific cleanup, so this never names `AppState`.
+        bof_domain::scene::SceneScoped,
         Name::new("Terrain"),
         terrain,
         collider,
@@ -888,7 +891,7 @@ pub(super) fn setup_terrain(mut commands: Commands, state: Res<State<crate::scen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy_ecs::system::RunSystemOnce;
 
     fn read_access(terrain: TerrainAccess) -> (Option<f32>, Option<TerrainKind>, usize) {
         (

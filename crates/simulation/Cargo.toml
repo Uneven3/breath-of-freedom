@@ -28,3 +28,5 @@ bevy_math = "0.19"
 bevy_time = "0.19"
 bevy_transform = "0.19"
 bof_domain = { package = "breath_of_freedom_domain", path = "../domain" }
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }

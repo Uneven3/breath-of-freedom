@@ -246,25 +246,31 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 
 ## Dónde se retoma (2026-08-04)
 
-6.5 y 6.6 cerraron: **la locomoción y el combate enteros son headless.**
-`bof_simulation` (15.468 LOC) posee los 13 motores de movimiento, la
-arbitración, `brain`/`facing`/sonda, y ahora `combat`, `enemies` y `mounts`. De
-`src/movement/` quedan los cuatro servicios de sensado, que leen `TerrainAccess`
-y geometría authored y siguen a `world` en 6.7. Dos cosas se resolvieron en su
-nivel en vez de abrir tipos: `expected_feet_y` bajó a `StairsFacts` en domain
-(quedaba pendiente de fase 5; falta `MovementSet`, que es orden y pertenece a
-quien arma el schedule), y los gates de escena de enemigos/caballo se mudaron al
-`ScenePlugin` — simulación construye, la tabla de escenas decide quién lo tiene.
-Jugado el 2026-08-04 en la caja Terreno: arranque y cierre limpios, esculpido y
-guardado repetidos, cero `error`/`panic`. **Salvedad anotada:** ese checkpoint
-no ejercitó los motores a fondo (el usuario los va a retocar igual), así que lo
-validado es que no rompen el juego, no el feeling.
+6.5, 6.6 y 6.7 cerraron: **el juego entero corre sin pantalla.** `bof_simulation`
+posee locomoción (13 motores, sensores y arbitración), combate, enemigos,
+monturas, el player, el terreno y el reloj del mundo; el replay determinista de
+120 ticks corre headless dentro del crate. En `src/` quedan presentación,
+composición (`scene`, `world::layout`/`spawn`/`forest`, iluminación) y `input`.
 
-1. **CRATES fase 6.7:** trasladar `player`, `input`, `world`, sensores pendientes
-   y runtime de assets; los adaptadores de render quedan en la app.
-2. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
+Tres decisiones que se apartaron del plan escrito, con su razón:
+- **`input` no cruzó.** Maneja hardware *y* cursor de ventana; dejándolo afuera,
+  simulación no declara `bevy_input` ni `bevy_window` y no **puede** leer
+  teclado, en vez de acordarse de no hacerlo.
+- **`layout`/`spawn` no cruzaron.** Son composición, como `scene`: el binario es
+  la única capa que ve simulación y presentación a la vez, así que es el único
+  lugar donde armar collider y malla juntos es legal.
+- **El reloj sí cruzó, la luz no.** `advance_time` escribe cada tick y
+  presentación sólo lee (§20).
+
+Jugado el 2026-08-04 en la caja Terreno (antes de 6.6/6.7): arranque y cierre
+limpios, esculpido y guardado repetidos, cero `error`/`panic`. **Salvedad:** ese
+checkpoint no ejercitó los motores a fondo, así que lo validado es que no rompen
+el juego, no el feeling. **6.7 no está jugada todavía** — mueve terreno, player
+y el ciclo de vida de escena, así que pide su propio checkpoint.
+
+1. **CRATES fase 6.8:** cableado raíz, retiro de shims/tests redundantes y
    checkpoint jugado; luego fase 7 (`bof_presentation` hermana).
-3. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
+2. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
    y jugar graybox sobre relieve + tipografía, aún sin validar.
 
 ## Rendimiento: lo que sigue informando decisiones

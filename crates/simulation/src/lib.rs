@@ -137,3 +137,103 @@ mod tests {
         assert!(velocity.y < 0.0, "gravity must advance in the headless app");
     }
 }
+
+#[cfg(test)]
+mod scheduling_audit {
+    use bevy_app::{App, FixedUpdate, TaskPoolPlugin};
+    use bevy_ecs::prelude::*;
+    use bevy_ecs::schedule::Schedules;
+    use bevy_time::TimePlugin;
+    use bevy_transform::TransformPlugin;
+
+    use super::SimulationPlugin;
+
+    fn simulation_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            TaskPoolPlugin::default(),
+            TimePlugin,
+            TransformPlugin,
+            SimulationPlugin,
+        ));
+        app
+    }
+
+    /// Pares de sistemas que pueden tocar el mismo dato y no tienen orden entre
+    /// ellos, así que cuál corre primero lo decide el ejecutor.
+    fn ambiguities(app: &mut App) -> usize {
+        app.finish();
+        // Se saca del mundo en vez de tomarlo prestado: `initialize` inserta
+        // recursos, y hacerlo dentro de un `resource_scope` es un panic.
+        let mut schedule = app
+            .world_mut()
+            .resource_mut::<Schedules>()
+            .remove(FixedUpdate)
+            .expect("FixedUpdate está registrado");
+        let _ = schedule.initialize(app.world_mut());
+        schedule.graph().conflicting_systems().len()
+    }
+
+    #[derive(Component, Default)]
+    struct Canary(u32);
+
+    fn bump_one(mut canaries: Query<&mut Canary>) {
+        for mut canary in &mut canaries {
+            canary.0 += 1;
+        }
+    }
+
+    fn bump_two(mut canaries: Query<&mut Canary>) {
+        for mut canary in &mut canaries {
+            canary.0 += 2;
+        }
+    }
+
+    /// El canario, y tiene que ser **diferencial**: no alcanza con pedir que
+    /// el detector reporte algo, porque el proyecto ya reporta de por sí.
+    /// Plantar dos escritores sin orden tiene que hacer *subir* la cuenta.
+    #[test]
+    fn the_detector_catches_a_planted_ambiguity() {
+        let baseline = ambiguities(&mut simulation_app());
+        let mut planted = simulation_app();
+        planted.add_systems(FixedUpdate, (bump_one, bump_two));
+        let with_canary = ambiguities(&mut planted);
+        assert!(
+            with_canary > baseline,
+            "plantar dos escritores sin orden no movió la cuenta \
+             ({baseline} → {with_canary}): el detector no está midiendo nada"
+        );
+    }
+
+    /// Pares ambiguos en `FixedUpdate` al 2026-08-04. **Sólo puede bajar.**
+    ///
+    /// Un par ambiguo es dos sistemas que pueden tocar el mismo dato y no
+    /// tienen orden entre ellos: cuál corre primero lo decide el ejecutor, y
+    /// con el pool multihilo puede cambiar entre corridas. Muchos son
+    /// inofensivos —tocan el mismo componente sobre entidades distintas— pero
+    /// **el detector no puede saber cuáles**, y el determinismo es el pilar que
+    /// sostiene el co-op (`NORTE.md`).
+    ///
+    /// Ninguno es de Avian: sus sistemas viven en `FixedPostUpdate` y en su
+    /// propio schedule. Los 117 son de gameplay.
+    ///
+    /// Bajarlo es declarar un orden (`.before`/`.after`) o separar en fases.
+    /// Subirlo es agregar una carrera nueva, y eso se discute, no se cuela.
+    const FIXED_UPDATE_AMBIGUITIES: usize = 117;
+
+    #[test]
+    fn scheduling_ambiguities_only_shrink() {
+        let found = ambiguities(&mut simulation_app());
+        assert!(
+            found <= FIXED_UPDATE_AMBIGUITIES,
+            "las ambigüedades de `FixedUpdate` subieron de \
+             {FIXED_UPDATE_AMBIGUITIES} a {found}: dos sistemas nuevos pueden \
+             tocar el mismo dato sin orden entre ellos"
+        );
+        assert!(
+            found == FIXED_UPDATE_AMBIGUITIES,
+            "bajaron de {FIXED_UPDATE_AMBIGUITIES} a {found} — actualizá la \
+             constante para que el logro no se pueda perder"
+        );
+    }
+}

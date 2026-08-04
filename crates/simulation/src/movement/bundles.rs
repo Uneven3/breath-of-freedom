@@ -12,12 +12,8 @@ use super::abilities::{
     GlideMovement, GroundMovement, JumpMovement, LadderMovement, LedgeTraversal, SneakMovement,
     SprintMovement, StairsMovement, WallJumpMovement,
 };
-use super::attachment::LocomotionEnabled;
 use super::body::{BodyDimensions, crouched_collider, standing_collider};
-use super::constraints::LocomotionConstraintFacts;
-use super::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
-use super::intents::Intents;
-use super::lod::SensingLod;
+use super::facts::{LadderFacts, LedgeFacts, StairsFacts};
 use super::motors::{
     auto_vault::VaultState,
     edge_leap::EdgeLeapState,
@@ -29,34 +25,28 @@ use super::motors::{
     stairs::{StairsGrace, StairsLocal},
     wall_jump::WallJumpState,
 };
-use super::proposal::ProposalBuffer;
 use super::sensing::GroundSensing;
 use super::stamina::Stamina;
-use super::state::LocomotionState;
-use super::{Actor, ActorId, BodyVelocity};
+use super::{Actor, ActorId};
 use crate::physics::GameLayer;
 
-/// Data every kinematic Movement actor needs, independent of who controls it
-/// or which locomotion capabilities it receives.
+/// Lo que un actor kinemático necesita **y no puede deducirse**: su identidad
+/// authored, su pose, su cuerpo físico y sus perfiles.
+///
+/// El resto del núcleo (velocidad, intents, estado, buffer de propuestas,
+/// facts, LOD) lo trae `Actor` por `#[require]`, así que ya no se puede
+/// spawnear un actor a medias — antes eran nueve campos más acá, sostenidos
+/// por disciplina.
 #[derive(Bundle)]
 pub struct KinematicActorBundle {
     pub actor: Actor,
     pub actor_id: ActorId,
-    pub locomotion_enabled: LocomotionEnabled,
     pub transform: Transform,
     pub rigid_body: RigidBody,
     pub collider: Collider,
     pub collision_layers: CollisionLayers,
     pub dimensions: BodyDimensions,
-    pub velocity: BodyVelocity,
-    pub intents: Intents,
-    pub locomotion: LocomotionState,
-    pub proposals: ProposalBuffer,
-    pub contact: BodyContact,
-    pub ground: GroundFacts,
     pub ground_sensing: GroundSensing,
-    pub sensing_lod: SensingLod,
-    pub constraint_facts: LocomotionConstraintFacts,
 }
 
 impl KinematicActorBundle {
@@ -69,7 +59,6 @@ impl KinematicActorBundle {
         Self {
             actor: Actor,
             actor_id,
-            locomotion_enabled: LocomotionEnabled,
             transform,
             rigid_body: RigidBody::Kinematic,
             collider: standing_collider(dimensions),
@@ -78,15 +67,7 @@ impl KinematicActorBundle {
             // actors out so no capsule reads as climbable wall.
             collision_layers: CollisionLayers::new(GameLayer::Actor, LayerMask::ALL),
             dimensions,
-            velocity: BodyVelocity::default(),
-            intents: Intents::default(),
-            locomotion: LocomotionState::default(),
-            proposals: ProposalBuffer::default(),
-            contact: BodyContact::default(),
-            ground: GroundFacts::default(),
             ground_sensing: sensing,
-            sensing_lod: SensingLod::default(),
-            constraint_facts: LocomotionConstraintFacts::default(),
         }
     }
 }
@@ -257,6 +238,37 @@ impl WallJumpMovementBundle {
 mod tests {
     use super::*;
     use crate::movement::abilities::ClimbMovement;
+    // Los trae `Actor` por `#[require]`, no este bundle: el test comprueba
+    // justamente que aparezcan sin que nadie los liste.
+    use crate::movement::BodyVelocity;
+    use crate::movement::constraints::LocomotionConstraintFacts;
+    use crate::movement::facts::{BodyContact, GroundFacts};
+    use crate::movement::intents::Intents;
+    use crate::movement::lod::SensingLod;
+    use crate::movement::proposal::ProposalBuffer;
+    use crate::movement::stamina::Stamina;
+    use crate::movement::state::{LocomotionEnabled, LocomotionState};
+
+    /// La razón de ser de `#[require]`: en ECS olvidarse de un componente no
+    /// da error, sólo hace que la query no enganche y el actor se quede quieto
+    /// sin decir nada. Acá se spawnea el marcador **solo**, sin bundle, y aun
+    /// así el cuerpo queda completo.
+    #[test]
+    fn a_bare_actor_marker_still_arrives_with_the_whole_broker_contract() {
+        let mut world = World::new();
+        let actor = world.spawn(Actor).id();
+        let actor = world.entity(actor);
+
+        assert!(actor.contains::<BodyVelocity>());
+        assert!(actor.contains::<Intents>());
+        assert!(actor.contains::<LocomotionState>());
+        assert!(actor.contains::<LocomotionEnabled>());
+        assert!(actor.contains::<ProposalBuffer>());
+        assert!(actor.contains::<BodyContact>());
+        assert!(actor.contains::<GroundFacts>());
+        assert!(actor.contains::<SensingLod>());
+        assert!(actor.contains::<LocomotionConstraintFacts>());
+    }
 
     #[test]
     fn kinematic_actor_bundle_supplies_the_movement_pipeline_contract() {
@@ -294,6 +306,9 @@ mod tests {
         assert!(actor.contains::<ProposalBuffer>());
         assert!(actor.contains::<BodyContact>());
         assert!(actor.contains::<GroundFacts>());
+        assert!(actor.contains::<LocomotionEnabled>());
+        assert!(actor.contains::<SensingLod>());
+        assert!(actor.contains::<LocomotionConstraintFacts>());
         assert!(!actor.contains::<Stamina>());
         assert!(!actor.contains::<LedgeFacts>());
         assert!(!actor.contains::<StairsFacts>());

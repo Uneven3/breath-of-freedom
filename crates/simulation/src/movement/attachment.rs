@@ -8,8 +8,7 @@ pub struct KinematicAttachment {
     pub local_pose: Transform,
 }
 
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct LocomotionEnabled;
+pub use bof_domain::movement::state::LocomotionEnabled;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PendingSafeRecovery {

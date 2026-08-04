@@ -11,7 +11,7 @@ use bevy_ecs::prelude::*;
 
 use super::{Actor, BodyVelocity};
 
-pub use bof_domain::movement::constraints::BodyImpulseMessage;
+pub use bof_domain::movement::constraints::{BodyImpulseMessage, LocomotionConstraintFacts};
 
 /// A semantic restriction on an actor's locomotion. Combat emits these from
 /// its committed states (see `docs/ARCHITECTURE.md`);
@@ -23,14 +23,6 @@ pub enum LocomotionConstraintMessage {
     /// restricted (stealth + attack is the GDD's damage-bonus combo).
     ForbidSprint(Entity),
     // Interrupt(Entity, InterruptKind) llega con `combat-defense` (Staggered).
-}
-
-/// Per-actor constraint facts for this tick, derived from the messages.
-/// Motors read this like any other fact; only `apply_locomotion_constraints`
-/// writes it.
-#[derive(Component, Default, Debug, Clone, Copy)]
-pub struct LocomotionConstraintFacts {
-    pub forbid_sprint: bool,
 }
 
 /// Runs alongside `apply_locomotion_constraints`, before motors tick.

@@ -82,3 +82,9 @@ const _: () = {
     // through as dead code.
     let _ = LocomotionState::ALL.len();
 };
+
+/// Present while an actor's own locomotion may run. Removed while the body is
+/// carried or driven by something else (a mount), so the broker's queries skip
+/// it without every system having to ask.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct LocomotionEnabled;

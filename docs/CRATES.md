@@ -144,8 +144,20 @@ error de compilación. Es aditivo: se paga por módulo, empezando por `movement`
 - **122 campos `bool` contra 47 enums**: un `bool` se invierte sin que nadie se
   entere; un enum de dos variantes con `wildcard_enum_match_arm` convierte cada
   estado nuevo en un error en todos sus consumidores.
-- **0 usos de `#[require(...)]`** (Bevy 0.19): "un actor necesita `Intents` y
-  `BodyVelocity`" vive en funciones de spawn en vez de en el tipo.
+- **`#[require(...)]` — empezado el 2026-08-04.** `Actor` declara los nueve
+  componentes que el broker necesita, así que spawnear el marcador solo ya trae
+  el cuerpo completo y `KinematicActorBundle` bajó de 17 campos a 8: quedan los
+  que necesitan un valor (identidad, pose, perfiles) o viven en Avian. Un test
+  spawnea `Actor` pelado y lo comprueba.
+
+  **Falta el mismo tratamiento para las capacidades** (`SprintMovement` →
+  `SprintLock`, `JumpMovement` → `JumpPhase`/`JumpLocal`, y siete más). Hoy no
+  se puede: la capacidad vive en domain y su bookkeeping en simulation, así que
+  el `require` invertiría la dependencia. Los trece tipos de bookkeeping son
+  datos puros por actor — §19 ya los quería en domain — pero tienen campos
+  privados que los motores usan, así que mudarlos obliga a abrirlos o a darles
+  API. Es la misma decisión que fase 7 tiene que tomar con `Crouched`, que está
+  en los dos problemas a la vez.
 
 ## Qué pasa con las leyes al terminar
 

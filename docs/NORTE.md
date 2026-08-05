@@ -54,14 +54,14 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
   toon, outline y pases fullscreen quedan como diagnósticos opt-in.
 - Assets de prototipado reemplazables mediante catálogo de presentación:
   identidad de gameplay, visual y colisión permanecen independientes.
-- **Rendimiento:** 60 FPS en hardware de referencia con presupuestos medidos; en
-  el piso móvil el costo real no son los polígonos sino fill-rate/overdraw,
-  passes fullscreen, sombras y draw calls. Más mundo no justifica degradar la
-  respuesta del movimiento.
-- **Máquina de referencia: AMD Polaris 11 (RX 460/560), 2 GB VRAM, 2016** — la
-  del dev, y low-end real. El costo escala con lo que se **ve**, no con el tamaño
-  del mundo (Bevy hace frustum culling), mientras la distancia de dibujo esté
-  acotada. Es el número que hace concretos los presupuestos de arriba.
+- **Rendimiento: 60 FPS en un Android de gama media ~2021** (Adreno 619/642L,
+  Mali-G57). Esa clase es tile-based: el costo no son los polígonos sino
+  fill-rate/overdraw, bandwidth de vértices, sombras y draw calls; y manda el
+  frame **sostenido** (~11 ms), no el pico. El costo escala con lo que se **ve**,
+  no con el tamaño del mundo (frustum culling), mientras la distancia de dibujo
+  esté acotada — pero más mundo no justifica degradar la respuesta del control.
+- **Se mide en una AMD Polaris 11 (RX 460), 2016** — la del dev. Sirve, pero es
+  modo inmediato: sus milisegundos **no** transfieren al target; el overdraw sí.
 - Música ambiental minimalista; SFX estilizados. Hasta tener audio real,
   cada punto sonoro emite un *cue* de debug (`[audio] cue: …`).
 

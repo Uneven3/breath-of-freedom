@@ -22,6 +22,7 @@ Los contratos especializados siguen teniendo un único dueño:
 | El follaje no pierde el frame | Geometría opaca y cota de sombras | Sin alpha-test en vegetación baseline |
 | Los objetos fuera de alcance desaparecen sin afectar gameplay | Frustum/distance culling sólo visual | Colliders y resultados de `FixedUpdate` no cambian |
 | La escena cabe en el target móvil | Guardrails estáticos + inventario runtime | ≤100k tris, ≤100 draws, ≤64 materiales |
+| El fill-rate no se dispara con vegetación densa | Dial de overdraw del hub F1 | Sin `discard` en el baseline; el overdraw se mide, no se supone |
 | El estilo sigue siendo legible y barato | `StandardMaterial` mate | Sin toon shader ni outline fullscreen baseline |
 
 ---
@@ -44,6 +45,15 @@ categoría:
 La escena completa apunta además a `MOBILE_TRIANGLES = 100_000`,
 `MOBILE_DRAWS = 100` y `MOBILE_MATERIALS = 64`. `SceneInventory` expone el
 resultado en el hub F1 y sólo avisa al cruzar o recuperar un límite.
+
+**Los tres son guardrails, no el objetivo.** El target es un Android de gama
+media ~2021 (`NORTE.md`), y esa clase de chip es tile-based: el costo dominante
+es fill-rate/overdraw, bandwidth de vértices y draw calls — no el conteo de
+triángulos. Estos números están acá porque son *dato* (deterministas,
+testeables, rompen el build); pasarlos no demuestra que la escena corra en el
+target. El techo de frame que importa es el **sostenido** (~11 ms), no el pico:
+un teléfono baja su reloj tras diez o quince minutos. `BOTWGrass.md` desarrolla
+las consecuencias para vegetación densa, que es donde muerden primero.
 
 ### 2. `ASSET_PIPELINE.md` es el único contrato de LOD
 
@@ -71,6 +81,12 @@ pipeline y estado compatibles.
 La pradera no promete hardware instancing: `BOTWGrass.md` agrupa miles de
 briznas en una malla por chunk. Ese diseño paga una entidad/draw por chunk, no
 por brizna.
+
+**Y su escalera de LOD no lleva billboards.** Ni cartas de grupo ni shell
+texturing: las dos formas que ahorran geometría de verdad necesitan `discard`, y
+en un GPU tile-based eso apaga LRZ/FPK/HSR y cuesta más fill del que ahorra en
+vértices. La escalera es brizna → menos briznas → terreno teñido, opaca en los
+tres peldaños. El detalle y las cuentas, en `BOTWGrass.md`.
 
 ### 5. El baseline es opaco y mate
 

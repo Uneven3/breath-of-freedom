@@ -37,6 +37,15 @@ Categoría → directorio runtime: `char_`→`characters/`, `creature_`→`creat
 `assets/game/authored/` es la única frontera autodescubierta. Legacy no se valida
 contra esta convención y conserva receta explícita hasta ser reemplazado.
 
+**Hueco conocido: la geometría estampada.** Una brizna de pasto se consume al
+hornear la malla del chunk y **nunca se spawnea como nodo de escena**, así que no
+tiene collider, ni material de paleta, ni bandas `VisibilityRange` — su LOD es la
+densidad por anillo, otro mecanismo. Ninguna categoría actual la describe, y
+meterla como `prop_` haría que `build.rs` le exija reglas que no le aplican.
+`BOTWGrass.md` propone una categoría propia con sus propias reglas (tope de tris;
+prohibido `U*_`, `SKT_`, `M_` y sufijo `_LOD`). **Decisión abierta**, no
+implementada.
+
 ## Tutorial recomendado: primero el contrato, después el detalle
 
 No empezar esculpiendo: primero una versión gris que demuestre escala, pivote y

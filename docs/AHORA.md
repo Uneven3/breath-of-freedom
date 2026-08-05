@@ -342,9 +342,13 @@ test de ms falla por ruido, se ignora y muere. Carriles separados.
   presupuesto puede leer "bien" desde un rincón donde casi todo está culleado.
 - El terreno son **32768 tris fijos** en toda escena — un tercio del presupuesto
   móvil antes de poner nada encima. Subir `CELLS` es una decisión de presupuesto.
-- **Hueco conocido:** la pradera no entra en la suma (`GRASS_TIERS` es privado en
-  `visuals/grass.rs`). Lo cierra hacerla `pub(crate)`. Un draw call exacto **no**
-  es testeable sin cámara; lo testeable es la cota superior.
+- Un draw call exacto **no** es testeable sin cámara; lo testeable es la cota
+  superior. (El hueco de la pradera fuera de la suma se cerró el 2026-08-04
+  haciendo `meadow_triangles` visible; qué destapó, más abajo.)
+- **Pero el conteo es guardrail, no objetivo.** El target es un Android
+  tile-based (`NORTE.md`), donde manda fill-rate/overdraw y bandwidth. Los
+  conteos siguen porque son testeables; pasarlos no prueba que corra en el
+  teléfono. El dial de overdraw del hub existe desde siempre y nunca se usó.
 
 ### Cámara y flythrough
 
@@ -444,9 +448,28 @@ legible que la función. Si sí, migrar `layout.rs` entero.
   no la sumaba nadie) destapó que la escena Mundo declara **106.918 triángulos
   contra 100.000** — coincide con lo que el medidor de runtime venía gritando.
   El desglose: pradera 56.250, terreno 32.768, bosque 17.900. La pradera cubre
-  625 m² de 320×320, así que **no escala**: extenderla es imposible sin LOD o
-  densidad por distancia. El exceso está declarado con número en
-  `perf::budget::WORLD_SCENE_OVERSHOOT` y el test falla si crece.
+  625 m² de 320×320, así que **no escala**: la forma "campo horneado de tamaño
+  fijo" no llega al mapa y afinarla no la va a hacer llegar. El exceso está
+  declarado con número en `perf::budget::WORLD_SCENE_OVERSHOOT` y el test falla
+  si crece. `BOTWGrass.md` se reescribió el 2026-08-04 contra el target real
+  (Android tile-based) y la salida es una **grilla rodante centrada en la
+  cámara** con densidad horneada por anillo, precedida por dos pasos que no
+  cambian la imagen: enchufar el `ExtendedMaterial` que lleva meses registrado y
+  sin usar, y **dejar el vértice en sólo la posición** (normal, color y uv son
+  derivables; la uv sale de `vertex_index & 3` porque la brizna son 4 vértices en
+  orden fijo) — 48 B a 12 B, imagen idéntica.
+- **El pasto no se puede medir con lo que hay, y la causa es un dial fuera del
+  registro.** La vista de overdraw es un mapa de calor aditivo que **no produce
+  número** y satura a ~17 capas. Y el barrido que sí daría número no es
+  ejecutable: `grass.rs` cicla la densidad con un `KeyCode::F8` propio, siendo el
+  **único dial visual fuera de `PerfKnob`**. Como `perf/sequence.rs` maneja
+  `PerfToggles`, un dial que no es knob no entra en la matriz A/B — sin warmup,
+  sin asentamiento, sin cámara clavada, sin chequeo de deriva. Viola además la
+  Fase 1 de `GraphicalTechniques.md` y el "una sola tecla, el resto es click" de
+  `hud_menu.rs`. **Lo cierra:** `GrassDensity` y `RenderScale` como `PerfKnob` +
+  pasos de `STEPS`, y borrar F8. Es el Paso 0 de `BOTWGrass.md` y el disparador
+  que decidiría si vale la pena vertex pulling — descartado hoy por aritmética
+  (los varyings, ~68 B/vértice, dominan el tráfico y esa técnica no los toca).
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

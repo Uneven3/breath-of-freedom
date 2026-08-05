@@ -28,7 +28,7 @@ worktrees separados y sesiones sin memoria compartida entre sí. Por eso:
   - **Referencias técnicas de dominio** (`docs/BOTWGrass.md`,
     `docs/BOTWMovements.md`, `docs/CHARACTER_ANIMATION_IK.md`,
     `docs/GraphicalTechniques.md`, `docs/TEXTURES.md`, `docs/LIGHTING.md`,
-    `docs/PARTICLES.md`, `docs/AUDIO.md`):
+    `docs/PARTICLES.md`, `docs/AUDIO.md`, `docs/MAP_EDITOR.md`):
     planes de implementación por feature, con la misma disciplina de
     honestidad y medición. Describen **lo que se quiere construir**; no son
     inventarios del código existente ni llevan el estado vivo de implementación.

@@ -408,15 +408,15 @@ tick.
 ## BSN: verificado, y no todavía (§21)
 
 A raíz de "¿no estamos rehaciendo BSN?": **sí, en parte** — `world/layout.rs` es
-un BSN artesanal. Pero verificado en las fuentes de `bevy_scene 0.19`: el formato
-`.bsn` **no existe** (los docs del crate dicen "not currently shipped" y el único
-test que carga uno usa un loader falso) y el crate **no sabe serializar** un
-`Scene`. O sea que BSN **no puede ser el archivo que escribe la herramienta de
-mapas**; sirve del lado de presentación (`kind` → componentes).
+un BSN artesanal. Reverificado en `bevy_scene 0.19` el 2026-08-05: `bsn!`,
+`SceneComponent` y el parcheo por campo **sí existen y se usan dentro de Bevy**;
+el formato de archivo `.bsn` **no**, y nada serializa una `Scene`. Por eso BSN
+no puede ser el archivo que escribe la herramienta de mapas, y sí es la forma
+correcta de resolver `kind` → entidades.
 
-Plan: no migrar en caliente; la API se va a mover. La prueba barata para decidir
-cuándo: reescribir `spawn_stair_segment` como un `bsn!` y ver si queda más
-legible que la función. Si sí, migrar `layout.rs` entero.
+El análisis completo y el plan viven en `docs/MAP_EDITOR.md`. La prueba barata
+para decidir cuándo migrar `layout.rs`: reescribir `spawn_stair_segment` como un
+`bsn!` y ver si queda más legible que la función.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 

@@ -39,7 +39,7 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§21** **No construir lo que el motor va a dar — ni planear sobre lo que
   todavía no da.** `bsn!` es la dirección para componer entidades; el formato
   `.bsn` no existe y un `Scene` no se serializa (verificado en las fuentes de
-  0.19), así que no puede ser el archivo de nivel. Detalle en `AHORA.md`.
+  0.19), así que no puede ser el archivo de nivel. Detalle en `MAP_EDITOR.md`.
 
 ## El pipeline seleccionado
 

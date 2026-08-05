@@ -53,12 +53,68 @@ antes/después de un cambio conocido; y una captura del juego corriendo en el
 teléfono, con su número de frame, aunque sea malo.
 
 **Qué desbloquea:** todo. En particular, el resultado puede reordenar los MVP
-3 y 4: si el pasto resulta fill-bound, la palanca es la densidad del anillo
+5 y 6: si el pasto resulta fill-bound, la palanca es la densidad del anillo
 cercano y no el shader.
 
 ---
 
-## MVP 1 — Que un golpe no cree nada
+## MVP 1 — Pintar significa algo
+
+Hoy se puede pintar `TallGrass` en el editor y no crece pasto: la pradera es un
+cuadrado fijo de 25×25 m centrado en una constante, y el bosque es un scatter
+procedural. La semántica se pinta, se guarda, se recarga, se ve en el
+diagnóstico — y ningún sistema de vegetación la mira.
+
+**Qué se construye**
+
+- `Terrain::cells_of_kind(kind)` en `terrain/query.rs`.
+- `visuals::grass` genera sus chunks donde hay `TallGrass` pintado, en vez de
+  sobre `MEADOW_CENTER`, y reconstruye **sólo los chunks tocados** al repintar.
+
+*(`MAP_EDITOR.md` Paso 1.)*
+
+**Criterio de aceptación**
+
+Pintar una franja de pasto largo cruzando una colina y verla crecer siguiendo el
+relieve, sin reiniciar, con el conteo de triángulos del hub moviéndose con lo
+pintado.
+
+**Por qué acá:** es el incremento más barato que convierte al editor en una
+herramienta que *hace* algo, y es prerrequisito honesto del MVP 6 — no tiene
+sentido optimizar una pradera cuyo tamaño y lugar todavía no se pueden autorar.
+
+---
+
+## MVP 2 — Se pueden poner cosas
+
+El paso que convierte esto en un editor de mapas. Hoy los objetos del mundo
+viven en `world/layout.rs` (656 líneas de tablas Rust) y en un scatter
+determinista: un mapa nuevo no se puede hacer sin recompilar.
+
+**Qué se construye**
+
+- `Instance { kind: PropKind, xz, yaw, scale }` en `bof_domain` — sin handles,
+  sin rutas, sin materiales. La altura **no se guarda**: se muestrea del terreno
+  al spawnear, o la primera persona que esculpa debajo deja todo flotando.
+- `#[serde(default)] instances: Vec<Instance>` en `TerrainFile`, que es lo que
+  deja cargar los cinco niveles que ya existen en disco. No se remuestrean: ya
+  están en metros.
+- `ToolLayer::Instances`: colocar, borrar, rotar, escalar.
+- `HistoryStep` como enum (`Terrain(snapshot)` / `Instances(before, after)`),
+  antes de que el historial mezcle dos costos muy distintos.
+- `PropKind` → escena: el lugar natural del **primer `SceneComponent`** del
+  proyecto (ver la sección de BSN en `MAP_EDITOR.md`).
+
+*(`MAP_EDITOR.md` Paso 2.)*
+
+**Criterio de aceptación**
+
+Colocar veinte rocas, guardar, cerrar el juego, volver a abrirlo y encontrarlas
+donde estaban. Después esculpir debajo y verlas seguir el suelo.
+
+---
+
+## MVP 3 — Que un golpe no cree nada
 
 El MVP más barato de la lista y el único cuyo efecto se lee sin cronómetro.
 
@@ -85,7 +141,7 @@ que el frame se despegue.
 
 ---
 
-## MVP 2 — El suelo se paga como corresponde
+## MVP 4 — El suelo se paga como corresponde
 
 El terreno es la superficie de mayor cobertura de pantalla del juego, y hoy se
 muestrea de la peor forma posible.
@@ -117,7 +173,7 @@ algo, se ve en el suelo); y el test de procedencia en verde.
 
 ---
 
-## MVP 3 — Las sombras dejan de tener un escalón
+## MVP 5 — Las sombras dejan de tener un escalón
 
 Las sombras son la palanca más cara ya medida del proyecto: llevar las hojas a
 no castear y el mapa a 1024 px las bajó de ~70% del frame a 2,74 ms.
@@ -146,7 +202,7 @@ números del target.
 
 ---
 
-## MVP 4 — El pasto se paga solo
+## MVP 6 — El pasto se paga solo
 
 El bloque más grande, y el que más cambia lo que se ve. Va después del MVP 0
 porque su primer paso es una medición que puede reordenar el resto.
@@ -179,7 +235,7 @@ del campo.
 
 ---
 
-## MVP 5 — El personaje se mueve como un personaje
+## MVP 7 — El personaje se mueve como un personaje
 
 Hoy el juego no reproduce ninguna animación, y la cápsula del jugador es un
 poste de un metro de diámetro.
@@ -210,7 +266,7 @@ afinado. Después: el personaje camina y su animación camina con él.
 
 ---
 
-## MVP 6 — El mundo suena y termina en algún lado
+## MVP 8 — El mundo suena y termina en algún lado
 
 **Qué se construye**
 

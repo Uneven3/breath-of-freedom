@@ -79,6 +79,7 @@ impl Plugin for CameraPlugin {
                 // Last, so it overrides follow/freecam and shake for the duration.
                 park_scripted_camera,
                 crosshair::toggle,
+                apply_render_scale,
             )
                 .chain(),
         );
@@ -101,6 +102,41 @@ fn spawn_camera(
         soft_distance_fog(atmosphere_color(time_of_day.hours)),
         crate::perf::data::profile_msaa(perf.profile),
     ));
+}
+
+/// Applies the `RenderScale` knob to the one camera (§7: the owner of the
+/// entity applies the knob).
+///
+/// A shrunk viewport rather than a scaled render target: it needs no offscreen
+/// image and no upscale pass, and because both axes shrink by the same factor
+/// the aspect ratio — and so the framing — is untouched. What changes is only
+/// the number of fragments, which is exactly the variable the resolution sweep
+/// isolates. The image landing in a corner of the window is the honest tell
+/// that a diagnostic dial is on.
+///
+/// Runs every frame rather than on `perf.is_changed()`, because resizing the
+/// window also invalidates the viewport, and a stale one clips the view to a
+/// rectangle that no longer matches the surface.
+fn apply_render_scale(
+    perf: Res<crate::perf::PerfToggles>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
+    mut camera: Single<&mut Camera, With<CameraRig>>,
+) {
+    let scale = perf.render_scale();
+    let wanted = (scale < 1.0).then(|| {
+        (window.physical_size().as_vec2() * scale)
+            .as_uvec2()
+            .max(UVec2::ONE)
+    });
+    // `Viewport` has no `PartialEq`, so the comparison is on the one field this
+    // system writes; position is always the origin and depth is always default.
+    if camera.viewport.as_ref().map(|v| v.physical_size) != wanted {
+        camera.viewport = wanted.map(|physical_size| bevy::camera::Viewport {
+            physical_position: UVec2::ZERO,
+            physical_size,
+            ..default()
+        });
+    }
 }
 
 fn soft_distance_fog(color: Color) -> DistanceFog {

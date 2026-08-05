@@ -67,6 +67,8 @@ pub struct BenchmarkStep {
     pub moon_shadows: bool,
     pub cull_step: usize,
     pub shadow_range_step: usize,
+    pub grass_density_step: usize,
+    pub render_scale_step: usize,
 }
 
 impl BenchmarkStep {
@@ -78,6 +80,8 @@ impl BenchmarkStep {
             moon_shadows: true,
             cull_step: 0,
             shadow_range_step: 0,
+            grass_density_step: 0,
+            render_scale_step: 0,
         }
     }
 }
@@ -90,10 +94,25 @@ const SHADOW_BUDGET_OFF: usize = 3;
 /// step and so never measured the one lever that visibly moves the frame.
 const CULL_MID: usize = 2;
 
+/// Sparse and dense entries of `GRASS_DENSITY_STEPS`, so the density sweep has
+/// two points and not just one — a single point cannot show whether GPU time
+/// *scales* with blade count, which is the whole question.
+const GRASS_SPARSE: usize = 2;
+const GRASS_SPARSEST: usize = 3;
+
+/// The 75% and 50% entries of `RENDER_SCALE_STEPS`.
+const SCALE_75: usize = 1;
+const SCALE_50: usize = 2;
+
 /// The matrix. Ordered so each step changes exactly one thing from the
 /// baseline — a step that changed two would make its delta unattributable.
 /// The trailing baseline repeat is the drift check.
-pub const STEPS: [BenchmarkStep; 7] = [
+///
+/// The last four steps are the pair of sweeps `BOTWGrass.md` needs to fill its
+/// fill-bound / vertex-bound matrix: density moves the blade count at constant
+/// resolution, resolution moves the fragment count at constant blade count.
+/// Read together they say which of the two the meadow is actually paying for.
+pub const STEPS: [BenchmarkStep; 11] = [
     BenchmarkStep::baseline("baseline"),
     BenchmarkStep {
         moon_shadows: false,
@@ -115,6 +134,22 @@ pub const STEPS: [BenchmarkStep; 7] = [
     BenchmarkStep {
         forest_visible: false,
         ..BenchmarkStep::baseline("forest hidden")
+    },
+    BenchmarkStep {
+        grass_density_step: GRASS_SPARSE,
+        ..BenchmarkStep::baseline("grass 25/m2")
+    },
+    BenchmarkStep {
+        grass_density_step: GRASS_SPARSEST,
+        ..BenchmarkStep::baseline("grass 10/m2")
+    },
+    BenchmarkStep {
+        render_scale_step: SCALE_75,
+        ..BenchmarkStep::baseline("render 75%")
+    },
+    BenchmarkStep {
+        render_scale_step: SCALE_50,
+        ..BenchmarkStep::baseline("render 50%")
     },
     BenchmarkStep::baseline("baseline repeat"),
 ];
@@ -293,6 +328,8 @@ fn apply_step(toggles: &mut PerfToggles, step: &BenchmarkStep) {
     toggles.moon_shadows = step.moon_shadows;
     toggles.cull_step = step.cull_step;
     toggles.shadow_range_step = step.shadow_range_step;
+    toggles.grass_density_step = step.grass_density_step;
+    toggles.render_scale_step = step.render_scale_step;
 }
 
 #[derive(Clone, Copy)]
@@ -534,6 +571,8 @@ mod tests {
                 step.forest_visible != base.forest_visible,
                 step.cull_step != base.cull_step,
                 step.shadow_range_step != base.shadow_range_step,
+                step.grass_density_step != base.grass_density_step,
+                step.render_scale_step != base.render_scale_step,
                 // Shadows count as one axis: "all shadows off" deliberately
                 // moves both lights together.
                 step.sun_shadows != base.sun_shadows || step.moon_shadows != base.moon_shadows,
@@ -556,6 +595,8 @@ mod tests {
         assert_eq!(first.moon_shadows, last.moon_shadows);
         assert_eq!(first.cull_step, last.cull_step);
         assert_eq!(first.shadow_range_step, last.shadow_range_step);
+        assert_eq!(first.grass_density_step, last.grass_density_step);
+        assert_eq!(first.render_scale_step, last.render_scale_step);
         assert_ne!(first.name, last.name, "the table must tell them apart");
     }
 

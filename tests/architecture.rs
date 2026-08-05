@@ -52,7 +52,6 @@ const HARDWARE_DEBT: &[&str] = &[
     "src/presentation/inventory_ui/mod.rs",
     "src/scene/menu.rs",
     "src/scene/mod.rs",
-    "src/visuals/grass.rs",
 ];
 
 /// Los tests sí pueden fabricar input: simular una tecla es la única forma de

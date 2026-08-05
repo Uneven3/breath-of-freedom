@@ -60,6 +60,27 @@ pub const SHADOW_DISTANCE_STEPS: [f32; 5] = [65.0, 100.0, 140.0, 200.0, 40.0];
 /// not vertex-bound, so this is the most direct lever on it.
 pub const SHADOW_MAP_STEPS: [usize; 3] = [2048, 1024, 512];
 
+/// Meadow density in blades per m². Index 0 is what the field ships at, so a
+/// fresh launch measures the real game.
+///
+/// This is half of the pair that separates *fill-bound* from *vertex-bound*
+/// (`BOTWGrass.md` → Presupuesto): if GPU time tracks this dial, the meadow is
+/// paying for the pixels it covers, and density is the cheapest lever in the
+/// system. It lives here rather than in `visuals::grass` because a dial outside
+/// [`PerfKnob`] cannot enter the A/B matrix — no warmup, no settle window, no
+/// parked camera, no drift check — and what it produces is an impression, not a
+/// measurement.
+pub const GRASS_DENSITY_STEPS: [f32; 4] = [45.0, 70.0, 25.0, 10.0];
+
+/// Fraction of the window the camera actually renders, for the resolution
+/// sweep. The other half of the pair above: if GPU time tracks *this* and not
+/// density, the frame is fill-bound on something that is not the grass.
+///
+/// Implemented as a shrunk camera viewport, which keeps the aspect ratio — and
+/// therefore the framing — while cutting the fragment count. The rendered image
+/// lands in a corner of the window; that is diagnostic ugliness, not a bug.
+pub const RENDER_SCALE_STEPS: [f32; 3] = [1.0, 0.75, 0.5];
+
 /// Which knob the hub acts on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PerfKnob {
@@ -75,10 +96,12 @@ pub enum PerfKnob {
     ShadowMap,
     LeafShadows,
     TreeDetail,
+    GrassDensity,
+    RenderScale,
 }
 
 impl PerfKnob {
-    pub const ALL: [PerfKnob; 12] = [
+    pub const ALL: [PerfKnob; 14] = [
         PerfKnob::Vsync,
         PerfKnob::Forest,
         PerfKnob::Wireframe,
@@ -91,6 +114,8 @@ impl PerfKnob {
         PerfKnob::ShadowMap,
         PerfKnob::LeafShadows,
         PerfKnob::TreeDetail,
+        PerfKnob::GrassDensity,
+        PerfKnob::RenderScale,
     ];
 
     pub fn label(self) -> &'static str {
@@ -107,6 +132,8 @@ impl PerfKnob {
             PerfKnob::ShadowMap => "shadow-map",
             PerfKnob::LeafShadows => "leaf-shadows",
             PerfKnob::TreeDetail => "tree-detail",
+            PerfKnob::GrassDensity => "grass-density",
+            PerfKnob::RenderScale => "render-scale",
         }
     }
 }
@@ -156,6 +183,11 @@ pub struct PerfToggles {
     /// Off (default) renders the cheap graybox proxy; on swaps in the detailed
     /// Quaternius scene. A live A/B on what modeled foliage actually costs.
     pub tree_detail: bool,
+    /// Indexes [`GRASS_DENSITY_STEPS`]. Rebuilding the field is the one knob
+    /// with a real CPU cost per step, so the A/B settle window matters here.
+    pub grass_density_step: usize,
+    /// Indexes [`RENDER_SCALE_STEPS`].
+    pub render_scale_step: usize,
 }
 
 impl Default for PerfToggles {
@@ -175,6 +207,8 @@ impl Default for PerfToggles {
             shadow_map_step: 1,
             leaf_shadows: false,
             tree_detail: false,
+            grass_density_step: 0,
+            render_scale_step: 0,
         }
     }
 }
@@ -222,6 +256,20 @@ impl PerfToggles {
             .unwrap_or(SHADOW_MAP_STEPS[0])
     }
 
+    pub fn grass_density(&self) -> f32 {
+        GRASS_DENSITY_STEPS
+            .get(self.grass_density_step)
+            .copied()
+            .unwrap_or(GRASS_DENSITY_STEPS[0])
+    }
+
+    pub fn render_scale(&self) -> f32 {
+        RENDER_SCALE_STEPS
+            .get(self.render_scale_step)
+            .copied()
+            .unwrap_or(RENDER_SCALE_STEPS[0])
+    }
+
     /// Steps the currently selected knob.
     pub fn step_selected(&mut self) {
         match PerfKnob::ALL[self.selected % PerfKnob::ALL.len()] {
@@ -250,6 +298,13 @@ impl PerfToggles {
             }
             PerfKnob::LeafShadows => self.leaf_shadows = !self.leaf_shadows,
             PerfKnob::TreeDetail => self.tree_detail = !self.tree_detail,
+            PerfKnob::GrassDensity => {
+                self.grass_density_step =
+                    (self.grass_density_step + 1) % GRASS_DENSITY_STEPS.len()
+            }
+            PerfKnob::RenderScale => {
+                self.render_scale_step = (self.render_scale_step + 1) % RENDER_SCALE_STEPS.len()
+            }
         }
     }
 
@@ -286,6 +341,8 @@ impl PerfToggles {
             PerfKnob::ShadowMap => format!("{}", self.shadow_map_size()),
             PerfKnob::LeafShadows => on_off(self.leaf_shadows),
             PerfKnob::TreeDetail => on_off(self.tree_detail),
+            PerfKnob::GrassDensity => format!("{:.0}/m2", self.grass_density()),
+            PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),
         }
     }
 
@@ -336,6 +393,11 @@ mod tests {
         // instead of most of the frame.
         assert!(!toggles.leaf_shadows);
         assert_eq!(toggles.shadow_map_size(), 1024);
+        // Both sweep dials start neutral: a launch renders the whole window at
+        // the density the meadow ships at, so step 0 is never a measurement of
+        // something the player never sees.
+        assert_eq!(toggles.grass_density(), GRASS_DENSITY_STEPS[0]);
+        assert_eq!(toggles.render_scale(), 1.0);
     }
 
     #[test]

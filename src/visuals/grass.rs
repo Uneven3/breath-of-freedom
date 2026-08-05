@@ -34,12 +34,18 @@ use crate::world::forest::{hash_u32, hash_unit};
 
 /// **The knob that decides how the meadow reads.** Blades per square metre.
 ///
-/// Everything else here is derived from it, so tuning the look is this line and
-/// nothing else. Judged by eye at 25 (ground covered, still reads thin) and
-/// raised to 45, which is where the field stops looking like blades on dirt and
-/// starts looking like a meadow. Below ~10 the dirt shows through, which is the
+/// Judged by eye at 25 (ground covered, still reads thin) and raised to 45,
+/// which is where the field stops looking like blades on dirt and starts
+/// looking like a meadow. Below ~10 the dirt shows through, which is the
 /// failure this system exists to avoid.
-const BLADES_PER_SQUARE_METRE: f32 = 45.0;
+///
+/// It lives in `PerfToggles` rather than here because the density sweep — half
+/// of what separates fill-bound from vertex-bound — is only a measurement if it
+/// runs inside the A/B sequence, with warmup, settle window and a parked
+/// camera. This constant is the shipped value, i.e. step 0 of that dial, and
+/// exists so the tests and the declared budget name it instead of a literal.
+#[cfg(test)]
+const BLADES_PER_SQUARE_METRE: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 
 /// Field size, as a grid of square chunks. One mesh, one draw call per chunk —
 /// the grid exists so distance culling has something to work on later, not
@@ -76,20 +82,6 @@ const STEEP_SCALE: f32 = 0.65;
 const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.13, 0.24, 0.09);
 const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.42, 0.70, 0.22);
 
-/// Density presets cycled by F8, in blades per m². Index 0 is what the meadow
-/// spawns at, so the resource never lies about what is on screen.
-const DENSITY_TIERS: [(f32, &str); 3] = [
-    (BLADES_PER_SQUARE_METRE, "45/m² (objetivo)"),
-    (70.0, "70/m² (tupido — mira el presupuesto de tris)"),
-    (25.0, "25/m² (el paso anterior, para comparar)"),
-];
-
-/// Which density preset the meadow is showing.
-#[derive(Resource, Default)]
-pub(super) struct GrassStressState {
-    tier: usize,
-}
-
 /// One baked chunk of the meadow: a single mesh holding all its blades.
 #[derive(Component)]
 pub(super) struct GrassChunk;
@@ -104,8 +96,7 @@ pub(super) struct GrassChunk;
 #[cfg(test)]
 pub(crate) fn meadow_triangles() -> usize {
     let chunks = (FIELD_CHUNKS * FIELD_CHUNKS) as usize;
-    let (density, _) = DENSITY_TIERS[0];
-    chunks * blades_per_chunk(density) as usize * 2
+    chunks * blades_per_chunk(BLADES_PER_SQUARE_METRE) as usize * 2
 }
 
 /// Blades per chunk at a given density. Rounded once, here, so the count on
@@ -119,21 +110,20 @@ fn blades_per_chunk(density: f32) -> u32 {
     (CHUNK_METRES * CHUNK_METRES * density).round().max(0.0) as u32
 }
 
-/// Startup: lay down the field at the default density.
+/// Scene entry: lay down the field at whatever density the dial says.
 pub(super) fn spawn_meadow(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    stress: Res<GrassStressState>,
+    perf: Res<crate::perf::PerfToggles>,
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
 ) {
-    let (density, _) = DENSITY_TIERS[stress.tier];
     spawn_field(
         &mut commands,
         &mut meshes,
         &mut materials,
-        density,
+        perf.grass_density(),
         *scene.get(),
         &terrain,
     );
@@ -283,28 +273,41 @@ fn build_chunk_mesh(centre: Vec2, count: u32, seed: u32, terrain: Option<&Terrai
     mesh
 }
 
-/// F8: cycle density and rebuild the field. A tuning aid — the whole point of
-/// this system is that the density number is something you can judge by eye.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn handle_grass_stress_toggle(
+/// Re-bake the field when the density dial moves.
+///
+/// Rebuilding is the one knob in the hub with a real CPU cost per step, which
+/// is why it is a step of the A/B sequence and not a keypress: the sequence
+/// gives it a settle window, so the rebuild frame is never inside the samples.
+/// The field is only rebuilt when the density actually changed — `PerfToggles`
+/// is one resource for fourteen dials, so `is_changed()` alone would re-bake
+/// 28k blades every time somebody toggled a shadow.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a rebuild needs the same eight pieces the spawn does"
+)]
+pub(super) fn rebuild_meadow_on_density_change(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut state: ResMut<GrassStressState>,
+    perf: Res<crate::perf::PerfToggles>,
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
     chunks: Query<Entity, With<GrassChunk>>,
+    mut current: Local<Option<usize>>,
 ) {
-    if !keys.just_pressed(KeyCode::F8) {
+    // The step index, not the density it resolves to: the dial is what moved,
+    // and an index compares exactly where two floats only compare by luck.
+    let known = current.replace(perf.grass_density_step);
+    // First run only latches the dial: the field `spawn_meadow` just baked is
+    // already at this density, and re-baking it would double the cost of
+    // entering every scene with a meadow.
+    if known.is_none_or(|previous| previous == perf.grass_density_step) {
         return;
     }
+    let density = perf.grass_density();
     for entity in &chunks {
         commands.entity(entity).despawn();
     }
-    state.tier = (state.tier + 1) % DENSITY_TIERS.len();
-    let (density, label) = DENSITY_TIERS[state.tier];
-    info!("[grass-stress] densidad → {label}");
     spawn_field(
         &mut commands,
         &mut meshes,

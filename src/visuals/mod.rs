@@ -59,7 +59,6 @@ impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(diagnostic::DiagnosticViewsPlugin);
         app.init_resource::<VisualCatalog>();
-        app.init_resource::<grass::GrassStressState>();
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content
         // (`crate::scene`), so they are built on entry and die on exit.
@@ -104,9 +103,9 @@ impl Plugin for VisualsPlugin {
                     foliage::apply_foliage_lod,
                     foliage::apply_shadow_caster_budget,
                 ),
-                // One system, and only on a keypress: the field is baked meshes,
-                // so nothing walks the blades per frame.
-                grass::handle_grass_stress_toggle,
+                // One system, and only when the density dial moves: the field is
+                // baked meshes, so nothing walks the blades per frame.
+                grass::rebuild_meadow_on_density_change,
                 terrain::sync_terrain_visual,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),

@@ -115,6 +115,61 @@ fn relative(path: &Path) -> String {
         .join("/")
 }
 
+// ---------------------------------------------------------------------------
+// Las reglas, como funciones puras sobre el texto de un archivo.
+//
+// Separadas del recorrido del disco a propósito: un test que afirma *ausencia*
+// —"nadie lee hardware", "presentación no nombra la simulación"— da la misma
+// salida verde si la ley se cumple que si el detector está ciego. La única
+// forma de distinguirlas es plantarle una infracción y exigir que la vea, y
+// para eso la regla tiene que poder ejecutarse sobre texto inventado.
+//
+// No es hipotético: el corte entre producción y tests estuvo mal durante meses
+// y dejó medio `world/forest.rs` invisible para dos de estas reglas.
+// ---------------------------------------------------------------------------
+
+fn reads_hardware(contents: &str) -> bool {
+    let source = production_source(contents);
+    HARDWARE.iter().any(|symbol| source.contains(symbol))
+}
+
+fn has_unsafe(contents: &str) -> bool {
+    let source = production_source(contents);
+    source.contains("unsafe ") || source.contains("unsafe{")
+}
+
+fn reaches_facade_or_physics(source: &str) -> bool {
+    source.contains("use bevy::") || source.contains("avian3d")
+}
+
+fn reaches_rendering(source: &str) -> bool {
+    source.contains("use bevy::") || source.contains("Mesh") || source.contains("StandardMaterial")
+}
+
+fn installs_an_inner_simulation_plugin(contents: &str) -> bool {
+    production_source(contents)
+        .split("add_plugins")
+        .skip(1)
+        // Sólo los argumentos de la llamada, hasta el cierre del statement: sin
+        // este corte el `split` se lleva el resto del archivo y cualquier
+        // mención posterior al crate es un falso positivo (le pasó a `scene`,
+        // que nombra `spawn_player` cien líneas más abajo).
+        .filter_map(|rest| rest.split_once(");").map(|(argument, _)| argument))
+        .any(|argument| {
+            // `bof_simulation::SimulationPlugin` es el único permitido, y sólo
+            // lo agrega `main`. Cualquier otra ruta del crate es un plugin
+            // interno que `SimulationPlugin` ya instaló.
+            argument
+                .split("bof_simulation::")
+                .skip(1)
+                .any(|tail| !tail.starts_with("SimulationPlugin"))
+        })
+}
+
+fn names_the_simulation_crate(contents: &str) -> bool {
+    contents.contains("bof_simulation")
+}
+
 /// C2: el hardware se muestrea una vez, en `input`, y todos los demás consumen
 /// acciones tipadas. Mientras la deuda exista, al menos no crece.
 #[test]
@@ -125,8 +180,7 @@ fn only_the_input_module_reads_hardware() {
         if path.starts_with("src/input/") {
             continue;
         }
-        let source = production_source(&contents);
-        if HARDWARE.iter().any(|symbol| source.contains(symbol)) {
+        if reads_hardware(&contents) {
             offenders.push(path);
         }
     }
@@ -160,10 +214,7 @@ fn only_the_input_module_reads_hardware() {
 fn the_project_has_no_unsafe_code() {
     let offenders: Vec<String> = source_files()
         .into_iter()
-        .filter(|(_, contents)| {
-            let source = production_source(contents);
-            source.contains("unsafe ") || source.contains("unsafe{")
-        })
+        .filter(|(_, contents)| has_unsafe(contents))
         .map(|(path, _)| path)
         .collect();
 
@@ -193,7 +244,7 @@ fn domain_has_no_render_or_physics_dependencies() {
     collect(&root.join("crates/domain/src"), &mut files);
     let offenders: Vec<_> = files
         .into_iter()
-        .filter(|(_, source)| source.contains("use bevy::") || source.contains("avian3d"))
+        .filter(|(_, source)| reaches_facade_or_physics(source))
         .map(|(path, _)| path)
         .collect();
     assert!(
@@ -220,11 +271,7 @@ fn simulation_has_no_render_dependencies() {
     collect(&root.join("crates/simulation/src"), &mut files);
     let offenders: Vec<_> = files
         .into_iter()
-        .filter(|(_, source)| {
-            source.contains("use bevy::")
-                || source.contains("Mesh")
-                || source.contains("StandardMaterial")
-        })
+        .filter(|(_, source)| reaches_rendering(source))
         .map(|(path, _)| path)
         .collect();
     assert!(
@@ -247,25 +294,7 @@ fn the_app_installs_simulation_only_through_its_root_plugin() {
     let offenders: Vec<String> = source_files()
         .into_iter()
         .filter(|(path, _)| path != "src/main.rs")
-        .filter(|(_, contents)| {
-            production_source(contents)
-                .split("add_plugins")
-                .skip(1)
-                // Sólo los argumentos de la llamada, hasta el cierre del
-                // statement: sin este corte el `split` se lleva el resto del
-                // archivo y cualquier mención posterior al crate es un falso
-                // positivo (le pasó a `scene`, que nombra `spawn_player`).
-                .filter_map(|rest| rest.split_once(");").map(|(argument, _)| argument))
-                .any(|argument| {
-                    // `bof_simulation::SimulationPlugin` es el único permitido, y
-                    // sólo lo agrega `main`. Cualquier otra ruta del crate es un
-                    // plugin interno que `SimulationPlugin` ya instaló.
-                    argument
-                        .split("bof_simulation::")
-                        .skip(1)
-                        .any(|tail| !tail.starts_with("SimulationPlugin"))
-                })
-        })
+        .filter(|(_, contents)| installs_an_inner_simulation_plugin(contents))
         .map(|(path, _)| path)
         .collect();
 
@@ -298,7 +327,7 @@ fn presentation_never_names_the_simulation_crate() {
     let offenders: Vec<String> = source_files()
         .into_iter()
         .filter(|(path, _)| PRESENTATION.iter().any(|prefix| path.starts_with(prefix)))
-        .filter(|(_, contents)| contents.contains("bof_simulation"))
+        .filter(|(_, contents)| names_the_simulation_crate(contents))
         .map(|(path, _)| path)
         .collect();
 
@@ -308,4 +337,110 @@ fn presentation_never_names_the_simulation_crate() {
          simulación, ese algo es dato y baja a domain, o se pide por mensaje: \
          {offenders:#?}"
     );
+}
+
+/// Los canarios: cada regla enfrentada a una infracción inventada y a su
+/// contraparte legítima.
+///
+/// Sin esto, las seis leyes de arriba pueden estar vigilando la nada y se ven
+/// exactamente igual de verdes. Un test que nunca se vio fallar no es un test.
+/// Los falsos negativos que este archivo ya tuvo —el corte de `#[cfg(test)]`
+/// que cegaba medio archivo, el `split` que se llevaba el resto del texto—
+/// habrían muerto acá el día que se escribieron.
+mod canaries {
+    use super::*;
+
+    #[test]
+    fn the_hardware_rule_sees_a_planted_reader() {
+        assert!(
+            reads_hardware("fn s(keys: Res<ButtonInput<KeyCode>>) {}"),
+            "la regla de hardware no ve un `ButtonInput` en producción"
+        );
+        assert!(
+            !reads_hardware("#[cfg(test)]\nmod tests {\n  Res<ButtonInput<KeyCode>>\n}"),
+            "los tests sí pueden fabricar input: simular una tecla es la única \
+             forma de probar un sistema que la consume"
+        );
+        assert!(
+            reads_hardware("fn real(k: Res<ButtonInput<KeyCode>>) {}\n#[cfg(test)]\nmod tests {}"),
+            "un `mod tests` al final no puede esconder lo que hay antes"
+        );
+        // El falso negativo real, encontrado el 2026-08-04: `world/forest.rs`
+        // tiene un `#[cfg(test)]` sobre una función a media altura, y el corte
+        // anterior —el primer `#[cfg(test)]` del archivo— dejaba ciega a la
+        // regla de ahí para abajo. Un atributo suelto arriba alcanzaba para
+        // apagar la ley entera.
+        assert!(
+            reads_hardware(
+                "#[cfg(test)]\nfn fixture() {}\nfn real(k: Res<ButtonInput<KeyCode>>) {}"
+            ),
+            "un `#[cfg(test)]` sobre una función suelta no puede cegar lo que sigue"
+        );
+    }
+
+    #[test]
+    fn the_unsafe_rule_sees_a_planted_block() {
+        assert!(has_unsafe("unsafe { *ptr }"), "no ve un bloque `unsafe`");
+        assert!(
+            !has_unsafe("#[cfg(test)]\nmod tests {\n unsafe { }\n}"),
+            "sólo mira producción"
+        );
+        assert!(
+            !has_unsafe("// nada inseguro acá\nfn safe() {}"),
+            "no puede acusar a código limpio"
+        );
+    }
+
+    #[test]
+    fn the_domain_rule_sees_the_facade_and_physics() {
+        assert!(reaches_facade_or_physics("use bevy::prelude::*;"));
+        assert!(reaches_facade_or_physics("use avian3d::prelude::Collider;"));
+        assert!(
+            !reaches_facade_or_physics("use bevy_ecs::prelude::*;\nuse bevy_math::Vec3;"),
+            "los crates sueltos de Bevy son justo lo que domain sí puede usar"
+        );
+    }
+
+    #[test]
+    fn the_simulation_rule_sees_rendering() {
+        assert!(reaches_rendering("Mesh3d(meshes.add(shape))"));
+        assert!(reaches_rendering(
+            "MeshMaterial3d(materials.add(StandardMaterial"
+        ));
+        assert!(
+            !reaches_rendering("use avian3d::prelude::*;\nuse bevy_ecs::prelude::*;"),
+            "la física sí es de simulación; lo prohibido es el render"
+        );
+    }
+
+    #[test]
+    fn the_plugin_rule_sees_an_inner_plugin() {
+        assert!(
+            installs_an_inner_simulation_plugin(
+                "app.add_plugins(bof_simulation::world::WorldPlugin);"
+            ),
+            "no ve el doble registro que rompió el arranque el 2026-08-04"
+        );
+        assert!(
+            !installs_an_inner_simulation_plugin("app.add_plugins(SimulationPlugin);"),
+            "el plugin raíz es justamente el que sí se instala"
+        );
+        assert!(
+            !installs_an_inner_simulation_plugin(
+                "app.add_plugins(menu::MenuPlugin);\nfn later() { bof_simulation::player::spawn_player(); }"
+            ),
+            "mencionar el crate lejos de un `add_plugins` no es instalar un plugin"
+        );
+    }
+
+    #[test]
+    fn the_presentation_rule_sees_the_simulation_crate() {
+        assert!(names_the_simulation_crate(
+            "use bof_simulation::movement::Actor;"
+        ));
+        assert!(
+            !names_the_simulation_crate("use bof_domain::movement::Actor;"),
+            "leer domain es exactamente lo que presentación sí puede hacer"
+        );
+    }
 }

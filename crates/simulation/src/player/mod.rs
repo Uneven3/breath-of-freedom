@@ -53,7 +53,10 @@ impl Plugin for PlayerPlugin {
         app.add_systems(
             FixedUpdate,
             lock_on::update_lock_on
-                .after(crate::movement::MovementSet::TickActiveMotor)
+                // Tras el rescate del terreno por la misma razón que
+                // `resolve_facing`: los tres escriben el `Transform` del cuerpo
+                // y sin orden declarado lo decidía el ejecutor.
+                .after(crate::movement::services::ground::lift_actors_out_of_terrain)
                 .before(crate::movement::facing::resolve_facing),
         );
     }

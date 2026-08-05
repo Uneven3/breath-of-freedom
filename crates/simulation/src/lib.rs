@@ -85,9 +85,17 @@ impl Plugin for SimulationPlugin {
             FixedUpdate,
             inventory::InventorySet::Consume.before(combat::CombatSet::ApplyContext),
         );
+        // Después de que **todo** lo que puede impactar haya impactado: melee
+        // emite en `EmitConstraints`, la flecha en `ProjectilesSet::Simulate` y
+        // la carga del caballo en `MountsSet::Charge`. Sin las tres, el
+        // desgaste leía `HitImpactMessage` un tick tarde o a tiempo según lo
+        // que decidiera el ejecutor.
         app.configure_sets(
             FixedUpdate,
-            inventory::InventorySet::Durability.after(combat::CombatSet::EmitConstraints),
+            inventory::InventorySet::Durability
+                .after(combat::CombatSet::EmitConstraints)
+                .after(projectiles::ProjectilesSet::Simulate)
+                .after(mounts::MountsSet::Charge),
         );
     }
 }
@@ -207,19 +215,33 @@ mod scheduling_audit {
 
     /// Pares ambiguos en `FixedUpdate` al 2026-08-04. **Sólo puede bajar.**
     ///
-    /// Un par ambiguo es dos sistemas que pueden tocar el mismo dato y no
-    /// tienen orden entre ellos: cuál corre primero lo decide el ejecutor, y
-    /// con el pool multihilo puede cambiar entre corridas. Muchos son
-    /// inofensivos —tocan el mismo componente sobre entidades distintas— pero
-    /// **el detector no puede saber cuáles**, y el determinismo es el pilar que
-    /// sostiene el co-op (`NORTE.md`).
+    /// Un par ambiguo es dos sistemas que pueden tocar el mismo dato sin orden
+    /// entre ellos: cuál corre primero lo decide el ejecutor. Ninguno es de
+    /// Avian —sus sistemas viven en `FixedPostUpdate` y en su propio schedule—,
+    /// así que los 113 son de gameplay.
     ///
-    /// Ninguno es de Avian: sus sistemas viven en `FixedPostUpdate` y en su
-    /// propio schedule. Los 117 son de gameplay.
+    /// **El número asusta más de lo que debe, y conviene saber por qué.**
+    /// Listadas por nombre el 2026-08-04 (activando la feature `debug` de
+    /// `bevy_ecs` un rato, porque si no los nombres salen como placeholders):
+    ///
+    /// - **78 son los trece `propose` escribiendo el `ProposalBuffer` del mismo
+    ///   actor.** No son deuda: la arbitración compara `(Priority, weight)` y
+    ///   `weight::co_proposing_motors_never_tie_on_priority_and_weight` prohíbe
+    ///   los empates, con su lista de excepciones mutuamente excluyentes. El
+    ///   orden de push no puede cambiar el ganador.
+    /// - **25 son `rebuild_terrain_collider` contra sistemas que mueven
+    ///   cuerpos.** Comparten el tipo `Collider`, no las entidades: uno es el
+    ///   terreno, los otros son actores.
+    /// - Las 10 restantes se revisaron una por una. Cuatro tenían consecuencia
+    ///   observable y se ordenaron (ver los `.after` de `resolve_facing`,
+    ///   `update_lock_on` e `InventorySet::Durability`); las otras seis son
+    ///   brains escribiendo `Intents` de entidades distintas —cubierto por los
+    ///   tests de aislamiento por actor—, el `CastTrace` de debug, y un sistema
+    ///   exclusivo, que conflictúa con todo por definición.
     ///
     /// Bajarlo es declarar un orden (`.before`/`.after`) o separar en fases.
     /// Subirlo es agregar una carrera nueva, y eso se discute, no se cuela.
-    const FIXED_UPDATE_AMBIGUITIES: usize = 117;
+    const FIXED_UPDATE_AMBIGUITIES: usize = 113;
 
     #[test]
     fn scheduling_ambiguities_only_shrink() {

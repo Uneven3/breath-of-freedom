@@ -228,10 +228,16 @@ impl Plugin for MovementPlugin {
         );
         // Decoupled facing (aim/lock-on) resolves after the active motor has
         // moved the body, before attachments sync to the final transform.
+        //
+        // **Después del rescate**, no en paralelo: los dos escriben el
+        // `Transform` del mismo cuerpo. Hoy no chocan porque uno toca
+        // `rotation` y el otro `translation.y`, pero eso es una coincidencia de
+        // campos y no una garantía — el orden entre ellos lo decidía el
+        // ejecutor. Primero dónde está el cuerpo, después hacia dónde mira.
         app.add_systems(
             FixedUpdate,
             facing::resolve_facing
-                .after(MovementSet::TickActiveMotor)
+                .after(services::ground::lift_actors_out_of_terrain)
                 .before(MovementSet::SyncAttachments),
         );
 

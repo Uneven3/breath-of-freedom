@@ -416,15 +416,16 @@ legible que la función. Si sí, migrar `layout.rs` entero.
   2026-08-01: la lista ya sólo encoge). Ya se cobraron `Tab` y el navegador de
   animación. El test de fase 1 ya impide que la lista crezca; falta el dueño
   único que traduzca bindings a acciones tipadas.
-- **117 pares de sistemas ambiguos en `FixedUpdate`** (auditado 2026-08-04).
-  Dos sistemas que pueden tocar el mismo dato sin orden entre ellos: cuál corre
-  primero lo decide el ejecutor, y con el pool multihilo puede cambiar entre
-  corridas. Muchos serán inofensivos —mismo componente, entidades distintas—
-  pero el detector no distingue, y el determinismo es el pilar que sostiene el
-  co-op. **Ninguno es de Avian**: sus sistemas viven en `FixedPostUpdate`. El
-  número está congelado en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES` y sólo
-  puede bajar; bajarlo es declarar orden o separar en fases. El replay
-  determinista pasa hoy, así que ninguna está mordiendo — todavía.
+- **113 pares de sistemas ambiguos en `FixedUpdate`**, auditados uno por uno el
+  2026-08-04 y congelados en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES`. El
+  número asusta más de lo que debe: **78 son los trece `propose` compartiendo el
+  `ProposalBuffer`**, que la arbitración por `(Priority, weight)` ya neutraliza
+  —hay un test que prohíbe los empates—, y **25 son `rebuild_terrain_collider`
+  contra los cuerpos**, que comparten el tipo `Collider` pero no las entidades.
+  De las 10 restantes, cuatro tenían consecuencia observable y quedaron
+  ordenadas. **Para volver a listarlas por nombre hay que activar la feature
+  `debug` de `bevy_ecs` un rato**: sin ella Bevy imprime placeholders, y después
+  de `initialize` el grafo ya no puede resolver nombres por ninguna otra vía.
 - **La pradera cuesta 52% del presupuesto del Mundo sobre el 0,6% de su área.**
   Cerrar el hueco del presupuesto (2026-08-04: `meadow_triangles` era privado y
   no la sumaba nadie) destapó que la escena Mundo declara **106.918 triángulos

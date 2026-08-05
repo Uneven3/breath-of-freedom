@@ -29,6 +29,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
+use crate::visuals::grass_material::{GrassExtension, GrassMaterial, GrassUniform};
 use crate::world::TerrainAccess;
 use crate::world::forest::{hash_u32, hash_unit};
 
@@ -75,10 +76,11 @@ const MAX_SLOPE_DEG: f32 = 45.0;
 const STEEP_SLOPE_DEG: f32 = 35.0;
 const STEEP_SCALE: f32 = 0.65;
 
-/// Root and tip colours, baked per vertex. `StandardMaterial` multiplies its
-/// base colour by the vertex colour, so the root-to-tip gradient — the single
-/// biggest reason BOTW grass reads as grass — costs nothing and needs no custom
-/// shader.
+/// Root and tip colours. The root-to-tip gradient is the single biggest reason
+/// BOTW grass reads as grass; it used to be baked into a vertex colour and now
+/// travels as two uniforms, because it is a pure function of the vertex's
+/// height along the blade and a `mix` in the shader costs nothing per frame
+/// while sixteen bytes per vertex cost bandwidth on every one of them.
 const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.13, 0.24, 0.09);
 const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.42, 0.70, 0.22);
 
@@ -114,7 +116,7 @@ fn blades_per_chunk(density: f32) -> u32 {
 pub(super) fn spawn_meadow(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<GrassMaterial>>,
     perf: Res<crate::perf::PerfToggles>,
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
@@ -129,24 +131,41 @@ pub(super) fn spawn_meadow(
     );
 }
 
-fn grass_material() -> StandardMaterial {
-    StandardMaterial {
-        // White base: the per-vertex gradient is the colour.
-        base_color: Color::WHITE,
-        // Blades are flat quads seen from every side, so both faces must draw —
-        // unlike tree bark, where double-siding was pure waste.
-        cull_mode: None,
-        double_sided: true,
-        perceptual_roughness: 0.95,
-        reflectance: 0.03,
-        ..default()
+/// The meadow's material: PBR plus the grass extension.
+///
+/// `ExtendedMaterial` rather than a pipeline of our own — lighting, shadows,
+/// fog and decals keep working, and what the extension owns is only where the
+/// base colour and the normal come from. The uniform carries the same two
+/// colours the vertices used to carry, so plugging this in changes no pixel.
+fn grass_material() -> GrassMaterial {
+    GrassMaterial {
+        base: StandardMaterial {
+            // The extension writes `base_color` per fragment; white here means
+            // nothing tints the gradient behind its back.
+            base_color: Color::WHITE,
+            // Blades are flat quads seen from every side, so both faces must
+            // draw — unlike tree bark, where double-siding was pure waste.
+            cull_mode: None,
+            double_sided: true,
+            perceptual_roughness: 0.95,
+            reflectance: 0.03,
+            ..default()
+        },
+        extension: GrassExtension {
+            grass_data: GrassUniform {
+                root_color: ROOT_COLOR,
+                tip_color: TIP_COLOR,
+                ..default()
+            },
+            interaction_map: None,
+        },
     }
 }
 
 fn spawn_field(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<GrassMaterial>,
     density: f32,
     scene: crate::scene::AppState,
     terrain: &TerrainAccess,
@@ -193,9 +212,7 @@ fn spawn_field(
 fn build_chunk_mesh(centre: Vec2, count: u32, seed: u32, terrain: Option<&TerrainAccess>) -> Mesh {
     let capacity = count as usize;
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(capacity * 4);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(capacity * 4);
     let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(capacity * 4);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(capacity * 4);
     let mut indices: Vec<u32> = Vec::with_capacity(capacity * 6);
 
     for blade in 0..count {
@@ -238,24 +255,16 @@ fn build_chunk_mesh(centre: Vec2, count: u32, seed: u32, terrain: Option<&Terrai
         positions.push([tip.x + side.x * taper, tip.y, tip.z + side.y * taper]);
         positions.push([tip.x - side.x * taper, tip.y, tip.z - side.y * taper]);
 
-        // Normals point up, not out of the quad. A blade lit by its own flat
-        // face goes black the moment the sun is off to the side; borrowing the
-        // ground's normal is what keeps a field evenly lit — the same trick the
-        // authored props use.
-        for _ in 0..4 {
-            normals.push([0.0, 1.0, 0.0]);
-        }
+        // `uv.y` is the vertex's height along the blade: 0 at the root, 1 at
+        // the tip. It is the one derived value still worth its eight bytes —
+        // the shader reads it for the colour gradient, and the wind and the
+        // trample map will multiply their displacement by it. The normal and
+        // the colour that used to sit beside it are gone: both are constants of
+        // the system, rebuilt in `grass.wgsl` for free.
         uvs.push([0.0, 0.0]);
         uvs.push([1.0, 0.0]);
         uvs.push([1.0, 1.0]);
         uvs.push([0.0, 1.0]);
-        // Height along the blade, ready for a vertex-shader wind pass to read.
-        let root = ROOT_COLOR.to_f32_array();
-        let tip_color = TIP_COLOR.to_f32_array();
-        colors.push(root);
-        colors.push(root);
-        colors.push(tip_color);
-        colors.push(tip_color);
 
         indices.extend_from_slice(&[first, first + 1, first + 2]);
         indices.extend_from_slice(&[first, first + 2, first + 3]);
@@ -266,9 +275,7 @@ fn build_chunk_mesh(centre: Vec2, count: u32, seed: u32, terrain: Option<&Terrai
         RenderAssetUsages::default(),
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
@@ -288,7 +295,7 @@ fn build_chunk_mesh(centre: Vec2, count: u32, seed: u32, terrain: Option<&Terrai
 pub(super) fn rebuild_meadow_on_density_change(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<GrassMaterial>>,
     perf: Res<crate::perf::PerfToggles>,
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
@@ -369,6 +376,44 @@ mod tests {
             b.attribute(Mesh::ATTRIBUTE_POSITION)
                 .map(|values| values.len())
         );
+    }
+
+    /// The vertex carries only what cannot be derived. Normal and colour are
+    /// constants of the system rebuilt in `grass.wgsl`; baking them again would
+    /// silently put back the 28 bytes per vertex this pair of steps removed,
+    /// and nothing on screen would show it.
+    #[test]
+    fn the_vertex_carries_only_position_and_height() {
+        let mesh = build_chunk_mesh(Vec2::ZERO, 8, 5, None);
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
+        assert!(
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some(),
+            "uv.y is the blade height the shader and the wind both read"
+        );
+        assert!(
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_none(),
+            "the normal is +Y for every blade — the shader rebuilds it"
+        );
+        assert!(
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_none(),
+            "the gradient is a function of uv.y between two uniforms"
+        );
+    }
+
+    /// The shader reads `uv.y` as the height along the blade, so the four
+    /// vertices have to keep meaning root, root, tip, tip in that order.
+    #[test]
+    fn a_blades_four_vertices_keep_their_authored_order() {
+        let mesh = build_chunk_mesh(Vec2::ZERO, 1, 5, None);
+        let bevy::mesh::VertexAttributeValues::Float32x2(uvs) =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0).expect("uvs")
+        else {
+            panic!("uvs must be Float32x2");
+        };
+        assert_eq!(uvs[0], [0.0, 0.0], "base-left sits at the root");
+        assert_eq!(uvs[1], [1.0, 0.0], "base-right sits at the root");
+        assert_eq!(uvs[2], [1.0, 1.0], "tip-right sits at the tip");
+        assert_eq!(uvs[3], [0.0, 1.0], "tip-left sits at the tip");
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub struct GrassUniform {
 impl Default for GrassUniform {
     fn default() -> Self {
         Self {
+            // The meadow overrides these with its own authored pair; the
+            // defaults exist so the material is usable without one.
             root_color: LinearRgba::from(Color::srgb(0.22, 0.40, 0.18)),
             tip_color: LinearRgba::from(Color::srgb(0.35, 0.65, 0.20)),
             sun_direction: Vec3::new(0.3, 0.8, 0.5).normalize(),

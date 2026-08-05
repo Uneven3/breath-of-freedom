@@ -3,7 +3,17 @@
 Hoja de ruta técnica para la **mezcla de animaciones**, el **mapeo/retargeting de rigs** y el sistema de **Cinemática Inversa (IK)** para pies y manos en **Bevy 0.19** con **Rust** y **Avian3D**.
 
 > Este documento define el sistema que se quiere construir. Código y
-> `AHORA.md` indican qué parte existe en cada momento.
+> `AHORA.md` indican qué parte existe en cada momento. Revisado el
+> **2026-08-05**.
+>
+> **Punto de partida real.** De todo lo que sigue, lo único que existe es el
+> **contrato de clips**: `PLAYER_CLIP_CONTRACT` en `schema.rs` y el guardrail de
+> `build.rs` que rechaza un GLB con `bof_animset = "player"` al que le falte un
+> clip requerido. No hay `AnimationPlayer` ni `AnimationGraph` en el proyecto:
+> **el juego todavía no reproduce ninguna animación**, y ni `src/visuals/animation.rs`
+> ni `src/visuals/ik.rs` existen. Tampoco `FootingFacts`. Esto no invalida el
+> plan —el orden de abajo sigue siendo el correcto— pero cambia dónde está el
+> primer escalón: antes del blending por capas hay que reproducir un clip.
 >
 > **Principios de Arquitectura (§1, §6, §7, §14, §19, §20, §21):**
 > 1. **Desacoplamiento Estricto (§20):** La física y el movimiento (`FixedUpdate`) jamás leen huesos ni ejecutan solvers de IK. El IK y el blending de animaciones se ejecutan exclusivamente en **`PostUpdate`** sobre entidades visuales (`PlayerVisual` / `Armature`), encadenados `.after(bevy::animation::animate_targets)` y `.before(TransformSystem::TransformPropagate)` para evitar que `bevy_animation` borre los ajustes de IK.
@@ -241,6 +251,30 @@ Limitando el ángulo máximo de inclinación del tobillo a $\le 35^\circ$ para e
 
 ## Plan Paso a Paso de Implementación
 
+### Paso 0: Que un clip se reproduzca
+
+Antes del grafo, las capas y el IK hay un escalón que este documento no tenía y
+que ningún paso posterior puede saltear: **reproducir una animación**.
+
+- **Código a crear — `src/visuals/animation.rs`:**
+  - `AnimationRole`: el enum de roles semánticos (`Idle`, `Walk`, `Run`,
+    `Sneak`, `Jump`, `Fall`, `Glide`, `Climb`…), uno por lo que la presentación
+    necesita mostrar. **No** es una copia de `LocomotionState`: varios estados
+    comparten rol y algunos roles no tienen estado (poses de espera).
+  - `ROLE_TABLE`: la cadena de fallback por rol (`Swim → Walk → Idle`), para que
+    un personaje sin el clip autorado no se congele sino que degrade.
+  - `CharacterAnimations`: componente que guarda, por entidad visual, el
+    `Handle<AnimationGraph>` y el `AnimationNodeIndex` de cada rol resuelto
+    contra los clips que el GLB realmente trajo.
+  - `resolve_animation_role(state, …) -> AnimationRole` y el sistema de `Update`
+    que aplica el rol al `AnimationPlayer` con crossfade.
+- **Contrato del que ya se cuelga:** `PLAYER_CLIP_CONTRACT` y `bof_animset` ya
+  garantizan que el GLB trae los clips requeridos; este paso es el consumidor
+  que faltaba de ese contrato.
+- **Validación:** el personaje camina y su animación de caminar corre, con
+  crossfade a idle al detenerse. Jugado, no testeado — es lo primero que se
+  juzga con el ojo.
+
 ### Paso 1: Mapeo y Estandarización de Jerarquía de Huesos
 - **Tarea:** Crear el módulo `src/visuals/ik.rs` (aún sin crear) y definir las estructuras de componentes `FootIkTargets`, `HandIkTargets`, `LegIkChain` y `ArmIkChain`.
 - **Entregables:**
@@ -289,7 +323,18 @@ Limitando el ángulo máximo de inclinación del tobillo a $\le 35^\circ$ para e
 
 ## Verificación de Rendimiento y Contrato
 
-- **Presupuesto CPU:** $\le 0.15\text{ ms}$ por personaje para la resolución de IK de 4 extremidades.
+- **Presupuesto CPU:** $\le 0.15\text{ ms}$ por personaje para la resolución de
+  IK de 4 extremidades, **y $\le 1.5\text{ ms}$ agregados en la escena entera**.
+  La segunda cota es la que manda: el juego es multi-actor, y un presupuesto por
+  personaje sin techo agregado se cumple mientras hay un personaje. El IK LOD
+  gate de 30 m es lo que hace alcanzable la suma, y coincide a propósito con
+  `full_rate_radius` del LOD de sensing.
+- **El costo no es sólo CPU.** Una malla skinned se transforma **una vez por
+  pase**: el pase visible más una vez por cascada de sombra. Con 4 cascadas, un
+  personaje se skinnea cinco veces por frame. En el target —tile-based, donde
+  cada pase además escribe y relee vértices— eso es el multiplicador que
+  importa, y la palanca es la misma de `LIGHTING.md`: qué castea y con cuántas
+  cascadas, no el solver.
 - **Presupuesto de Memoria:** 0 asignaciones dinámicas por frame (`Vec` pre-dimensionados en componentes `Resource` / `Component`).
 - **Comandos de Verificación:**
 ```bash

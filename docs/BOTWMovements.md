@@ -2,6 +2,17 @@
 
 Documento de diseño y plan de implementación táctico para lograr la paridad completa de movimiento, física, mezcla de animaciones y Cinemática Inversa (IK) de **Breath of the Wild** en **Bevy 0.19** con **Rust** y **Avian3D**.
 
+Revisado el **2026-08-05** contra el código. El diseño se conserva; lo que
+cambió es **qué está marcado como vigente y qué como objetivo**, porque varias
+secciones describían en presente componentes que no existen. Ver *Los errores
+que este documento ya cometió*.
+
+> **Lo que existe hoy, en una línea:** trece motores de locomoción con su
+> árbitro, sensado de suelo y el montado como subsistema aparte. **No existen:**
+> `ObjectManipulationState`, `WaterVolume`/`WaterFacts`, `FootingFacts`,
+> `AnimationRole`/`ROLE_TABLE`, ni ningún `AnimationPlayer` — el juego todavía no
+> reproduce una sola animación. Todo lo demás de este documento es plan.
+
 ---
 
 ## 1. Arquitectura del Sistema de Motores de Locomoción
@@ -10,8 +21,15 @@ Documento de diseño y plan de implementación táctico para lograr la paridad c
 
 1. **Multi-actor por `Actor` + `Intents` (§19):** Todo personaje (Player, NPCs, enemigos, caballo) es un `Actor`. La IA, el hardware de input o la red escriben **únicamente** sobre componentes `Intents` (`PlanarIntent`, `JumpIntent`, `ClimbIntent`). Jamás modifican directamente `Transform`, `BodyVelocity` o `LocomotionState`.
 2. **Ortogonalidad Estricta de Estados (§1, §6, §19):** 
-   - **`LocomotionState` (SSoT de Piernas):** Define la locomoción física (`Walk`, `Sprint`, `Jump`, `Fall`, `Swim`, `Dive`, `Climb`, `Glide`, `Stairs`, `Mount`).
-   - **`ObjectManipulationState` (SSoT de Manos/Tronco):** Cargar una vasija (`Carry`) o empujar una caja (`PushPull`) son estados ortogonales a la locomoción de las piernas. Si el jugador carga una vasija y camina por un precipicio, `LocomotionState` pasa a `Fall` sin destruir el estado de carga de la vasija ni soltarla en el aire.
+   - **`LocomotionState` (SSoT de Piernas):** Define la locomoción física. Hoy
+     son trece variantes: `Walk`, `Sprint`, `Fall`, `Jump`, `AutoVault`,
+     `Climb`, `Mantle`, `Stairs`, `Ladder`, `Glide`, `Sneak`, `WallJump`,
+     `EdgeLeap`. `Swim`, `Dive`, `ShieldSurf` y `SlopeSlide` son objetivo de la
+     Fase 1. **`Mount` no es un `LocomotionState`** y no debería serlo: el
+     montado vive en `crates/simulation/src/mounts/` como subsistema con su
+     propio ciclo de vida (`MountedOn`, `MountTransitionRequest`), y esa
+     separación es la que permite que un jinete conserve su locomoción.
+   - **`ObjectManipulationState` (SSoT de Manos/Tronco) — *objetivo*:** Cargar una vasija (`Carry`) o empujar una caja (`PushPull`) son estados ortogonales a la locomoción de las piernas. Si el jugador carga una vasija y camina por un precipicio, `LocomotionState` pasa a `Fall` sin destruir el estado de carga de la vasija ni soltarla en el aire.
 3. **Árbitro Central y Arbitraje de Manipulación (§7):**
    - La locomoción de las piernas se arbitra mediante `ProposalBuffer` (`arbitrate_locomotion`).
    - Los cambios de `ObjectManipulationState` son procesados por un árbitro autoritativo (`arbitrate_manipulation`) en `FixedUpdate`, asegurando un único escritor por tick.
@@ -23,7 +41,7 @@ Documento de diseño y plan de implementación táctico para lograr la paridad c
    - Los solvers de IK y la mezcla de animaciones se ejecutan en **`PostUpdate`**, encadenados `.after(bevy::animation::animate_targets)` y `.before(TransformSystem::TransformPropagate)`.
 6. **Restricciones por Mensajes (`LocomotionConstraintMessage`):** La carga de objetos emite restricciones de velocidad (`SpeedLimit(1.2)`, `ForbidSprint`) al motor de locomoción activo.
 
-### Subsistema de Agua (`WaterVolume` / `WaterFacts`)
+### Subsistema de Agua (`WaterVolume` / `WaterFacts`) — *objetivo, nada de esto existe*
 Para soportar los motores `Swim` y `Dive` sin falsos positivos en puentes o volando sobre abismos:
 - **Datos (`world/water.rs`):** Entidades delimitadas con componente `WaterVolume` (volúmenes de colisión/sensores AABB en Bevy/Avian3D).
 - **Percepción (`movement/mod.rs`):** Durante `MovementSet::SenseWorld`, un sistema evalúa si la cápsula del `Actor` intersecta un `WaterVolume`:
@@ -51,7 +69,20 @@ PostUpdate   [ Animación e IK ] ──► bevy::animation::animate_targets ─�
 
 ## 2. Catálogo de Motores de Locomoción
 
-### A. Motores Implementados y Validados (14)
+### A. Motores Implementados y Validados (13)
+
+Trece hoy, y **el catálogo está abierto a propósito**: `Swim`, `Dive`,
+`ShieldSurf` y `SlopeSlide` ya están planeados, y cualquier forma de moverse que
+el juego pida —volar montado, deslizarse en nieve, nadar contra corriente— entra
+como un motor más. Agregar motores es el crecimiento normal de este sistema, no
+una excepción.
+
+Lo que **no** es negociable es cómo entran: **una variante de `LocomotionState`,
+un archivo, una fila en el árbitro**. Esa correspondencia 1:1 es lo que hace que
+`assert_all_is_exhaustive` y la matriz de arbitraje puedan auditar el conjunto
+completo; un motor que se cuela sin su variante, o una variante sin motor, es
+justamente lo que esos tests existen para atrapar. El costo de sumar el número
+catorce es bajo **porque** la regla se respeta.
 
 | Motor | Archivo (`crates/simulation/src/movement/motors/`) | `LocomotionState` | Propósito |
 |---|---|---|---|
@@ -61,14 +92,21 @@ PostUpdate   [ Animación e IK ] ──► bevy::animation::animate_targets ─�
 | **Jump** | `jump.rs` | `Jump` | Impulso vertical con tolerancia *coyote time* y buffer de entrada. |
 | **Fall** | `fall.rs` | `Fall` | Caída libre bajo gravedad con cálculo de daño por impacto. |
 | **Glide** | `glide.rs` | `Glide` | Planeo en paravela con velocidad terminal acotada y consumo de stamina. |
-| **Climb** | `climbing.rs` / `climb.rs` | `Climb` | Adherencia a paredes verticales con consumo de stamina por desplazamiento/salto. |
+| **Climb** | `climb.rs` | `Climb` | Adherencia a paredes verticales con consumo de stamina por desplazamiento/salto. |
 | **Ladder** | `ladder.rs` | `Ladder` | Escalada fija en escaleras de mano. |
 | **Mantle** | `mantle.rs` | `Mantle` | Subida de borde/cornisa impulsando el cuerpo sobre la superficie. |
 | **AutoVault** | `auto_vault.rs` | `AutoVault` | Salto automático de muros bajos ($\le 1.2\text{ m}$) sin perder inercia. |
 | **WallJump** | `wall_jump.rs` | `WallJump` | Rebote en pared vertical. |
 | **EdgeLeap** | `edge_leap.rs` | `EdgeLeap` | Impulso desde el borde de un precipicio. |
 | **Stairs** | `stairs.rs` | `Stairs` | Adaptación de pasos para huella/contrahuella sin tropezar. |
-| **Mounts** | `mounts/mod.rs` | `Mount` | Montado de caballo mediante enlace transaccional `ActorLink`. |
+
+**El montado no es un motor.** Vive en `crates/simulation/src/mounts/`
+(`lifecycle.rs`, `transition.rs`, `recovery.rs`) como subsistema con enlace
+transaccional entre jinete y montura, y **no aporta una variante de
+`LocomotionState`**. Es la decisión correcta y conviene no deshacerla: un jinete
+sigue teniendo piernas, y `NORTE.md` quiere monturas voladoras como un motor
+`Fly` que suspende el contrato de suelo — o sea, montar y moverse son dos ejes,
+no dos valores del mismo eje.
 
 ### B. Motores y Estados Ortogonales para el Feeling Objetivo
 
@@ -161,8 +199,28 @@ Las armas y objetos cargados no forman parte del mesh del personaje. Son GLBs in
   - Rotación en Blender: Mirando hacia $-Y$ (al exportar a GLTF se convierte en $-Z$ en Bevy).
 
 ### Coincidencia con la Cápsula Física
-- **Física (`FixedUpdate`):** Cápsula Avian3D de radio $R = 0.35\text{ m}$ y altura $H = 1.85\text{ m}$ (centro en $Y = 0.925\text{ m}$).
-- **Presentación (`Update`):** La entidad `PlayerVisual` se alinea al pivote inferior de la cápsula física con escala $(1.0, 1.0, 1.0)$.
+
+- **Objetivo:** cápsula Avian3D de radio $R = 0.35\text{ m}$ y altura total
+  $H = 1.85\text{ m}$ (centro en $Y = 0.925\text{ m}$), que es la proporción de
+  un humanoide de esa estatura.
+- **Lo que corre hoy:** `BodyDimensions::PLAYER` es radio **0.5 m** con cilindro
+  de **1.0 m**, o sea **2.0 m de alto por 1.0 m de ancho**. El personaje actual
+  es, físicamente, un poste de un metro de diámetro.
+- **Presentación (`Update`):** la entidad `PlayerVisual` se alinea al pivote
+  inferior de la cápsula física con escala $(1.0, 1.0, 1.0)$.
+
+**Por qué esto no es un ajuste cosmético.** El radio es el parámetro que decide
+por dónde cabe el personaje, a qué distancia queda su centro al pegarse a una
+pared para escalar, cuánto sobresale al hacer mantle y qué ancho mínimo tiene un
+pasillo jugable. Bajarlo de 0.5 a 0.35 mueve **todos** los motores de traversal
+que ya están validados jugando, y varios umbrales (alcance de `AutoVault`,
+detección de borde de `EdgeLeap`, separación de `Climb`) están afinados contra
+el valor actual sin saberlo.
+
+**Regla:** el cambio de cápsula es un paso propio, con su rejugado completo de
+la caja `Traversal`, y no se cuela dentro del paso que traiga el modelo del
+personaje. Se hace **antes** de afinar animaciones contra la escala, porque
+afinar dos veces es el resultado de hacerlo al revés.
 
 ---
 
@@ -199,11 +257,36 @@ El sistema de IK es ortogonal a los motores de locomoción: los motores escriben
 huesos en `PostUpdate`. Ver `CHARACTER_ANIMATION_IK.md` para el solver 2-bone,
 el pipeline de foot IK, el IK de manos y los pasos de implementación.
 
-Lo que este documento aporta al IK:
-- `FootingFacts` se graba en `MovementSet::SenseWorld` (altura del colisionador).
-- `ObjectManipulationState` define los sockets activos (`SKT_Push_L/R`,
+Lo que este documento aporta al IK — **todo objetivo, nada implementado**:
+- `FootingFacts` se grabará en `MovementSet::SenseWorld` (altura del
+  colisionador pisado). Hoy sólo existe `GroundFacts`; `FootingFacts` es un
+  componente nuevo que este documento tiene que entregar antes de que el IK de
+  pies pueda empezar.
+- `ObjectManipulationState` definirá los sockets activos (`SKT_Push_L/R`,
   `SKT_Carry_Overhead`) que el IK de manos consume.
 - Los motores Swim/Dive/Glide desactivan el IK de pies.
+
+---
+
+## Los errores que este documento ya cometió
+
+1. **Contar catorce motores cuando hay trece**, sumando el montado —que no es un
+   motor ni tiene variante de estado— y citando un `climbing.rs` inexistente.
+   Una tabla de inventario que no se puede verificar de un vistazo deja de ser
+   inventario.
+2. **Listar `Swim`, `Dive` y `Mount` como variantes de `LocomotionState`** en la
+   sección de leyes, que es justamente el lugar donde alguien va a buscar la
+   verdad antes de escribir un `match`.
+3. **Describir `WaterVolume`, `WaterFacts`, `ObjectManipulationState`,
+   `FootingFacts`, `AnimationRole` y `ROLE_TABLE` en presente.** Ninguno existe.
+   El diseño de todos ellos es bueno y por eso se conserva entero; lo que
+   cambió es el tiempo verbal.
+4. **Afirmar una cápsula que no es la que corre.** Y no era un detalle: el radio
+   real es 43% mayor que el documentado, y de él dependen los umbrales de media
+   docena de motores ya afinados.
+5. **Presupuestar el IK por personaje sin cota agregada.** En un juego
+   multi-actor, "≤ 0,15 ms por personaje" no es un presupuesto: es una
+   multiplicación esperando a ocurrir.
 
 ---
 
@@ -241,7 +324,15 @@ Ver `CHARACTER_ANIMATION_IK.md` Pasos 3-5. Los motores de este documento aportan
 en el módulo de IK.
 
 ### Fase 6 — Profiling y Verificación de Invariantes
-- [ ] Medir en el hub F1 que el costo de animación e IK sea $\le 0.15\text{ ms}$ en CPU.
+- [ ] Medir en el hub F1 el costo de animación e IK: $\le 0.15\text{ ms}$ de CPU
+  por personaje **y $\le 1.5\text{ ms}$ agregados con todos los actores de la
+  escena**. La cota que decide es la segunda: el juego es multi-actor y el LOD
+  de sensing (`full_rate_radius = 30 m`, el mismo umbral que el IK LOD gate)
+  existe precisamente para que la suma no escale con la población.
+- [ ] Recordar contra qué máquina: el target es un móvil de gama media, con
+  menos CPU y menos caché que la del dev, y el skinning además se paga en cada
+  pase de sombra (ver `LIGHTING.md`, ley 1). Un personaje animado no cuesta una
+  vez por frame: cuesta una vez por pase.
 - [ ] Ejecutar la suite completa de pruebas:
 ```bash
 cargo fmt --package breath-of-freedom

@@ -15,7 +15,8 @@ use bevy_time::prelude::*;
 const REAL_MINUTES_PER_GAME_DAY: f32 = 24.0;
 
 /// Simulation clock: `hours` in `0.0..24.0`, advanced on the fixed step.
-/// `speed` is a debug affordance (F9 fast-forward); 1.0 in normal play.
+/// `speed` is a debug affordance (the F1 hub's fast-forward action); 1.0 in
+/// normal play.
 #[derive(Resource)]
 pub struct TimeOfDay {
     pub hours: f32,

@@ -6,8 +6,9 @@ continuar; actualízalo tras cada decisión aceptada, checkpoint jugado o
 cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`. Los sistemas
 visuales tienen un doc por tema: `TEXTURES.md`, `BOTWGrass.md`,
 `GraphicalTechniques.md`, `BOTWMovements.md`, `CHARACTER_ANIMATION_IK.md`.
-El plan para que las leyes se cobren solas (tests de frontera, determinismo,
-lints, crates) está en `CRATES.md`.
+El plan que llevó a los tres crates cerró el 2026-08-04 y su documento se
+borró: lo vivo quedó en `ARCHITECTURE.md` (las capas y qué cobra cada frontera)
+y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
 
 ## Cómo trabajar en este repo
 
@@ -15,7 +16,7 @@ lints, crates) está en `CRATES.md`.
   --all-targets -- -D warnings` + `cargo test`.
 - **Los crates se testean por paquete, no con `--workspace`.** Meter el binario
   en la misma invocación unifica las features de Avian, y el smoke headless de
-  `bof_simulation` panickea con esa resolución (`CRATES.md`, fase 6). La corrida
+  `bof_simulation` panickea con esa resolución. La corrida
   buena son tres: `cargo test`, `cargo test -p breath_of_freedom_simulation` y
   `cargo test -p breath_of_freedom_domain`. Con `--workspace` todo lo demás pasa
   y sólo cae ese smoke: si cae otro, es real.
@@ -58,10 +59,22 @@ lints, crates) está en `CRATES.md`.
   piden. Medido el 2026-08-01: **39 variantes de `libbevy_render`**, **136 GB**
   en `deps/`, y **agregar un target nuevo** (un `tests/*.rs`, un bin) recompila
   el árbol de bevy entero para ese target — `tests/architecture.rs` pasó de
-  25 min sin llegar a correr un test. Apagar las features default de avian
-  (fase 6 de `CRATES.md`) ataca las dos cosas. **Decisión abierta**: seguir
-  compartiendo o devolver cada proyecto a su target local, que hace `cargo
-  clean` predecible — y nunca `rm -rf` sobre lo que Cargo administra.
+  25 min sin llegar a correr un test. Avian ya usa `default-features = false`
+  en `bof_simulation`, que ataca la bifurcación por el lado de las features.
+  **El 2026-08-04 el disco se llenó y hubo que hacer `clean` de todo el
+  workspace**: el árbol volvió a **39 GB** desde los 136 GB. O sea que la
+  estrategia no sólo bifurca — acumula hasta obligar a tirar todo y recompilar,
+  que es el costo que la decisión de abajo tiene que pesar. **Decisión
+  abierta**: seguir compartiendo o devolver cada proyecto a su target local,
+  que hace `cargo clean` predecible — y nunca `rm -rf` sobre lo que Cargo
+  administra.
+- **Para listar las ambigüedades de scheduling por nombre**, activá un rato la
+  feature `debug` de `bevy_ecs` en `crates/simulation/Cargo.toml`: sin ella
+  Bevy imprime `<Enable the debug feature to see the name>`, y después de
+  `Schedule::initialize` el grafo ya no puede resolver nombres por ninguna otra
+  vía (los sistemas se mudan al ejecutable). El reporte sale por `LogPlugin` +
+  `ambiguity_detection: LogLevel::Warn`. Acordate de revertir la feature: crea
+  otra variante en el build compartido.
 
 ## Estado (2026-08-04)
 
@@ -78,7 +91,7 @@ hermanas (`bof_domain`, `bof_simulation`, y el binario), 18.910 LOC de simulaci�
 contra 14.952 de presentación y composición. `main` son diez plugins más
 `SimulationPlugin`. El smoke headless levanta el juego completo sin ventana ni
 GPU. Suite: 86 tests del binario + 4 de arquitectura, 258 de simulation, 50 de
-domain, Clippy estricto en todo. Detalle y lo que falta (fase 7) en `CRATES.md`.
+domain, Clippy estricto en todo. Detalle.
 
 **Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
 horneadas en una malla por chunk — 25 entidades, cero trabajo por frame. Medido
@@ -245,7 +258,7 @@ para poder declararlo. Se retiraron nueve bundles que sólo repetían a mano lo
 que ahora exige el tipo. **Los newtypes de unidades se midieron y se
 descartaron**: en todo `movement` hay 4 funciones con dos o más `f32`, y en dos
 de ellas los parámetros comparten unidad — el riesgo que justificaba envolver
-141 campos no existe. Detalle en `CRATES.md`.
+141 campos no existe.
 
 **Fase 7 cerrada (2026-08-04): presentación no nombra la simulación.** Cero
 referencias a `bof_simulation` desde `camera`, `debug`, `visuals`,

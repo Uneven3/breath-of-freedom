@@ -5,12 +5,12 @@
 //! con 14 archivos, llegó a 15 el 2026-08-01 y desde entonces empezó a bajar.
 //! Una ley que solo vive en prosa no es una ley.
 //!
-//! Esto es andamiaje deliberado: cuando `src/input/` sea el único crate que
-//! declare `bevy_input` (fase 6 de `docs/CRATES.md`), `KeyCode` dejará de ser
-//! nombrable fuera de él y este archivo se borra. Mientras tanto **congela la
-//! deuda**: `HARDWARE_DEBT` solo puede encoger, y el test falla tanto si
-//! aparece un infractor nuevo como si un archivo de la lista deja de serlo sin
-//! sacarlo de ella.
+//! Se pensó como andamiaje hasta que Cargo cobrara la ley, y **no se borró**:
+//! eso valía si `input` cruzaba a `bof_simulation`, y se quedó en la app porque
+//! también maneja el cursor de la ventana. Cargo cobra que la simulación no lea
+//! hardware; dentro de la app no llega, y acá es donde `HARDWARE_DEBT` se
+//! congela — sólo puede encoger, y el test falla tanto si aparece un infractor
+//! nuevo como si un archivo de la lista deja de serlo sin sacarlo de ella.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 

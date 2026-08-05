@@ -1,7 +1,7 @@
 # Arquitectura y rationale
 
 El código documenta lo hecho; este archivo (≤200 líneas) fija las **leyes** y el
-**por qué** arquitectónico. El detalle vive en módulos/tests; historial: `git log -- docs/`.
+**por qué**. El detalle vive en módulos y tests; historial: `git log -- docs/`.
 
 ## Leyes (la Constitución — el código las cita por §)
 
@@ -55,122 +55,127 @@ FixedUpdate Brain → Intents → [Sense → Propose → Arbitrate → Tick moto
                             Charge, DeathCleanup (tras Health)
             Combat sets:    ApplyContext → ReadIntents → GatherProposals →
                             Arbitrate → TickActiveMotor → EmitConstraints
-                            (todo tras Movement::TickActiveMotor)
-            Projectiles → Health::Apply → death cleanup
+            EmitConstraints → Projectiles::Simulate → Health::Apply, y el
+            desgaste de armas después de los tres emisores de impacto
 Update      Presentación: visuals, camera, HUD/debug, juice, sfx — solo READ
 ```
 
-**Regla de schedules:** Bevy corre `FixedUpdate` antes que `Update`; todo hardware
-que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tarde
-(hallazgo crítico del audit 2026-07-17).
+**Regla de schedules:** Bevy corre `FixedUpdate` antes que `Update`; todo
+hardware que lee simulación se resuelve en `PreUpdate` — en `Update` llega tarde
+(audit 2026-07-17). Dos sistemas que tocan el mismo dato sin orden declarado
+dejan la decisión al ejecutor: `scheduling_audit` congela cuántos pares así
+quedan y sólo permite que bajen.
 
 ## Por qué (rationale destilado)
 
-- **Multi-actor por `ActorId` + `Actor` + `Intents`.** Todo cuerpo (player,
-  enemigo, horse, futuro remoto) tiene identidad estable; IA y red mueven **solo**
-  `Intents`/`CombatIntents` — nunca `Transform`, `BodyVelocity`,
-  `LocomotionState` ni estado privado de motores. Por eso agregar animales/NPCs/
-  co-op es un Brain nuevo y cero motores. Los motores despachan por **capacidad**
-  (`GroundMovement`, `JumpMovement`, …), no por identidad: el horse es un actor
-  con otro set de capacidades, no un caso especial.
-- **Árbitro central por sistema.** Motores *proponen* transiciones a un
-  `ProposalBuffer` de capacidad fija (núcleo compartido `bof_domain::proposal`,
-  prioridad → peso → orden); un solo sistema arbitra y es el único escritor
-  de `LocomotionState`/`CombatState`. Nada de estados concurrentes ni
-  motores escribiéndose entre sí. Tests `arbitration_matrix` fijan que cada
-  estado tiene exactamente un motor dueño.
+- **Multi-actor por `ActorId` + `Actor` + `Intents`.** Todo cuerpo tiene
+  identidad estable; IA y red mueven **sólo** `Intents`/`CombatIntents`, nunca
+  `Transform`, `BodyVelocity`, `LocomotionState` ni estado privado de motores.
+  Por eso agregar animales, NPCs o co-op es un Brain nuevo y cero motores. Los
+  motores despachan por **capacidad**, no por identidad: el horse es un actor
+  con otro set, no un caso especial — y cada capacidad exige su estado por
+  `#[require]`, así que no se puede spawnear a medias.
+- **Árbitro central por sistema.** Motores *proponen* a un `ProposalBuffer` de
+  capacidad fija (`bof_domain::proposal`, prioridad → peso); un solo sistema
+  arbitra y es el único escritor de `LocomotionState`/`CombatState`. Los trece
+  `propose` corren en paralelo y **el orden no puede cambiar el ganador**:
+  `arbitration_matrix` prohíbe los empates de `(Priority, weight)` entre motores
+  que co-proponen, con su lista de excepciones mutuamente excluyentes.
 - **El receptor posee el contrato.** El mensaje lo define quien lo consume
-  (`LocomotionConstraintMessage` es de Movement aunque lo emita Combat;
-  `DamageRequestMessage` es de Health). Las restricciones expiran por
-  silencio: el emisor re-emite cada tick mientras la condición dure. El veto
-  `ForbidSprint` llega 1 tick tarde por el orden Movement→Combat — aceptado
-  y fijado con test de regresión.
+  (`LocomotionConstraintMessage` es de Movement aunque lo emita Combat). Las
+  restricciones expiran por silencio: el emisor re-emite mientras la condición
+  dure. `ForbidSprint` llega 1 tick tarde por el orden Movement→Combat —
+  aceptado y fijado con test.
 - **Mounts vía ActorLink transaccional.** Mounts pide `Attach`/`Detach`/
-  `Neutralize` por mensaje; Movement instala/retira atómicamente attachment,
-  redirect de control, collider y gate, y responde con ack. Mounts confirma su
-  relación solo desde un ack aceptado. Aplican el mismo tick (workspace
-  dimensionado en `PreUpdate`, sin allocation en `FixedUpdate`). Detach sin pose
-  segura = collider off + suspensión (`PendingSafeRecovery`).
+  `Neutralize` por mensaje; Movement instala o retira atómicamente attachment,
+  redirect, collider y gate, y responde con ack — Mounts confirma su relación
+  sólo desde un ack aceptado. Mismo tick, sin allocation en `FixedUpdate`
+  (workspace dimensionado en `PreUpdate`). Detach sin pose segura = collider off
+  y suspensión.
 - **Salud y hostilidad.** Combat/Projectiles/Charge consultan
-  `HostileInteractionImmunity` antes de toda consecuencia y emiten
-  `DamageRequestMessage`; Health re-valida, aplica y emite `DeathMessage`.
-  La reacción a la muerte vive con el dueño del actor (Player respawnea en
-  `player/`, enemigos en `enemies/`, targets en `world/`). No existe
-  `DamageAppliedMessage`: se diseñará con su primer consumidor real.
-- **Percepción por marcador.** Los enemigos perciben actores `Perceivable`
-  (marcador de Perception; hoy solo el player). Cuando la hostilidad
-  necesite más de un bit (animales, aliados), se reemplaza por facción.
+  `HostileInteractionImmunity` y emiten `DamageRequestMessage`; Health
+  re-valida, aplica y emite `DeathMessage`. La reacción a la muerte vive con el
+  dueño del actor. No existe `DamageAppliedMessage`: se diseñará con su primer
+  consumidor. Los enemigos perciben actores `Perceivable`; con más de un bit de
+  hostilidad, ese marcador pasa a ser facción.
 - **Presentación desechable.** Cada actor tiene un visual separado que interpola
-  hacia el cuerpo (`VisualOf` lo enlaza para efectos transversales); la simulación
-  no porta meshes ni handles, y lo que toca entidades despawneables el mismo frame
-  usa comandos tolerantes (`try_insert`). `AppearanceBinding` vive en esa raíz y
-  selecciona por clave+slot una receta de `VisualCatalog` — la identidad de
-  gameplay jamás es una ruta de asset; Body/MainHand/OffHand/World separan por
-  dueño. LOD, culling e instancing solo cambian entidades/recetas visuales: nunca
-  el collider ni el estado de simulación. Toda UI que actúa lee en `Update` y
-  emite comandos que su dueño valida en `FixedUpdate`; el foco modal es de Input.
+  hacia el cuerpo (`VisualOf` los enlaza); la simulación no porta meshes ni
+  handles. `AppearanceBinding` selecciona una receta de `VisualCatalog` por
+  clave+slot: la identidad de gameplay jamás es una ruta de asset. LOD, culling
+  e instancing sólo cambian entidades visuales, nunca el collider ni el estado.
+  Toda UI que actúa lee en `Update` y emite comandos que su dueño valida en
+  `FixedUpdate`.
 - **Combate apuntado en dos fases.** El rayo del crosshair nace del pivote a
-  altura de ojos (`AIM_PIVOT_HEIGHT`, simulación pura — §20; la cámara lo
-  importa y se alinea al apuntar) y resuelve el target; la flecha sale del
-  socket del arco (`BOW_SOCKET_LOCAL`, compartido con el visual)
-  convergiendo. Fallbacks a la línea de mira: a quemarropa, y cuando
-  cualquier obstáculo bloquea la línea del arco que el crosshair despejó —
-  "si lo veo, puedo dispararle". La carga estilo Bannerlord (velocidad/daño
-  escalan, spread castiga soltar rápido) y la caída parabólica son diseño.
-- **Capas de física.** `GameLayer::{Default, Actor}`: los contactos físicos
-  cruzan capas; lo que compran es *sensing selectivo* (el sensing de ledges
-  enmascara a `Default` para no trepar cápsulas ajenas; espada/flechas
-  seleccionan `Actor`).
-- **Colisiones independientes del asset (decisión 2026-07-19).** La
-  migración separará tres geometrías: cuerpo sólido simple para locomoción,
-  hurtboxes sensoras para recibir daño y hitboxes barridas para atacar. El
-  mesh renderizado nunca es collider ni autoridad. Hurtboxes/hitboxes viven
-  en `FixedUpdate`, enlazan a su `Actor` dueño y usan primitivas/perfiles de
-  capacidad fija. Un GLTF puede aportar nodos/socket espaciales que el loader
-  convierte a datos puros; simulación nunca lee huesos/`AnimationPlayer` de
-  `Update`. Cambiar solo el visual no cambia resultados de simulación.
-- **Mundo en tres capas.** `world/mod.rs` (tipos y reglas propias),
-  `world/spawn.rs` (mecanismo agnóstico del nivel), `world/layout.rs` +
-  submódulos authored como `world/forest.rs` (tablas/diseño y geometría
-  derivada). Agrandar el mapa toca solo autoría; esa es la costura donde un
-  loader de assets (RON/escena GLTF) se enchufa sin tocar el mecanismo.
-- **El costo es una propiedad de la representación, no de la identidad.** Una
-  entidad semántica (`TreeKind`, un actor) carga *tiers* de representación en
-  `VisualCatalog` — proxy procedural barato, malla detallada, y en el futuro
-  impostor/LOD — elegidos por presupuesto, nunca una receta fija. El graybox usa
-  el tier barato para no mentir sobre el costo: un placeholder caro que la
-  versión final no shipeará invalida toda medición hecha contra él. El watchdog
-  de triángulos (`visuals/budget.rs`) hace visible en el log cualquier malla que
-  exceda el presupuesto. El baseline usa PBR de Bevy: `StandardMaterial` y el
-  único `ExtendedMaterial` del terreno; shaders fullscreen son opt-in.
-- **Debug: un snapshot, dos sinks.** Consola y pantalla responden preguntas
-  distintas y no pueden contradecirse: el jugador mira el HUD para juzgar
-  *feeling*, y el log es lo único que sobrevive al playtest para armar la tabla
-  antes/después. Por eso `debug/collect.rs` es el único que convierte valores en
-  texto, hacia un `DebugSnapshot` de datos puros (§6, §19); `hud` y `console`
-  solo lo acomodan. Las secciones tienen slots fijos, así el orden del reporte
-  no depende del orden de los sistemas. La consola emite periódico (serie
-  temporal del A/B), por cambio (secciones no volátiles) y a demanda con **P**.
-  El *trace* por tick (transiciones, flips, casts) queda aparte: es un flujo de
-  eventos, no un estado presente, y un snapshot solo mostraría el último.
-- **La instrumentación tiene puntos ciegos declarados.** El total `gpu:` es la
-  suma de los spans que Bevy *registra*, no el costo real de GPU. Los pases de
-  sombra quedan afuera: Bevy los marca con `info_span!` y no con el grabador de
-  diagnostics (`bevy_pbr/render/light.rs`), así que no aportan timestamps. Una
-  lectura de "el gpu medido no cambió" no significa "el GPU no es el cuello" —
-  ese error ya se cometió una vez y desvió el diagnóstico hacia el prepass
-  cuando el costo dominante eran las sombras. Lo no instrumentado se mide por
-  A/B (perilla + frame time), nunca por ausencia en la tabla de pases.
-- **Suavizado invariante al framerate.** Toda interpolación de presentación usa
-  `StableInterpolate::smooth_nudge` (decaimiento exponencial), nunca
-  `(rate * dt)` como factor de lerp: esa forma llega a 1.0 a ~20 fps y elimina
-  el suavizado justo cuando más se nota, cambiando el comportamiento de cámara
-  y visuales entre configuraciones de un mismo A/B. Los `lerp` que quedan
-  mezclan por un factor de estado (p. ej. `aim_blend`), no por tiempo.
-- **Checkpoint jugado, luego tests** (§10-§11). El loop: implementar →
-  `fmt`+`clippy`+`test` → lanzar el juego para el usuario → leer el log antes de
-  reportar. Rendimiento exige además escena/build/resolución repetibles y frame
-  time antes/después: no se optimiza por intuición ni se acepta porque corre.
+  altura de ojos y resuelve el target; la flecha sale del socket del arco
+  convergiendo. Ambas constantes viven en domain porque la cámara **tiene** que
+  alinearse con el origen del proyectil. Fallback a la línea de mira a
+  quemarropa y cuando un obstáculo tapa la línea del arco: "si lo veo, puedo
+  dispararle".
+- **Capas de física.** `GameLayer::{Default, Actor}`: los contactos cruzan
+  capas; compran *sensing selectivo* (ledges enmascara `Default` para no trepar
+  cápsulas ajenas; espada y flechas seleccionan `Actor`).
+- **Colisiones independientes del asset (2026-07-19).** Cuerpo sólido para
+  locomoción, hurtboxes sensoras y hitboxes barridas, separados. El mesh nunca
+  es collider ni autoridad. Contrato completo en `AHORA.md`.
+- **Mundo en tres capas.** Dato (heightfield y semántica, en simulación),
+  mecanismo agnóstico del nivel (`world/spawn.rs`) y autoría (`layout`,
+  `forest`). Agrandar el mapa toca sólo autoría, que es donde un loader de
+  assets se enchufa sin tocar el mecanismo.
+- **El costo es propiedad de la representación, no de la identidad.** Una
+  entidad semántica (`TreeKind`, un actor) carga *tiers* en `VisualCatalog`
+  —proxy barato, malla detallada, impostor futuro— elegidos por presupuesto. El
+  graybox usa el tier barato para no mentir sobre el costo: un placeholder caro
+  que no shipea invalida toda medición hecha contra él. `visuals/budget.rs`
+  avisa por log de cualquier malla pasada, y `perf/budget.rs` suma lo que cada
+  escena *declara*, que es lo que el contador de runtime no puede ser. Baseline
+  PBR de Bevy; shaders fullscreen son opt-in.
+- **Debug: un snapshot, dos sinks.** El HUD sirve para juzgar *feeling* y el log
+  es lo único que sobrevive al playtest, y no pueden contradecirse: sólo
+  `debug/collect.rs` convierte valores en texto, hacia un `DebugSnapshot` de
+  datos puros (§6, §19). El *trace* por tick va aparte: es un flujo de eventos,
+  no un estado presente.
+- **La instrumentación tiene puntos ciegos declarados.** El total `gpu:` suma
+  los spans que Bevy *registra*, no el costo real: las sombras usan
+  `info_span!` y no aportan timestamps. "El gpu medido no cambió" **no**
+  significa "el GPU no es el cuello" — ese error ya desvió un diagnóstico hacia
+  el prepass cuando el costo eran las sombras. Lo no instrumentado se mide por
+  A/B (perilla + frame time), nunca por ausencia en la tabla.
+- **Un test que afirma ausencia necesita un canario.** "Nadie lee hardware", "no
+  hay ambigüedades": esos tests dan la misma salida verde si la ley se cumple
+  que si el detector está ciego, y las dos veces que se midieron ambigüedades
+  sin canario el número era falso. Cada regla de `tests/architecture.rs` tiene
+  el suyo, y el canario debe ser **diferencial** cuando ya hay un baseline.
+- **Suavizado invariante al framerate.** Presentación interpola con
+  `StableInterpolate::smooth_nudge`, nunca con `(rate * dt)` como factor: esa
+  forma llega a 1.0 a ~20 fps y borra el suavizado justo cuando más se nota,
+  cambiando el comportamiento entre configuraciones de un mismo A/B. Los `lerp`
+  que quedan mezclan por estado, no por tiempo.
+- **Checkpoint jugado, luego tests** (§10-§11): implementar →
+  `fmt`+`clippy`+`test` → lanzar el juego → leer el log antes de reportar.
+  Rendimiento exige además escena/build repetibles y frame time antes/después.
+
+## Las tres capas, y quién ve a quién
+
+```text
+breath-of-freedom (bin)   composición: main.rs, scene, world::layout/spawn, input
+   ├── bof_simulation     gameplay autoritativo, sin ventana ni render
+   └── bof_domain         datos puros: tipos, unidades, Intents, estados, facts
+```
+
+**Hermanas, no una pila** (decisión del usuario, 2026-08-03): presentación vive
+en el binario y sólo puede nombrar `bof_domain`, que es dato puro, así que
+**leer es lo único que puede hacer**. El binario es la única capa que ve las
+dos, y por eso el único lugar donde armar collider **y** malla en la misma
+función es legal (`world::spawn`).
+
+La frontera la cobra Cargo —`bof_domain` sin `bevy` ni Avian, `bof_simulation`
+sin `bevy_render`/`bevy_input`/`bevy_window`— y lo que Cargo no alcanza está en
+`tests/architecture.rs`: presentación no nombra `bof_simulation`, C2, `unsafe` y
+el registro único de plugins.
+
+Cuando simulación quiere saber el estado de la app, la pregunta correcta es qué
+mensaje debería recibir: terreno, player, enemigos, caballo y reloj declaran su
+vida con `SceneScoped` y `scene` decide cuándo nacen.
 
 ## Mapa de módulos (contratos reexportados desde `bof_domain`)
 
@@ -180,21 +185,16 @@ que lee simulación se resuelve en `PreUpdate`. Escribirlo en `Update` llega tar
 | `scene` (app) | `AppState`, tabla `SCENES`, `SceneBuild`, ciclo de vida | Decide *qué existe y cuándo*; simulación declara `SceneScoped` y esto lo bindea a `DespawnOnExit` |
 | `editor` | Autoría in-engine: pinceles de relieve, pintura semántica, historial, persistencia | Decide *dónde y cuándo*; el **cómo** cambia el dato es de `world` |
 | `asset_pipeline` | Manifiesto build-time, `MaterialPalette`, `SpatialCatalog`, `schema.rs` | Única autoridad espacial de lo authored; SoT compartida con `build.rs` |
-| `movement` | `Intents`, `LocomotionState`, motores, facts, attachment/link | Brains escriben Intents; Combat pide por mensaje |
-| `proposal` (domain) | Núcleo genérico de arbitración | Type-aliases por sistema |
-| `combat` | `CombatIntents`, `CombatState`, motores, perfiles montados | Tras Movement; emite constraints/daño por mensaje |
-| `projectiles` | Pool fijo de flechas: vuelo/impacto | Simulación sin visuales; Update sincroniza representación |
-| `health` | `Health`, inmunidad, aplicación autoritativa de daño | Único que resta HP; muerte por mensaje |
 | `inventory` | `Inventory`, equipo/durabilidad, pickups | Equipar inserta/retira `WeaponProfile`; lee `HitImpactMessage` (melee); pide heal a Health |
-| `enemies` | Percepción, `Awareness`, brains melee/arquero | Escribe solo sus `*Intents`/`ControlOrientation` |
-| `interaction` | Árbitro de `Interact`, `Interactable`, prioridad | Único consumidor de la tecla; emite la decisión por mensaje |
-| `mounts` | `Horse`, relación, owner, carga | Todo cambio físico vía ActorLink a Movement |
-| `player` | Spawn y respawn del jugador | Dueño de la reacción a su muerte |
 | `world` | Heightfield, semántica por celda, marcadores authored, reloj | `TerrainAccess` enruta toda lectura; `layout`/`spawn` se quedan en el binario porque arman collider **y** malla |
 | `visuals`, `camera`, `presentation`, `sfx` | Presentación + UI | Solo READ; las acciones UI vuelven por mensajes (§20) |
 | `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
 | `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las aplica a lo suyo |
-| `time_control` | Hitstop y `Time<Virtual>` | Único escritor del reloj virtual de simulación |
 
-Sistemas futuros (crafteo, swim, clima, NPCs, multiplayer, persistencia) se
-diseñan al tocar, como consumidores aditivos; borradores en git.
+La tabla sólo lista lo que tiene una frontera **particular**. El resto sigue la
+regla general —posee su dato, lo publica por mensaje, nadie más lo escribe— y no
+necesita fila: `movement` (Intents, motores, facts), `combat`, `health` (único
+que resta HP), `enemies` (escribe sólo sus propios Intents), `mounts` (todo
+cambio físico vía ActorLink), `projectiles`, `interaction`, `time_control`,
+`player` y `proposal`. Lo que venga (crafteo, swim, clima, NPCs, multiplayer)
+se diseña al tocar, como consumidor aditivo.

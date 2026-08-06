@@ -208,12 +208,20 @@ Nada de esta fase cambia la imagen.
   tomar. `GrassDensity` y `RenderScale` entran a `PerfKnob` y a la matriz de
   `perf/sequence.rs`; el `KeyCode::F8` de `grass.rs` se borra. El detalle y el
   porqué están en *Presupuesto → Los dos diales tienen que nacer en el hub*.
-- **Estado.** No implementado. F8 existe pero está fuera del registro, así que lo
-  que produce no es atribuible.
-- **Entregable & validación.** Una corrida de la secuencia que llene la matriz
-  fill-bound / vertex-bound con números, y cuyo paso de baseline repetido muestre
-  la deriva. **Ese resultado puede reordenar todo lo que sigue**, y por eso va
-  primero: si el pasto resulta fill-bound, la palanca es la densidad del anillo 0
+- **Estado (2026-08-05): implementado.** Los dos diales son `PerfKnob`
+  (`GRASS_DENSITY_STEPS`, `RENDER_SCALE_STEPS` en `domain::perf`), F8 y
+  `GrassStressState` se borraron, y `STEPS` pasó de 7 a 11 pasos: dos de
+  densidad (25 y 10/m²) y dos de resolución (75% y 50%), un cambio por paso.
+  Efecto colateral: `grass.rs` salió de `HARDWARE_DEBT` (C2 bajó a 12 archivos).
+  `RenderScale` se aplica como **viewport encogido** en la cámara, no como render
+  target escalado: no necesita imagen intermedia ni pase de upscale, y al encoger
+  los dos ejes por igual conserva el aspecto y por lo tanto el encuadre — lo
+  único que cambia es el número de fragmentos. La imagen queda en una esquina de
+  la ventana; eso es fealdad de diagnóstico, no un bug.
+- **Entregable & validación.** **Pendiente:** una corrida de la secuencia que
+  llene la matriz fill-bound / vertex-bound con números, y cuyo paso de baseline
+  repetido muestre la deriva. **Ese resultado puede reordenar todo lo que
+  sigue** — si el pasto resulta fill-bound, la palanca es la densidad del anillo 0
   y no el shader.
 
 ### Paso 1: `ExtendedMaterial` enchufado y shader corregido

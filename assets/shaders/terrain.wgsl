@@ -23,11 +23,6 @@
 
 struct TerrainExtension {
     debug: vec4<f32>,
-    // rgb = color de la raíz de una brizna, a = cuánto puede teñirse el suelo.
-    grass_tint: vec4<f32>,
-    // x = cos(pendiente máxima), y = cos(pendiente empinada),
-    // z = máscara de capas con pasto, w = libre. Ver `visuals/grass_cover.rs`.
-    grass_rules: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -37,6 +32,20 @@ var terrain_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
 var<uniform> terrain: TerrainExtension;
 
+// Un binding por `#[uniform(n)]` del lado Rust, y no un struct que los agrupe:
+// `AsBindGroup` le da a cada atributo su propio buffer, así que declararlos
+// juntos acá le promete al pipeline un buffer de 48 bytes donde hay uno de 16 y
+// la validación del device rechaza la pipeline entera al crearla.
+
+// rgb = color de la raíz de una brizna, a = cuánto puede teñirse el suelo.
+@group(#{MATERIAL_BIND_GROUP}) @binding(103)
+var<uniform> grass_tint: vec4<f32>;
+
+// x = cos(pendiente máxima), y = cos(pendiente empinada),
+// z = máscara de capas con pasto, w = libre. Ver `visuals/grass_cover.rs`.
+@group(#{MATERIAL_BIND_GROUP}) @binding(104)
+var<uniform> grass_rules: vec4<f32>;
+
 /// Cuánto pasto le toca a este punto del suelo — la misma regla que usa el
 /// estampador, evaluada acá con lo que el fragment tiene a mano: la capa que
 /// dice el color de vértice y la inclinación que dice la normal.
@@ -45,14 +54,14 @@ var<uniform> terrain: TerrainExtension;
 /// un borde es exactamente lo que aparece si las dos mitades no se ponen de
 /// acuerdo sobre dónde termina el pasto.
 fn grass_coverage(layer: i32, world_normal: vec3<f32>) -> f32 {
-    let mask = u32(round(terrain.grass_rules.z));
+    let mask = u32(round(grass_rules.z));
     if (mask & (1u << u32(max(layer, 0)))) == 0u {
         return 0.0;
     }
     // El coseno con +Y *baja* cuando la pendiente sube, así que el máximo de
     // pendiente es el mínimo de coseno.
     let upness = normalize(world_normal).y;
-    return smoothstep(terrain.grass_rules.x, terrain.grass_rules.y, upness);
+    return smoothstep(grass_rules.x, grass_rules.y, upness);
 }
 
 fn kind_debug_color(layer: i32) -> vec3<f32> {
@@ -88,7 +97,7 @@ fn fragment(
     // lleva su color, así que el campo no termina en una línea — termina en un
     // piso que ya combina.
     let coverage = grass_coverage(layer, in.world_normal);
-    color = mix(color, terrain.grass_tint.rgb, coverage * terrain.grass_tint.a);
+    color = mix(color, grass_tint.rgb, coverage * grass_tint.a);
 
     if debug_mode == 1u {
         color = kind_debug_color(layer);

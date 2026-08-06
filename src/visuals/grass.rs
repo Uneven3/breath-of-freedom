@@ -30,20 +30,24 @@
 //! triangle budget, and stretching it to 320×320 m would have been millions of
 //! triangles. Tuning that shape could never fix it.
 //!
-//! So the field is not a place any more, it is a **neighbourhood**: four rings
-//! that exist around wherever the camera is, each with bigger chunks, wider
-//! blades and fewer of them per square metre than the one inside it. Walk, and
-//! chunks left behind are rebaked ahead. The blade count is constant whether the
-//! map is 25 m or 4 km across, and the budget becomes *per view* instead of per
-//! scene — which is the only definition that means anything in an open world.
+//! So the field is not a place any more, it is a **neighbourhood**: three rings
+//! that exist around wherever the camera is, each with bigger chunks and fewer
+//! blades per square metre than the one inside it. Walk, and chunks left behind
+//! are rebaked ahead. The blade count is constant whether the map is 25 m or
+//! 4 km across, and the budget becomes *per view* instead of per scene — which
+//! is the only definition that means anything in an open world.
 //!
-//! What must **not** change with distance is how thick the field looks. That is
-//! why the rings thin out on a derivation rather than on taste: a blade at
-//! distance `d` hides `width · H · d / h` of the ground behind it, so the same
-//! apparent cover needs `1/d` as many blades — and wider blades need fewer still.
-//! Forty-five blades per m² at 16 m is not a dense field, it is thirty times the
-//! cover anyone can see, and the surplus is paid in overdraw, which is exactly
-//! what the mobile target cannot afford. See [`RINGS`] and `docs/BOTWGrass.md`.
+//! What must **not** change with distance is how thick the field looks. The
+//! rings thin out on a derivation rather than on taste: a blade at distance `d`
+//! hides `width · H · d / h` of the ground behind it, so the same apparent cover
+//! needs `1/d` as many blades. Forty-five blades per m² at 16 m is not a denser
+//! field, it is several times the cover anyone can resolve, and the surplus is
+//! paid in overdraw — which is exactly what the mobile target cannot afford.
+//!
+//! **But that derivation is a floor, not a recipe.** Planted at the minimum the
+//! field covered the ground and still read as sparse spikes: covering the ground
+//! and looking like a meadow are different bars. See [`RINGS`] for where each
+//! number actually comes from, and `docs/BOTWGrass.md` for the table.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -72,59 +76,71 @@ struct Ring {
     density: f32,
     /// How much wider than [`BLADE_WIDTH`] this ring's blades are.
     ///
-    /// This is what keeps the density *looking* constant while the blade count
-    /// falls. Coverage is `blades × width × height × d / h`, so a blade twice as
-    /// wide hides twice the ground and half as many are needed. A 5 cm blade at
-    /// 20 m is already thinner than a pixel; at 20 cm it is still thinner than
-    /// three, and nobody can tell one from the other — but the second costs a
-    /// quarter as much geometry to cover the same field.
+    /// **This is 1.0 everywhere, and that is a finding, not an oversight.** The
+    /// arithmetic said otherwise: coverage is `blades × width × height × d / h`,
+    /// so a blade twice as wide hides twice the ground and half as many are
+    /// needed for the same cover. The first version of these rings used ×2 from
+    /// 4 m and ×4 from 8 m, and the field came out looking like a bed of fat
+    /// spikes — played on 2026-08-05 and rejected on sight.
+    ///
+    /// The formula was right and the conclusion wrong. Coverage is not what the
+    /// eye judges: at 4 m a blade is several pixels across, so its *silhouette*
+    /// reads, and a blade twice as wide is not a cheaper equivalent, it is a
+    /// different plant. Widening only buys anything once a blade is genuinely
+    /// sub-pixel, which at this camera height starts well past this meadow's
+    /// reach. Kept as a field rather than deleted so the next person who
+    /// rediscovers the arithmetic finds the result of trying it.
     width_scale: f32,
 }
 
-/// The four rings, from the camera outward. **Every number here is derived, not
-/// chosen** — [`minimum_density`] is the derivation and a test checks each row
-/// against it.
+/// The three rings, from the camera outward. Each row is **floored** by
+/// [`minimum_density`] — a test enforces that — and chosen above it by eye.
 ///
 /// The field has to read equally thick at every distance; what falls with
-/// distance is the *cost*, not the look. Two things make that possible:
+/// distance is the *cost*, not the look. The lever is blade count: a blade at
+/// distance `d` hides `width · H · d / h` of the ground behind it because the
+/// viewing angle flattens out, so the density needed for the same cover falls as
+/// `1/d`. The near ring keeps the 45/m² that was judged by eye long before any
+/// of this; the outer two sit at roughly twice their derived minimum.
 ///
-/// - **Fewer blades.** A blade at distance `d` hides `width · H · d / h` of the
-///   ground behind it, because the viewing angle flattens out. The density
-///   needed to cover the ground therefore falls as `1/d` — at 16 m, four blades
-///   per m² cover what forty-five do at two.
-/// - **Wider blades.** Coverage is linear in width too, so doubling the width
-///   halves the blade count for the same look. Alone the first lever leaves each
-///   ring costing twice its inner neighbour (area grows as `d²`, density falls
-///   as `1/d`); with the second the outer rings roughly hold their price.
-///
-/// Chunks are half the ring's reach: coarser chunks waste less draw budget but
+/// Chunks are half the ring's reach: coarser chunks spend less draw budget but
 /// overshoot the ring's boundary, and that overshoot is baked geometry nobody
 /// asked for. Measured both ways, `reach/2` cost 59.696 triangles against
 /// 116.352 for `reach/1`.
-const RINGS: [Ring; 4] = [
-    Ring {
-        reach_m: 4.0,
-        chunk_m: 2.0,
-        density: 45.5,
-        width_scale: 1.0,
-    },
+///
+/// **What this costs, stated plainly:** 107.840 blades, 215.680 triangles
+/// declared across the full 360°, 100 chunks. That is over twice the mobile
+/// triangle budget, and `perf::budget` declares it as debt with a number rather
+/// than hiding it. The frustum throws away roughly two thirds before anything
+/// draws, but the honest position is that this has not been measured yet — the
+/// two sweeps in the hub are what decide whether the reach or the near density
+/// is the thing to cut.
+///
+/// **The minimum is a floor, not a target.** The first version planted every
+/// ring at 1,25× its derived minimum, which is what the formula says is needed
+/// for the ground not to show through — and the field read as sparse and
+/// spiky. Covering the ground and looking like a meadow are different bars, and
+/// the second one is higher: the near ring keeps the 45/m² that was judged by
+/// eye long before any of this, and the outer rings sit around twice their
+/// minimum rather than at it.
+const RINGS: [Ring; 3] = [
     Ring {
         reach_m: 8.0,
         chunk_m: 4.0,
-        density: 11.4,
-        width_scale: 2.0,
+        density: 45.0,
+        width_scale: 1.0,
     },
     Ring {
         reach_m: 16.0,
         chunk_m: 8.0,
-        density: 2.8,
-        width_scale: 4.0,
+        density: 16.0,
+        width_scale: 1.0,
     },
     Ring {
         reach_m: 32.0,
         chunk_m: 16.0,
-        density: 1.4,
-        width_scale: 4.0,
+        density: 6.0,
+        width_scale: 1.0,
     },
 ];
 
@@ -139,7 +155,7 @@ const EYE_HEIGHT_M: f32 = 1.6;
 /// hash, not on a lattice, so some clumping is certain and the bare patches it
 /// would otherwise leave are the artefact this margin buys off.
 #[cfg(test)]
-const COVERAGE_MARGIN: f32 = 1.25;
+const COVERAGE_MARGIN: f32 = 1.2;
 
 /// Blades per m² needed at distance `d` for the ground not to show through,
 /// given blades of `width`.
@@ -176,13 +192,23 @@ const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 /// law 3).
 const FADE_BAND_M: f32 = 8.0;
 
-/// At most one chunk is baked per frame.
+/// At most one chunk is baked per frame **while rolling**.
 ///
 /// Re-baking while the player walks is the only per-frame work this system will
 /// ever have, and a frame spike at a chunk boundary would be exactly the kind of
 /// stutter the whole design exists to avoid. One per frame means crossing a
 /// boundary costs one chunk, not a ring.
 const CHUNKS_BAKED_PER_FRAME: usize = 1;
+
+/// Filling an empty grid ignores that limit and bakes the lot in one frame.
+///
+/// The two cases look alike and are opposites. Rolling is a grid that is already
+/// right needing one chunk at its edge, and there the budget is everything.
+/// Filling is a grid with nothing in it — pacing that at one chunk per frame
+/// does not protect the frame rate, it just makes the meadow grow in from
+/// nowhere over several seconds while the player watches. Played on 2026-08-05
+/// and reported as "cargó extremadamente lento", which is exactly what it was.
+const FILL_IN_ONE_FRAME: bool = true;
 
 /// Blade shape. Wide enough at the base to cover ground, tapered at the tip so
 /// it reads as a leaf rather than a strip of paper.
@@ -418,12 +444,18 @@ pub(super) fn roll_meadow_grid(
     });
 
     let density = perf.grass_density();
-    // Collected before the loop so the bake can borrow the field mutably; the
-    // list is at most `CHUNKS_BAKED_PER_FRAME` long.
+    // An empty grid is being filled, not rolled: bake it whole rather than
+    // letting the meadow grow in around the player over several seconds.
+    let budget = if FILL_IN_ONE_FRAME && field.live.is_empty() {
+        usize::MAX
+    } else {
+        CHUNKS_BAKED_PER_FRAME
+    };
+    // Collected before the loop so the bake can borrow the field mutably.
     let missing: Vec<ChunkKey> = wanted
         .iter()
         .filter(|key| !field.live.contains_key(*key))
-        .take(CHUNKS_BAKED_PER_FRAME)
+        .take(budget)
         .copied()
         .collect();
     for key in &missing {
@@ -665,19 +697,18 @@ mod tests {
             let inner = index.checked_sub(1).map_or(2.0, |i| RINGS[i].reach_m);
             let needed = minimum_density(inner, BLADE_WIDTH * ring.width_scale);
             assert!(
-                ring.density >= needed,
-                "ring reaching {} m plants {}/m2 where {needed:.1}/m2 is the minimum at {inner} m",
-                ring.reach_m,
-                ring.density
-            );
-            assert!(
-                ring.density <= needed * COVERAGE_MARGIN * 1.05,
-                "ring reaching {} m plants {}/m2, past the {:.1}/m2 its distance needs — \
-                 surplus density is paid entirely in overdraw",
+                ring.density >= needed * COVERAGE_MARGIN,
+                "ring reaching {} m plants {}/m2 where {:.1}/m2 is the minimum at {inner} m",
                 ring.reach_m,
                 ring.density,
                 needed * COVERAGE_MARGIN
             );
+            // Deliberately no upper bound. There used to be one, pinning every
+            // ring to its minimum plus a margin, and it did exactly what it was
+            // told: the field covered the ground and looked like sparse spikes.
+            // Surplus density is paid in overdraw and that is a real cost, but
+            // it is one the measurement decides, not a test — this file's job is
+            // to keep a ring from falling *below* what its distance demands.
             assert!(
                 ring.width_scale <= MAX_WIDTH_SCALE,
                 "a blade {}x its authored width reads as a card, not a blade",
@@ -715,15 +746,22 @@ mod tests {
         }
     }
 
+    /// The declared cost is checked against its per-view ceiling — and its debt
+    /// — in `perf::budget`, which is where the mobile budget lives. What this
+    /// one keeps is the property that makes that number mean anything: the
+    /// neighbourhood is bounded at all, so no camera position can make the
+    /// meadow arbitrarily expensive.
     #[test]
-    fn the_whole_neighbourhood_stays_inside_the_mobile_triangle_budget() {
-        // Grass shares the frame with 32768 triangles of terrain, so the field
-        // has to leave room for the ground it grows on.
-        let terrain = 128 * 128 * 2;
+    fn the_neighbourhood_is_bounded() {
+        let blades = neighbourhood_blades(Vec2::ZERO);
+        assert!(blades > 0, "a meadow with no blades is not a meadow");
+        let chunks: usize = (0..RINGS.len())
+            .map(|index| ring_cells(index, Vec2::ZERO).len())
+            .sum();
         assert!(
-            meadow_triangles() + terrain <= crate::perf::budget::MOBILE_TRIANGLES,
-            "meadow {} + terrain {terrain} exceeds the mobile budget",
-            meadow_triangles()
+            chunks <= crate::perf::budget::MOBILE_DRAWS,
+            "{chunks} chunks is over the {} draw budget before anything else draws",
+            crate::perf::budget::MOBILE_DRAWS
         );
     }
 

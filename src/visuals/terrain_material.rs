@@ -238,7 +238,14 @@ fn setup_terrain_material(
 /// Not all the way: the tint has to make the field edgeless without erasing the
 /// texture underneath, which is what still gives the ground its grain up close.
 /// Judged by eye, and the one number here that is a look decision.
-const GRASS_TINT_STRENGTH: f32 = 0.8;
+///
+/// Started at 0.8 and came down after playing it: at that strength the ground
+/// sat so close in value to the blades that the blades stopped reading as
+/// separate objects and the whole field went flat. The floor has to *rhyme*
+/// with the grass, not match it — what kills the field's edge is sharing a
+/// colour family, and what keeps the grass legible is the ground staying darker
+/// than it.
+const GRASS_TINT_STRENGTH: f32 = 0.55;
 
 fn grass_tint() -> Vec4 {
     let root = super::grass::ROOT_COLOR;

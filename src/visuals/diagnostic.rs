@@ -8,6 +8,7 @@ use bevy::shader::ShaderRef;
 
 use crate::perf::PerfToggles;
 use crate::visuals::DiagnosticViewState;
+use crate::visuals::grass_material::GrassMaterial;
 use crate::visuals::terrain_material::TerrainMaterial;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
@@ -61,6 +62,17 @@ struct OverdrawOriginalMaterial {
 #[derive(Component)]
 struct OverdrawOriginalTerrainMaterial {
     original: Handle<TerrainMaterial>,
+    diagnostic: Handle<AdditiveOverdrawMaterial>,
+}
+
+/// So does the meadow, and it is the one that matters most: overlapping blades
+/// are the textbook overdraw case, and a diagnostic that silently skipped them
+/// would read "clean" over exactly the geometry it was opened to inspect. It
+/// did, for one afternoon — the meadow moved to its own `ExtendedMaterial` and
+/// dropped out of a view that only knew two material types.
+#[derive(Component)]
+struct OverdrawOriginalGrassMaterial {
+    original: Handle<GrassMaterial>,
     diagnostic: Handle<AdditiveOverdrawMaterial>,
 }
 
@@ -142,6 +154,20 @@ type SavedTerrainMeshQuery<'a> = (
     Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
 );
 
+type GrassMeshQuery<'a> = (
+    Entity,
+    &'a MeshMaterial3d<GrassMaterial>,
+    Option<&'a OverdrawOriginalGrassMaterial>,
+    Has<Mesh3d>,
+);
+
+type SavedGrassMeshQuery<'a> = (
+    Entity,
+    &'a OverdrawOriginalGrassMaterial,
+    Has<Mesh3d>,
+    Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn apply_diagnostic_views(
     mut commands: Commands,
@@ -154,6 +180,9 @@ fn apply_diagnostic_views(
     saved_meshes: Query<SavedMeshQuery>,
     terrain_meshes: Query<TerrainMeshQuery>,
     saved_terrain_meshes: Query<SavedTerrainMeshQuery>,
+    grass_materials: Res<Assets<GrassMaterial>>,
+    grass_meshes: Query<GrassMeshQuery>,
+    saved_grass_meshes: Query<SavedGrassMeshQuery>,
 ) {
     let wanted_wireframe = perf.wireframe && !perf.overdraw;
     if wireframe.global != wanted_wireframe {
@@ -167,6 +196,7 @@ fn apply_diagnostic_views(
         && !perf.is_changed()
         && saved_meshes.is_empty()
         && saved_terrain_meshes.is_empty()
+        && saved_grass_meshes.is_empty()
     {
         return;
     }
@@ -228,6 +258,34 @@ fn apply_diagnostic_views(
                     .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
             }
         }
+        for (entity, material, _saved, has_mesh) in &grass_meshes {
+            if !has_mesh {
+                continue;
+            }
+            let cull_mode = grass_materials
+                .get(&material.0)
+                .map(|material| material.base.cull_mode)
+                .unwrap_or(None);
+            commands
+                .entity(entity)
+                .try_remove::<MeshMaterial3d<GrassMaterial>>()
+                .try_insert(OverdrawOriginalGrassMaterial {
+                    original: material.0.clone(),
+                    diagnostic: overdraw.matching(cull_mode),
+                });
+        }
+        for (entity, saved, has_mesh, has_overdraw) in &saved_grass_meshes {
+            if !has_mesh {
+                commands
+                    .entity(entity)
+                    .try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>()
+                    .try_remove::<OverdrawOriginalGrassMaterial>();
+            } else if !has_overdraw {
+                commands
+                    .entity(entity)
+                    .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
+            }
+        }
     } else {
         for (entity, original, has_mesh, has_overdraw) in &saved_meshes {
             let mut entity = commands.entity(entity);
@@ -253,6 +311,17 @@ fn apply_diagnostic_views(
                 }
             }
         }
+        for (entity, original, has_mesh, has_overdraw) in &saved_grass_meshes {
+            let mut entity = commands.entity(entity);
+            if has_overdraw {
+                entity.try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>();
+            } else {
+                entity.try_remove::<OverdrawOriginalGrassMaterial>();
+                if has_mesh {
+                    entity.try_insert(MeshMaterial3d(original.original.clone()));
+                }
+            }
+        }
     }
 }
 
@@ -260,10 +329,13 @@ fn publish_diagnostic_state(
     perf: Res<PerfToggles>,
     saved_meshes: Query<(), With<OverdrawOriginalMaterial>>,
     saved_terrain_meshes: Query<(), With<OverdrawOriginalTerrainMaterial>>,
+    saved_grass_meshes: Query<(), With<OverdrawOriginalGrassMaterial>>,
     mut state: ResMut<DiagnosticViewState>,
 ) {
-    state.overdraw_material_override =
-        perf.overdraw || !saved_meshes.is_empty() || !saved_terrain_meshes.is_empty();
+    state.overdraw_material_override = perf.overdraw
+        || !saved_meshes.is_empty()
+        || !saved_terrain_meshes.is_empty()
+        || !saved_grass_meshes.is_empty();
 }
 
 #[cfg(test)]
@@ -274,6 +346,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<StandardMaterial>>()
             .init_resource::<Assets<TerrainMaterial>>()
+            .init_resource::<Assets<GrassMaterial>>()
             .init_resource::<Assets<AdditiveOverdrawMaterial>>()
             .init_resource::<PerfToggles>()
             .init_resource::<WireframeConfig>()

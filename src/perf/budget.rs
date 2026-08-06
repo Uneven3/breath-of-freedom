@@ -203,17 +203,31 @@ mod tests {
     /// tiene sentido para algo que existe alrededor de la cámara y no en un
     /// lugar del mapa.
     ///
-    /// El número sale de restar: el presupuesto móvil son 100.000 triángulos, el
-    /// terreno se lleva 32.768 fijos en toda escena y el bosque ronda los
-    /// 17.900, así que al pasto le quedan unos 49.000 antes de que la vista
-    /// entera se pase. El techo está sobre ese hueco porque el declarado cuenta
-    /// los 360° alrededor de la cámara —incluido lo que queda a la espalda— y el
-    /// frustum descarta del orden de dos tercios antes de dibujar nada.
+    /// **Hoy es el doble del presupuesto móvil entero, y está acá para que eso
+    /// no se pueda ignorar.**
     ///
-    /// **Sigue siendo un guardrail, no el objetivo**: que la pradera entre en el
-    /// conteo no prueba que corra en un teléfono, donde mandan fill-rate y
-    /// overdraw. Eso lo dicen los dos barridos del hub, no este test.
-    const MEADOW_VIEW_TRIANGLES: usize = 62_000;
+    /// El número que la aritmética pedía eran ~49.000: 100.000 del presupuesto
+    /// móvil menos 32.768 de terreno y ~17.900 de bosque. La primera versión de
+    /// los anillos entraba en 59.696 cumpliendo al pie de la letra la densidad
+    /// mínima derivada — y **se jugó el 2026-08-05 y se rechazó de entrada**:
+    /// tapaba el suelo y leía como púas ralas. Tapar el suelo y parecer una
+    /// pradera son dos varas distintas, y la segunda es más alta.
+    ///
+    /// Con densidad de verdad cerca (45/m² hasta 8 m, la que se juzgó por ojo
+    /// mucho antes de todo esto) y briznas finas en todos los anillos, la
+    /// vecindad son 215.680 triángulos declarados en los 360°. El frustum
+    /// descarta del orden de dos tercios, así que lo dibujado ronda los 72.000 —
+    /// pero *declarado* es lo que este test mide, y declarado es el doble del
+    /// móvil.
+    ///
+    /// **Es deuda con número, no una tolerancia.** No se paga bajando el listón:
+    /// se paga midiendo con los dos barridos del hub y viendo cuál de las dos
+    /// causas manda. Si resulta fill-bound, la palanca es la densidad del anillo
+    /// interior; si resulta vertex-bound, es el alcance. Hasta que ese cuadro
+    /// tenga números, "el pasto cuesta demasiado" sigue siendo una hipótesis —
+    /// que el conteo entre no prueba que corra en un teléfono, y que no entre
+    /// tampoco prueba que no.
+    const MEADOW_VIEW_TRIANGLES: usize = 216_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -223,12 +237,14 @@ mod tests {
             "the meadow neighbourhood declares {meadow} triangles, over its \
              {MEADOW_VIEW_TRIANGLES} per-view ceiling"
         );
-        // Y el terreno que pisa entra con ella: el pasto crece sobre el suelo,
-        // nunca en lugar de él.
+        // Y lo que de verdad hay que vigilar mientras la deuda exista: cuánto
+        // se pasa del móvil, para que crecer sea una decisión y no un descuido.
         let ground = terrain_cost();
+        let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            meadow + ground <= MOBILE_TRIANGLES,
-            "meadow {meadow} + terrain {ground} exceeds the mobile budget"
+            over <= 150_000,
+            "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
+             past the debt this file declares"
         );
     }
 

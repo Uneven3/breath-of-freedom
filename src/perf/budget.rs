@@ -215,7 +215,9 @@ mod tests {
     ///
     /// Con densidad de verdad cerca (45/m² hasta 8 m, la que se juzgó por ojo
     /// mucho antes de todo esto) y briznas finas en todos los anillos, la
-    /// vecindad son 207.200 triángulos declarados en los 360°. El frustum
+    /// vecindad son 250.800 triángulos declarados en los 360°. De esos, 43.600 son
+    /// la punta partida: los dos anillos internos gastan un triángulo más por
+    /// brizna para que una brizna cercana no lea como tira de papel. El frustum
     /// descarta buena parte antes de dibujar —cuánta es una incógnita, no una medición—
     /// pero *declarado* es lo que este test mide, y declarado es el doble del
     /// móvil.
@@ -234,7 +236,7 @@ mod tests {
     /// tenga números, "el pasto cuesta demasiado" sigue siendo una hipótesis —
     /// que el conteo entre no prueba que corra en un teléfono, y que no entre
     /// tampoco prueba que no.
-    const MEADOW_VIEW_TRIANGLES: usize = 210_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 255_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -249,7 +251,7 @@ mod tests {
         let ground = terrain_cost();
         let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            over <= 145_000,
+            over <= 190_000,
             "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
              past the debt this file declares"
         );

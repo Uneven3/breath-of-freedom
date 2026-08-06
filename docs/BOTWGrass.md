@@ -230,9 +230,13 @@ Nada de esta fase cambia la imagen.
   necesitan un shader propio. Bevy lo permite sin abandonar el PBR:
   `ExtendedMaterial<StandardMaterial, GrassExtension>` conserva luz, sombras y
   niebla, y agrega los uniforms propios.
-- **Estado.** `src/visuals/grass_material.rs` y `assets/shaders/grass.wgsl`
-  existen y están **registrados pero sin usar** (`visuals/mod.rs:66`). El shader
-  tiene tres bugs reales:
+- **Estado (2026-08-05): implementado.** El material está enchufado y los tres
+  bugs corregidos. Un cuarto apareció al usarlo, y no estaba en esta lista: con
+  `double_sided`, Bevy **invierte la normal en las caras traseras**
+  (`pbr_functions.wgsl:144`), y como la nuestra apunta a +Y, invertida apunta al
+  suelo — brizna negra. Con yaw al azar, media pradera. El fragment repone las
+  dos normales que el PBR usa (`world_normal` y `N`). *Los tres originales,
+  para el registro:*
   1. `out.position = world_position` — tiene que ser clip space.
   2. El fragment **escribe el color directo y nunca llama al PBR**, así que
      saldría plano, sin luz ni sombras ni niebla: justo lo que
@@ -271,7 +275,16 @@ Nada de esta fase cambia la imagen.
   que era exagerar. Se hace porque es **casi gratis, no cambia un píxel y es
   prerrequisito de toda la Fase 2**, no porque rescate el frame. Lo que rescata
   el frame es el Paso 4.
-- **Estado.** No implementado.
+- **Estado (2026-08-05): implementado, con un límite verificado.** La normal y
+  el color se fueron; la `uv` **no puede irse**: el campo `uv` de `VertexOutput`
+  está gateado por el shader def `VERTEX_UVS_A`, que Bevy define desde el
+  atributo de la malla, así que sin atributo no hay varying donde pasar la
+  altura al fragment. Derivarla de `vertex_index` exigiría un `VertexOutput`
+  propio y con eso se pierde `pbr_input_from_standard_material`. El documento
+  avisaba que había que verificarlo en vez de darlo por hecho: verificado, no se
+  puede. De 48 B se bajó a 20 B, y después subió a **28 B** al agregar el canal
+  de dato por brizna que la Fase 2 necesita (hash con el lado en el signo, y
+  alcance del anillo empaquetado con la altura).
 - **Entregable & validación.** Imagen idéntica; `count_vertices()` igual y buffer
   más chico. Un test que afirme que la malla ya no declara normal ni color — y,
   si la uv también se va, **un test que congele el orden de los 4 vértices por
@@ -382,8 +395,16 @@ el terreno ya se está dibujando de todos modos.
   pintando el terreno del mismo verde que la raíz de la brizna. La transición
   deja de existir porque no hay dos cosas distintas. Requiere que el albedo del
   terreno y `ROOT_COLOR` compartan firma cromática.
-- **Estado.** El terreno ya carga `T_GroundGrass_Albedo.png`; los colores no
-  están calibrados entre sí.
+- **Estado (2026-08-05): implementado como tinte, y falta la mitad.** El shader
+  del terreno mezcla hacia `ROOT_COLOR` allí donde crece pasto, con una regla
+  única (`visuals/grass_cover.rs`) que consumen el estampador y el suelo: a WGSL
+  no cruza la lógica sino sus parámetros —umbrales como cosenos, kinds con pasto
+  como máscara de bits— así que cambiarla mueve las dos mitades juntas. La
+  fuerza bajó de 0,8 a 0,55: a 0,8 el suelo quedaba tan cerca en valor de las
+  briznas que éstas dejaban de leerse como objetos separados.
+  **Lo que falta:** un tinte plano no es una textura de pasto. `T_GroundTallGrass_Albedo.png`
+  ya está en el repo y es lo que permitiría recortar el anillo exterior, que hoy
+  se lleva casi la mitad de las briznas.
 - **Entregable & validación.** Desde 30 m, dónde termina el pasto no se
   distingue. Es el paso más barato del documento y borra el peor artefacto.
 
@@ -411,10 +432,26 @@ funcionan: el primero por la ley 4, y los otros dos porque son la misma pieza.
     factor que va de 1 a 0 en el borde de cada anillo, evaluado **respecto a la
     cámara**, no al jugador: si la cámara se aleja o hace zoom, el LOD responde a
     lo que la pantalla muestra. Sin esto, cada re-horneo es un pop.
-- **Estado.** No implementado. Los chunks ya son la unidad correcta y ya son
-  culleables — con la cámara puesta el frustum descarta 17 de 25 (`meshes=11`).
-  El primer intento hacía el crecimiento en CPU y además pisaba la escala
-  autorada, con lo que todo el pasto tenía la misma altura. Eliminado.
+- **Estado (2026-08-05): implementado.** Tres anillos (0-8 m a 45/m², 8-16 a 16,
+  16-32 a 6), chunks de 5/10/20 m, uno horneado por frame al rodar y todos de
+  una al entrar a la escena. Tres cosas que costaron una iteración cada una:
+  1. **Decidir la pertenencia de un chunk por su centro deja huecos** de tierra
+     pelada a pocos metros del jugador — un chunk grande cuyo centro cae dentro
+     del anillo interior se descarta entero aunque ese anillo nunca llegue a su
+     lado lejano. Ahora entra si *toca* la corona y sale sólo si está *entero*
+     adentro.
+  2. **La banda de crecimiento va en el borde de cada anillo, no del último.**
+     Con una sola banda al final, los anillos internos hacían aparecer chunks de
+     45/m² a ocho metros de la cámara, enteros y de golpe. Cada brizna lleva el
+     alcance de su anillo y se apaga escalonada por su hash — todas juntas leen
+     como una persiana bajando.
+  3. **Los anillos se solapan durante la banda**, o la densidad cae a cero antes
+     de que el siguiente empiece.
+- **Lo que cuesta, y es deuda:** 207.200 triángulos declarados en los 360°, en la
+  **peor alineación** de la cámara contra la grilla (en el origen son 82.000; el
+  presupuesto declaraba el origen y lo llamaba el peor caso — era el mejor).
+  `perf::budget::MEADOW_VIEW_TRIANGLES` lo declara con número y el test falla si
+  crece.
 - **Entregable & validación.** Caminar 200 m en cualquier dirección con pasto
   siempre alrededor, sin ver el anillo donde baja la densidad, sin ver aparecer
   nada, y con el conteo de draws y de triángulos **plano** durante todo el
@@ -444,8 +481,12 @@ shader del Paso 1 — por eso va después.
   frecuencia y escala grande que **modula la amplitud** de las otras dos. Sin
   eso el campo entero ondea parejo, que lee como tela. Con eso hay zonas quietas
   y zonas agitadas y una frontera que se desplaza: eso lee como ráfaga.
-- **Estado.** El primer intento lo hacía en CPU rotando el `Transform` de 2.352
-  entidades. Eliminado; no vuelve.
+- **Estado (2026-08-05): implementado.** Las tres capas, incluida la del ruido
+  que modula la amplitud. El desplazamiento es cuadrático en la altura
+  normalizada, así la brizna se arquea en vez de inclinarse rígida desde la
+  base. Cero estado por brizna: una función de la posición y el tiempo, o sea
+  una escritura de uniform por frame para todo el campo. *El primer intento lo
+  hacía en CPU rotando el `Transform` de 2.352 entidades. Eliminado; no vuelve.*
 - **Entregable & validación.** Ráfagas atravesando la pradera, raíces quietas, y
   el frame sin cambios respecto al Paso 2 — el viento debe ser gratis.
 
@@ -460,7 +501,10 @@ shader del Paso 1 — por eso va después.
     se abre levemente hacia afuera a lo ancho de la brizna. Sombrea como un
     cilindro suave en vez de como una superficie plana. Se reconstruye en el
     shader, que es donde ya vive desde el Paso 2.
-- **Estado.** No implementado.
+- **Estado (2026-08-05): implementado.** El lado del quad viaja en el *signo* del
+  hash, así que abombar no costó un atributo. La apertura es 0,18 y no 0,35: a
+  0,35 un borde entero de la brizna quedaba notablemente más oscuro que el otro
+  y el campo se veía moteado.
 - **Entregable & validación.** Una captura del mismo punto antes y después: el
   campo deja de leerse como una superficie única. Frame sin cambios.
 
@@ -470,8 +514,9 @@ shader del Paso 1 — por eso va después.
   lo que hace que un campo se sienta vivo a la hora dorada, y es lo que ninguna
   cantidad de densidad compra. Un término de wrap lighting barato en el fragment,
   activado por el ángulo entre vista y sol.
-- **Estado.** No implementado, pero **`GrassUniform` ya reserva `sss_amount`** y
-  `sun_direction` (`grass_material.rs:16`). Y la ley 5 de
+- **Estado (2026-08-05): implementado.** `sun_direction` sale del transform de la
+  luz direccional, así que el ciclo día/noche lo maneja gratis. El término va al
+  cuadrado para que sea un halo a contraluz y no un lavado general. Y la ley 5 de
   `GraphicalTechniques.md` ya lo autoriza explícitamente: *"un shader de
   rim/transmisión vegetal sólo entra como experimento opt-in, medido, y bajo el
   documento dueño `BOTWGrass.md`"*. Este es ese documento y esta es esa

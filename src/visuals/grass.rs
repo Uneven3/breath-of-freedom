@@ -120,9 +120,10 @@ struct Ring {
 /// chunks and 419.840, and 5/10/20 m gives **48 chunks and 164.000** — better on
 /// both axes than either extreme.
 ///
-/// **What this costs, stated plainly:** 103.600 blades, 207.200 triangles
+/// **What this costs, stated plainly:** 103.600 blades, 250.800 triangles
 /// declared across the full 360°, 48 chunks, at the worst alignment of the
-/// camera against the grid. (At the friendliest alignment it is 82.000
+/// camera against the grid — 43.600 of those triangles are the notched tips of
+/// the two inner rings. (At the friendliest alignment it is 82.000
 /// triangles; the budget takes the worst, because that is the one the frame has
 /// to survive.) That is over the mobile triangle budget, and `perf::budget`
 /// declares it as debt with a number rather than hiding it. The frustum throws away a large part of it before anything
@@ -151,7 +152,12 @@ const RINGS: [Ring; 3] = [
         chunk_m: 10.0,
         density: 16.0,
         width_scale: 1.0,
-        split_tips: false,
+        // También parte la punta, y no por gusto: como los anillos se solapan
+        // durante la banda de transición, este empieza en 2 m — o sea que sus
+        // briznas se mezclan con las del anillo interior justo delante de la
+        // cámara. Con la punta recta, la mitad de las briznas cercanas se veían
+        // distintas de la otra mitad.
+        split_tips: true,
     },
     Ring {
         reach_m: 32.0,
@@ -286,7 +292,32 @@ pub(super) struct GrassField {
 /// mapa. Ese cambio es el punto entero del Paso 4.
 #[cfg(test)]
 pub(crate) fn meadow_triangles() -> usize {
-    worst_case_blades() * 2
+    // Not `blades * 2`: a notched tip is three triangles, and the two inner
+    // rings have one. A budget that assumed two everywhere would under-declare
+    // the meadow by a third of its near geometry — the kind of quiet error a
+    // budget exists to make loud.
+    let period = RINGS
+        .iter()
+        .map(|ring| ring.chunk_m)
+        .fold(0.0_f32, f32::max);
+    let mut worst = 0;
+    for z in 0..8 {
+        for x in 0..8 {
+            let focus = Vec2::new(x as f32, z as f32) * (period / 8.0);
+            let triangles: usize = RINGS
+                .iter()
+                .enumerate()
+                .map(|(index, ring)| {
+                    let per_blade = if ring.split_tips { 3 } else { 2 };
+                    ring_cells(index, focus).len()
+                        * blades_per_chunk(ring, REFERENCE_DENSITY) as usize
+                        * per_blade
+                })
+                .sum();
+            worst = worst.max(triangles);
+        }
+    }
+    worst
 }
 
 /// The most blades the meadow can ever have standing at once.
@@ -353,17 +384,31 @@ fn blades_per_chunk(ring: &Ring, dial: f32) -> u32 {
 /// which is the exact artefact this system exists to prevent. The overlap this
 /// criterion allows instead is a strip up to half a chunk wide that is a little
 /// denser than derived, and denser is not a defect.
+fn ring_cells(index: usize, focus: Vec2) -> Vec<IVec2> {
+    ring_cells_with_slack(index, focus, 0.0)
+}
+
+/// How far past its reach a chunk is kept before being dropped.
+///
+/// Without it the grid thrashes: a camera sitting on a grid line puts a chunk
+/// just inside the boundary on one frame and just outside on the next, so it is
+/// despawned and re-baked over and over — which on screen is a patch of grass
+/// flickering. Creating uses the exact reach and keeping uses reach + this, so a
+/// chunk has to be clearly outside before it goes.
+const KEEP_SLACK_M: f32 = 3.0;
+
 #[expect(
     clippy::cast_possible_truncation,
     reason = "chunk coordinates are small integers by construction"
 )]
-fn ring_cells(index: usize, focus: Vec2) -> Vec<IVec2> {
+fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32) -> Vec<IVec2> {
     let ring = &RINGS[index];
+    let reach_m = ring.reach_m + slack;
     let inner_reach = index.checked_sub(1).map_or(0.0, |i| RINGS[i].reach_m);
     let half = ring.chunk_m * 0.5;
     // One cell of slack: a chunk can touch the ring while its centre sits
     // outside it.
-    let span = (ring.reach_m / ring.chunk_m).ceil() as i32 + 1;
+    let span = (reach_m / ring.chunk_m).ceil() as i32 + 1;
     let base = (focus / ring.chunk_m).floor().as_ivec2();
 
     let mut cells = Vec::new();
@@ -381,7 +426,7 @@ fn ring_cells(index: usize, focus: Vec2) -> Vec<IVec2> {
             // exterior ya están enteras, así que la densidad cruza de una a otra
             // en vez de caer a cero y saltar.
             let handover = (inner_reach - FADE_BAND_M).max(0.0);
-            if nearest > ring.reach_m || farthest <= handover {
+            if nearest > reach_m || farthest <= handover {
                 continue;
             }
             cells.push(cell);
@@ -486,8 +531,20 @@ pub(super) fn roll_meadow_grid(
         })
         .collect();
 
+    // Kept with slack, created without: a chunk on the boundary stays instead of
+    // being re-baked every other frame, which is what the flicker was.
+    let keep_set: HashSet<ChunkKey> = RINGS
+        .iter()
+        .enumerate()
+        .flat_map(|(ring, _)| {
+            ring_cells_with_slack(ring, focus, KEEP_SLACK_M)
+                .into_iter()
+                .map(move |cell| ChunkKey { ring, cell })
+        })
+        .collect();
+
     field.live.retain(|key, entity| {
-        let keep = wanted.contains(key);
+        let keep = keep_set.contains(key);
         if !keep {
             commands.entity(*entity).despawn();
         }

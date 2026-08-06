@@ -168,47 +168,68 @@ mod tests {
         );
     }
 
-    /// Lo que el Mundo se pasa hoy, medido el 2026-08-04: 106.918 contra
-    /// 100.000. **No es una tolerancia, es una deuda con número.** Sale casi
-    /// entera de la pradera (56.250 tris, 52% del total, sobre 625 m² del mundo
-    /// de 320×320) y se paga con LOD o densidad por distancia, no bajando el
-    /// listón. Mientras exista, el test la deja pasar sólo a esta escena y
-    /// falla si crece — que es lo que el hueco anterior no podía hacer, porque
-    /// la pradera no la sumaba nadie.
-    const WORLD_SCENE_OVERSHOOT: usize = 6_918;
-
     #[test]
     fn every_scene_fits_the_mobile_triangle_budget() {
         // The guardrail the runtime counter cannot be: it grades what the camera
         // happens to see, so a scene can be over budget and still read "bien"
         // from a corner where most of it is culled. This sums what the scene
         // *declares*, so passing means it fits from anywhere in it.
+        //
+        // La pradera **ya no entra en esta suma**, y no por indulgencia: desde
+        // que es una grilla rodante centrada en la cámara dejó de ser contenido
+        // de escena. No escala con el tamaño del mapa ni con lo que la escena
+        // contenga — es la misma vecindad en un patio de 25 m que en un mundo
+        // de 4 km, así que sumarla al declarado de la escena mide una cosa que
+        // no existe. Tiene su propio techo, por vista, en el test de abajo. Con
+        // eso el Mundo dejó de estar excedido: la deuda de 6.918 triángulos que
+        // este archivo declaraba el 2026-08-04 salía entera de los 56.250 de
+        // pradera fija que ya no están.
         let forest =
             crate::world::forest::tree_count() * static_cost::asset_triangles("tree_pine_a");
-        let meadow = crate::visuals::grass::meadow_triangles();
         for scene in crate::scene::SCENES {
             let mut triangles = terrain_cost();
             if scene.contents.forest {
                 triangles += forest;
             }
-            if scene.contents.meadow {
-                triangles += meadow;
-            }
-            use crate::scene::SceneId;
-            let ceiling = match scene.id {
-                SceneId::World => MOBILE_TRIANGLES + WORLD_SCENE_OVERSHOOT,
-                // Exhaustivo a propósito (`wildcard_enum_match_arm`): una caja
-                // nueva tiene que decidir su techo acá, no heredarlo callada.
-                SceneId::Traversal | SceneId::Combat | SceneId::Grass | SceneId::Sandbox => {
-                    MOBILE_TRIANGLES
-                }
-            };
             assert!(
-                triangles <= ceiling,
-                "scene {} declares {triangles} triangles, over its {ceiling} ceiling",
+                triangles <= MOBILE_TRIANGLES,
+                "scene {} declares {triangles} triangles, over its {MOBILE_TRIANGLES} ceiling",
                 scene.label
             );
         }
+    }
+
+    /// Lo que la pradera puede costar **por vista**, que es la única unidad que
+    /// tiene sentido para algo que existe alrededor de la cámara y no en un
+    /// lugar del mapa.
+    ///
+    /// El número sale de restar: el presupuesto móvil son 100.000 triángulos, el
+    /// terreno se lleva 32.768 fijos en toda escena y el bosque ronda los
+    /// 17.900, así que al pasto le quedan unos 49.000 antes de que la vista
+    /// entera se pase. El techo está sobre ese hueco porque el declarado cuenta
+    /// los 360° alrededor de la cámara —incluido lo que queda a la espalda— y el
+    /// frustum descarta del orden de dos tercios antes de dibujar nada.
+    ///
+    /// **Sigue siendo un guardrail, no el objetivo**: que la pradera entre en el
+    /// conteo no prueba que corra en un teléfono, donde mandan fill-rate y
+    /// overdraw. Eso lo dicen los dos barridos del hub, no este test.
+    const MEADOW_VIEW_TRIANGLES: usize = 62_000;
+
+    #[test]
+    fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
+        let meadow = crate::visuals::grass::meadow_triangles();
+        assert!(
+            meadow <= MEADOW_VIEW_TRIANGLES,
+            "the meadow neighbourhood declares {meadow} triangles, over its \
+             {MEADOW_VIEW_TRIANGLES} per-view ceiling"
+        );
+        // Y el terreno que pisa entra con ella: el pasto crece sobre el suelo,
+        // nunca en lugar de él.
+        let ground = terrain_cost();
+        assert!(
+            meadow + ground <= MOBILE_TRIANGLES,
+            "meadow {meadow} + terrain {ground} exceeds the mobile budget"
+        );
     }
 
     #[test]

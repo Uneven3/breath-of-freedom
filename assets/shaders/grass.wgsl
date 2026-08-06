@@ -44,6 +44,9 @@ struct GrassUniform {
     sun_direction: vec3<f32>,
     sss_amount: f32,
     time: f32,
+    focus_xz: vec2<f32>,
+    fade_start: f32,
+    fade_end: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -62,16 +65,35 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
     return clamp(uv.y, 0.0, 1.0);
 }
 
+/// Cuánto de su altura conserva una brizna a esta distancia de la cámara.
+///
+/// Es **crecimiento, no transparencia**: la brizna se encoge hacia su propia
+/// raíz y desaparece siendo geometría, sin blending, sin `discard` y sin orden
+/// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
+/// ventaja principal del chip (ley 3 de `BOTWGrass.md`). El chunk se descarta
+/// recién después, con sus briznas ya en cero, así que nada aparece de golpe al
+/// caminar.
+fn blade_growth(world_xz: vec2<f32>) -> f32 {
+    let distance = length(world_xz - grass_data.focus_xz);
+    return 1.0 - smoothstep(grass_data.fade_start, grass_data.fade_end, distance);
+}
+
 #ifndef PREPASS_PIPELINE
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
 
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
-    let world_position = mesh_functions::mesh_position_local_to_world(
+    var world_position = mesh_functions::mesh_position_local_to_world(
         world_from_local,
         vec4<f32>(vertex.position, 1.0),
     );
+
+    // La brizna se encoge hacia su raíz con la distancia. `uv.x` lleva la altura
+    // del suelo bajo la brizna justamente para esto: sin ella el shader no sabe
+    // dónde está la base y no puede colapsar hacia ella.
+    let ground_y = vertex.uv.x;
+    world_position.y = mix(ground_y, world_position.y, blade_growth(world_position.xz));
 
     out.world_position = world_position;
     // Clip space, no world space: la posición que sale del vertex shader es la

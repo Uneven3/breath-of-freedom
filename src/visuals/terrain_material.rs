@@ -134,6 +134,23 @@ pub struct TerrainExtension {
     /// layout portable without target-specific padding.
     #[uniform(102)]
     debug: Vec4,
+    /// The colour a blade has at its root, `.a` being how far the ground is
+    /// allowed to travel toward it.
+    ///
+    /// This is the whole of "the terrain is the furthest LOD": where grass
+    /// grows, the ground underneath already wears its colour, so the field
+    /// stops having an edge and the last blades fade into a floor that already
+    /// matches. It is the cheapest step in `BOTWGrass.md` and it removes its
+    /// worst artefact.
+    #[uniform(103)]
+    grass_tint: Vec4,
+    /// The cover rule's parameters, as the shader needs them:
+    /// `.x` cosine of the maximum slope, `.y` cosine of the steep slope,
+    /// `.z` the grass-bearing texture layers as a bitmask, `.w` unused.
+    ///
+    /// Parameters rather than a copy of the rule — see `grass_cover`.
+    #[uniform(104)]
+    grass_rules: Vec4,
 }
 
 impl TerrainExtension {
@@ -200,6 +217,8 @@ fn setup_terrain_material(
         extension: TerrainExtension {
             textures: array.clone(),
             debug: Vec4::ZERO,
+            grass_tint: grass_tint(),
+            grass_rules: grass_rules(),
         },
     });
     let sources = TERRAIN_TEXTURES
@@ -212,6 +231,29 @@ fn setup_terrain_material(
         sources,
         dirty: false,
     });
+}
+
+/// How far the ground travels toward the blade's root colour where grass grows.
+///
+/// Not all the way: the tint has to make the field edgeless without erasing the
+/// texture underneath, which is what still gives the ground its grain up close.
+/// Judged by eye, and the one number here that is a look decision.
+const GRASS_TINT_STRENGTH: f32 = 0.8;
+
+fn grass_tint() -> Vec4 {
+    let root = super::grass::ROOT_COLOR;
+    Vec4::new(root.red, root.green, root.blue, GRASS_TINT_STRENGTH)
+}
+
+fn grass_rules() -> Vec4 {
+    Vec4::new(
+        super::grass_cover::MAX_SLOPE_DEG.to_radians().cos(),
+        super::grass_cover::STEEP_SLOPE_DEG.to_radians().cos(),
+        // A bitmask of four layers survives an f32 exactly; the shader rounds
+        // it back to an integer.
+        super::grass_cover::grass_layer_mask() as f32,
+        0.0,
+    )
 }
 
 fn fallback_array() -> Image {

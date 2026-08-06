@@ -15,6 +15,13 @@ pub struct GrassUniform {
     pub sun_direction: Vec3,
     pub sss_amount: f32,
     pub time: f32,
+    /// Where the camera stands, in world XZ. The outermost blades shrink with
+    /// their distance to this point, so a chunk is always culled *after* its
+    /// blades have already gone to nothing.
+    pub focus_xz: Vec2,
+    /// Distance at which blades start shrinking, and where they reach zero.
+    pub fade_start: f32,
+    pub fade_end: f32,
 }
 
 impl Default for GrassUniform {
@@ -27,6 +34,11 @@ impl Default for GrassUniform {
             sun_direction: Vec3::new(0.3, 0.8, 0.5).normalize(),
             sss_amount: 0.4,
             time: 0.0,
+            focus_xz: Vec2::ZERO,
+            // Defaults that fade nothing: the meadow overwrites them every
+            // frame, and a material used without one should not shrink.
+            fade_start: f32::MAX,
+            fade_end: f32::MAX,
         }
     }
 }

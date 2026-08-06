@@ -21,6 +21,7 @@ pub mod enemy;
 pub mod foliage;
 pub mod forest;
 pub(crate) mod grass;
+mod grass_cover;
 pub mod grass_material;
 pub mod horse;
 pub mod player;
@@ -66,12 +67,16 @@ impl Plugin for VisualsPlugin {
         app.add_plugins(terrain_material::TerrainMaterialPlugin);
         app.add_systems(
             Startup,
-            (forest::build_tree_proxy_assets, arrows::init_assets),
+            (
+                forest::build_tree_proxy_assets,
+                arrows::init_assets,
+                grass::init_meadow_material,
+            ),
         );
         for id in crate::scene::SceneId::ALL {
             app.add_systems(
                 OnEnter(crate::scene::AppState::Scene(id)),
-                grass::spawn_meadow.run_if(crate::scene::scene_has(|c| c.meadow)),
+                grass::reset_meadow.run_if(crate::scene::scene_has(|c| c.meadow)),
             );
         }
         app.add_systems(
@@ -103,9 +108,12 @@ impl Plugin for VisualsPlugin {
                     foliage::apply_foliage_lod,
                     foliage::apply_shadow_caster_budget,
                 ),
-                // One system, and only when the density dial moves: the field is
-                // baked meshes, so nothing walks the blades per frame.
-                grass::rebuild_meadow_on_density_change,
+                // The meadow's only per-frame work: roll the grid with the
+                // camera, and tell the shader where that camera is. Nothing
+                // walks a blade — the chunks are baked meshes.
+                (grass::roll_meadow_grid, grass::track_meadow_focus)
+                    .chain()
+                    .run_if(crate::scene::scene_has(|c| c.meadow)),
                 terrain::sync_terrain_visual,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),

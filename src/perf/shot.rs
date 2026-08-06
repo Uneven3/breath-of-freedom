@@ -37,6 +37,30 @@ use crate::scene::AppState;
 
 const SHOT_ENV: &str = "BOF_SHOT";
 const OUT_ENV: &str = "BOF_SHOT_OUT";
+const POSE_ENV: &str = "BOF_SHOT_POSE";
+
+/// Un mirador escrito a mano, `x,y,z:dx,dy,dz`.
+///
+/// Rompe a propósito la regla de que la foto mira desde donde mide: es para
+/// **reproducir una queja**. Cuando el usuario dice "desde arriba se ve ralo", el
+/// mirador canónico no sirve para verificarlo, y verificar antes de opinar es
+/// justo lo que esta herramienta existe para permitir.
+fn configured_pose() -> Option<(Vec3, Vec3)> {
+    let raw = std::env::var(POSE_ENV).ok()?;
+    let (from, towards) = raw.split_once(':')?;
+    let triple = |text: &str| -> Option<Vec3> {
+        let mut parts = text.split(',').map(|n| n.trim().parse::<f32>());
+        Some(Vec3::new(
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+        ))
+    };
+    let facing = triple(towards)?.normalize_or_zero();
+    // Una dirección nula dejaría a `look_to` sin base y la cámara en cualquier
+    // parte; mejor ignorar la variable que fotografiar un lugar al azar.
+    (facing != Vec3::ZERO).then(|| Some((triple(from)?, facing)))?
+}
 
 /// Dónde caen las fotos si nadie dice otra cosa.
 ///
@@ -78,6 +102,11 @@ pub struct AutoShot {
 }
 
 impl AutoShot {
+    /// El mirador escrito a mano si lo hay, y si no el de la suite.
+    fn pose(&self) -> (Vec3, Vec3) {
+        configured_pose().unwrap_or_else(|| self.suite.vantage())
+    }
+
     fn path(&self) -> PathBuf {
         self.out.join(format!("{}.png", self.suite.label()))
     }
@@ -121,7 +150,7 @@ pub fn configured_auto_shot() -> Option<AutoShot> {
 pub fn shot_pose(shot: &AutoShot) -> Option<(Vec3, Vec3)> {
     // Antes de entrar a la escena no hay nada que encuadrar, y parquear la
     // cámara mientras la escena anterior sigue viva la saca de su lugar.
-    (shot.stage != Stage::EnteringScene).then(|| shot.suite.vantage())
+    (shot.stage != Stage::EnteringScene).then(|| shot.pose())
 }
 
 /// Lleva la foto de punta a punta, con la misma máquina de estados que la
@@ -157,7 +186,7 @@ pub fn drive_auto_shot(
                 exit.write(AppExit::error());
                 return;
             }
-            let (position, facing) = shot.suite.vantage();
+            let (position, facing) = shot.pose();
             info!(
                 "[shot] {} — escena {:?}, mirador pos=({:.1},{:.1},{:.1}) facing=({:.2},{:.2},{:.2}) → {}",
                 shot.suite.label(),

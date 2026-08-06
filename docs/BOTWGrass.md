@@ -625,6 +625,57 @@ dejan de ser responsables de tapar el suelo y pasan a ser responsables de darle
 textura y movimiento. Por eso el Paso 3 va **antes** del Paso 4: no es un arreglo
 cosmético del borde, es lo que hace pagables las densidades de los anillos.
 
+### El crecimiento: por qué se veía, medido y arreglado (2026-08-06)
+
+Cuatro intentos fallaron porque nadie había mirado la forma de la transición.
+Medida por primera vez desde una vista cenital a 40 m, en anillos de 2 m:
+
+| distancia | densidad aparente |
+|---|---|
+| 0–10 m | plana en ~26 |
+| **10–16 m** | **25,7 → 19,6 (−28%)** |
+| 16–22 m | plana en ~18-19 |
+| 22–32 m | 12 → 9 |
+
+**El 28% está concentrado en 6 metros**, y esa banda viaja con la cámara: el
+suelo que estaba ralo a 16 m se ve engordar al llegar a 10. Con la cámara 4 m
+detrás del player, son 5-6 m delante suyo — "muy cerca", como se reportó.
+
+Y explica los cuatro fracasos: los dos parámetros que se tocaban —alcance y
+dispersión— **mueven la banda pero no la borran**. Alargar el alcance la empuja
+(+73% de triángulos, y siguió ahí); acortar la dispersión la concentra.
+
+**La salida estaba escrita en este documento desde el principio y nunca se
+aplicó:** la densidad necesaria cae como `1/d`. Se plantaba plano y se recortaba
+al borde — una escalera donde correspondía una rampa. Con los umbrales repartidos
+como `start / (1 - hash)`, la fracción viva a distancia `d` es `start / d`.
+
+Dos correcciones que hicieron falta y valen por sí solas:
+
+1. **La ley sola mueve el escalón al borde del anillo.** Deja ~25% vivo al llegar
+   al alcance y ahí se corta de golpe: medido, −26% en el traspaso de los 16 m.
+   Se compone con la banda de borde que ya existía, que ahora sólo tiene que
+   apagar ese cuarto.
+2. **Los dos umbrales necesitan hashes distintos.** Con el mismo, las briznas que
+   la ley perdona son exactamente las que el borde mata primero, y el reparto se
+   vuelve un escalón otra vez.
+
+Barrido del punto donde empieza a ralear, midiendo la **desviación de la
+pendiente** entre anillos contiguos — menos es más rampa y menos escalera:
+
+| | pendiente media | desviación |
+|---|---:|---:|
+| escalera (antes) | −7,2%/2m | 7,9 |
+| 4 m | −10,0% | **5,1** |
+| **8 m** (elegido) | −9,3% | **6,9** |
+| 12 m | −8,7% | 8,2 |
+
+Cuatro da la rampa más pareja y deja el campo en 16,5 contra 27 a los 8-10 m, que
+es el look registrado como jugado y rechazado. Doce es *peor* que no hacer nada.
+
+**No ahorra un triángulo.** La geometría sigue horneada; esto sólo la encoge en
+el vertex shader. Arregla la imagen, no el costo.
+
 ### Los anillos
 
 **La tabla derivada**, con un factor de seguridad ×2,5 sobre el mínimo:

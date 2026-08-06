@@ -5,11 +5,9 @@
 //!
 //! Two decisions carry the module, both argued in `docs/BOTWGrass.md`: a chunk
 //! bakes its blades into **one mesh** (a blade is not an entity), and the field
-//! is a **neighbourhood, not a place** — rings around wherever the camera is,
-//! rebaked as it moves, so the budget is *per view*.
-//!
-//! The unit is the two-triangle blade ([`BladeShape`]) and density falls as
-//! `1/d`. That derivation is a floor, not a recipe.
+//! is a **neighbourhood, not a place** — rings around wherever the camera is, so
+//! the budget is *per view*. The unit is the two-triangle blade
+//! ([`BladeShape`]) and density falls as `1/d`, a floor rather than a recipe.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -34,9 +32,8 @@ struct Ring {
     density: f32,
     /// How much wider than [`BLADE_WIDTH`] this ring's blades are.
     ///
-    /// **1.0 everywhere, and that is a finding.** ×2/×4 was tried on 2026-08-05
-    /// and rejected on sight as a bed of fat spikes: widening only buys anything
-    /// once a blade is sub-pixel, well past this reach.
+    /// **1.0 everywhere, and that is a finding.** ×2/×4 was rejected on sight as
+    /// a bed of fat spikes: widening only pays once a blade is sub-pixel.
     width_scale: f32,
     /// How many triangles this ring's blades are worth spending.
     shape: BladeShape,
@@ -50,24 +47,20 @@ struct Ring {
 /// blade is now a statement about the *near* ring; past it a blade may be less.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BladeShape {
-    /// Five vertices, three triangles: the top edge dips in the middle, so the
-    /// blade ends in two points. Up close a straight-topped quad reads as a
-    /// strip of paper — the one shape cue that says "leaf" at arm's length.
+    /// Five vertices, three triangles: the top edge dips, so the blade ends in
+    /// two points. The one shape cue that says "leaf" at arm's length.
     Notched,
     /// Four vertices, two triangles: the plain tapered quad.
     Quad,
     /// Three vertices, one triangle: two base corners and a single tip. The
-    /// floor. The taper already converges to a point, so the fourth vertex is a
-    /// corner nobody can resolve out here rather than a feature.
+    /// floor — the taper already converges, so the fourth vertex is a corner
+    /// nobody resolves out here.
     Spike,
 }
 
 impl BladeShape {
-    /// How many vertices and triangles one blade of this shape costs.
-    ///
-    /// One place, because three separate places is how the budget quietly stops
-    /// matching the mesh — `perf::budget` counts with these and the baker builds
-    /// with these.
+    /// Vertices and triangles per blade. One place, because several is how the
+    /// budget quietly stops matching the mesh.
     const fn vertices(self) -> usize {
         match self {
             Self::Notched => 5,
@@ -86,12 +79,11 @@ impl BladeShape {
 }
 
 /// The three rings, from the camera outward. Each row is **floored** by
-/// [`minimum_density`] — a test enforces that — and chosen above it by eye,
-/// because covering the ground and looking like a meadow are different bars.
+/// [`minimum_density`] — a test enforces it — and chosen above it by eye, because
+/// covering the ground and looking like a meadow are different bars.
 ///
-/// Derivation, cost and the `BOF_BENCH=grass` numbers are in
-/// `docs/BOTWGrass.md`; the one that governs decisions here is that the meadow
-/// is **fill-bound**, so the triangle count is a guardrail and not the target.
+/// Derivation and cost in `docs/BOTWGrass.md`. The fact that governs decisions
+/// here: the meadow is **fill-bound**, so the triangle count is a guardrail.
 const RINGS: [Ring; 3] = [
     Ring {
         // 8 → 10 → **16**, las tres por el mismo reporte jugando: se nota
@@ -186,13 +178,28 @@ const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 /// Short — see [`GROWTH_SPREAD_M`] for why the two are different knobs.
 const GROWTH_RAMP_M: f32 = 1.0;
 
-/// Over how many metres, inward from a ring's edge, the blades' individual
-/// thresholds are spread by their hash.
+/// Over how many metres, inward from a ring's edge, the thresholds are spread.
 ///
-/// Long, and separate from the ramp on purpose: **one blade growing is
-/// invisible, a whole band growing at once is not**. Shortening both together
-/// was the fix that made it worse.
+/// Separate from the ramp on purpose: **one blade growing is invisible, a whole
+/// band growing at once is not.** Shortening both together made it worse.
 const GROWTH_SPREAD_M: f32 = 6.0;
+
+/// A partir de qué distancia la pradera empieza a ralear, en metros.
+///
+/// Los umbrales se reparten como `start / (1 - hash)`, así que la fracción viva a
+/// distancia `d` es `start / d`: **la ley 1/d que `BOTWGrass.md` deriva y que
+/// hasta el 2026-08-06 no se aplicaba**. Se plantaba plano y se recortaba en una
+/// banda al borde del anillo — una escalera donde correspondía una rampa, y esa
+/// escalera viajando con la cámara *es* el artefacto de "veo crecer el pasto".
+///
+/// Ocho metros salieron de un barrido cenital midiendo qué tan pareja queda la
+/// pendiente; cuatro da la rampa más lisa pero deja el campo en el look que este
+/// proyecto ya jugó y rechazó, y doce es peor que no hacer nada. La tabla está en
+/// `BOTWGrass.md`.
+///
+/// **No ahorra un triángulo:** la geometría sigue horneada y esto sólo la encoge
+/// en el vertex shader. Arregla la imagen, no el costo.
+const GROWTH_START_M: f32 = 8.0;
 
 /// How far **below** the ground a blade collapses to, in metres.
 ///
@@ -226,8 +233,7 @@ const BLADE_TIP_TAPER: f32 = 0.18;
 /// How far down from the tip the notch sits, as a fraction of the height. Deep
 /// enough to read as two points, shallow enough not to be a fork.
 const TIP_NOTCH_DEPTH: f32 = 0.72;
-/// Blade height range in metres, picked per blade. Knee to hip on a 1,8 m
-/// capsule; half a metre read as a mown lawn.
+/// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
 /// **The ceiling is one metre and it is hard**: the height travels in the
 /// fraction of `uv1.y` with the ring's reach in the whole part. A test pins it.
@@ -244,11 +250,9 @@ const BLADE_LEAN: f32 = 0.27;
 /// Root and tip colours, as uniforms because the gradient is a pure function of
 /// the vertex's height.
 ///
-/// **The criterion is the soil the blades stand in** (`T_GroundSoil_Albedo.png`,
-/// hue 84°, sat 37%), not taste: where the field thins, blade and ground are
-/// seen together, and a blade that disagrees with its own soil reads as two
-/// materials. The root was 16° off that hue and half its saturation — see
-/// `docs/BOTWGrass.md`.
+/// **The criterion is the soil the blades stand in** (hue 84°, sat 37%), not
+/// taste: where the field thins, blade and ground are seen together. The root was
+/// 16° off that hue and half its saturation — see `docs/BOTWGrass.md`.
 pub(super) const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.093, 0.147, 0.031);
 const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.340, 0.622, 0.089);
 
@@ -369,9 +373,8 @@ fn ring_reach(index: usize, reach_scale: f32) -> f32 {
     (RINGS[index].reach_m * reach_scale).round().max(1.0)
 }
 
-/// How far past its reach a chunk is kept before being dropped. Without it a
-/// camera on a grid line despawns and rebakes the same chunk every frame, which
-/// on screen is a patch of grass flickering.
+/// How far past its reach a chunk is kept. Without it a camera on a grid line
+/// rebakes the same chunk every frame, which on screen is a patch flickering.
 const KEEP_SLACK_M: f32 = 3.0;
 
 #[expect(
@@ -625,6 +628,7 @@ pub(super) fn track_meadow_focus(
     data.focus_xz = camera.translation().xz();
     data.growth_ramp = GROWTH_RAMP_M;
     data.growth_spread = GROWTH_SPREAD_M;
+    data.growth_start = GROWTH_START_M;
     data.growth_sink = GROWTH_SINK_M;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs

@@ -57,6 +57,7 @@ struct GrassUniform {
     wind_speed: f32,
     tint_variation: f32,
     gradient_bias: f32,
+    growth_start: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -105,10 +106,23 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// artefacto reportado jugando.
 fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
-    // El umbral propio de esta brizna, en algún punto de la dispersión. Ninguna
-    // sobrevive más allá del alcance de su anillo: con hash 0 el umbral es el
-    // borde exacto.
-    let ends = ring_reach - grass_data.growth_spread * blade_hash;
+    // Dos umbrales, y la brizna muere en el primero que llegue.
+    //
+    // El de la **ley**: `start / (1 - hash)` reparte los umbrales de modo que la
+    // fracción sobreviviente a distancia `d` sea exactamente `start / d` — la ley
+    // 1/d que deriva `BOTWGrass.md`, continua en vez de concentrada al borde.
+    //
+    // El del **borde**: la ley sola deja ~25% de las briznas vivas al llegar al
+    // alcance del anillo, y ahí se cortan de golpe. Medido: la escalera se movía
+    // de los 10-16 m al borde exacto. Esta banda las apaga antes de llegar.
+    //
+    // Hashes distintos a propósito: con el mismo, las que la ley perdona son
+    // justo las que el borde mata primero, y el reparto se vuelve un escalón
+    // otra vez.
+    let edge_hash = fract(blade_hash * 7.1234 + 0.371);
+    let by_law = grass_data.growth_start / max(1.0 - blade_hash, 1e-4);
+    let by_edge = ring_reach - grass_data.growth_spread * edge_hash;
+    let ends = min(by_law, by_edge);
     let starts = ends - grass_data.growth_ramp;
     return 1.0 - smoothstep(starts, ends, distance);
 }

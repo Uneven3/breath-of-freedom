@@ -46,6 +46,8 @@ pub struct GrassUniform {
     /// and not `pow`, whose variable exponent is two transcendentals per
     /// fragment in a fill-bound frame — the saving is **unmeasured**.
     pub gradient_bias: f32,
+    /// Desde qué distancia ralea la pradera. Ver `GROWTH_START_M`.
+    pub growth_start: f32,
 }
 
 impl Default for GrassUniform {
@@ -68,6 +70,7 @@ impl Default for GrassUniform {
             wind_speed: 1.7,
             tint_variation: 0.16,
             gradient_bias: 1.0,
+            growth_start: 1.0e9,
         }
     }
 }

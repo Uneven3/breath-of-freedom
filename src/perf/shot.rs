@@ -153,6 +153,60 @@ pub fn shot_pose(shot: &AutoShot) -> Option<(Vec3, Vec3)> {
     (shot.stage != Stage::EnteringScene).then(|| shot.pose())
 }
 
+/// F7 durante el juego: una captura de lo que el usuario está viendo.
+///
+/// Numeradas y no pisadas, al revés que las de `BOF_SHOT`: una corrida de
+/// captura reemplaza su archivo porque compara dos versiones del mismo
+/// encuadre, y esto documenta una sesión donde cada disparo es un momento
+/// distinto.
+pub fn capture_on_request(
+    mut commands: Commands,
+    mut requests: MessageReader<crate::input::ScreenshotRequest>,
+    inventory: Res<super::budget::SceneInventory>,
+    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    mut taken: Local<u32>,
+) {
+    if requests.read().count() == 0 {
+        return;
+    }
+    let out = std::env::var(OUT_ENV).map_or_else(|_| PathBuf::from(DEFAULT_OUT), PathBuf::from);
+    if let Err(error) = std::fs::create_dir_all(&out) {
+        error!("[shot] no se pudo crear {}: {error}", out.display());
+        return;
+    }
+    *taken += 1;
+    let path = out.join(format!("captura_{:03}.png", *taken));
+    // El mirador va al log porque una queja sobre la cámara sin la pose de la
+    // cámara no se puede reproducir — que es exactamente el caso que esta tecla
+    // existe para cubrir.
+    if let Some(camera) = camera {
+        let (p, f) = (camera.translation(), camera.forward().as_vec3());
+        info!(
+            "[shot] F7 → {} — pos=({:.1},{:.1},{:.1}) facing=({:.2},{:.2},{:.2}) · BOF_SHOT_POSE=\"{:.1},{:.1},{:.1}:{:.2},{:.2},{:.2}\"",
+            path.display(),
+            p.x,
+            p.y,
+            p.z,
+            f.x,
+            f.y,
+            f.z,
+            p.x,
+            p.y,
+            p.z,
+            f.x,
+            f.y,
+            f.z,
+        );
+    }
+    info!(
+        "[shot] escena: {} mallas visibles, {} triángulos, {} draws",
+        inventory.visible_meshes, inventory.triangles, inventory.draws,
+    );
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path));
+}
+
 /// Lleva la foto de punta a punta, con la misma máquina de estados que la
 /// medición y por la misma razón: el orden de las etapas *es* la lógica.
 pub fn drive_auto_shot(
@@ -162,6 +216,7 @@ pub fn drive_auto_shot(
     scene: Res<State<AppState>>,
     mut exit: MessageWriter<AppExit>,
     time: Res<Time<Real>>,
+    inventory: Res<super::budget::SceneInventory>,
 ) {
     match shot.stage {
         Stage::EnteringScene => {
@@ -198,6 +253,12 @@ pub fn drive_auto_shot(
                 facing.y,
                 facing.z,
                 path.display(),
+            );
+            // Lo que la foto no puede mostrar: si dos encuadres discrepan, hace
+            // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
+            info!(
+                "[shot] escena: {} mallas visibles, {} triángulos, {} draws",
+                inventory.visible_meshes, inventory.triangles, inventory.draws,
             );
             commands
                 .spawn(Screenshot::primary_window())

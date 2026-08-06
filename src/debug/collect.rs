@@ -17,6 +17,7 @@ use crate::inventory::{Inventory, ItemKind, WeaponDurability};
 use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
 use crate::visuals::DiagnosticViewState;
+use crate::visuals::grass_material::GrassMaterial;
 use crate::visuals::terrain_material::TerrainMaterial;
 use crate::world::day_night::TimeOfDay;
 use bof_domain::combat::state::CombatState;
@@ -236,6 +237,17 @@ type TerrainSceneMesh<'a> = (
     &'a MeshMaterial3d<TerrainMaterial>,
 );
 
+/// La pradera, que hasta el 2026-08-06 este inventario no veía.
+///
+/// `GrassMaterial` es un tercer tipo de material, así que no lo alcanzaba ni la
+/// consulta de `StandardMaterial` ni la del terreno: el grader de presupuesto
+/// calificaba la escena sin la cosa más cara que hay en ella.
+type MeadowSceneMesh<'a> = (
+    &'a ViewVisibility,
+    &'a Mesh3d,
+    &'a MeshMaterial3d<GrassMaterial>,
+);
+
 /// Static scene inventory — the numbers a mobile budget is actually spent on,
 /// distinct from the frame cost in `perf`. `draws` counts distinct
 /// `(mesh, material)` pairs among visible entities: Bevy batches by exactly
@@ -248,6 +260,7 @@ type TerrainSceneMesh<'a> = (
 pub(super) fn collect_scene(
     meshes: Query<SceneMesh>,
     terrain_meshes: Query<TerrainSceneMesh>,
+    meadow_meshes: Query<MeadowSceneMesh>,
     ranged: Query<&ViewVisibility, With<VisibilityRange>>,
     mesh_assets: Res<Assets<Mesh>>,
     perf: Res<PerfToggles>,
@@ -267,6 +280,8 @@ pub(super) fn collect_scene(
     let mut terrain_batches: HashSet<(AssetId<Mesh>, AssetId<TerrainMaterial>)> =
         HashSet::default();
     let mut terrain_materials: HashSet<AssetId<TerrainMaterial>> = HashSet::default();
+    let mut meadow_batches: HashSet<(AssetId<Mesh>, AssetId<GrassMaterial>)> = HashSet::default();
+    let mut meadow_materials: HashSet<AssetId<GrassMaterial>> = HashSet::default();
 
     for (visibility, mesh3d, material) in &meshes {
         if !visibility.get() {
@@ -298,6 +313,21 @@ pub(super) fn collect_scene(
         }
     }
 
+    for (visibility, mesh3d, material) in &meadow_meshes {
+        if !visibility.get() {
+            continue;
+        }
+        visible_meshes += 1;
+        meadow_batches.insert((mesh3d.0.id(), material.0.id()));
+        meadow_materials.insert(material.0.id());
+        if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
+            triangles += match mesh.indices() {
+                Some(indices) => indices.len() / 3,
+                None => mesh.count_vertices() / 3,
+            };
+        }
+    }
+
     // The distance-LOD ledger: how many range-gated meshes the camera dropped
     // this frame, so the cull can be trusted to be working rather than assumed.
     let mut ranged_total = 0u32;
@@ -312,8 +342,8 @@ pub(super) fn collect_scene(
     let scene = SceneInventory {
         visible_meshes,
         triangles,
-        draws: batches.len() + terrain_batches.len(),
-        materials: materials.len() + terrain_materials.len(),
+        draws: batches.len() + terrain_batches.len() + meadow_batches.len(),
+        materials: materials.len() + terrain_materials.len() + meadow_materials.len(),
         ranged_culled,
         ranged_total,
     };

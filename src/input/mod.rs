@@ -105,6 +105,14 @@ impl ModalInputFocus {
     }
 }
 
+/// F7: sacar una captura de lo que hay en pantalla ahora mismo.
+///
+/// El agente no puede jugar, así que hay reportes que sólo el usuario puede
+/// producir — "desde arriba se ve ralo" no se reproduce desde un mirador fijo.
+/// Con esto la evidencia la saca quien ve el problema.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct ScreenshotRequest;
+
 /// Input owns modal focus and validates releases, so presentation layers do
 /// not mutate cursor or gameplay input resources directly.
 #[derive(Message, Debug, Clone, Copy)]
@@ -133,6 +141,7 @@ impl Plugin for InputPlugin {
         app.init_resource::<ModalInputFocus>();
         app.add_message::<ModalInputFocusRequest>();
         app.add_message::<SetCursorGrab>();
+        app.add_message::<ScreenshotRequest>();
         app.add_systems(Startup, grab_cursor);
         // Everything the fixed-step simulation reads (actions AND orientation)
         // must resolve in PreUpdate: Bevy runs FixedUpdate *before* Update in
@@ -143,6 +152,7 @@ impl Plugin for InputPlugin {
             (
                 apply_modal_focus_requests,
                 resolve_local_actions,
+                request_screenshot,
                 cursor_control,
                 update_local_orientation,
                 // Last, so an explicit presentation grab request (freecam
@@ -156,6 +166,17 @@ impl Plugin for InputPlugin {
                 // hardware state nondeterministically.
                 .after(bevy::input::InputSystems),
         );
+    }
+}
+
+/// La única tecla que sigue viva con el foco en un panel: si hay que capturar
+/// una pantalla, capturarla incluye lo que el panel esté tapando.
+fn request_screenshot(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut requests: MessageWriter<ScreenshotRequest>,
+) {
+    if keys.just_pressed(KeyCode::F7) {
+        requests.write(ScreenshotRequest);
     }
 }
 

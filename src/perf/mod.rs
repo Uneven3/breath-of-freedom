@@ -68,6 +68,7 @@ impl Plugin for PerfPlugin {
                 budget::warn_scene_budget,
                 auto::drive_auto_bench.run_if(resource_exists::<auto::AutoBench>),
                 shot::drive_auto_shot.run_if(resource_exists::<shot::AutoShot>),
+                shot::capture_on_request,
             )
                 .chain(),
         );

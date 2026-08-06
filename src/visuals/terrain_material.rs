@@ -328,9 +328,47 @@ fn mark_changed_source_textures(
     }
 }
 
+/// Arma el array desde los PNG y **vuelve a tocar el material**, que es la parte
+/// que faltaba.
+///
+/// Reemplazar el contenido de la `Image` no alcanza. El array nace como un
+/// fallback de 1×1 por capa, así que cuando los PNG llegan la imagen cambia de
+/// tamaño; wgpu no puede redimensionar una textura, se crea una nueva, y el
+/// bind group que el material armó apunta a la vieja. El material sigue
+/// muestreando 1×1 para siempre — o sea los colores planos del fallback.
+///
+/// **Estuvo así desde que existe el sistema y nadie lo vio, por una coincidencia
+/// que vale registrar:** los cuatro PNG canónicos se generaron a partir de los
+/// mismos `placeholder_rgb` del fallback, así que su color medio coincide con él
+/// exactamente (`#7D828C` la roca, `#D8C274` la arena, los cuatro). El fallback
+/// y el arte real eran indistinguibles, el log decía "packed" y todo parecía
+/// funcionar. Se destapó el 2026-08-06, al poner la primera textura que de
+/// verdad no se parece a su placeholder: el suelo siguió café.
+///
+/// El array **entra como un asset nuevo**, no reescribiendo el que ya estaba, y
+/// el material pasa a apuntar a ese handle.
+///
+/// Sobrescribir el contenido de la imagen anterior es lo que hacía antes, y no
+/// funciona: el array nace como un fallback de 1×1 por capa, así que cuando los
+/// PNG llegan la imagen cambia de tamaño. wgpu no redimensiona texturas —crea
+/// una nueva— y el bind group que el material ya armó sigue apuntando a la
+/// vieja. Tocar el material tampoco alcanza, porque el rearmado puede caer en un
+/// frame en el que la textura nueva todavía no subió a la GPU. Con un handle
+/// distinto no hay carrera posible: Bevy arma el bind group cuando esa
+/// `GpuImage` existe, y hasta entonces el material sigue mostrando el fallback,
+/// que es exactamente el comportamiento que se quiere.
+///
+/// **Estuvo roto desde que existe el sistema y nadie lo vio, por una
+/// coincidencia que vale registrar:** los cuatro PNG canónicos se generaron a
+/// partir de los mismos `placeholder_rgb` del fallback, así que su color medio
+/// coincide con él exactamente (`#7D828C` la roca, `#D8C274` la arena, los
+/// cuatro). El fallback y el arte real eran indistinguibles, el log decía
+/// "packed" y todo parecía andar. Se destapó el 2026-08-06, con la primera
+/// textura que de verdad no se parece a su placeholder: el suelo siguió café.
 fn rebuild_texture_array(
     mut terrain: Option<ResMut<TerrainMaterialAssets>>,
     mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     let Some(terrain) = terrain.as_mut() else {
         return;
@@ -345,15 +383,56 @@ fn rebuild_texture_array(
     let Some(array) = collect_source_layers(&terrain.sources, &images) else {
         return;
     };
-    let Some(mut target) = images.get_mut(&terrain.array) else {
-        warn!("[terrain] texture array asset disappeared; keeping current material");
+    let edge = array.width();
+    let layer_colours = describe_layers(&array);
+    let handle = images.add(array);
+    let Some(mut material) = materials.get_mut(&terrain.material) else {
+        warn!("[terrain] texture array rebuilt but the material is gone; keeping the fallback");
         return;
     };
-    *target = array;
+    material.extension.textures = handle.clone();
+    terrain.array = handle;
     info!(
-        "[terrain] packed {} canonical PNGs into one texture array",
-        TERRAIN_TEXTURES.len()
+        "[terrain] packed {} canonical PNGs into one {edge}px texture array — {}",
+        TERRAIN_TEXTURES.len(),
+        layer_colours
     );
+}
+
+/// El color medio de cada capa, para el log.
+///
+/// Existe porque "packed 4 canonical PNGs" fue **verdadero y useless** durante
+/// meses: se imprimía igual con el arte cargado que con el fallback, así que un
+/// array que nunca llegaba al material se veía exactamente como uno que sí. Un
+/// mensaje de éxito que no se puede distinguir de un fracaso no es un mensaje de
+/// éxito. Con el color al lado, el log dice cuál de las dos cosas pasó.
+fn describe_layers(array: &Image) -> String {
+    let texels = (TERRAIN_TEXTURE_EDGE * TERRAIN_TEXTURE_EDGE) as usize;
+    array
+        .data
+        .as_ref()
+        .map(|data| {
+            TERRAIN_TEXTURES
+                .iter()
+                .enumerate()
+                .map(|(layer, spec)| {
+                    let start = layer * texels * 4;
+                    let Some(bytes) = data.get(start..start + texels * 4) else {
+                        return format!("{}=?", spec.path);
+                    };
+                    let mut sums = [0u64; 3];
+                    for texel in bytes.chunks_exact(4) {
+                        for (sum, channel) in sums.iter_mut().zip(texel) {
+                            *sum += u64::from(*channel);
+                        }
+                    }
+                    let avg = sums.map(|sum| u8::try_from(sum / texels as u64).unwrap_or(u8::MAX));
+                    format!("L{layer}=#{:02X}{:02X}{:02X}", avg[0], avg[1], avg[2])
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_else(|| "sin datos".to_string())
 }
 
 fn collect_source_layers(sources: &[Handle<Image>], images: &Assets<Image>) -> Option<Image> {

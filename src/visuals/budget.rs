@@ -22,10 +22,27 @@ const TRIANGLE_WARN: usize = 2_000;
 #[derive(Component)]
 pub(super) struct TriangleChecked;
 
+/// A mesh whose triangle count is a design decision, not an accident.
+///
+/// The watchdog asks "did a detailed model slip in where a placeholder
+/// belongs?", and for the terrain grid and the meadow's chunks the answer is
+/// permanently no: they are baked in code, their counts are derived, and
+/// `perf::budget` already holds them to a declared ceiling in a test. Without
+/// this marker the meadow alone put a hundred warnings into a log that is
+/// supposed to start silent — and a log that cries wolf about the one thing it
+/// cannot fix is a log nobody reads when it warns about something real.
+#[derive(Component)]
+pub(crate) struct BakedByDesign;
+
+/// Meshes still awaiting a count: everything that is not already checked and not
+/// baked on purpose.
+type UncheckedMesh<'a> = (Entity, &'a Mesh3d, Option<&'a Name>);
+type Unchecked = (Without<TriangleChecked>, Without<BakedByDesign>);
+
 pub(super) fn warn_on_heavy_meshes(
     mut commands: Commands,
     meshes: Res<Assets<Mesh>>,
-    pending: Query<(Entity, &Mesh3d, Option<&Name>), Without<TriangleChecked>>,
+    pending: Query<UncheckedMesh, Unchecked>,
 ) {
     for (entity, mesh3d, name) in &pending {
         let Some(mesh) = meshes.get(&mesh3d.0) else {

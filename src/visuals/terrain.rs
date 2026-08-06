@@ -52,6 +52,7 @@ pub(super) fn sync_terrain_visual(
     commands.spawn((
         Name::new("TerrainVisual"),
         TerrainVisual,
+        crate::visuals::budget::BakedByDesign,
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(terrain_material.material.clone()),
         Transform::default(),

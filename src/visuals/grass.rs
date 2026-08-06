@@ -91,6 +91,15 @@ struct Ring {
     /// reach. Kept as a field rather than deleted so the next person who
     /// rediscovers the arithmetic finds the result of trying it.
     width_scale: f32,
+    /// Whether this ring's blades end in two points rather than a flat cut.
+    ///
+    /// Costs one extra triangle and one extra vertex per blade, so it is only
+    /// worth it where a blade covers enough pixels for its outline to read —
+    /// the near ring, and nowhere else. This is the *V-split* an earlier draft
+    /// of `BOTWGrass.md` listed and a later rewrite dropped in favour of a
+    /// curved blade; the user remembered it and it is back, because it solves
+    /// the same problem for one triangle instead of four.
+    split_tips: bool,
 }
 
 /// The three rings, from the camera outward. Each row is **floored** by
@@ -129,18 +138,21 @@ const RINGS: [Ring; 3] = [
         chunk_m: 4.0,
         density: 45.0,
         width_scale: 1.0,
+        split_tips: true,
     },
     Ring {
         reach_m: 16.0,
         chunk_m: 8.0,
         density: 16.0,
         width_scale: 1.0,
+        split_tips: false,
     },
     Ring {
         reach_m: 32.0,
         chunk_m: 16.0,
         density: 6.0,
         width_scale: 1.0,
+        split_tips: false,
     },
 ];
 
@@ -215,6 +227,10 @@ const FILL_IN_ONE_FRAME: bool = true;
 const BLADE_WIDTH: f32 = 0.055;
 /// Fraction of the base width kept at the tip.
 const BLADE_TIP_TAPER: f32 = 0.35;
+/// How far down from the tip the notch between the two points sits, as a
+/// fraction of the blade's height. Deep enough to read as two points at arm's
+/// length, shallow enough not to turn the blade into a fork.
+const TIP_NOTCH_DEPTH: f32 = 0.82;
 /// Blade height range in metres, picked per blade.
 const BLADE_HEIGHT_MIN: f32 = 0.26;
 const BLADE_HEIGHT_MAX: f32 = 0.52;
@@ -474,6 +490,7 @@ pub(super) fn roll_meadow_grid(
             ring.chunk_m,
             blades_per_chunk(ring, density),
             ring.width_scale,
+            ring.split_tips,
             seed,
             Some(&terrain),
         );
@@ -485,11 +502,28 @@ pub(super) fn roll_meadow_grid(
                     key.ring, key.cell.x, key.cell.y
                 )),
                 GrassChunk,
+                // Su cuenta de triángulos es una decisión, no un descuido: el
+                // watchdog de mallas pesadas es para assets, y el presupuesto de
+                // la pradera se cobra en `perf::budget`.
+                crate::visuals::budget::BakedByDesign,
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(field.material.clone()),
                 // Blades cast no shadows: thousands of alpha-free slivers in the
                 // cascades buy noise, not depth.
                 bevy::light::NotShadowCaster,
+                // And they receive none either. Shadows were the only lever
+                // outside the noise floor in the 2026-07-25 measurement of this
+                // box (−0,66 ms), and receiving is the expensive half: a shadow
+                // map sample per fragment, over the geometry with more overdraw
+                // than anything else in the scene. The blades keep their shape
+                // from the root-to-tip gradient and the bowed normal, not from
+                // self-shadowing.
+                //
+                // The cost is real and worth naming: grass under a tree is lit
+                // as if the tree were not there. In the `Pasto` box there are no
+                // trees; in the world there are, and that is the call to revisit
+                // if it reads wrong.
+                bevy::light::NotShadowReceiver,
                 Transform::default(),
             ))
             .id();
@@ -506,6 +540,8 @@ pub(super) fn track_meadow_focus(
     field: Res<GrassField>,
     mut materials: ResMut<Assets<GrassMaterial>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    sun: Option<Single<&GlobalTransform, With<DirectionalLight>>>,
+    time: Res<Time>,
 ) {
     let Some(camera) = camera else {
         return;
@@ -514,9 +550,19 @@ pub(super) fn track_meadow_focus(
         return;
     };
     let outermost = RINGS[RINGS.len() - 1].reach_m;
-    material.extension.grass_data.focus_xz = camera.translation().xz();
-    material.extension.grass_data.fade_start = outermost - FADE_BAND_M;
-    material.extension.grass_data.fade_end = outermost;
+    let data = &mut material.extension.grass_data;
+    data.focus_xz = camera.translation().xz();
+    data.fade_start = outermost - FADE_BAND_M;
+    data.fade_end = outermost;
+    // The wind is a function of world position and time — there is no per-blade
+    // state anywhere, which is why a field of a hundred thousand blades costs
+    // one uniform write a frame.
+    data.time = time.elapsed_secs_wrapped();
+    // Backlit transmission needs to know where the sun is; reading the light's
+    // own transform rather than a copy keeps day/night driving it for free.
+    if let Some(sun) = sun {
+        data.sun_direction = sun.back().as_vec3();
+    }
 }
 
 /// Bake `count` blades into one mesh, in world space, around `centre`.
@@ -529,13 +575,15 @@ fn build_chunk_mesh(
     chunk_m: f32,
     count: u32,
     width_scale: f32,
+    split_tips: bool,
     seed: u32,
     terrain: Option<&TerrainAccess>,
 ) -> Mesh {
     let capacity = count as usize;
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(capacity * 4);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(capacity * 4);
-    let mut indices: Vec<u32> = Vec::with_capacity(capacity * 6);
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(capacity * 5);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(capacity * 5);
+    let mut blade_data: Vec<[f32; 2]> = Vec::with_capacity(capacity * 5);
+    let mut indices: Vec<u32> = Vec::with_capacity(capacity * 9);
 
     for blade in 0..count {
         let hash = hash_u32(seed ^ blade.wrapping_mul(0x0019_6f3d));
@@ -597,8 +645,41 @@ fn build_chunk_mesh(
         uvs.push([base.y, 1.0]);
         uvs.push([base.y, 1.0]);
 
-        indices.extend_from_slice(&[first, first + 1, first + 2]);
-        indices.extend_from_slice(&[first, first + 2, first + 3]);
+        // Per-blade data the shader cannot derive from a vertex position, packed
+        // into eight bytes:
+        //
+        // - `x` is the blade's hash with the *side* of the quad in its sign:
+        //   magnitude picks this blade's colour and its wind phase, sign says
+        //   which edge the vertex is on so the normal can bow outward across the
+        //   width. Two values in one channel because they are both cheap and
+        //   neither deserves four bytes of its own.
+        // - `y` is the blade's height in metres, so the wind can move a tall
+        //   blade further than a short one instead of shearing the whole field
+        //   by the same amount.
+        let tint = hash_unit(hash ^ 0x2545_f491);
+        blade_data.push([-tint, height]);
+        blade_data.push([tint, height]);
+        blade_data.push([tint, height]);
+        blade_data.push([-tint, height]);
+
+        if split_tips {
+            // The notched tip: a fifth vertex dipping between the two corners,
+            // so the blade ends in two points instead of a flat cut. Up close a
+            // straight-topped quad reads as a strip of paper — this is the one
+            // shape cue that says "leaf" at arm's length, and it costs one
+            // triangle on the only ring where anyone can see it.
+            let notch = base.lerp(tip, TIP_NOTCH_DEPTH);
+            positions.push([notch.x, notch.y, notch.z]);
+            uvs.push([base.y, TIP_NOTCH_DEPTH]);
+            blade_data.push([tint, height]);
+            let notch_index = first + 4;
+            indices.extend_from_slice(&[first, first + 1, first + 2]);
+            indices.extend_from_slice(&[first, first + 2, notch_index]);
+            indices.extend_from_slice(&[first, notch_index, first + 3]);
+        } else {
+            indices.extend_from_slice(&[first, first + 1, first + 2]);
+            indices.extend_from_slice(&[first, first + 2, first + 3]);
+        }
     }
 
     let mut mesh = Mesh::new(
@@ -607,6 +688,7 @@ fn build_chunk_mesh(
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, blade_data);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
@@ -769,8 +851,8 @@ mod tests {
     fn blades_are_deterministic_per_chunk() {
         // Same chunk, same blades: a field that reshuffles when it is rebuilt
         // makes every visual comparison worthless.
-        let a = build_chunk_mesh(Vec2::new(5.0, -5.0), 5.0, 64, 1.0, 11, None);
-        let b = build_chunk_mesh(Vec2::new(5.0, -5.0), 5.0, 64, 1.0, 11, None);
+        let a = build_chunk_mesh(Vec2::new(5.0, -5.0), 5.0, 64, 1.0, false, 11, None);
+        let b = build_chunk_mesh(Vec2::new(5.0, -5.0), 5.0, 64, 1.0, false, 11, None);
         assert_eq!(
             a.attribute(Mesh::ATTRIBUTE_POSITION)
                 .map(|values| values.len()),
@@ -785,7 +867,7 @@ mod tests {
     /// nothing on screen would show it.
     #[test]
     fn the_vertex_carries_only_position_and_the_two_derived_values() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 8, 1.0, 5, None);
+        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 8, 1.0, false, 5, None);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
         assert!(
@@ -803,7 +885,7 @@ mod tests {
     /// tip, tip in that order.
     #[test]
     fn a_blades_four_vertices_keep_their_authored_order() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, 5, None);
+        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 5, None);
         let bevy::mesh::VertexAttributeValues::Float32x2(uvs) =
             mesh.attribute(Mesh::ATTRIBUTE_UV_0).expect("uvs")
         else {
@@ -818,9 +900,51 @@ mod tests {
         }
     }
 
+    /// The shader reads the blade hash out of the *sign* of `uv1.x`, so the two
+    /// edges of a quad have to disagree in sign and agree in magnitude. Get this
+    /// wrong and the normal bows the same way on both sides — which looks like
+    /// nothing at all, and would be found by nobody.
+    #[test]
+    fn the_two_edges_of_a_blade_carry_the_same_hash_with_opposite_signs() {
+        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 9, None);
+        let bevy::mesh::VertexAttributeValues::Float32x2(data) =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_1).expect("blade data")
+        else {
+            panic!("blade data must be Float32x2");
+        };
+        assert!(data[0][0] < 0.0 && data[1][0] > 0.0, "the edges disagree");
+        assert!(
+            (data[0][0].abs() - data[1][0].abs()).abs() < f32::EPSILON,
+            "both edges belong to the same blade and share its hash"
+        );
+        for vertex in data {
+            assert!(
+                (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&vertex[1]),
+                "every vertex carries its blade's height for the wind to scale"
+            );
+        }
+    }
+
+    /// The near ring's blades end in two points; the outer ones do not, because
+    /// out there the extra triangle buys a silhouette nobody can resolve.
+    #[test]
+    fn only_split_tips_pay_for_the_extra_triangle() {
+        let plain = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 9, None);
+        let split = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, true, 9, None);
+        let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
+        assert_eq!(triangles(&plain), 2, "a plain blade is two triangles");
+        assert_eq!(triangles(&split), 3, "a notched tip costs exactly one more");
+        assert_eq!(plain.count_vertices(), 4);
+        assert_eq!(split.count_vertices(), 5);
+        assert!(
+            RINGS[0].split_tips && !RINGS[RINGS.len() - 1].split_tips,
+            "the notch belongs to the near ring and only there"
+        );
+    }
+
     #[test]
     fn a_blade_stands_on_the_ground_and_reaches_its_height() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, 3, None);
+        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 3, None);
         let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("positions")
         else {

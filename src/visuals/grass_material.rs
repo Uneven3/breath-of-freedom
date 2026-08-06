@@ -22,6 +22,15 @@ pub struct GrassUniform {
     /// Distance at which blades start shrinking, and where they reach zero.
     pub fade_start: f32,
     pub fade_end: f32,
+    /// Wind direction in world XZ, normalised, and how far a tip travels at
+    /// full gust as a fraction of the blade's height.
+    pub wind_dir: Vec2,
+    pub wind_strength: f32,
+    /// Metres per second the gust front travels across the field.
+    pub wind_speed: f32,
+    /// How much a blade's colour may drift from the shared gradient. Without it
+    /// a field of one green reads as carpet, however dense it is.
+    pub tint_variation: f32,
 }
 
 impl Default for GrassUniform {
@@ -39,6 +48,12 @@ impl Default for GrassUniform {
             // frame, and a material used without one should not shrink.
             fade_start: f32::MAX,
             fade_end: f32::MAX,
+            wind_dir: Vec2::new(0.80, 0.60),
+            // A tip leaning a fifth of its height at full gust. Grass that
+            // bends further reads as wheat.
+            wind_strength: 0.22,
+            wind_speed: 1.7,
+            tint_variation: 0.16,
         }
     }
 }

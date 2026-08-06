@@ -402,30 +402,41 @@ const BLADE_LEAN: f32 = 0.27;
 /// travels as two uniforms, because it is a pure function of the vertex's
 /// height along the blade and a `mix` in the shader costs nothing per frame
 /// while sixteen bytes per vertex cost bandwidth on every one of them.
-/// **Both are derived from `T_GroundGrass_Albedo.png`, not chosen by eye**, and
-/// that is the point rather than a shortcut. The texture is the meadow's other
-/// half — the ground the blades stand in and the thing the eye sees where no
-/// blade reaches — so a palette that disagrees with it makes geometry and ground
-/// two different plants. Taking the pair from the art means they agree by
-/// construction, and re-authoring the texture moves the blades with it.
+/// **The criterion is the ground the blades stand in**, which on 2026-08-06 is
+/// `T_GroundSoil_Albedo.png` — hue 84°, saturation 37%. Not a taste: wherever
+/// the field thins, the eye sees blade and ground side by side, and a blade that
+/// disagrees with the soil it grows out of reads as two materials rather than
+/// one meadow. That claim is checkable by walking to a sparse patch, which is
+/// what makes it worth writing down.
 ///
-/// Read off the texture on 2026-08-06 as the mean colour of its darkest and
-/// lightest seventh: `#566b31` (luminance 99, saturation 37%) and `#b1cf55`
-/// (192, 56%).
+/// | | tono | lum | sat |
+/// |---|---:|---:|---:|
+/// | suelo bajo el campo (Soil) | 84° | 43% | 37% |
+/// | raíz, antes | 100° | 43% | **22%** |
+/// | raíz, ahora | 82° | 31% | 37% |
+/// | punta, antes | 90° | 68% | 55% |
+/// | punta, ahora | 84° | 57% | 56% |
 ///
-/// What that replaced, and why it was wrong — measured, not argued:
+/// The **root** was the defect: 16° off the soil's hue and half its saturation.
+/// A field seen from standing height is mostly canopy, so that one colour is
+/// what made the whole meadow read as a pale haze instead of grass. The tip only
+/// moved enough to join the same hue family; its lightness is what still
+/// separates a blade from the floor.
 ///
-/// | | antes | textura |
-/// |---|---|---|
-/// | raíz | `#658855` — lum 124, sat **22%** | `#566b31` — lum 99, sat **37%** |
-/// | punta | `#ADDA81` — lum 202, sat 55% | `#b1cf55` — lum 192, sat 56% |
+/// **Two corrections to how this was arrived at, kept because they cost a round
+/// of the user's trust.** The first pair was read off `T_GroundGrass_Albedo.png`
+/// — a file that *is not one of the four canonical textures* and never reaches
+/// the scene. That it landed close anyway is luck, not method. And the target
+/// itself was picked by eye ("that mesh reads better as grass") and then
+/// measured against with three decimals, which dresses a preference as a
+/// finding. The hue of the soil under the field is a fact; "reads better" was
+/// not.
 ///
-/// The tip was already right. The **root** was both too light and half as
-/// saturated as the art, and since a field seen from standing height is mostly
-/// canopy, that one colour is what made the whole meadow read as a pale haze
-/// instead of grass.
+/// Unrelated and still open: `T_GroundTallGrass_Albedo.png` sits at **hue 113°**,
+/// 29° away from the soil beside it. Two ground textures in one scene that far
+/// apart is an art defect this palette cannot fix from here.
 pub(super) const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.093, 0.147, 0.031);
-const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.440, 0.624, 0.091);
+const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.340, 0.622, 0.089);
 
 /// One baked chunk of the meadow: a single mesh holding all its blades.
 #[derive(Component)]

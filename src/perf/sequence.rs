@@ -613,11 +613,29 @@ fn warn_if_presentation_capped(results: &[StepResult]) {
     );
 }
 
-/// El criterio, aparte para poder probarlo: si el trabajo de GPU se mueve mucho
-/// entre pasos y el frame casi nada, el frame no está midiendo el trabajo. No
-/// nombra ningún refresh — vale a 60 Hz, a 144, y en una máquina que no
-/// conocemos.
+/// El criterio, aparte para poder probarlo.
+///
+/// **Compara los dos recorridos entre sí, no cada uno contra un umbral**, y esa
+/// es la segunda versión: la primera pedía que el frame variara menos del 5% y
+/// que la GPU variara más del 20%, y **dejó pasar la corrida del 2026-08-06
+/// donde la GPU varió 203% y el frame 6,3%**. Con umbrales sueltos, un caso
+/// evidente falla por un decimal en uno de los dos.
+///
+/// La razón entre ambos no tiene ese problema: en una corrida sana el frame
+/// sigue a la GPU y la razón ronda 1; con la presentación mandando, la GPU se
+/// mueve decenas de veces más que el frame. No nombra ningún refresh, así que
+/// vale a 60 Hz, a 144 y en una máquina que no conocemos.
 fn presentation_capped(results: &[StepResult]) -> bool {
+    /// Cuántas veces más tiene que moverse la GPU que el frame. Con 4 hay
+    /// margen de sobra contra el ~1 de una corrida sana y contra el 32 de una
+    /// clavada, y no hace falta afinarlo: los dos casos no están cerca.
+    const SWING_RATIO: f64 = 4.0;
+    /// Debajo de esto la GPU no se movió lo suficiente como para que su
+    /// comparación con el frame signifique algo — una suite cuyos pasos no
+    /// mueven la GPU (`shadows` desde el mirador de hoy) no está clavada, sólo
+    /// no tiene nada que medir.
+    const MIN_GPU_SWING: f64 = 0.20;
+
     let spread = |values: &mut dyn Iterator<Item = f64>| {
         let (mut low, mut high) = (f64::MAX, 0.0_f64);
         for value in values {
@@ -641,7 +659,12 @@ fn presentation_capped(results: &[StepResult]) -> bool {
     }
     let frame_swing = (frame_high - frame_low) / frame_low;
     let gpu_swing = (gpu_high - gpu_low) / gpu_low;
-    frame_swing < 0.05 && gpu_swing > 0.20
+    if gpu_swing < MIN_GPU_SWING {
+        return false;
+    }
+    // Un frame perfectamente plano contra una GPU que se mueve es el caso más
+    // claro de todos, y dividir por cero no debería perdérselo.
+    frame_swing <= 0.0 || gpu_swing / frame_swing > SWING_RATIO
 }
 
 #[cfg(test)]
@@ -818,6 +841,24 @@ mod tests {
             .map(|(frame, gpu)| result(frame, gpu))
             .collect();
         assert!(presentation_capped(&pinned));
+
+        // El caso que la primera versión dejó pasar, con sus números reales: la
+        // GPU se movió 203% y el frame 6,3%, o sea justo por encima del 5% que
+        // aquel criterio exigía. Un frame clavado con jitter sigue estando
+        // clavado.
+        let jittery: Vec<StepResult> = [(16.64, 5.43), (16.10, 2.39), (17.11, 7.24)]
+            .into_iter()
+            .map(|(frame, gpu)| result(frame, gpu))
+            .collect();
+        assert!(presentation_capped(&jittery));
+
+        // Y una suite cuyos pasos no mueven la GPU no está clavada: no tiene
+        // nada que medir, que es distinto. `shadows` del 2026-08-06.
+        let flat: Vec<StepResult> = [(16.67, 4.13), (16.65, 3.68), (16.67, 4.14)]
+            .into_iter()
+            .map(|(frame, gpu)| result(frame, gpu))
+            .collect();
+        assert!(!presentation_capped(&flat));
 
         // Y una corrida sana no dispara el aviso: acá el frame sigue a la GPU.
         let healthy: Vec<StepResult> = [(7.47, 5.82), (5.51, 4.90), (5.80, 4.25)]

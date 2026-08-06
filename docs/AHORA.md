@@ -268,23 +268,39 @@ De los cinco problemas reportados el 2026-08-05:
    avanza con el jugador a un campo que ralea con la distancia. Sin jugar.
 5. **Falta abundancia en el horizonte** → sin hacer. El anillo externo subió de
    6 a 10/m², que ayuda pero no es el arreglo.
-6. **El parpadeo** → sin resolver, y ahora **se puede probar en un click**:
-   `msaa` es una perilla del hub. Medido lo que cuesta: **4x = +2,10 ms de GPU
-   (+35%)**, 2x = +1,46. Si resulta ser el arreglo, es caro; la alternativa por
-   geometría (briznas más anchas de lejos) ataca la misma causa.
+6. **El parpadeo** → **resuelto y confirmado jugando**, y no era ninguna de las
+   dos cosas que veníamos suponiendo. Era **z-fighting**: al encogerse, la brizna
+   colapsaba hacia la altura del suelo y quedaba como un cuadrilátero plano
+   coplanar con el terreno, agitado por el viento. Ahora colapsa 18 cm **bajo**
+   tierra (`GROWTH_SINK_M`) y de paso brota del suelo, que es el efecto que el
+   doc pedía. La hipótesis de MSAA sostenida dos días era falsa; lo que la
+   descartó fue la descripción del usuario, *"unos pastos que parecen pegados en
+   el piso"*. La perilla `msaa` queda igual, ahora con su costo medido: entre
+   1,81 y 3,17 ms de GPU.
 
 ### La medición, que es lo primero que este sistema tiene
 
-`BOF_BENCH=grass`, caja Pasto, altura de ojo. **La pradera es el 62% de la GPU
-de su caja** (3,77 ms de 6,08, por resta contra un paso en cero) y **es
-fill-bound**: bajar la resolución a la mitad ahorra 3,90 ms — más que apagar el
-pasto entero — con exactamente la misma geometría. La tabla completa y las tres
-consecuencias están en `BOTWGrass.md`.
+Caja Pasto, altura de ojo, **tres corridas** cuyos números no coinciden: el costo
+del pasto salió 3,77 / 2,56 / 2,36 ms de GPU. La deriva *dentro* de cada corrida
+fue de 0,2 ms, así que la dispersión es externa — el usuario tenía **Blender
+abierto**, que compite por CPU y GPU. **Regla que sale de ahí: cerrar lo que
+compita por la GPU antes de medir**, porque el encabezado de contexto del
+reporte no puede declarar lo que no ve.
+
+Lo que aguanta las tres: la pradera es **entre el 45% y el 62% de la GPU** de su
+caja, y **es fill-bound** — en las tres, bajar la resolución a la mitad ahorra
+más que apagar el pasto entero, con la misma geometría. El alcance ahorra menos
+que la densidad. Tabla completa en `BOTWGrass.md`.
 
 Eso reordena las prioridades: **el conteo de triángulos no es lo que cuesta el
 frame en esta máquina**, y el cambio a 900p30 golpea la palanca correcta. La
 salvedad de siempre sigue en pie — un tiler cobra el vértice en bandwidth aunque
 no pinte un píxel, y eso no se mide acá.
+
+**Sin zanjar:** en la única corrida con frame utilizable, apagar el pasto bajó
+la GPU 2,56 ms y el frame sólo 0,31, lo que apunta a un techo de CPU de ~7,4 ms.
+Pero fue con Blender abierto y en build dev. Zanjarlo pide una corrida en
+release con la máquina limpia.
 
 **Costo declarado que subió hoy:** 250.800 → 489.200 triángulos por vista
 (`perf::budget::MEADOW_VIEW_TRIANGLES`), casi cinco veces el presupuesto móvil.
@@ -303,7 +319,12 @@ Reglas que los tests cobran sobre toda suite, presente y futura: empieza y
 termina en el baseline (la diferencia es la deriva), cada paso mueve **un** eje,
 y el baseline es la configuración que se envía.
 
-**Dos trampas de esta máquina, encontradas corriendo:**
+**Tres trampas de esta máquina, encontradas corriendo:**
+
+- **Cerrar Blender (o cualquier cosa que use la GPU) antes de medir.** Con él
+  abierto, tres corridas de la misma configuración dieron costos del pasto entre
+  2,36 y 3,77 ms, con derivas internas de 0,2. Lo externo no aparece en la
+  tabla.
 
 - **La ventana tiene que estar visible.** En Wayland nativo el compositor no
   manda frame callbacks a una superficie oculta y el juego entero se duerme —

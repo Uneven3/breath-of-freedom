@@ -28,6 +28,10 @@ pub struct GrassUniform {
     /// a wave travelling with the player into a field that thins out with
     /// distance. See `blade_growth` in `grass.wgsl`.
     pub growth_spread: f32,
+    /// How far **below** the ground a blade collapses to as it shrinks, in
+    /// metres. Collapsing to ground level leaves a flat quad lying coplanar with
+    /// the terrain, which z-fights and flickers; see the vertex shader.
+    pub growth_sink: f32,
     /// Wind direction in world XZ, normalised, and how far a tip travels at
     /// full gust as a fraction of the blade's height.
     pub wind_dir: Vec2,
@@ -54,6 +58,7 @@ impl Default for GrassUniform {
             // frame, and a material used without one should not shrink.
             growth_ramp: 0.0,
             growth_spread: 0.0,
+            growth_sink: 0.0,
             wind_dir: Vec2::new(0.80, 0.60),
             // A tip leaning a fifth of its height at full gust. Grass that
             // bends further reads as wheat.

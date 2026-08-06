@@ -51,6 +51,7 @@ struct GrassUniform {
     focus_xz: vec2<f32>,
     growth_ramp: f32,
     growth_spread: f32,
+    growth_sink: f32,
     wind_dir: vec2<f32>,
     wind_strength: f32,
     wind_speed: f32,
@@ -201,12 +202,27 @@ fn vertex(vertex: Vertex) -> VertexOutput {
         world_position.w,
     );
 
-    // Y después el crecimiento por distancia, que colapsa hacia la raíz. `uv.x`
-    // lleva la altura del suelo justamente para esto: sin ella el shader no sabe
-    // dónde está la base y no puede encogerla hacia ella.
+    // Y después el crecimiento por distancia, que colapsa la brizna hacia un
+    // punto **bajo** el suelo. `uv.x` lleva la altura del terreno justamente
+    // para esto: sin ella el shader no sabe dónde está la base.
+    //
+    // **Lo de "bajo" es el arreglo del parpadeo** (reportado jugando tres veces;
+    // la tercera con la descripción que lo resolvió: "unos pastos que parecen
+    // pegados en el piso que parpadean"). Colapsando hacia `ground_y` a secas,
+    // una brizna encogida no desaparece: sus cuatro vértices llegan a la altura
+    // del suelo, pero la punta conserva su desplazamiento horizontal —el lean
+    // horneado más el viento— así que queda un cuadrilátero **horizontal,
+    // coplanar con el terreno**. Eso es z-fighting, el viento lo agita, y
+    // parpadea. No era aliasing: MSAA no lo habría tocado.
+    //
+    // Hundiendo el punto de colapso, la brizna se mete en la tierra antes de
+    // degenerar y el terreno la tapa por profundidad. Y de paso hace lo que el
+    // sistema quería desde el principio: la brizna **brota del suelo** en vez de
+    // aparecer aplastada sobre él. Emerge cuando el crecimiento pasa de
+    // `sink / (altura + sink)`, o sea alrededor de un quinto de la rampa.
     let ground_y = vertex.uv.x;
     world_position.y = mix(
-        ground_y,
+        ground_y - grass_data.growth_sink,
         world_position.y,
         blade_growth(world_position.xz, ring_reach, blade_hash),
     );

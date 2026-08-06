@@ -289,6 +289,30 @@ const GROWTH_RAMP_M: f32 = 1.0;
 /// `handover` in `ring_cells_with_slack` measures against this constant.
 const GROWTH_SPREAD_M: f32 = 6.0;
 
+/// How far **below** the ground a blade collapses to, in metres.
+///
+/// **This is the flicker.** Reported playing three times; the third time with
+/// the description that solved it — *"unos pastos que parecen pegados en el piso
+/// que parpadean"*. Collapsing a blade toward `ground_y` does not make it
+/// vanish: its four vertices reach ground level while the tip keeps its
+/// horizontal offset (the baked lean, up to [`BLADE_LEAN`], plus the wind), so
+/// what is left is a flat quad **lying coplanar with the terrain**. That
+/// z-fights, and the wind shakes it, so it flickers.
+///
+/// Two diagnoses were wrong before this one, and both are worth remembering.
+/// The chunk hysteresis ([`KEEP_SLACK_M`]) fixed a real thrashing bug that was
+/// *not* this. And MSAA — the standing hypothesis for two days, now measured at
+/// 2,48 ms of frame — would not have touched it: z-fighting is not edge
+/// aliasing.
+///
+/// Sinking the collapse point buries the blade before it degenerates and lets
+/// the terrain hide it by depth. It also produces the effect the system wanted
+/// all along: the blade **sprouts out of the ground** instead of appearing
+/// flattened on it. A blade of height `H` breaks the surface once its growth
+/// passes `sink / (H + sink)` — with these numbers, the first fifth of the ramp
+/// happens underground.
+const GROWTH_SINK_M: f32 = 0.18;
+
 /// At most one chunk is baked per frame **while rolling**.
 ///
 /// Re-baking while the player walks is the only per-frame work this system will
@@ -764,6 +788,7 @@ pub(super) fn track_meadow_focus(
     data.focus_xz = camera.translation().xz();
     data.growth_ramp = GROWTH_RAMP_M;
     data.growth_spread = GROWTH_SPREAD_M;
+    data.growth_sink = GROWTH_SINK_M;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs
     // one uniform write a frame.

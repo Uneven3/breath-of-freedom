@@ -185,34 +185,39 @@ alineamiento.
 
 ### La medición que este documento venía pidiendo desde que se reescribió
 
-`BOF_BENCH=grass`, caja `Pasto`, altura de ojo mirando al horizonte, Polaris 11
-*(tipo a: medición nuestra)*. **La columna que vale es la de GPU** — el frame
-quedó clavado por la presentación y el propio reporte lo avisó.
+Caja `Pasto`, altura de ojo mirando al horizonte, Polaris 11 *(tipo a: medición
+nuestra)*. **Tres corridas el 2026-08-06**, y se presentan las tres a propósito,
+porque no coinciden:
 
-| paso | GPU ms | contra baseline |
-|---|---:|---:|
-| baseline (56/m², alcance 100%) | 6,08 | — |
-| **pasto apagado** | 2,31 | **−3,77** |
-| densidad 80/m² | 7,02 | +0,94 |
-| densidad 30/m² | 5,00 | −1,08 |
-| densidad 12/m² | 3,56 | −2,52 |
-| alcance 75% | 5,54 | −0,54 |
-| alcance 50% | 3,96 | −2,12 |
-| render 50% | 2,17 | −3,90 |
-| MSAA 4x | 8,17 | +2,10 |
-| MSAA 2x | 7,54 | +1,46 |
+| paso | corrida A | corrida B | corrida C |
+|---|---:|---:|---:|
+| baseline (56/m²), GPU ms | 6,08 | 4,87 | 5,43 |
+| pasto apagado | 2,31 | 2,31 | 3,07 |
+| **costo del pasto** | **3,77** | **2,56** | **2,36** |
+| render 50% | −3,90 | −3,10 | −3,04 |
+| densidad 12/m² | −2,52 | −1,98 | −1,84 |
+| alcance 50% | −2,12 | −1,66 | −1,44 |
+| MSAA 4x | +2,10 | +3,17 | +1,81 |
 
-Deriva entre los dos baselines: **0,25 ms**. Todo delta menor es ruido.
+Deriva interna de cada corrida: 0,25 / 0,24 / 0,17 ms. O sea que **dentro** de
+una corrida la máquina estuvo quieta, y aun así el costo del pasto varía **entre
+corridas de 2,36 a 3,77 ms** — una dispersión del orden de la mitad del efecto.
+La causa conocida: el usuario tenía **Blender abierto**, que compite por CPU y
+por GPU. De ahí sale una regla del ritual: *cerrar lo que compita por la GPU
+antes de medir*, porque el encabezado de contexto del reporte no puede declarar
+lo que no ve.
 
-**1. La pradera es el 62% de la GPU de su caja.** 3,77 ms de 6,08. Por resta
-contra un paso en cero, no por extrapolación desde el paso más ralo — que es
-todo lo que se podía hacer hasta que existió un paso de 0/m².
+**Lo que aguanta las tres corridas**, que es lo único que se puede afirmar:
 
-**2. Es fill-bound, y con eso se cierra la pregunta central del documento.**
-Bajar la resolución a la mitad —misma geometría, los mismos 489.200
-triángulos— ahorra **3,90 ms, más que apagar la pradera entera**. Lo que cuesta
-es cuántos píxeles pinta cada brizna encima de otra, no cuántas briznas hay.
-Consecuencias directas:
+**1. La pradera es entre el 45% y el 62% de la GPU de su caja.** Por resta
+contra un paso en cero, no extrapolando. El número exacto depende de la corrida;
+el orden de magnitud no.
+
+**2. Es fill-bound, y con eso se cierra la pregunta central del documento.** En
+las **tres** corridas, bajar la resolución a la mitad —misma geometría, los
+mismos 489.200 triángulos— ahorra **más que apagar la pradera entera**. Lo que
+cuesta es cuántos píxeles pinta cada brizna encima de otra, no cuántas hay.
+Consecuencias:
 
 - El conteo de triángulos es **guardrail, no objetivo** — con la salvedad de
   siempre, que en el target tile-based un vértice se paga en bandwidth aunque no
@@ -222,9 +227,51 @@ Consecuencias directas:
 - Las técnicas que reducen *overdraw* pasan al frente de la fila; las que
   reducen vértices, atrás.
 
-**3. MSAA no es gratis:** 4x cuesta 2,10 ms de GPU (+35%) y 2x cuesta 1,46. Si
-resulta ser el arreglo del parpadeo, es un arreglo caro y hay que pesarlo contra
-briznas más anchas de lejos, que atacan la misma causa por geometría.
+**3. El alcance ahorra menos que la densidad**, en las tres. Recortar la vista
+lejana no es la primera palanca.
+
+**4. MSAA cuesta entre 1,81 y 3,17 ms de GPU**, y en la única corrida con frame
+utilizable, **2,48 ms de frame — un 32%**. Ya no hace falta pagarlo: no era la
+causa del parpadeo (ver más abajo).
+
+### Lo que estas corridas NO dicen
+
+En dos de las tres el **frame quedó clavado por la presentación** (~16,6 ms en
+todos los pasos) y sus deltas no significan nada. En la única con frame
+utilizable, apagar la pradera entera bajó la GPU 2,56 ms y el frame sólo 0,31 —
+lo que sugiere un techo de CPU alrededor de 7,4 ms. **Pero eso se midió con
+Blender abierto y en build dev**, donde nuestro propio código va sin optimizar,
+así que no se puede atribuir. Zanjar si el frame es CPU-bound necesita una
+corrida en release, con la máquina limpia, y todavía no se hizo.
+
+### El parpadeo: tres diagnósticos, y el que valió fue una frase del usuario
+
+**Resuelto el 2026-08-06** (*"ya no hay parpadeo de pasto"*), y vale escribir
+cómo, porque los dos primeros diagnósticos eran razonables y estaban mal.
+
+- **Primero: la histéresis de chunks.** Un chunk en el borde exacto de un anillo
+  nacía y moría en frames alternos. Era un bug real y `KEEP_SLACK_M` lo arregló
+  — pero no era éste, y el parpadeo siguió.
+- **Después: aliasing temporal, o sea MSAA.** Una brizna de 5,5 cm a veinte
+  metros es sub-píxel, y el perfil de escritorio corre con `msaa=off`. La
+  hipótesis se sostuvo dos días y motivó una perilla nueva. **Era falsa**, y
+  costó medirla: MSAA sale entre 1,81 y 3,17 ms de GPU.
+- **Lo que era: z-fighting con el suelo.** El shader colapsaba la brizna hacia
+  `ground_y`, así que al encogerse **no desaparecía**: sus cuatro vértices
+  llegaban a la altura del terreno mientras la punta conservaba su
+  desplazamiento horizontal (el lean horneado más el viento). Quedaba un
+  cuadrilátero plano, coplanar con el suelo, agitado por el viento. El arreglo
+  es una línea: colapsar hacia `ground_y - GROWTH_SINK_M`, 18 cm bajo tierra.
+
+**Lo que hizo la diferencia fue la descripción, no la teoría.** Dos días de
+"parpadea" no alcanzaron; *"unos pastos que parecen pegados en el piso que
+parpadean"* nombró la causa entera. Cuando un artefacto visual resiste dos
+diagnósticos, la pregunta correcta al que lo está viendo no es "¿sigue?" sino
+"¿a qué se parece?".
+
+Y de yapa hace lo que la tabla de BOTW de más arriba pedía desde el principio:
+la brizna **brota del suelo** en vez de aparecer aplastada sobre él. El primer
+quinto de la rampa de crecimiento ocurre bajo tierra.
 
 ### Del mismo día, en el Mundo (`BOF_BENCH=general`)
 

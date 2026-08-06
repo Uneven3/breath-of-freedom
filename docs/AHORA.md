@@ -235,44 +235,88 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## El pasto (2026-08-06) — jugado, arreglado, y por primera vez medido
+## El pasto (2026-08-06) — medido por primera vez, y con el problema de fondo sin resolver
 
 **Sigue vigente la decisión del usuario:** primero que se vea bien, después se
 optimiza. `BOTWGrass.md` manda medir antes de cada paso; esa regla está
 suspendida para la parte estética. Target **900p30** (`NORTE.md` todavía dice
 1080p60 y hay que actualizarlo — es decisión del usuario, no se tocó).
 
+**Lo primero que hay que leer, porque es lo que el día enseñó:** cuatro arreglos
+distintos apuntaron al mismo síntoma —*dónde y cuándo se ve la transición del
+pasto*— y los cuatro fallaron. El veredicto del usuario, después del cuarto:
+
+> *"No es ese el problema. Cuando el pasto se vea bien por sí solo, todo lo demás
+> va a caber bien, lo cual no es cierto al revés."*
+
+Y el contraejemplo que zanja la discusión de presupuesto: **Flower (PS3, 2009)**
+llena la pantalla de pasto con una fracción de este hardware. No es un problema
+de plata, es de técnica. El registro de los cuatro intentos y por qué cada uno
+falló está en `BOTWGrass.md` → *Cuatro intentos que fallaron*.
+
 ### Lo que se arregló hoy, y qué falta validar jugando
 
-De los cinco problemas reportados el 2026-08-05:
+De los cinco problemas reportados el 2026-08-05, más los que salieron jugando:
 
 1. **Briznas muy chicas** → 0,26-0,52 m pasaron a **0,45-0,90 m**, con el lean
    escalado a la par. *Jugado y aceptado: "está mejor la altura y el feeling".*
-2. **Densidad insuficiente** (pedido en el mismo playtest) → los tres anillos
-   subieron a **56 / 28 / 10 briznas por m²**. Jugado dos veces sin comentario:
-   ni aceptado ni rechazado.
-3. **Punta cuadrada** → taper 0,35 → **0,18**, muesca 0,82 → **0,72**. Ídem —
-   ojo que el salto del taper es grande y puede haber quedado como aguja.
-4. **"Veo crecer el pasto muy cerca"** → **dos intentos, y el primero estuvo
-   mal diagnosticado.** La banda de crecimiento hacía dos trabajos con una sola
-   constante: cuánto tarda *una* brizna en crecer, y en cuántos metros se
-   reparten los umbrales *entre* briznas. Acortarla de 8 a 3 m alejó el
-   fenómeno y lo hizo **más** brusco — el usuario lo volvió a reportar como "muy
-   notorio". Ahora son dos constantes: `GROWTH_RAMP_M` = 1 m (una brizna) y
-   `GROWTH_SPREAD_M` = 6 m (la dispersión). Lo que se ve pasa de una ola que
-   avanza con el jugador a un campo que ralea con la distancia. Jugado dos veces
-   sin volver a reportarse, que es indicio pero no confirmación.
-5. **Falta abundancia en el horizonte** → sin hacer. El anillo externo subió de
-   6 a 10/m², que ayuda pero no es el arreglo.
+2. **Densidad** → 45 → 56 → **40 / 20 / 7** por anillo, las tres decididas por
+   ojo. 56 resultó más de lo necesario y 30 poco. La condición que el usuario
+   puso al bajarla importa más que el número: *"para que las texturas hagan el
+   resto de la pega"* — y esa condición después se cumplió.
+3. **Punta cuadrada** → taper 0,35 → **0,18**, muesca 0,82 → **0,72**. Jugado
+   sin comentario: ni aceptado ni rechazado.
+4. **El crecimiento demasiado cerca** → **medio arreglado, y ahí se acabó lo que
+   este camino podía dar.** Lo que sí funcionó: separar `GROWTH_RAMP_M` (1 m,
+   cuánto tarda *una* brizna) de `GROWTH_SPREAD_M` (6 m, en cuántos metros se
+   reparten los umbrales *entre* briznas). Antes una sola constante gobernaba
+   los dos fenómenos y acortarla los acortaba a la vez, lo que alejó la ola y la
+   hizo **más** brusca. Con las dos separadas el mecanismo quedó bien —*"crece
+   parejo a medida que uno camina, y crece bien"*—, pero **se sigue notando**, y
+   agrandar el anillo de 10 a 16 m no lo resolvió.
+5. **Falta abundancia en el horizonte** → **no resuelto, y es el mismo problema
+   que el 4.** *"Nuestro pasto llega hasta ahí y no llena la escena."* El suelo
+   ya es pradera y no alcanzó.
 6. **El parpadeo** → **resuelto y confirmado jugando**, y no era ninguna de las
-   dos cosas que veníamos suponiendo. Era **z-fighting**: al encogerse, la brizna
-   colapsaba hacia la altura del suelo y quedaba como un cuadrilátero plano
+   dos cosas que se venían suponiendo. Era **z-fighting**: al encogerse, la
+   brizna colapsaba a la altura del suelo y quedaba como un cuadrilátero plano
    coplanar con el terreno, agitado por el viento. Ahora colapsa 18 cm **bajo**
    tierra (`GROWTH_SINK_M`) y de paso brota del suelo, que es el efecto que el
-   doc pedía. La hipótesis de MSAA sostenida dos días era falsa; lo que la
-   descartó fue la descripción del usuario, *"unos pastos que parecen pegados en
-   el piso"*. La perilla `msaa` queda igual, ahora con su costo medido: entre
-   1,81 y 3,17 ms de GPU.
+   doc pedía. La hipótesis de MSAA, sostenida dos días, era falsa.
+
+### El suelo dejó de ser un color plano (2026-08-06)
+
+`Soil` es la celda por defecto del mundo y su textura era un marrón liso. El
+usuario generó una textura de pradera contra el contrato de este repo (512×512,
+cenital, luz plana, matas de 10-50 cm porque a 12 m por tile una brizna
+individual mide dos píxeles). Se midió antes de instalarla: la iluminación venía
+uniforme al 0,1% entre cuadrantes, y **tenía costura** —bordes opuestos 1,9×
+más distintos que dos columnas vecinas—, corregida con la **descomposición
+periódica de Moisan**, que a diferencia de un blend de bordes no duplica ni
+difumina detalle. Quedó en 0,5×.
+
+`GRASS_TINT_STRENGTH` bajó de 0,55 a **0,25**: era un sustituto de no tener
+textura y lo único que agregaba era aplastarle el grano al arte.
+
+**Y destapó un bug que llevaba ahí desde que existe el sistema.** El array de
+texturas nace como un fallback de 1×1 por capa; cuando los PNG llegaban se
+reescribía el contenido de esa imagen, pero wgpu no redimensiona texturas —crea
+una nueva— y el bind group del material seguía apuntando a la vieja. **El
+material mostró el fallback siempre.** Nadie podía verlo porque los cuatro PNG
+canónicos se generaron a partir de los mismos `placeholder_rgb`, así que
+fallback y arte real eran del mismo color. Se destapó con la primera textura que
+no se parece a su placeholder. El arreglo: entrar el array como asset nuevo y
+apuntar el material a ese handle, sin carrera posible.
+
+**Lección que se lleva el log a todos lados:** `"packed 4 canonical PNGs"` era
+verdadero e inútil — se imprimía igual con el arte cargado que con el fallback.
+Un mensaje de éxito que no se distingue de un fracaso no es un mensaje de éxito.
+Ahora imprime el tamaño y el color medio de cada capa.
+
+**Lo que la textura NO resolvió**, y es un resultado: la hipótesis era que el
+crecimiento se nota porque destapa tierra y que un suelo verde lo escondería.
+Veredicto jugando: *"la textura no maquilla ningún problema que estamos
+intentando solucionar"*. El fenómeno es geométrico. Por eso se pagó el anillo.
 
 ### La medición, que es lo primero que este sistema tiene
 
@@ -298,10 +342,18 @@ la GPU 2,56 ms y el frame sólo 0,31, lo que apunta a un techo de CPU de ~7,4 ms
 Pero fue con Blender abierto y en build dev. Zanjarlo pide una corrida en
 release con la máquina limpia.
 
-**Costo declarado que subió hoy:** 250.800 → 489.200 triángulos por vista
-(`perf::budget::MEADOW_VIEW_TRIANGLES`), casi cinco veces el presupuesto móvil.
-62.700 son el anillo interior de 8 a 10 m; el resto, las tres densidades. Se
-pagó a sabiendas bajo la regla vigente.
+**Costo declarado que se movió cuatro veces hoy:** 250.800 → 313.500 → 489.200
+→ 347.600 → **600.000** triángulos por vista
+(`perf::budget::MEADOW_VIEW_TRIANGLES`), seis veces el presupuesto móvil. El
+salto grande es el último, el anillo de 10 a 16 m, y se pagó recién después de
+agotar la alternativa barata. El desglose de qué compró cada salto está en
+`budget.rs`.
+
+**El tamaño de chunk dejó de ser cosmético.** Decide cuánta geometría se hornea
+*fuera* del anillo: con alcance 16, chunks de 7 m dan 509.488 triángulos y 103
+draws; de 10 m, 600.000 y menos de 100. Chunks chicos desperdician menos y
+cuestan más draws. Se eligió respetar `MOBILE_DRAWS`, porque en un tiler un draw
+cuesta más que triángulos que el frustum va a descartar.
 
 ## La suite de medición (2026-08-06)
 

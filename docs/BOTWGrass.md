@@ -283,6 +283,51 @@ domina también acá. **Ojo con ese mirador**: que ocultar el bosque entero valg
 
 ---
 
+## Cuatro intentos que fallaron, y qué enseñaron (2026-08-06)
+
+Un día entero apuntando al mismo síntoma —**dónde y cuándo se ve la transición
+del pasto**— con cuatro arreglos distintos. Los cuatro fallaron. Están acá para
+que nadie los reintente creyendo que son nuevos, y porque el patrón que forman
+vale más que cualquiera de ellos.
+
+| intento | hipótesis | resultado | costo |
+|---|---|---|---|
+| Banda de crecimiento 8 → 3 m | "se ve porque pasa cerca" | **peor**: más lejos pero más brusco | 0 |
+| Separar rampa de dispersión | "es un fenómeno, no dos" | **acertó a medias**: el mecanismo quedó bien, se sigue notando | 0 |
+| Anillo interior 10 → 16 m | "se ve porque pasa cerca" (otra vez) | **no cambió nada perceptible** | +73% tris (347.600 → 600.000) |
+| Textura de pradera en el suelo | "se ve porque destapa tierra" | *"no maquilla ningún problema"* | 0, y el arte quedó |
+
+**Lo que enseñan juntos.** Los cuatro tratan la transición como el problema. No
+lo es: es el síntoma de que **el pasto no se sostiene solo**. Un campo que se
+sostiene puede terminar donde sea, porque lo que hay antes de terminar ya se lee
+como campo. El nuestro no, así que su frontera se nota la pongas donde la
+pongas — a 10, a 16 o a 32 metros.
+
+**El veredicto del usuario, que es la línea que gobierna lo que sigue:**
+
+> *"Cuando el pasto se vea bien por sí solo, todo lo demás va a caber bien, lo
+> cual no es cierto al revés: poner arbustos, flores y árboles no va a arreglar
+> el pasto."*
+
+**Y el contraejemplo que cierra la discusión de presupuesto:** *Flower*
+(thatgamecompany, PS3, **2009**) llena la pantalla de pasto con una fracción de
+este hardware. Cuando la respuesta a un problema de imagen sea "hace falta más
+presupuesto", este renglón dice que no. Es técnica, no plata.
+
+### Dos propuestas mías que el usuario rechazó, y por qué tenía razón
+
+Las anoto porque las dos suenan sensatas y van a volver a tentar:
+
+- **"Velar el borde con niebla / acercar el fog."** Es maquillaje explícito:
+  esconde el síntoma sin tocar la causa, y encima cambia la atmósfera de todo el
+  juego para arreglar un sistema.
+- **"Capas de vegetación: matas a media distancia, arbustos más allá."** Suena a
+  ingeniería y hasta tiene aritmética a favor (una mata de 22 tris cubre lo que
+  decenas de briznas). Pero es lo mismo: tapar con otros objetos que el pasto no
+  llena. Y falla la prueba de Flower, que no tiene ninguna de esas capas.
+
+---
+
 ## Fase 0 — Poder medir, y pagar menos por lo mismo
 
 Nada de esta fase cambia la imagen.
@@ -610,7 +655,31 @@ shader del Paso 1 — por eso va después.
   sol bajo de frente. Es fragment cost puro, así que **este paso sí tiene que
   medirse contra el dial de overdraw**, no sólo contra el frame.
 
-### Paso 8: Brizna curva y acentos (condicional)
+### Paso 8: Brizna curva y acentos — **deja de ser condicional (2026-08-06)**
+
+> **Por qué sube de prioridad.** Este paso estaba marcado *condicional* y se
+> saltó para ir a la Fase 2, que es la que se ve bien enseguida. El día de los
+> cuatro intentos fallidos dio la razón por la que hay que volver: la unidad del
+> campo no aporta suficiente masa visual por triángulo que cuesta, y **por eso
+> ninguna cantidad de densidad, alcance o textura hace que el campo se sostenga
+> solo**.
+>
+> El número que lo sostiene, y es aritmética, no medición: nuestra brizna es un
+> **quad plano con yaw uniforme al azar** (`grass.rs`, `yaw = u3 * TAU`). El
+> ancho que proyecta a pantalla es proporcional al seno del ángulo entre su
+> plano y la vista, y el promedio de `|sin|` sobre todos los yaws es **2/π ≈
+> 0,64**. O sea que una brizna de 5,5 cm rinde en promedio como 3,5, y las que
+> caen cerca de canto **rinden casi cero pagando sus tres triángulos igual**.
+>
+> Una hoja curva no tiene ángulo muerto: siempre hay superficie dando a la
+> cámara. Es lo que se ve en las referencias que el usuario trajo (Genshin), y
+> lo que permite que ensanchar sirva — hoy `width_scale` está en 1.0 con un
+> comentario explicando que ensanchar se probó y se rechazó, y ese rechazo es
+> correcto **para un quad plano**: una tira ancha y recta lee como papel.
+>
+> Curvatura → silueta → se puede ensanchar → hace falta menos densidad. Ése es
+> el orden, y es la única cadena del documento que baja el costo mientras mejora
+> la imagen.
 
 - **Lógica.** Dos cosas que sólo importan en el anillo 0, donde la brizna ocupa
   píxeles de verdad:
@@ -628,7 +697,13 @@ shader del Paso 1 — por eso va después.
   este paso no se abre.
 - **Estado.** No implementado. La curvatura sustituye al *V-split* que la versión
   anterior mandaba a fuera de alcance: apuntaban al mismo problema (de cerca las
-  briznas se ven finas) y la curvatura lo resuelve mejor.
+  briznas se ven finas) y la curvatura lo resuelve mejor. La punta partida sí se
+  hizo, y es media solución al mismo problema por un triángulo.
+- **Lo que hay que cuidar al hacerla.** La curvatura no puede ser sólo geometría
+  doblada: la **normal** tiene que seguirla, o una hoja arqueada se sombrea como
+  una plana y no se gana nada. Hoy la normal se reconstruye en el shader como +Y
+  abombada 0,18 hacia el borde (`blade_normal`), y ese abombado es justamente
+  una imitación barata de la curvatura que este paso haría real.
 
 ---
 

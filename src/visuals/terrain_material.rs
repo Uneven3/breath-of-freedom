@@ -245,7 +245,16 @@ fn setup_terrain_material(
 /// with the grass, not match it — what kills the field's edge is sharing a
 /// colour family, and what keeps the grass legible is the ground staying darker
 /// than it.
-const GRASS_TINT_STRENGTH: f32 = 0.55;
+///
+/// **0,55 → 0,25 el 2026-08-06, cuando el suelo dejó de ser un color plano.**
+/// Esta constante era un sustituto: sin textura, teñir era lo único que impedía
+/// que el campo terminara en una línea contra tierra marrón. Con una textura de
+/// pradera authored en la capa `Soil` (#769746 de media, el mismo family que la
+/// brizna), la rima ya la da el arte y lo que el tinte agrega es aplastarle el
+/// grano. Se baja, no se borra: sigue siendo lo que distingue el suelo *donde
+/// crece pasto* del mismo suelo en una pendiente donde no crece, que es una
+/// diferencia que ninguna textura puede expresar porque depende de la geometría.
+const GRASS_TINT_STRENGTH: f32 = 0.25;
 
 fn grass_tint() -> Vec4 {
     let root = super::grass::ROOT_COLOR;

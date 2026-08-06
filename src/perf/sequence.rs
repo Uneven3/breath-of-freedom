@@ -18,6 +18,7 @@
 use bevy::prelude::*;
 
 use super::data::PerfToggles;
+use super::suite::{BenchSuite, BenchmarkStep};
 
 /// Discarded after each switch: shaders recompile, caches refill, and the
 /// smoothed diagnostics still carry the previous configuration.
@@ -32,23 +33,11 @@ const MEASURE_SECS: f32 = 4.0;
 /// run taken right after launch reads slower than the same run on a warm
 /// process — which is exactly how two otherwise identical runs disagreed.
 const WARMUP_SECS: f32 = 0.5;
-/// Hard stop for lifecycle failures. The normal matrix takes 42 seconds;
-/// fifteen seconds of slack tolerates long frames without stranding toggles.
-const MAX_RUN_SECS: f32 = (WARMUP_SECS + SETTLE_SECS + MEASURE_SECS) * STEPS.len() as f32 + 15.0;
-
-/// Where the camera stands while a run measures.
-///
-/// Authored from the operator's own ritual — walking to the stairs and looking
-/// into the forest — averaged over two hand-placed runs. Standing there by hand
-/// was reproducible to about half a metre, and half a metre turned out to be
-/// worth ~1 ms: enough to swamp the very differences the sequence was being
-/// asked to resolve. Pinning it makes absolute frame times comparable across
-/// sessions, profiles and days, which is what "reproducible baseline" means.
-///
-/// Presentation only: the camera is not simulation, so parking it changes no
-/// `FixedUpdate` result. Gameplay keeps running underneath, unwatched.
-pub const VANTAGE_POSITION: Vec3 = Vec3::new(-6.2, 4.7, -3.2);
-pub const VANTAGE_FACING: Vec3 = Vec3::new(-0.78, -0.02, 0.63);
+/// Hard stop for lifecycle failures, per step, so a longer matrix gets
+/// proportionally longer to finish instead of being cut off at a fixed wall.
+const MAX_SECS_PER_STEP: f32 = WARMUP_SECS + SETTLE_SECS + MEASURE_SECS;
+/// Slack on top, to tolerate long frames without stranding the toggles.
+const RUN_SLACK_SECS: f32 = 15.0;
 
 /// Movement past this (metres from the anchor) invalidates the step.
 const STILLNESS_TOLERANCE: f32 = 0.75;
@@ -57,108 +46,68 @@ const STILLNESS_TOLERANCE: f32 = 0.75;
 /// of trees in frustum, which is precisely the variable under test.
 const AIM_TOLERANCE: f32 = 0.12;
 
-/// One configuration under test. Only the fields a step actually varies are
-/// listed; everything else stays at the baseline for that run.
-#[derive(Clone, Copy)]
-pub struct BenchmarkStep {
-    pub name: &'static str,
-    pub forest_visible: bool,
-    pub sun_shadows: bool,
-    pub moon_shadows: bool,
-    pub cull_step: usize,
-    pub shadow_range_step: usize,
-    pub grass_density_step: usize,
-    pub render_scale_step: usize,
-}
-
-impl BenchmarkStep {
-    const fn baseline(name: &'static str) -> Self {
-        Self {
-            name,
-            forest_visible: true,
-            sun_shadows: true,
-            moon_shadows: true,
-            cull_step: 0,
-            shadow_range_step: 0,
-            grass_density_step: 0,
-            render_scale_step: 0,
-        }
-    }
-}
-
-/// Index of the "unbounded" entry in `SHADOW_CASTER_STEPS`, i.e. the old
-/// behaviour the budget is measured against.
-const SHADOW_BUDGET_OFF: usize = 3;
-
-/// The 70 m entry in `CULL_STEPS`. The matrix reset culling to off for every
-/// step and so never measured the one lever that visibly moves the frame.
-const CULL_MID: usize = 2;
-
-/// Sparse and dense entries of `GRASS_DENSITY_STEPS`, so the density sweep has
-/// two points and not just one — a single point cannot show whether GPU time
-/// *scales* with blade count, which is the whole question.
-const GRASS_SPARSE: usize = 2;
-const GRASS_SPARSEST: usize = 3;
-
-/// The 75% and 50% entries of `RENDER_SCALE_STEPS`.
-const SCALE_75: usize = 1;
-const SCALE_50: usize = 2;
-
-/// The matrix. Ordered so each step changes exactly one thing from the
-/// baseline — a step that changed two would make its delta unattributable.
-/// The trailing baseline repeat is the drift check.
-///
-/// The last four steps are the pair of sweeps `BOTWGrass.md` needs to fill its
-/// fill-bound / vertex-bound matrix: density moves the blade count at constant
-/// resolution, resolution moves the fragment count at constant blade count.
-/// Read together they say which of the two the meadow is actually paying for.
-pub const STEPS: [BenchmarkStep; 11] = [
-    BenchmarkStep::baseline("baseline"),
-    BenchmarkStep {
-        moon_shadows: false,
-        ..BenchmarkStep::baseline("moon-shadow off")
-    },
-    BenchmarkStep {
-        sun_shadows: false,
-        moon_shadows: false,
-        ..BenchmarkStep::baseline("all shadows off")
-    },
-    BenchmarkStep {
-        shadow_range_step: SHADOW_BUDGET_OFF,
-        ..BenchmarkStep::baseline("shadow budget off")
-    },
-    BenchmarkStep {
-        cull_step: CULL_MID,
-        ..BenchmarkStep::baseline("cull 70m")
-    },
-    BenchmarkStep {
-        forest_visible: false,
-        ..BenchmarkStep::baseline("forest hidden")
-    },
-    BenchmarkStep {
-        grass_density_step: GRASS_SPARSE,
-        ..BenchmarkStep::baseline("grass 25/m2")
-    },
-    BenchmarkStep {
-        grass_density_step: GRASS_SPARSEST,
-        ..BenchmarkStep::baseline("grass 10/m2")
-    },
-    BenchmarkStep {
-        render_scale_step: SCALE_75,
-        ..BenchmarkStep::baseline("render 75%")
-    },
-    BenchmarkStep {
-        render_scale_step: SCALE_50,
-        ..BenchmarkStep::baseline("render 50%")
-    },
-    BenchmarkStep::baseline("baseline repeat"),
-];
-
 #[derive(Default)]
 struct StepSamples {
     frame_ms: Vec<f64>,
     gpu_ms: Vec<f64>,
     invalid: bool,
+}
+
+/// Lo que hacía falta saber para que una tabla de milisegundos signifique algo
+/// dentro de un mes. Se toma al **arrancar** la corrida, no al terminarla: al
+/// terminar las perillas ya volvieron a su valor previo y el contexto
+/// describiría otra cosa que la que se midió.
+#[derive(Default)]
+struct RunContext {
+    suite: BenchSuite,
+    scene: String,
+    profile: &'static str,
+    window: UVec2,
+    msaa: String,
+    render_scale: String,
+    grass_density: String,
+    grass_reach: String,
+    shadow_map: String,
+    shadow_range: String,
+    leaf_shadows: String,
+}
+
+impl RunContext {
+    fn capture(
+        suite: BenchSuite,
+        toggles: &PerfToggles,
+        scene: &crate::scene::AppState,
+        window: UVec2,
+    ) -> Self {
+        use bof_domain::perf::PerfKnob;
+        // Del baseline de la suite, no de las perillas de ahora mismo: lo que
+        // el reporte tiene que declarar es contra qué se midió todo lo demás.
+        let mut baseline = *toggles;
+        apply_step(&mut baseline, &suite.steps()[0]);
+        Self {
+            suite,
+            scene: scene_label(scene),
+            profile: baseline.profile.label(),
+            window,
+            msaa: baseline.knob_value(PerfKnob::Msaa),
+            render_scale: baseline.knob_value(PerfKnob::RenderScale),
+            grass_density: baseline.knob_value(PerfKnob::GrassDensity),
+            grass_reach: baseline.knob_value(PerfKnob::GrassReach),
+            shadow_map: baseline.knob_value(PerfKnob::ShadowMap),
+            shadow_range: baseline.knob_value(PerfKnob::ShadowRange),
+            leaf_shadows: baseline.knob_value(PerfKnob::LeafShadows),
+        }
+    }
+}
+
+fn scene_label(state: &crate::scene::AppState) -> String {
+    match state {
+        crate::scene::AppState::MainMenu => "menu".to_string(),
+        crate::scene::AppState::Scene(id) => crate::scene::SCENES
+            .iter()
+            .find(|scene| scene.id == *id)
+            .map_or_else(|| format!("{id:?}"), |scene| scene.label.to_string()),
+    }
 }
 
 /// Result of one completed step.
@@ -174,6 +123,9 @@ pub struct StepResult {
 
 #[derive(Default)]
 pub struct RunState {
+    /// Which matrix this run is walking. Carried on the run rather than read
+    /// from a resource, so a suite cannot change under a run in progress.
+    suite: BenchSuite,
     /// `Some(i)` while priming configuration `i`; `None` once measuring.
     warmup: Option<usize>,
     index: usize,
@@ -185,6 +137,7 @@ pub struct RunState {
     /// Restored when the run finishes, so a benchmark never leaves the game in
     /// a configuration the operator did not choose.
     restore: PerfToggles,
+    context: RunContext,
     /// Where the camera stood when measuring began. Absolute frame times only
     /// mean something relative to a viewpoint — two runs from different spots
     /// see different amounts of forest and are not comparable, which is not
@@ -229,7 +182,8 @@ impl Benchmark {
     /// Progress text: which step, and how far into it.
     pub fn status(&self) -> Option<String> {
         let run = self.run.as_ref()?;
-        let step = STEPS.get(run.index)?;
+        let steps = run.suite.steps();
+        let step = steps.get(run.index)?;
         let (phase, remaining) = if run.elapsed < SETTLE_SECS {
             ("asentando", SETTLE_SECS - run.elapsed)
         } else {
@@ -237,15 +191,17 @@ impl Benchmark {
         };
         if let Some(warming) = run.warmup {
             return Some(format!(
-                "precalentando pipelines {}/{}",
+                "{} · precalentando pipelines {}/{}",
+                run.suite.label(),
                 warming + 1,
-                STEPS.len()
+                steps.len()
             ));
         }
         Some(format!(
-            "paso {}/{} · {} · {phase} {remaining:.1}s",
+            "{} · paso {}/{} · {} · {phase} {remaining:.1}s",
+            run.suite.label(),
             run.index + 1,
-            STEPS.len(),
+            steps.len(),
             step.name
         ))
     }
@@ -264,9 +220,27 @@ pub enum VantageMode {
 }
 
 /// Presentation asks for a run; `perf` owns the sequence and starts it.
+///
+/// La suite viaja en el pedido y no en un recurso, porque quién mide y qué mide
+/// son la misma decisión: el hub tiene un botón por suite.
 #[derive(Message, Debug, Clone, Copy)]
-pub struct BenchmarkRequest(pub VantageMode);
+pub struct BenchmarkRequest {
+    pub vantage: VantageMode,
+    pub suite: BenchSuite,
+}
 
+impl BenchmarkRequest {
+    pub const fn new(suite: BenchSuite, vantage: VantageMode) -> Self {
+        Self { vantage, suite }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "arrancar una corrida necesita el pedido, el estado, las perillas, el reloj, \
+              la cámara, el diagnóstico que la bloquea, y la escena y la ventana que el \
+              reporte declara como contexto"
+)]
 pub(super) fn start_requested_runs(
     mut requests: MessageReader<BenchmarkRequest>,
     mut benchmark: ResMut<Benchmark>,
@@ -274,8 +248,10 @@ pub(super) fn start_requested_runs(
     time: Res<Time<Real>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
     terrain_debug: Res<crate::visuals::terrain_material::TerrainDebugState>,
+    scene: Res<State<crate::scene::AppState>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
 ) {
-    let Some(mode) = requests.read().map(|request| request.0).next() else {
+    let Some(request) = requests.read().copied().next() else {
         return;
     };
     if benchmark.is_running() {
@@ -295,24 +271,35 @@ pub(super) fn start_requested_runs(
         warn!("[bench] cannot start — switch the terrain view back to Arte first");
         return;
     }
-    let pose = match mode {
+    let pose = match request.vantage {
         VantageMode::Here => (camera.translation(), camera.forward().as_vec3()),
-        VantageMode::Canonical => (VANTAGE_POSITION, VANTAGE_FACING),
+        VantageMode::Canonical => request.suite.vantage(),
     };
     let restore = *toggles;
     benchmark.finished = None;
+    let suite = request.suite;
+    let context = RunContext::capture(
+        suite,
+        &toggles,
+        scene.get(),
+        window.map_or(UVec2::ZERO, |window| window.physical_size()),
+    );
     benchmark.run = Some(RunState {
+        suite,
         warmup: Some(0),
         restore,
         vantage: Some(pose),
+        context,
         ..default()
     });
     // Vsync would quantise every step to the same refresh multiple.
     toggles.vsync = false;
-    apply_step(&mut toggles, &STEPS[0]);
+    apply_step(&mut toggles, &suite.steps()[0]);
     info!(
-        "[bench] start — priming {} configurations, then {:.1}s settle + {:.1}s measure each.",
-        STEPS.len(),
+        "[bench] start — suite '{}' ({}), priming {} configurations, then {:.1}s settle + {:.1}s measure each.",
+        suite.label(),
+        suite.question(),
+        suite.steps().len(),
         SETTLE_SECS,
         MEASURE_SECS
     );
@@ -328,8 +315,12 @@ fn apply_step(toggles: &mut PerfToggles, step: &BenchmarkStep) {
     toggles.moon_shadows = step.moon_shadows;
     toggles.cull_step = step.cull_step;
     toggles.shadow_range_step = step.shadow_range_step;
+    toggles.shadow_map_step = step.shadow_map_step;
+    toggles.leaf_shadows = step.leaf_shadows;
     toggles.grass_density_step = step.grass_density_step;
+    toggles.grass_reach_step = step.grass_reach_step;
     toggles.render_scale_step = step.render_scale_step;
+    toggles.msaa_step = step.msaa_step;
 }
 
 #[derive(Clone, Copy)]
@@ -352,7 +343,7 @@ fn finalize_benchmark(
     let valid = run.results.iter().filter(|step| !step.invalid).count();
     let aborted = match reason {
         FinishReason::Completed => {
-            report(&run.results, run.vantage);
+            report(&run.results, run.vantage, &run.context);
             None
         }
         FinishReason::Aborted(reason) => {
@@ -394,7 +385,8 @@ pub(super) fn advance_benchmark(
 
     run.elapsed += time.delta_secs();
     run.total_elapsed += time.delta_secs();
-    if run.total_elapsed > MAX_RUN_SECS {
+    let max_secs = MAX_SECS_PER_STEP * run.suite.steps().len() as f32 + RUN_SLACK_SECS;
+    if run.total_elapsed > max_secs {
         finalize_benchmark(
             &mut benchmark,
             &mut toggles,
@@ -411,14 +403,14 @@ pub(super) fn advance_benchmark(
             return;
         }
         run.elapsed = 0.0;
-        match STEPS.get(warming + 1) {
+        match run.suite.steps().get(warming + 1) {
             Some(step) => {
                 run.warmup = Some(warming + 1);
                 apply_step(&mut toggles, step);
             }
             None => {
                 run.warmup = None;
-                apply_step(&mut toggles, &STEPS[0]);
+                apply_step(&mut toggles, &run.suite.steps()[0]);
                 info!("[bench] warm-up done — measuring.");
             }
         }
@@ -454,13 +446,13 @@ pub(super) fn advance_benchmark(
     }
 
     run.results
-        .push(summarise(STEPS[run.index].name, &run.current));
+        .push(summarise(run.suite.steps()[run.index].name, &run.current));
     run.index += 1;
     run.elapsed = 0.0;
     run.anchor = None;
     run.current = StepSamples::default();
 
-    match STEPS.get(run.index) {
+    match run.suite.steps().get(run.index) {
         Some(step) => apply_step(&mut toggles, step),
         None => {
             finalize_benchmark(
@@ -473,9 +465,14 @@ pub(super) fn advance_benchmark(
     }
 }
 
-/// `None` when there is no usable baseline to subtract from.
-fn delta_against(baseline: Option<&StepResult>, result: &StepResult) -> Option<f64> {
-    Some(result.frame_mean - baseline?.frame_mean)
+/// `None` cuando no hay baseline utilizable del que restar.
+///
+/// Existe como función y no como una resta suelta por el bug que ya ocurrió: un
+/// baseline inválido igual tiene un `frame_mean`, así que restarle producía un
+/// número inventado con el formato exacto de una medición. Una corrida sin
+/// baseline utilizable tiene que **retener** los deltas, no fabricarlos.
+fn delta_against(baseline: Option<f64>, value: f64) -> Option<f64> {
+    Some(value - baseline?)
 }
 
 fn summarise(name: &'static str, samples: &StepSamples) -> StepResult {
@@ -501,7 +498,13 @@ fn summarise(name: &'static str, samples: &StepSamples) -> StepResult {
 /// The before/after table `AHORA.md` requires as the closing criterion.
 /// Deltas are against the first step, and the repeated baseline at the end
 /// bounds how much of any delta is drift rather than the change under test.
-fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>) {
+///
+/// **Abre declarando qué se midió, y eso no es adorno.** Una tabla de
+/// milisegundos sin su contexto no se puede comparar con otra de la semana que
+/// viene: el 2026-08-06 hubo que deducir del delta del bosque en qué escena
+/// había corrido una tabla, porque no lo decía. Perfil, escena, resolución y las
+/// perillas del baseline son lo que hace que dos corridas hablen de lo mismo.
+fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>, context: &RunContext) {
     let Some(first) = results.first() else {
         return;
     };
@@ -509,32 +512,61 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>) {
     // costume of a measurement. Without a usable baseline the run reports its
     // absolute values and says so, rather than inviting a false comparison.
     let baseline = (!first.invalid).then_some(first);
+    info!(
+        "[bench] ================ {} ================",
+        context.suite.label()
+    );
+    info!("[bench] pregunta: {}", context.suite.question());
+    info!(
+        "[bench] escena={} perfil={} ventana={}x{} msaa={} render={}",
+        context.scene,
+        context.profile,
+        context.window.x,
+        context.window.y,
+        context.msaa,
+        context.render_scale,
+    );
+    info!(
+        "[bench] pasto: densidad={} alcance={} · sombras: mapa={} rango={} hoja={}",
+        context.grass_density,
+        context.grass_reach,
+        context.shadow_map,
+        context.shadow_range,
+        context.leaf_shadows,
+    );
     if let Some((position, facing)) = vantage {
         info!(
-            "[bench] vantage pos=({:.1},{:.1},{:.1}) facing=({:.2},{:.2},{:.2}) — \
-             absolute values only compare against a run from the same spot",
+            "[bench] mirador pos=({:.1},{:.1},{:.1}) facing=({:.2},{:.2},{:.2}) — \
+             los valores absolutos sólo comparan contra una corrida del mismo lugar",
             position.x, position.y, position.z, facing.x, facing.y, facing.z
         );
     }
-    info!("[bench] ---- results (frame ms, lower is better) ----");
+    info!("[bench] ---- resultados (ms, menos es mejor) ----");
     info!(
-        "[bench] {:<20} {:>9} {:>9} {:>9} {:>9} {:>7} {:>7}",
-        "step", "mean", "min", "max", "gpu", "delta", "n"
+        "[bench] {:<20} {:>9} {:>9} {:>9} {:>8} {:>9} {:>8} {:>6}",
+        "step", "frame", "min", "max", "d-frame", "gpu", "d-gpu", "n"
     );
     for result in results {
         if result.invalid {
             info!(
-                "[bench] {:<20} INVALID (moved, looked around, or no samples)",
+                "[bench] {:<20} INVÁLIDO (se movió, miró para otro lado, o no hubo muestras)",
                 result.name
             );
             continue;
         }
-        let delta = match delta_against(baseline, result) {
-            Some(delta) => format!("{delta:+7.2}"),
-            None => format!("{:>7}", "n/a"),
+        let frame_delta =
+            match delta_against(baseline.map(|base| base.frame_mean), result.frame_mean) {
+                Some(delta) => format!("{delta:+8.2}"),
+                None => format!("{:>8}", "n/a"),
+            };
+        // El delta de GPU es la columna que sobrevive cuando la presentación
+        // clava el frame, que es la mitad de las corridas en esta máquina.
+        let gpu_delta = match delta_against(baseline.map(|base| base.gpu_mean), result.gpu_mean) {
+            Some(delta) => format!("{delta:+8.2}"),
+            None => format!("{:>8}", "n/a"),
         };
         info!(
-            "[bench] {:<20} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {delta} {:>7}",
+            "[bench] {:<20} {:>9.2} {:>9.2} {:>9.2} {frame_delta} {:>9.2} {gpu_delta} {:>6}",
             result.name,
             result.frame_mean,
             result.frame_min,
@@ -544,7 +576,7 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>) {
         );
     }
     if baseline.is_none() {
-        warn!("[bench] baseline INVALID — deltas withheld; absolute values only");
+        warn!("[bench] baseline INVÁLIDO — sin deltas; sólo valores absolutos");
     }
 
     if let (Some(first), Some(last)) = (baseline, results.last())
@@ -552,53 +584,74 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>) {
     {
         let drift = last.frame_mean - first.frame_mean;
         info!(
-            "[bench] drift between the two baselines: {drift:+.2} ms — any delta smaller than this is noise",
+            "[bench] deriva entre los dos baselines: {drift:+.2} ms — todo delta de frame menor que esto es ruido",
         );
     }
+    warn_if_presentation_capped(results);
+}
+
+/// Avisa cuando el **frame está clavado por la presentación** y sus deltas no
+/// significan nada.
+///
+/// Pasó en la primera corrida automática, el 2026-08-06: once pasos que iban de
+/// 2,15 a 7,98 ms de GPU reportaron todos 16,66-16,67 ms de frame. Con el
+/// compositor sincronizando la presentación, el frame mide el ritmo de la
+/// pantalla y no el trabajo que se hizo — y una tabla así **invita a concluir
+/// que nada cuesta nada**, que es peor que no medir.
+///
+/// El criterio no nombra ningún refresh: si el trabajo de GPU se mueve mucho
+/// entre pasos y el frame casi nada, el frame no está midiendo el trabajo. Eso
+/// vale a 60 Hz, a 144 y en una máquina que no conocemos.
+fn warn_if_presentation_capped(results: &[StepResult]) {
+    if !presentation_capped(results) {
+        return;
+    }
+    warn!(
+        "[bench] el frame casi no se movió entre pasos mientras la GPU sí — está clavado por \
+         la presentación, no por el trabajo. **Leé la columna d-gpu y descartá d-frame.** \
+         Suele pasar con la ventana en segundo plano."
+    );
+}
+
+/// El criterio, aparte para poder probarlo: si el trabajo de GPU se mueve mucho
+/// entre pasos y el frame casi nada, el frame no está midiendo el trabajo. No
+/// nombra ningún refresh — vale a 60 Hz, a 144, y en una máquina que no
+/// conocemos.
+fn presentation_capped(results: &[StepResult]) -> bool {
+    let spread = |values: &mut dyn Iterator<Item = f64>| {
+        let (mut low, mut high) = (f64::MAX, 0.0_f64);
+        for value in values {
+            low = low.min(value);
+            high = high.max(value);
+        }
+        (low <= high).then_some((low, high))
+    };
+    let valid: Vec<&StepResult> = results.iter().filter(|step| !step.invalid).collect();
+    if valid.len() < 3 {
+        return false;
+    }
+    let (Some((frame_low, frame_high)), Some((gpu_low, gpu_high))) = (
+        spread(&mut valid.iter().map(|step| step.frame_mean)),
+        spread(&mut valid.iter().map(|step| step.gpu_mean)),
+    ) else {
+        return false;
+    };
+    if frame_low <= 0.0 || gpu_low <= 0.0 {
+        return false;
+    }
+    let frame_swing = (frame_high - frame_low) / frame_low;
+    let gpu_swing = (gpu_high - gpu_low) / gpu_low;
+    frame_swing < 0.05 && gpu_swing > 0.20
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A step that changed two things at once would produce a delta nobody can
-    /// attribute. Only the trailing baseline repeat may match the first.
-    #[test]
-    fn every_step_varies_exactly_one_axis_from_the_baseline() {
-        let base = &STEPS[0];
-        for step in &STEPS[1..STEPS.len() - 1] {
-            let changed = [
-                step.forest_visible != base.forest_visible,
-                step.cull_step != base.cull_step,
-                step.shadow_range_step != base.shadow_range_step,
-                step.grass_density_step != base.grass_density_step,
-                step.render_scale_step != base.render_scale_step,
-                // Shadows count as one axis: "all shadows off" deliberately
-                // moves both lights together.
-                step.sun_shadows != base.sun_shadows || step.moon_shadows != base.moon_shadows,
-            ]
-            .iter()
-            .filter(|changed| **changed)
-            .count();
-            assert_eq!(changed, 1, "{} varies {changed} axes", step.name);
-        }
-    }
-
-    /// Without a repeated baseline there is no way to tell a real win from the
-    /// machine warming up over the course of the run.
-    #[test]
-    fn the_run_starts_and_ends_on_the_baseline() {
-        let first = STEPS.first().expect("non-empty");
-        let last = STEPS.last().expect("non-empty");
-        assert_eq!(first.forest_visible, last.forest_visible);
-        assert_eq!(first.sun_shadows, last.sun_shadows);
-        assert_eq!(first.moon_shadows, last.moon_shadows);
-        assert_eq!(first.cull_step, last.cull_step);
-        assert_eq!(first.shadow_range_step, last.shadow_range_step);
-        assert_eq!(first.grass_density_step, last.grass_density_step);
-        assert_eq!(first.render_scale_step, last.render_scale_step);
-        assert_ne!(first.name, last.name, "the table must tell them apart");
-    }
+    /// Las reglas de las matrices (un eje por paso, baseline al principio y al
+    /// final) viven con las matrices, en `suite.rs`. Acá se prueba el **motor**:
+    /// que aplique un paso entero, que restaure lo que encontró, y que no deje
+    /// un diagnóstico visual prendido contaminando las muestras.
 
     #[test]
     fn benchmark_steps_disable_visual_diagnostics() {
@@ -608,10 +661,56 @@ mod tests {
             ..default()
         };
 
-        apply_step(&mut toggles, &STEPS[0]);
+        apply_step(&mut toggles, &BenchSuite::General.steps()[0]);
 
         assert!(!toggles.wireframe);
         assert!(!toggles.overdraw);
+    }
+
+    /// El motor tiene que aplicar **todos** los ejes de un paso. El agujero que
+    /// esto cierra ya pasó una vez: `apply_step` copiaba cinco campos y la
+    /// matriz declaraba seis, así que un paso pedía una cosa y medía otra sin
+    /// que nada fallara. Se compara contra el juego entero de perillas que un
+    /// paso puede mover.
+    #[test]
+    fn applying_a_step_moves_every_axis_the_step_declares() {
+        for suite in BenchSuite::ALL {
+            for step in suite.steps() {
+                let mut toggles = PerfToggles::default();
+                apply_step(&mut toggles, step);
+                assert_eq!(toggles.forest_visible, step.forest_visible, "{}", step.name);
+                assert_eq!(toggles.sun_shadows, step.sun_shadows, "{}", step.name);
+                assert_eq!(toggles.moon_shadows, step.moon_shadows, "{}", step.name);
+                assert_eq!(toggles.cull_step, step.cull_step, "{}", step.name);
+                assert_eq!(
+                    toggles.shadow_range_step, step.shadow_range_step,
+                    "{}",
+                    step.name
+                );
+                assert_eq!(
+                    toggles.shadow_map_step, step.shadow_map_step,
+                    "{}",
+                    step.name
+                );
+                assert_eq!(toggles.leaf_shadows, step.leaf_shadows, "{}", step.name);
+                assert_eq!(
+                    toggles.grass_density_step, step.grass_density_step,
+                    "{}",
+                    step.name
+                );
+                assert_eq!(
+                    toggles.grass_reach_step, step.grass_reach_step,
+                    "{}",
+                    step.name
+                );
+                assert_eq!(
+                    toggles.render_scale_step, step.render_scale_step,
+                    "{}",
+                    step.name
+                );
+                assert_eq!(toggles.msaa_step, step.msaa_step, "{}", step.name);
+            }
+        }
     }
 
     #[test]
@@ -687,15 +786,15 @@ mod tests {
         );
     }
 
-    fn result(name: &'static str, frame_mean: f64, invalid: bool) -> StepResult {
+    fn result(frame_mean: f64, gpu_mean: f64) -> StepResult {
         StepResult {
-            name,
+            name: "step",
             frame_mean,
             frame_min: frame_mean,
             frame_max: frame_mean,
-            gpu_mean: 0.0,
-            samples: 10,
-            invalid,
+            gpu_mean,
+            samples: 240,
+            invalid: false,
         }
     }
 
@@ -705,11 +804,27 @@ mod tests {
     /// deltas, not invent them.
     #[test]
     fn no_delta_is_reported_without_a_valid_baseline() {
-        let measured = result("cull 70m", 18.45, false);
-        assert_eq!(delta_against(None, &measured), None);
+        assert_eq!(delta_against(None, 18.45), None);
+        assert_eq!(delta_against(Some(24.23), 18.45), Some(18.45 - 24.23));
+    }
 
-        let usable = result("baseline", 24.23, false);
-        assert_eq!(delta_against(Some(&usable), &measured), Some(18.45 - 24.23));
+    /// La corrida automática del 2026-08-06: once pasos con la GPU entre 2,15 y
+    /// 7,98 ms y **todos** los frames en 16,66-16,67. Sin este aviso la tabla
+    /// invita a concluir que ningún paso cuesta nada.
+    #[test]
+    fn a_frame_pinned_by_presentation_is_called_out() {
+        let pinned: Vec<StepResult> = [(16.67, 6.30), (16.66, 2.31), (16.67, 7.98)]
+            .into_iter()
+            .map(|(frame, gpu)| result(frame, gpu))
+            .collect();
+        assert!(presentation_capped(&pinned));
+
+        // Y una corrida sana no dispara el aviso: acá el frame sigue a la GPU.
+        let healthy: Vec<StepResult> = [(7.47, 5.82), (5.51, 4.90), (5.80, 4.25)]
+            .into_iter()
+            .map(|(frame, gpu)| result(frame, gpu))
+            .collect();
+        assert!(!presentation_capped(&healthy));
     }
 
     #[test]

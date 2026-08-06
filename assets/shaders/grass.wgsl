@@ -49,7 +49,8 @@ struct GrassUniform {
     sss_amount: f32,
     time: f32,
     focus_xz: vec2<f32>,
-    fade_band: f32,
+    growth_ramp: f32,
+    growth_spread: f32,
     wind_dir: vec2<f32>,
     wind_strength: f32,
     wind_speed: f32,
@@ -79,25 +80,34 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
 /// ventaja principal del chip (ley 3 de `BOTWGrass.md`).
 ///
-/// Dos cosas que la primera versión no hacía y por las que el pasto "aparecía
-/// de golpe" al caminar:
+/// La banda es del borde de **su** anillo, no del anillo más lejano: los
+/// anillos internos también ruedan, y sin banda propia sus chunks nacían
+/// enteros y de una. `ring_reach` viaja por vértice justamente para esto.
 ///
-/// 1. **La banda es del borde de *su* anillo, no del anillo más lejano.** Los
-///    anillos internos también ruedan: al caminar nacen chunks de 45 briznas/m²
-///    a ocho metros de la cámara, y sin banda propia nacían enteros y de una.
-///    `ring_reach` viaja por vértice justamente para esto.
-/// 2. **Cada brizna se apaga en un punto distinto de la banda**, corrido por su
-///    hash. Si todas se encogen a la vez el campo entero baja como una persiana,
-///    que es un artefacto tan visible como el pop que reemplaza; escalonadas, lo
-///    que se ve es un campo que se va raleando.
+/// **Y son dos números, no uno, porque son dos fenómenos distintos.** Hasta el
+/// 2026-08-06 una sola constante gobernaba las dos cosas y por eso no había
+/// forma de arreglar el crecimiento: acortarla las acortaba a las dos.
+///
+/// - `growth_ramp` es lo que tarda **una** brizna en pasar de nada a entera.
+///   Corta. Una brizna sola creciendo es imperceptible; lo que se percibe es
+///   *que todas crezcan juntas*.
+/// - `growth_spread` es en cuántos metros se reparten los **umbrales** de las
+///   distintas briznas, corridos por su hash. Largo. Esto es lo que convierte
+///   una ola que avanza con el jugador en un raleo gradual hacia el borde: a
+///   cada distancia sobrevive una fracción distinta del anillo, y lo que el ojo
+///   lee es densidad que baja con la distancia, que es lo que hace un campo de
+///   verdad.
+///
+/// Con la rampa corta metida dentro de una dispersión larga, en ningún momento
+/// hay una franja donde todo esté creciendo a la vez — que era exactamente el
+/// artefacto reportado jugando.
 fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
-    // El corrimiento por brizna se come media banda, así que la banda efectiva
-    // es más ancha que `fade_band` y ninguna brizna sobrevive más allá del
-    // alcance de su anillo.
-    let stagger = grass_data.fade_band * 0.5 * blade_hash;
-    let ends = ring_reach - stagger;
-    let starts = ends - grass_data.fade_band * 0.5;
+    // El umbral propio de esta brizna, en algún punto de la dispersión. Ninguna
+    // sobrevive más allá del alcance de su anillo: con hash 0 el umbral es el
+    // borde exacto.
+    let ends = ring_reach - grass_data.growth_spread * blade_hash;
+    let starts = ends - grass_data.growth_ramp;
     return 1.0 - smoothstep(starts, ends, distance);
 }
 

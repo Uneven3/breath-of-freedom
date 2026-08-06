@@ -13,10 +13,12 @@
 //! (§7): `world::day_night` for the sun/moon and `visuals::forest` for tree
 //! visuals.
 
+pub mod auto;
 pub(crate) mod budget;
 pub mod data;
 pub mod flythrough;
 pub mod sequence;
+pub mod suite;
 
 use bevy::diagnostic::DiagnosticsStore;
 use bevy::prelude::*;
@@ -25,12 +27,19 @@ use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 pub use data::{PerfKnob, PerfProfile, PerfToggles};
 pub use flythrough::{Flythrough, FlythroughRequest};
 pub use sequence::{Benchmark, BenchmarkRequest};
+pub use suite::BenchSuite;
 
 pub struct PerfPlugin;
 
 impl Plugin for PerfPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(data::configured_toggles());
+        // Sólo existe cuando `BOF_BENCH` la pide, y los sistemas que la mueven
+        // se gatean con `resource_exists`: sin la variable, nada de esto corre
+        // ni cuesta un frame.
+        if let Some(auto) = auto::configured_auto_bench() {
+            app.insert_resource(auto);
+        }
         app.init_resource::<Benchmark>();
         app.init_resource::<Flythrough>();
         app.init_resource::<ScriptedCameraPose>();
@@ -53,6 +62,7 @@ impl Plugin for PerfPlugin {
                 reconcile_scripted_camera_pose,
                 apply_present_mode,
                 budget::warn_scene_budget,
+                auto::drive_auto_bench.run_if(resource_exists::<auto::AutoBench>),
             )
                 .chain(),
         );

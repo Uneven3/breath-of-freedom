@@ -70,7 +70,44 @@ pub const SHADOW_MAP_STEPS: [usize; 3] = [2048, 1024, 512];
 /// [`PerfKnob`] cannot enter the A/B matrix — no warmup, no settle window, no
 /// parked camera, no drift check — and what it produces is an impression, not a
 /// measurement.
-pub const GRASS_DENSITY_STEPS: [f32; 4] = [45.0, 70.0, 25.0, 10.0];
+///
+/// El último paso es **cero**, y existe por una pregunta que el barrido no podía
+/// contestar: cuánto cuesta la pradera *entera*. Con el paso más ralo en 10/m²
+/// lo más que se sabía era la pendiente de la curva, y extrapolar a cero es una
+/// estimación, no una medición. Un paso en cero la convierte en resta.
+pub const GRASS_DENSITY_STEPS: [f32; 5] = [56.0, 80.0, 30.0, 12.0, 0.0];
+
+/// Scale applied to every ring's reach, for the sweep that separates *how much
+/// grass is near the camera* from *how far the field goes*.
+///
+/// Density and reach both change the blade count, and until this existed the
+/// only dial that moved it was density — so a run could tell you that the meadow
+/// costs, but not which half of it. They are not interchangeable: near blades
+/// are few but cover many pixels each, far blades are many and cover almost
+/// none. On a fill-bound frame the first dominates, on a bandwidth-bound one the
+/// second. `BOTWGrass.md` has been asking which since it was rewritten.
+///
+/// Only whole-metre products, because a ring's reach travels packed in the whole
+/// part of a vertex attribute; the meadow rounds and a test pins that every
+/// combination lands on an integer.
+pub const GRASS_REACH_STEPS: [f32; 3] = [1.0, 0.75, 0.5];
+
+/// Multisample counts for the anti-aliasing sweep, as sample counts — 1 is off.
+///
+/// **Existe por el parpadeo del pasto**, reportado jugando tres veces seguidas y
+/// sobreviviendo a la histéresis de chunks que se creyó que era la causa. La
+/// hipótesis viva es aliasing temporal: una brizna de 5,5 cm de ancho vista a
+/// veinte metros es más angosta que un píxel, y una figura sub-píxel sin MSAA
+/// titila al moverse la cámara porque cae dentro o fuera del centro del píxel de
+/// un frame al otro. No es un bug del pasto; es lo que le pasa a cualquier
+/// geometría fina sin muestreo múltiple.
+///
+/// Hasta ahora MSAA se elegía **sólo al arrancar, por perfil**, así que probar
+/// la hipótesis obligaba a lanzar con `BOF_PROFILE=mobile` — que además cambia
+/// el shadow map, el culling y la distancia de sombras. Cuatro variables a la
+/// vez no contestan una pregunta. Como perilla es un click, y entra al barrido
+/// con su ventana de asentamiento.
+pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 
 /// Fraction of the window the camera actually renders, for the resolution
 /// sweep. The other half of the pair above: if GPU time tracks *this* and not
@@ -97,11 +134,13 @@ pub enum PerfKnob {
     LeafShadows,
     TreeDetail,
     GrassDensity,
+    GrassReach,
     RenderScale,
+    Msaa,
 }
 
 impl PerfKnob {
-    pub const ALL: [PerfKnob; 14] = [
+    pub const ALL: [PerfKnob; 16] = [
         PerfKnob::Vsync,
         PerfKnob::Forest,
         PerfKnob::Wireframe,
@@ -115,7 +154,9 @@ impl PerfKnob {
         PerfKnob::LeafShadows,
         PerfKnob::TreeDetail,
         PerfKnob::GrassDensity,
+        PerfKnob::GrassReach,
         PerfKnob::RenderScale,
+        PerfKnob::Msaa,
     ];
 
     pub fn label(self) -> &'static str {
@@ -133,7 +174,9 @@ impl PerfKnob {
             PerfKnob::LeafShadows => "leaf-shadows",
             PerfKnob::TreeDetail => "tree-detail",
             PerfKnob::GrassDensity => "grass-density",
+            PerfKnob::GrassReach => "grass-reach",
             PerfKnob::RenderScale => "render-scale",
+            PerfKnob::Msaa => "msaa",
         }
     }
 }
@@ -186,8 +229,15 @@ pub struct PerfToggles {
     /// Indexes [`GRASS_DENSITY_STEPS`]. Rebuilding the field is the one knob
     /// with a real CPU cost per step, so the A/B settle window matters here.
     pub grass_density_step: usize,
+    /// Indexes [`GRASS_REACH_STEPS`]. Like the density step, changing it
+    /// re-bakes every chunk, so the A/B settle window matters.
+    pub grass_reach_step: usize,
     /// Indexes [`RENDER_SCALE_STEPS`].
     pub render_scale_step: usize,
+    /// Indexes [`MSAA_STEPS`]. Set from the profile at launch rather than
+    /// defaulting to zero, because the shipped configuration differs between
+    /// desktop and mobile and a benchmark's baseline has to be what ships.
+    pub msaa_step: usize,
 }
 
 impl Default for PerfToggles {
@@ -208,7 +258,9 @@ impl Default for PerfToggles {
             leaf_shadows: false,
             tree_detail: false,
             grass_density_step: 0,
+            grass_reach_step: 0,
             render_scale_step: 0,
+            msaa_step: 0,
         }
     }
 }
@@ -224,6 +276,9 @@ impl PerfToggles {
             toggles.shadow_range_step = 2;
             toggles.shadow_distance_step = 4;
             toggles.shadow_map_step = 2;
+            // El perfil móvil venía con MSAA 4x desde antes de que fuera
+            // perilla; que siga siendo su baseline.
+            toggles.msaa_step = 1;
         }
         toggles
     }
@@ -261,6 +316,20 @@ impl PerfToggles {
             .get(self.grass_density_step)
             .copied()
             .unwrap_or(GRASS_DENSITY_STEPS[0])
+    }
+
+    pub fn grass_reach_scale(&self) -> f32 {
+        GRASS_REACH_STEPS
+            .get(self.grass_reach_step)
+            .copied()
+            .unwrap_or(GRASS_REACH_STEPS[0])
+    }
+
+    pub fn msaa_samples(&self) -> u32 {
+        MSAA_STEPS
+            .get(self.msaa_step)
+            .copied()
+            .unwrap_or(MSAA_STEPS[0])
     }
 
     pub fn render_scale(&self) -> f32 {
@@ -302,9 +371,13 @@ impl PerfToggles {
                 self.grass_density_step =
                     (self.grass_density_step + 1) % GRASS_DENSITY_STEPS.len()
             }
+            PerfKnob::GrassReach => {
+                self.grass_reach_step = (self.grass_reach_step + 1) % GRASS_REACH_STEPS.len()
+            }
             PerfKnob::RenderScale => {
                 self.render_scale_step = (self.render_scale_step + 1) % RENDER_SCALE_STEPS.len()
             }
+            PerfKnob::Msaa => self.msaa_step = (self.msaa_step + 1) % MSAA_STEPS.len(),
         }
     }
 
@@ -342,7 +415,12 @@ impl PerfToggles {
             PerfKnob::LeafShadows => on_off(self.leaf_shadows),
             PerfKnob::TreeDetail => on_off(self.tree_detail),
             PerfKnob::GrassDensity => format!("{:.0}/m2", self.grass_density()),
+            PerfKnob::GrassReach => format!("{:.0}%", self.grass_reach_scale() * 100.0),
             PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),
+            PerfKnob::Msaa => match self.msaa_samples() {
+                1 => "off".to_string(),
+                samples => format!("{samples}x"),
+            },
         }
     }
 

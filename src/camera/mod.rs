@@ -80,6 +80,7 @@ impl Plugin for CameraPlugin {
                 park_scripted_camera,
                 crosshair::toggle,
                 apply_render_scale,
+                apply_msaa,
             )
                 .chain(),
         );
@@ -136,6 +137,27 @@ fn apply_render_scale(
             physical_size,
             ..default()
         });
+    }
+}
+
+/// Applies the `Msaa` knob to the one camera (§7, same as the render scale).
+///
+/// **Changing this rebuilds render pipelines**, because the sample count is part
+/// of a pipeline's key — so the first frames after a click stutter while they
+/// recompile. That is not a reason to keep it at launch-time only: it is a
+/// reason for the benchmark to prime every configuration before measuring,
+/// which it already does. Outside a run the hitch is one click's worth.
+///
+/// Gated on `is_changed` rather than run every frame like the viewport: nothing
+/// else invalidates it, and writing the component unconditionally would mark it
+/// changed every frame for every observer downstream.
+fn apply_msaa(perf: Res<crate::perf::PerfToggles>, mut camera: Single<&mut Msaa, With<CameraRig>>) {
+    if !perf.is_changed() {
+        return;
+    }
+    let wanted = crate::perf::data::msaa_for_samples(perf.msaa_samples());
+    if **camera != wanted {
+        **camera = wanted;
     }
 }
 

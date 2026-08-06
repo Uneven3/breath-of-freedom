@@ -19,10 +19,15 @@ pub struct GrassUniform {
     /// their distance to this point, so a chunk is always culled *after* its
     /// blades have already gone to nothing.
     pub focus_xz: Vec2,
-    /// How wide the band is, in metres, over which a blade shrinks to nothing
-    /// before its chunk is culled. The band sits at the outer edge of *each*
-    /// ring, and each blade is staggered inside it by its own hash.
-    pub fade_band: f32,
+    /// How many metres **one** blade takes to grow from nothing to full height.
+    /// Short: a single blade growing is invisible, what the eye catches is a
+    /// whole band of them growing at once.
+    pub growth_ramp: f32,
+    /// Over how many metres, inward from each ring's edge, the blades'
+    /// individual thresholds are spread by their hash. Long: this is what turns
+    /// a wave travelling with the player into a field that thins out with
+    /// distance. See `blade_growth` in `grass.wgsl`.
+    pub growth_spread: f32,
     /// Wind direction in world XZ, normalised, and how far a tip travels at
     /// full gust as a fraction of the blade's height.
     pub wind_dir: Vec2,
@@ -45,9 +50,10 @@ impl Default for GrassUniform {
             sss_amount: 0.4,
             time: 0.0,
             focus_xz: Vec2::ZERO,
-            // Fades nothing by default: the meadow overwrites it every frame,
-            // and a material used without one should not shrink.
-            fade_band: 0.0,
+            // Shrinks nothing by default: the meadow overwrites both every
+            // frame, and a material used without one should not shrink.
+            growth_ramp: 0.0,
+            growth_spread: 0.0,
             wind_dir: Vec2::new(0.80, 0.60),
             // A tip leaning a fifth of its height at full gust. Grass that
             // bends further reads as wheat.

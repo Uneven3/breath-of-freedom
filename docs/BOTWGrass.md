@@ -175,35 +175,64 @@ geometría horneada**. La densidad se decide al construir la malla del chunk.
 
 ---
 
-## Estado actual (medido el 2026-07-25, en escritorio)
+## Estado actual (medido el 2026-08-06, en escritorio)
 
-Implementado en `src/visuals/grass.rs`, con 4 tests:
+Implementado en `src/visuals/grass.rs` y `assets/shaders/grass.wgsl`, 18 tests.
+Grilla rodante de tres anillos: **56 / 28 / 10 briznas por m²** hasta 10, 16 y
+32 m, chunks de 5/10/20 m, brizna de 0,45-0,90 m, punta partida en los dos
+anillos internos. 489.200 triángulos declarados en los 360° al peor
+alineamiento.
 
-- **45 briznas/m²**, 28.125 briznas, 56.250 triángulos.
-- **25 entidades** (chunks de 5×5 m en una grilla de 5×5), una malla y un draw
-  call cada uno. **Cero trabajo por frame**: nada recorre briznas.
-- Brizna generada en código: quad con punta angostada, normales +Y, degradado
-  raíz→punta por **color de vértice** (`StandardMaterial` lo multiplica por su
-  base, así que el gradiente no cuesta un shader).
-- Filtro de pendiente: nada de pasto sobre 45°, briznas más cortas sobre 35°.
-- Material **opaco**, `double_sided` (una brizna se ve de los dos lados),
-  `NotShadowCaster`.
+### La medición que este documento venía pidiendo desde que se reescribió
 
-Medición en la caja `Pasto`, mismo punto, 7 configuraciones A/B *(tipo a)*:
+`BOF_BENCH=grass`, caja `Pasto`, altura de ojo mirando al horizonte, Polaris 11
+*(tipo a: medición nuestra)*. **La columna que vale es la de GPU** — el frame
+quedó clavado por la presentación y el propio reporte lo avisó.
 
-| | valor |
-|---|---|
-| frame | **5,78 ms** (techo 16,6; objetivo sostenido ~11) |
-| gpu | 4,16 ms |
-| draws / meshes en pantalla | 11 |
-| única palanca fuera del ruido | sombras: −0,66 ms |
-| deriva entre baselines | 0,05 ms (cualquier delta menor es ruido) |
+| paso | GPU ms | contra baseline |
+|---|---:|---:|
+| baseline (56/m², alcance 100%) | 6,08 | — |
+| **pasto apagado** | 2,31 | **−3,77** |
+| densidad 80/m² | 7,02 | +0,94 |
+| densidad 30/m² | 5,00 | −1,08 |
+| densidad 12/m² | 3,56 | −2,52 |
+| alcance 75% | 5,54 | −0,54 |
+| alcance 50% | 3,96 | −2,12 |
+| render 50% | 2,17 | −3,90 |
+| MSAA 4x | 8,17 | +2,10 |
+| MSAA 2x | 7,54 | +1,46 |
 
-**Y el dato que el conteo escondía:** la pradera cubre 625 m² de un mundo de
-320×320 m, y ya se lleva el **52% del presupuesto de triángulos de la escena
-Mundo** (`AHORA.md`). Extendida al mapa entero serían millones de triángulos.
-La forma "campo horneado de tamaño fijo" no llega, y afinarla no la va a hacer
-llegar. Ver Fase 1.
+Deriva entre los dos baselines: **0,25 ms**. Todo delta menor es ruido.
+
+**1. La pradera es el 62% de la GPU de su caja.** 3,77 ms de 6,08. Por resta
+contra un paso en cero, no por extrapolación desde el paso más ralo — que es
+todo lo que se podía hacer hasta que existió un paso de 0/m².
+
+**2. Es fill-bound, y con eso se cierra la pregunta central del documento.**
+Bajar la resolución a la mitad —misma geometría, los mismos 489.200
+triángulos— ahorra **3,90 ms, más que apagar la pradera entera**. Lo que cuesta
+es cuántos píxeles pinta cada brizna encima de otra, no cuántas briznas hay.
+Consecuencias directas:
+
+- El conteo de triángulos es **guardrail, no objetivo** — con la salvedad de
+  siempre, que en el target tile-based un vértice se paga en bandwidth aunque no
+  produzca un píxel *(tipo b)*, y eso no se manifiesta en esta máquina.
+- El cambio de target a **900p30** golpea exactamente la palanca correcta, y no
+  por casualidad: es el mismo eje que el paso de render 50%.
+- Las técnicas que reducen *overdraw* pasan al frente de la fila; las que
+  reducen vértices, atrás.
+
+**3. MSAA no es gratis:** 4x cuesta 2,10 ms de GPU (+35%) y 2x cuesta 1,46. Si
+resulta ser el arreglo del parpadeo, es un arreglo caro y hay que pesarlo contra
+briznas más anchas de lejos, que atacan la misma causa por geometría.
+
+### Del mismo día, en el Mundo (`BOF_BENCH=general`)
+
+Desde el mirador canónico: la pradera cuesta **1,14 ms de GPU de 4,19** (27%),
+render 50% ahorra 2,55, el bosque oculto 0,34 y todas las sombras 0,48. Fill
+domina también acá. **Ojo con ese mirador**: que ocultar el bosque entero valga
+0,34 ms sugiere que desde ahí casi no se ve bosque, o sea que el punto de vista
+"del bosque" no mira al bosque. Autorearlo de verdad sigue pendiente.
 
 ---
 
@@ -599,50 +628,43 @@ El número sale de **dos barridos diferenciales**, no de un contador:
 - **Barrido de resolución.** Renderizar al 100 / 75 / 50% y mirar el GPU ms. Es
   la forma estándar de diagnosticar fill-rate.
 
-**Y ninguno de los dos es ejecutable hoy**, aunque F8 haga ciclar la densidad.
-Ver la sección siguiente antes de intentarlo.
-
-### Los dos diales tienen que nacer en el hub, no en una tecla
-
-`grass.rs` cicla la densidad con un `KeyCode::F8` propio y un `GrassStressState`
-local. Es el **único dial visual fuera de `PerfKnob`**, el registro tipado que
-tiene los otros doce (`Wireframe`, `Overdraw`, `Forest`, `TreeDetail`…), y viola
-dos cosas ya escritas: la Fase 1 de `GraphicalTechniques.md` ("exponer los diales
-de comparación en el hub F1") y la regla del menú, que en `hud_menu.rs` está
-puesta como *"the one key; everything else inside is a click"*.
-
-Lo que lo vuelve bloqueante y no cosmético: **`perf/sequence.rs` maneja
-`PerfToggles`**. Un dial que no es un `PerfKnob` no puede entrar en la matriz
-A/B, así que no tiene warmup, ni ventana de asentamiento, ni cámara clavada, ni
-chequeo de deriva. Su propio encabezado dice por qué eso arruina el resultado:
-*"el operador cronometra mal, las muestras post-cambio siguen asentándose, y la
-deriva entre la primera y la última configuración es invisible"*. Un barrido a
-mano con F8 no produce una medición: produce una impresión.
-
-Entonces, antes que cualquier paso del plan:
-
-1. **`GrassDensity` entra a `PerfKnob`** y el handler de F8 se borra. Es un dial
-   escalonado, igual que `ShadowRange` o `TreeDetail`; no hace falta mecanismo
-   nuevo. `PerfKnob::ALL` es un array de tamaño fijo, así que agregarlo obliga al
-   compilador a señalar cada sitio que falte.
-2. **`RenderScale` entra a `PerfKnob`** — el dial de resolución nace ahí por la
-   misma razón, no como otra tecla suelta.
-3. **Los dos entran como pasos de `STEPS`**, un cambio por paso para que el delta
-   sea atribuible. Eso es lo que llena la matriz de abajo con números que
-   sobreviven a comparar hoy contra dentro de un mes.
-
-Sostener MSAA constante durante el barrido de resolución: el perfil móvil lo pone
-en `Sample4` (`perf::data::profile_msaa`) y moverlo mezclaría dos variables.
-
-Juntos separan las dos causas, que es lo que ninguno solo puede hacer:
+Los dos existen y **los dos se corrieron el 2026-08-06**. El cuadro que llenan:
 
 | | resolución escala | resolución plana |
 |---|---|---|
-| **densidad escala** | fill-bound → bajar densidad es la palanca | vertex-bound → Paso 2, y ahí sí vertex pulling |
+| **densidad escala** | fill-bound → bajar densidad/overdraw es la palanca | vertex-bound → Paso 2, y ahí sí vertex pulling |
 | **densidad plana** | fill-bound, pero no por el pasto | el pasto no es el problema |
 
-Hasta que ese cuadro esté lleno con números reales, "el pasto cuesta demasiado"
-es una hipótesis, no un hallazgo.
+**Resultado: la casilla de arriba a la izquierda.** Las dos escalan, y la
+resolución más fuerte que la densidad — 3,90 ms contra 1,08 al bajar a 30/m².
+Fill-bound, y el pasto es la mayor parte de ese fill.
+
+### Cómo se corre un barrido, desde el 2026-08-06
+
+**Sin tocar el juego:** `BOF_BENCH=grass cargo run`. Arranca en la caja de la
+suite, se para en su mirador, mide, escribe la tabla y cierra el proceso. Las
+suites son `grass`, `general` y `shadows`; viven en `perf/suite.rs` como tablas,
+y agregar una es una variante más una tabla, nunca código en el motor.
+
+También están los botones del hub F1, uno por suite, más "aquí" para medir un
+punto malo encontrado jugando.
+
+**Dos trampas de esta máquina, las dos encontradas corriendo:**
+
+1. **La ventana tiene que estar visible.** En Wayland nativo, un compositor no
+   manda frame callbacks a una superficie que no se ve, y el juego entero se
+   duerme: 1,9 segundos de CPU en 105 de reloj, sin llegar a medir. Para correr
+   con la ventana en segundo plano hay que forzar XWayland:
+   `WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= BOF_BENCH=grass cargo run`. Eso es
+   **sólo para medir** — el juego se juega en Wayland nativo.
+2. **El frame time suele quedar clavado por la presentación** y sus deltas no
+   significan nada; los de GPU sí. El reporte lo detecta solo y lo avisa: si el
+   trabajo de GPU se mueve mucho entre pasos y el frame casi nada, imprime que
+   hay que leer `d-gpu` y descartar `d-frame`.
+
+Lo que ese cuadro **no** dice, y hay que seguir repitiendo: nada de esto se midió
+en el target. Un tiler cobra el vértice en bandwidth aunque no pinte un píxel, y
+esa mitad del problema sigue sin evidencia.
 - **Techo de triángulos:** 100.000 por escena (`perf::budget::MOBILE_TRIANGLES`).
   Sigue siendo un contrato útil porque es *dato* — determinista y testeable, a
   diferencia de los milisegundos. Pero es un **guardrail, no el objetivo**: que
@@ -797,8 +819,28 @@ sufijo `_LOD`) en vez de las inapropiadas. Es un cambio chico pero toca el
 contrato de assets, así que **no se implementa sin decisión explícita** — queda
 anotado acá, no ejecutado.
 
-### Lo que ya existe y no sirve
+### Lo que ya existe, medido el 2026-08-06
 
-Los props actuales (`prop_grass_a` … `prop_grass_tall_a`, 12 triángulos cada
-uno) son matojos de cuatro briznas: la unidad que la ley 1 descarta con número.
-No se borran, pero la pradera no los usa.
+Siete GLB de pasto viven en `assets/game/authored/props/` y **ningún `.rs` los
+nombra**: no se spawnean en ninguna escena. Contados leyendo los GLB:
+
+| pieza | tris | material | atributos |
+|---|---:|---|---|
+| `prop_grass_a` / `_b` / `_c` | 22 | `M_FoliageCommon` | POSITION, NORMAL, TEXCOORD_0, COLOR_0, COLOR_1 |
+| `prop_grass_tall_a` | 22 | `M_FoliageCommon` | ídem |
+| `prop_grass_very_short_a` | 22 | `M_FoliageCommon` | ídem |
+| `prop_grass_dry_a` | 22 | `M_FoliageDry` | ídem |
+| `prop_grass_card_a` | 2 | `M_FoliageCard` | ídem |
+
+Los seis matojos son **11 briznas de costo cada uno** contra las 2 de la unidad
+del sistema, y traen puestos los tres atributos que el Paso 2 borró a mano. Como
+**unidad del campo la ley 1 los descarta con número**, y eso no cambia.
+
+Pero *acento* es otro trabajo: al 1-3% de las posiciones, 22 triángulos es
+barato, y `prop_grass_dry_a` (tallo seco) y `prop_grass_tall_a` (mata alta) son
+literalmente dos de los tres acentos que el Paso 8 pide. Ahí sí entran, con dos
+condiciones: se **estampan en la malla del chunk** como la brizna —el horneador
+lee POSITION e índices y tira el resto— y el `M_*` se ignora, porque el material
+lo decide el campo. `prop_grass_card_a` es un caso aparte: 2 triángulos, y el
+candidato natural para dar masa al horizonte si las cartas de grupo se
+reconsideran contra 900p30.

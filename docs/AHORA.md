@@ -93,12 +93,12 @@ contra 14.952 de presentación y composición. `main` son diez plugins más
 GPU. Suite: 86 tests del binario + 4 de arquitectura, 258 de simulation, 50 de
 domain, Clippy estricto en todo. Detalle.
 
-**Pradera** (ver `BOTWGrass.md`): 45 briznas/m², 28.125 briznas de 2 tris
-horneadas en una malla por chunk — 25 entidades, cero trabajo por frame. Medido
-en la caja `Pasto`: **5,78 ms de frame, 4,16 de GPU, 11 draws**. Reemplaza un
-intento de matojos por entidad cuya documentación afirmaba "0.0 ms CPU" y "60 FPS
-estables" el mismo día en que el medidor marcaba 35-46 FPS. **Regla que sale de
-ahí: ningún número entra a estos documentos sin salir del medidor.**
+**Pradera** (ver `BOTWGrass.md` y la sección del pasto más abajo): grilla
+rodante de tres anillos centrada en la cámara, briznas de 2 tris horneadas en
+una malla por chunk, cero trabajo por frame. Nació reemplazando un intento de
+matojos por entidad cuya documentación afirmaba "0.0 ms CPU" y "60 FPS estables"
+el mismo día en que el medidor marcaba 35-46 FPS. **Regla que sale de ahí:
+ningún número entra a estos documentos sin salir del medidor.**
 
 Auditorías: arquitectura (2026-07-17, 4/4 corregidos), calidad (2026-07-24) y
 código (`AUDITORIA_CODIGO_2026-07-25.md`); de esta última siguen abiertas **C1**
@@ -241,120 +241,123 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## Mañana: el pasto, y **primero que se vea bien** (2026-08-05)
+## El pasto (2026-08-06) — jugado, arreglado, y por primera vez medido
 
-**Decisión del usuario, y cambia el orden del documento:** primero se hace que
-el pasto se vea bien, después se optimiza. `BOTWGrass.md` manda medir antes de
-cada paso; esa regla queda suspendida para la parte estética y vuelve en cuanto
-la imagen esté aceptada. El target además pasó a **900p a 30 FPS** (`NORTE.md`
-todavía dice 1080p60 y hay que actualizarlo — es decisión del usuario, no se
-tocó). 900p30 contra 1080p60 es del orden de 2,6× menos píxeles por segundo, así
-que el margen es bastante mayor del que veníamos suponiendo.
+**Sigue vigente la decisión del usuario:** primero que se vea bien, después se
+optimiza. `BOTWGrass.md` manda medir antes de cada paso; esa regla está
+suspendida para la parte estética. Target **900p30** (`NORTE.md` todavía dice
+1080p60 y hay que actualizarlo — es decisión del usuario, no se tocó).
 
-Cinco cosas reportadas jugando, en el orden en que las dijo. **Ninguna está
-medida; dos tienen diagnóstico y tres son hipótesis.**
+### Lo que se arregló hoy, y qué falta validar jugando
 
-1. **Las briznas son muy pequeñas.** Hoy `BLADE_HEIGHT_MIN/MAX` = 0,26-0,52 m y
-   `BLADE_WIDTH` = 0,055 m. Es autoría pura: subirlas y mirar. Ojo que la altura
-   entra en la fórmula de cobertura (`minimum_density`), así que briznas más
-   altas *bajan* la densidad mínima — el test lo va a decir solo.
-2. **Todavía parpadea.** La histéresis de chunks (`KEEP_SLACK_M`) no lo mató, así
-   que la causa era otra. **Sospecha principal: aliasing temporal.** El perfil de
-   escritorio corre con `msaa=off` (se ve en el log de arranque) y una brizna
-   fina sub-píxel titila sin remedio sin MSAA. **Prueba barata que lo zanja:**
-   correr con `BOF_PROFILE=mobile`, que pone `Sample4`, y ver si desaparece. Si
-   desaparece, el arreglo es MSAA y no la grilla. Otras dos candidatas: geometría
-   coplanar entre anillos que se solapan, y el escalonado del fade.
-3. **La punta es muy cuadrada.** `BLADE_TIP_TAPER` = 0,35 deja la punta ancha y
-   `TIP_NOTCH_DEPTH` = 0,82 hace la muesca poco profunda. Afinar las dos.
-4. **"Veo crecer el pasto muy cerca del player."** *Este tiene causa clara:*
-   `FADE_BAND_M` son 6 m y el anillo interior llega a 8 m, así que su banda de
-   crecimiento va de 2 a 8 metros — o sea que el jugador ve encogerse y crecer
-   briznas prácticamente a sus pies. La banda no puede medir el 75% del anillo
-   que gobierna. Dos salidas: banda mucho más corta, o anillo interior más
-   grande. Probablemente las dos.
-5. **Falta abundancia en el horizonte.** No hay nada más allá de 32 m salvo el
-   tinte del suelo. Acá entra lo que el usuario venía pidiendo como "el pasto
-   pequeño que sólo se renderiza a lo lejos": algo barato que dé masa a la
-   distancia. Candidatos, y el primero es el más barato: **textura de pasto en el
-   terreno** (`T_GroundTallGrass_Albedo.png` ya está en el repo y hoy sólo se
-   aplica un tinte plano), matas bajas horneadas a densidad ínfima, y **cartas de
-   grupo** — que `BOTWGrass.md` descarta por el `discard` contra LRZ, pero ese
-   veredicto se escribió contra 1080p60 y merece revisarse contra 900p30.
+De los cinco problemas reportados el 2026-08-05:
 
-Además, sin hacer y ya escrito: **acentos** (flores, tallos secos, matas altas al
-1-3%), que el documento llama lo que separa "campo" de "césped", y el **aplastado
-al caminar** (Paso 9).
+1. **Briznas muy chicas** → 0,26-0,52 m pasaron a **0,45-0,90 m**, con el lean
+   escalado a la par. *Jugado y aceptado: "está mejor la altura y el feeling".*
+2. **Densidad insuficiente** (pedido en el mismo playtest) → los tres anillos
+   subieron a **56 / 28 / 10 briznas por m²**. Sin jugar.
+3. **Punta cuadrada** → taper 0,35 → **0,18**, muesca 0,82 → **0,72**. Sin
+   comentario del usuario todavía.
+4. **"Veo crecer el pasto muy cerca"** → **dos intentos, y el primero estuvo
+   mal diagnosticado.** La banda de crecimiento hacía dos trabajos con una sola
+   constante: cuánto tarda *una* brizna en crecer, y en cuántos metros se
+   reparten los umbrales *entre* briznas. Acortarla de 8 a 3 m alejó el
+   fenómeno y lo hizo **más** brusco — el usuario lo volvió a reportar como "muy
+   notorio". Ahora son dos constantes: `GROWTH_RAMP_M` = 1 m (una brizna) y
+   `GROWTH_SPREAD_M` = 6 m (la dispersión). Lo que se ve pasa de una ola que
+   avanza con el jugador a un campo que ralea con la distancia. Sin jugar.
+5. **Falta abundancia en el horizonte** → sin hacer. El anillo externo subió de
+   6 a 10/m², que ayuda pero no es el arreglo.
+6. **El parpadeo** → sin resolver, y ahora **se puede probar en un click**:
+   `msaa` es una perilla del hub. Medido lo que cuesta: **4x = +2,10 ms de GPU
+   (+35%)**, 2x = +1,46. Si resulta ser el arreglo, es caro; la alternativa por
+   geometría (briznas más anchas de lejos) ataca la misma causa.
 
-**Estado de lo que sí quedó hecho hoy:** Pasos 0 a 7 del documento más la punta
-partida y el pasto sin sombras. Contado: 103.600 briznas, 250.800 triángulos y 48
-chunks en el peor caso de alineación, contra un presupuesto móvil de 100.000 —
-declarado como deuda con número en `perf::budget::MEADOW_VIEW_TRIANGLES`.
-**Medido: nada, ni un milisegundo.** El barrido A/B existe (F1) y no se corrió.
+### La medición, que es lo primero que este sistema tiene
 
-## Dónde se retoma (2026-08-04)
+`BOF_BENCH=grass`, caja Pasto, altura de ojo. **La pradera es el 62% de la GPU
+de su caja** (3,77 ms de 6,08, por resta contra un paso en cero) y **es
+fill-bound**: bajar la resolución a la mitad ahorra 3,90 ms — más que apagar el
+pasto entero — con exactamente la misma geometría. La tabla completa y las tres
+consecuencias están en `BOTWGrass.md`.
 
-**Checkpoint fase 7 jugado y aceptado (2026-08-04):** combate con combos (daño
-variable por golpe, o sea el combo avanza), equipar arma, curación, cambio de
-escena y esculpido; el arco del swing se dibuja leyendo el fact nuevo.
+Eso reordena las prioridades: **el conteo de triángulos no es lo que cuesta el
+frame en esta máquina**, y el cambio a 900p30 golpea la palanca correcta. La
+salvedad de siempre sigue en pie — un tiler cobra el vértice en bandwidth aunque
+no pinte un píxel, y eso no se mide acá.
 
-**Checkpoint fase 8 jugado y aceptado (2026-08-04):** las capacidades llegan por
-`#[require]` y el juego se comporta igual; combate y sigilo verificados sobre
-actores construidos por el camino nuevo.
+**Costo declarado que subió hoy:** 250.800 → 489.200 triángulos por vista
+(`perf::budget::MEADOW_VIEW_TRIANGLES`), casi cinco veces el presupuesto móvil.
+62.700 son el anillo interior de 8 a 10 m; el resto, las tres densidades. Se
+pagó a sabiendas bajo la regla vigente.
 
-**Fase 8 cerrada (2026-08-04): una capacidad sin su estado no existe.** Las
-nueve capacidades declaran `#[require]` sobre su bookkeeping (15 usos en total),
-y los trece tipos de estado de motor bajaron a `bof_domain::movement::motor_state`
-para poder declararlo. Se retiraron nueve bundles que sólo repetían a mano lo
-que ahora exige el tipo. **Los newtypes de unidades se midieron y se
-descartaron**: en todo `movement` hay 4 funciones con dos o más `f32`, y en dos
-de ellas los parámetros comparten unidad — el riesgo que justificaba envolver
-141 campos no existe.
+## La suite de medición (2026-08-06)
 
-**Fase 7 cerrada (2026-08-04): presentación no nombra la simulación.** Cero
-referencias a `bof_simulation` desde `camera`, `debug`, `visuals`,
-`presentation`, `sfx` e `inventory::pickup`, congeladas por un test. No se creó
-`bof_presentation`: con las referencias en cero y la ley en un test, el crate no
-agregaba nada que no estuviera cobrado. El caso testigo se resolvió como manda
-§19 — el motor de ataque publica `SwingFacts { reach, arc_deg }` y el VFX lee el
-dato en vez de llamar a `ComboLocal::current_step`, que volvió a ser interno.
+**Correr un barrido ya no requiere jugar.** `BOF_BENCH=<suite> cargo run` entra
+a la caja de la suite, se para en su mirador, mide, escribe la tabla y cierra el
+proceso. Tres suites, en `perf/suite.rs` como **dato**: `grass`, `general`,
+`shadows`. Agregar una es una variante y una tabla — el motor (`sequence.rs`) no
+se toca. También hay un botón por suite en el hub F1.
 
-**Fase 6 cerrada: el juego entero corre sin pantalla.** El smoke headless ya no
-levanta una esfera con gravedad, levanta `SimulationPlugin` completo. `src/`
-quedó en 14.952 LOC de presentación y composición contra 18.910 de simulación, y
-`main` en diez plugins más uno. `bof_simulation`
-posee locomoción (13 motores, sensores y arbitración), combate, enemigos,
-monturas, el player, el terreno y el reloj del mundo; el replay determinista de
-120 ticks corre headless dentro del crate. En `src/` quedan presentación,
-composición (`scene`, `world::layout`/`spawn`/`forest`, iluminación) y `input`.
+Reglas que los tests cobran sobre toda suite, presente y futura: empieza y
+termina en el baseline (la diferencia es la deriva), cada paso mueve **un** eje,
+y el baseline es la configuración que se envía.
 
-Tres decisiones que se apartaron del plan escrito, con su razón:
-- **`input` no cruzó.** Maneja hardware *y* cursor de ventana; dejándolo afuera,
-  simulación no declara `bevy_input` ni `bevy_window` y no **puede** leer
-  teclado, en vez de acordarse de no hacerlo.
-- **`layout`/`spawn` no cruzaron.** Son composición, como `scene`: el binario es
-  la única capa que ve simulación y presentación a la vez, así que es el único
-  lugar donde armar collider y malla juntos es legal.
-- **El reloj sí cruzó, la luz no.** `advance_time` escribe cada tick y
-  presentación sólo lee (§20).
+**Dos trampas de esta máquina, encontradas corriendo:**
 
-**Checkpoint `#[require]` cerrado (2026-08-04).** Jugado tras hacer que `Actor`
-exija su núcleo: locomoción y montura bien, los dos bokobos nacieron completos y
-murieron por la cadena normal (uno con `STEALTH SHOT`), y **F9 movió el reloj**,
-que era la única parte del corte de `day_night` sin evidencia en juego.
+- **La ventana tiene que estar visible.** En Wayland nativo el compositor no
+  manda frame callbacks a una superficie oculta y el juego entero se duerme —
+  1,9 s de CPU en 105 de reloj, sin medir nada. Para correr en segundo plano:
+  `WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= BOF_BENCH=grass cargo run`. **Sólo
+  para medir**; el juego se juega en Wayland nativo.
+- **El frame suele quedar clavado por la presentación** (16,67 ms en todos los
+  pasos) mientras la GPU varía de 2,15 a 8,17. El reporte lo detecta solo y
+  avisa que hay que leer `d-gpu` y descartar `d-frame`. El criterio no nombra
+  ningún refresh: compara cuánto se movió el frame contra cuánto la GPU.
 
-**Checkpoint 6.5–6.7 cerrado (2026-08-04).** El usuario jugó Traversal, volvió
-al menú y entró a Terreno: locomoción bien, esculpido y guardado tres veces,
-cero `error`/`panic`. Ese cambio de escena es la prueba del paso de
-`DespawnOnExit` a `SceneScoped`: si el terreno de la primera escena hubiera
-sobrevivido, `TerrainAccess` —que exige cardinalidad única— habría fallado en el
-primer trazo. **Al leer el log, ojo**: sólo `sandbox.ron` existe en disco, y
-`spawn_terrain` únicamente loguea cuando encuentra archivo, así que una escena
-sin heightmap arranca plana **y en silencio** — la ausencia de línea no es
-ausencia de escena.
+El reporte abre declarando **suite, pregunta, escena, perfil, ventana, MSAA,
+render scale, densidad y alcance del pasto, sombras y mirador**, porque una
+tabla de milisegundos sin contexto no se compara con otra de la semana que
+viene — el 2026-08-06 hubo que deducir de un delta en qué escena había corrido
+una tabla.
 
-1. **Después de crates:** instancias discretas; además cerrar el ciclo semántico
-   y jugar graybox sobre relieve + tipografía, aún sin validar.
+**Perillas nuevas:** `msaa` (1/4/2 muestras) y `grass-reach` (100/75/50% del
+alcance de los anillos), más un paso de **0 briznas/m²** que convierte "cuánto
+cuesta el pasto" de extrapolación en resta.
+
+**Pendiente que la suite destapó:** ocultar el bosque entero desde el mirador
+canónico vale 0,34 ms, lo que sugiere que **el mirador "del bosque" no mira al
+bosque**. Autorearlo con F4 sigue sin hacerse y ahora tiene evidencia.
+
+**Ruido de Bevy, no nuestro:** cada corrida imprime ~260 líneas
+`bevy_render::slab_allocator: Use-after-free`. Aparecen al despawnear muchas
+mallas de golpe (cambiar densidad o alcance re-hornea la grilla entera). No
+rompe la corrida ni los números; ensucia el log y no está investigado.
+
+## Crates: cerrado (2026-08-04), y lo que quedó vivo de ahí
+
+Las ocho fases están en `git log -- docs/CRATES.md` y las leyes en
+`ARCHITECTURE.md`. Lo que sigue informando decisiones y no se deduce del código:
+
+- **Tres decisiones que se apartaron del plan.** `input` no cruzó a simulación:
+  maneja hardware *y* cursor, y dejándolo afuera simulación no declara
+  `bevy_input` ni `bevy_window` y no **puede** leer teclado, en vez de acordarse
+  de no hacerlo. `layout`/`spawn` tampoco: son composición, y el binario es la
+  única capa que ve simulación y presentación a la vez. El reloj sí cruzó, la
+  luz no — `advance_time` escribe cada tick y presentación sólo lee (§20).
+- **Los newtypes de unidades se midieron y se descartaron:** en todo `movement`
+  hay 4 funciones con dos o más `f32` y en dos de ellas comparten unidad. El
+  riesgo que justificaba envolver 141 campos no existe.
+- **`bof_presentation` no se creó a propósito:** con las referencias a
+  simulación en cero y la ley congelada en un test, el crate no agregaba nada
+  que no estuviera ya cobrado.
+- **Al leer un log, ojo:** sólo `sandbox.ron` existe en disco, y `spawn_terrain`
+  únicamente loguea cuando encuentra archivo, así que una escena sin heightmap
+  arranca plana **y en silencio** — la ausencia de línea no es ausencia de
+  escena.
+
+Siguiente en esa línea: instancias discretas, cerrar el ciclo semántico, y jugar
+graybox sobre relieve + tipografía.
 
 ## Rendimiento: lo que sigue informando decisiones
 
@@ -377,6 +380,13 @@ detalle está en git; los principios que quedaron:
   siempre.** Eso es cargo-culting y frena al dev, no al juego.
 - Último perfil móvil medido: **37,3k tris, 62 draws, 53 mats → "medio", por
   materiales.** De ahí sale la ley 1 de `TEXTURES.md`.
+- **Fill antes que geometría (2026-08-06, medido en las tres suites).** En la
+  caja Pasto bajar la resolución a la mitad ahorra más GPU que apagar la pradera
+  entera; en el Mundo, 2,55 ms de 4,19. Todo lo que se midió en esta máquina
+  apunta al mismo lado: el frame se va en píxeles pintados, no en vértices
+  transformados. Vale para elegir en qué orden atacar cualquier sistema visual
+  nuevo — y con la salvedad de que el target es un tiler, donde el vértice
+  también se paga.
 
 ### Presupuesto de polígonos como contrato (2026-07-25)
 
@@ -411,7 +421,9 @@ pose como `Waypoint` pegable). El flythrough acumula frame/gpu/tris/draws/mats
 
 Pendiente: **autorear la ruta canónica real** con F4 — hoy los tramos se llaman
 `spawn→clearing` en cajas que no tienen ni claro ni bosque, y una regresión de
-~1 ms de GPU pasó dos días inadvertida. Diferido salvo que el profiler lo pida:
+~1 ms de GPU pasó dos días inadvertida. **Lo mismo vale para el mirador del
+bosque**, y ahora hay evidencia: la suite `general` mide que ocultar el bosque
+entero desde ahí vale 0,34 ms, o sea que desde ese punto casi no se ve bosque. Diferido salvo que el profiler lo pida:
 impostores, streaming por chunks, y **occlusion culling** — el de Bevy es
 experimental vía meshlets, no mobile-friendly.
 
@@ -494,7 +506,13 @@ para decidir cuándo migrar `layout.rs`: reescribir `spawn_stair_segment` como u
   ordenadas. **Para volver a listarlas por nombre hay que activar la feature
   `debug` de `bevy_ecs` un rato**: sin ella Bevy imprime placeholders, y después
   de `initialize` el grafo ya no puede resolver nombres por ninguna otra vía.
-- **La pradera cuesta 52% del presupuesto del Mundo sobre el 0,6% de su área.**
+- **La pradera cuesta 489.200 triángulos por vista, casi 5× el presupuesto
+  móvil entero** — y desde el 2026-08-06 sabemos que en esta máquina *eso no es
+  lo que cuesta el frame*: es fill-bound, no vertex-bound (`BOTWGrass.md`). La
+  deuda sigue declarada porque el target es un tiler y ahí el vértice se paga en
+  bandwidth aunque no pinte, pero la palanca a tocar primero es el overdraw. El
+  histórico de por qué existe:
+- **La pradera costaba 52% del presupuesto del Mundo sobre el 0,6% de su área.**
   Cerrar el hueco del presupuesto (2026-08-04: `meadow_triangles` era privado y
   no la sumaba nadie) destapó que la escena Mundo declara **106.918 triángulos
   contra 100.000** — coincide con lo que el medidor de runtime venía gritando.
@@ -509,18 +527,6 @@ para decidir cuándo migrar `layout.rs`: reescribir `spawn_stair_segment` como u
   sin usar, y **dejar el vértice en sólo la posición** (normal, color y uv son
   derivables; la uv sale de `vertex_index & 3` porque la brizna son 4 vértices en
   orden fijo) — 48 B a 12 B, imagen idéntica.
-- **El pasto no se puede medir con lo que hay, y la causa es un dial fuera del
-  registro.** La vista de overdraw es un mapa de calor aditivo que **no produce
-  número** y satura a ~17 capas. Y el barrido que sí daría número no es
-  ejecutable: `grass.rs` cicla la densidad con un `KeyCode::F8` propio, siendo el
-  **único dial visual fuera de `PerfKnob`**. Como `perf/sequence.rs` maneja
-  `PerfToggles`, un dial que no es knob no entra en la matriz A/B — sin warmup,
-  sin asentamiento, sin cámara clavada, sin chequeo de deriva. Viola además la
-  Fase 1 de `GraphicalTechniques.md` y el "una sola tecla, el resto es click" de
-  `hud_menu.rs`. **Lo cierra:** `GrassDensity` y `RenderScale` como `PerfKnob` +
-  pasos de `STEPS`, y borrar F8. Es el Paso 0 de `BOTWGrass.md` y el disparador
-  que decidiría si vale la pena vertex pulling — descartado hoy por aritmética
-  (los varyings, ~68 B/vértice, dominan el tráfico y esa técnica no los toca).
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

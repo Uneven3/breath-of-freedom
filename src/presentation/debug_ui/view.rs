@@ -13,8 +13,9 @@ use super::{
     TerrainViewText,
 };
 use crate::debug::channel::{DebugAction, DebugChannel};
+use crate::perf::BenchSuite;
 use crate::perf::PerfKnob;
-use crate::perf::sequence::VantageMode;
+use crate::perf::sequence::{BenchmarkRequest, VantageMode};
 use crate::visuals::terrain_material::TerrainDebugView;
 
 use super::ActionButton;
@@ -136,23 +137,37 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
     section_title(
         panel,
         "Medición",
-        "Corre la matriz sola: precalienta, mide 4s por paso con vsync apagado, y repite \
-         el baseline para exponer deriva. \"Aquí\" clava la cámara donde estás — usalo en \
-         las zonas lentas; el punto canónico sirve para comparar entre sesiones.",
+        "Corre una matriz sola: precalienta, mide 4s por paso con vsync apagado, y repite \
+         el baseline para exponer deriva. Cada suite se para en su propio mirador y mide en \
+         su caja — la del pasto en la pradera, las otras en el Mundo. \"Aquí\" corre la \
+         general clavando la cámara donde estás, que es para las zonas lentas que encontrás \
+         jugando.",
     );
     panel
         .spawn(Node {
             width: Val::Percent(100.0),
             column_gap: Val::Px(8.0),
+            flex_wrap: FlexWrap::Wrap,
+            row_gap: Val::Px(6.0),
             ..default()
         })
         .with_children(|row| {
-            for (mode, label) in [
-                (VantageMode::Here, "Correr aquí"),
-                (VantageMode::Canonical, "Punto canónico"),
-            ] {
+            let mut buttons: Vec<(BenchmarkRequest, String)> = BenchSuite::ALL
+                .iter()
+                .map(|suite| {
+                    (
+                        BenchmarkRequest::new(*suite, VantageMode::Canonical),
+                        suite.label().to_string(),
+                    )
+                })
+                .collect();
+            buttons.push((
+                BenchmarkRequest::new(BenchSuite::General, VantageMode::Here),
+                "aquí".to_string(),
+            ));
+            for (request, label) in buttons {
                 row.spawn((
-                    BenchmarkButton(mode),
+                    BenchmarkButton(request),
                     Button,
                     Node {
                         flex_grow: 1.0,
@@ -165,7 +180,7 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
                 ))
                 .with_child((
                     BenchmarkText,
-                    Text::new(label),
+                    Text::new(label.clone()),
                     body_font(),
                     TextColor(TEXT_BRIGHT),
                 ));

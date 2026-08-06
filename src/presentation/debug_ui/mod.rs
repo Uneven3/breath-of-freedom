@@ -48,7 +48,7 @@ struct ScrollPanel;
 struct CloseButton;
 
 #[derive(Component)]
-struct BenchmarkButton(crate::perf::sequence::VantageMode);
+struct BenchmarkButton(crate::perf::sequence::BenchmarkRequest);
 
 #[derive(Component)]
 struct BenchmarkText;
@@ -207,7 +207,7 @@ fn handle_clicks(
     }
     for (interaction, button) in &bench {
         if pressed(interaction) {
-            bench_writer.write(BenchmarkRequest(button.0));
+            bench_writer.write(button.0);
             // The panel would be measured along with the scene; close it first.
             set_open(&mut state, false, *root, &mut focus);
         }

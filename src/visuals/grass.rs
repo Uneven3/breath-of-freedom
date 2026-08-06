@@ -109,8 +109,10 @@ struct Ring {
 /// distance is the *cost*, not the look. The lever is blade count: a blade at
 /// distance `d` hides `width · H · d / h` of the ground behind it because the
 /// viewing angle flattens out, so the density needed for the same cover falls as
-/// `1/d`. The near ring keeps the 45/m² that was judged by eye long before any
-/// of this; the outer two sit at roughly twice their derived minimum.
+/// `1/d`. The near ring's density is judged by eye and was raised twice for
+/// that reason; the outer two sit well above their derived minimum, because
+/// they are also the rings that catch what the one inside them sheds during
+/// [`GROWTH_SPREAD_M`].
 ///
 /// Chunks are about two thirds of the ring's reach, and that ratio was counted
 /// rather than picked. Finer chunks hug the ring's boundary and waste less baked
@@ -120,37 +122,77 @@ struct Ring {
 /// chunks and 419.840, and 5/10/20 m gives **48 chunks and 164.000** — better on
 /// both axes than either extreme.
 ///
-/// **What this costs, stated plainly:** 103.600 blades, 250.800 triangles
-/// declared across the full 360°, 48 chunks, at the worst alignment of the
-/// camera against the grid — 43.600 of those triangles are the notched tips of
-/// the two inner rings. (At the friendliest alignment it is 82.000
-/// triangles; the budget takes the worst, because that is the one the frame has
-/// to survive.) That is over the mobile triangle budget, and `perf::budget`
-/// declares it as debt with a number rather than hiding it. The frustum throws away a large part of it before anything
-/// draws — how much is *unmeasured*, and the honest position is that no
-/// millisecond of this system has been measured at all. The two sweeps in the
-/// hub are what decide whether the reach or the near density is the thing to
-/// cut.
+/// **What this costs, stated plainly:** 489.200 triangles declared across the
+/// full 360° at the worst alignment of the camera against the grid. That is
+/// nearly five times the mobile triangle budget, and `perf::budget` declares it
+/// as debt with a number rather than hiding it.
+///
+/// **And since 2026-08-06 it is measured, which changes what the number means.**
+/// The `grass` suite (`BOF_BENCH=grass`) in the Pasto box, at eye height looking
+/// at the horizon, on the dev machine's Polaris 11:
+///
+/// | paso | GPU ms | contra el baseline |
+/// |---|---:|---:|
+/// | baseline (56/m²) | 6,08 | — |
+/// | **pasto apagado** | 2,31 | **−3,77** |
+/// | densidad 30/m² | 5,00 | −1,08 |
+/// | densidad 12/m² | 3,56 | −2,52 |
+/// | alcance 75% | 5,54 | −0,54 |
+/// | alcance 50% | 3,96 | −2,12 |
+/// | render 50% | 2,17 | −3,90 |
+///
+/// Ruido de esa corrida: 0,25 ms (deriva entre los dos baselines).
+///
+/// Tres cosas que se leen ahí y que ningún conteo de triángulos podía decir:
+///
+/// 1. **La pradera es el 62% de la GPU de su caja** — 3,77 de 6,08 ms. Por
+///    resta contra un paso en cero, no extrapolando.
+/// 2. **Es fill-bound, no vertex-bound.** Bajar la resolución a la mitad —misma
+///    geometría, mismos 489.200 triángulos— ahorra 3,90 ms, *más que apagar el
+///    pasto entero*. La palanca es cuántos píxeles pinta cada brizna encima de
+///    otra, no cuántas hay. Eso es lo que decide que el conteo de arriba sea
+///    guardrail y no objetivo — con la salvedad de siempre: en el target
+///    tile-based un vértice se paga en bandwidth aunque no produzca un píxel, y
+///    eso no se manifiesta en esta máquina.
+/// 3. **Densidad y alcance mueven cosas parecidas por caminos distintos.** El
+///    alcance al 50% (área a un cuarto) ahorra 2,12; la densidad a 12/m² (79%
+///    menos briznas) ahorra 2,52. Ninguna de las dos es gratis y las dos se ven.
 ///
 /// **The minimum is a floor, not a target.** The first version planted every
 /// ring at 1,25× its derived minimum, which is what the formula says is needed
 /// for the ground not to show through — and the field read as sparse and
 /// spiky. Covering the ground and looking like a meadow are different bars, and
-/// the second one is higher: the near ring keeps the 45/m² that was judged by
-/// eye long before any of this, and the outer rings sit around twice their
-/// minimum rather than at it.
+/// the second one is higher — twice now the answer to "¿cómo se ve?" has been
+/// "más densa", so the near ring sits far above its floor and the outer two
+/// above theirs.
 const RINGS: [Ring; 3] = [
     Ring {
-        reach_m: 8.0,
+        // 10 y no 8 desde el 2026-08-06, y es la otra mitad del arreglo del
+        // "veo crecer el pasto muy cerca del player": la banda de crecimiento se
+        // acortó a 3 m, pero una banda vive *adentro* del anillo que gobierna,
+        // así que el anillo tiene que ser bastante más ancho que ella o el
+        // jugador camina siempre dentro de la rampa. Cuesta briznas —el área
+        // crece con el cuadrado— y ese costo está declarado en
+        // `perf::budget::MEADOW_VIEW_TRIANGLES`.
+        reach_m: 10.0,
         chunk_m: 5.0,
-        density: 45.0,
+        // 56 y no 45 desde el 2026-08-06, pedido jugando. El costo no es
+        // gratis y está medido: bajar el conjunto de 45 a 25/m² ahorró 0,94 ms
+        // de frame, así que subir un 24% cuesta del orden de dos décimas
+        // *(estimado por la pendiente de esa medición, no medido)*.
+        density: 56.0,
         width_scale: 1.0,
         split_tips: true,
     },
     Ring {
         reach_m: 16.0,
         chunk_m: 10.0,
-        density: 16.0,
+        // 28 y no 16, y esta subida no es sólo por densidad: este anillo es el
+        // que **recibe** lo que el interior va soltando durante los 6 m de
+        // dispersión. Con 16 el traspaso se leía como un escalón de densidad
+        // moviéndose con el jugador, que es la mitad del artefacto que
+        // `GROWTH_SPREAD_M` ataca por el otro lado.
+        density: 28.0,
         width_scale: 1.0,
         // También parte la punta, y no por gusto: como los anillos se solapan
         // durante la banda de transición, este empieza en 2 m — o sea que sus
@@ -162,7 +204,11 @@ const RINGS: [Ring; 3] = [
     Ring {
         reach_m: 32.0,
         chunk_m: 20.0,
-        density: 6.0,
+        // 10 y no 6, por la misma razón que el anillo de en medio: recibe su
+        // raleo. Es el anillo más barato por brizna en pantalla —a 16-32 m una
+        // brizna ocupa poquísimos píxeles— y el que más hace por la sensación
+        // de que el campo sigue.
+        density: 10.0,
         width_scale: 1.0,
         split_tips: false,
     },
@@ -206,15 +252,42 @@ const MAX_WIDTH_SCALE: f32 = 4.0;
 /// sweep readable: one variable moves, not four.
 const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 
-/// How wide the band is, in metres, where the outermost ring's blades shrink to
-/// nothing before their chunk is culled.
+/// The reach scale the rings are written against, so the budget and the tests
+/// measure the shipped field rather than whatever the dial happens to be on.
+#[cfg(test)]
+const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
+
+/// How many metres **one** blade takes to grow from nothing to its full height
+/// as the camera approaches.
 ///
 /// This is the anti-pop: without it, walking makes a wall of grass appear out of
-/// nothing at the edge of the last ring. Growth rather than fade because growth
-/// is geometry — no blending, no `discard`, no draw order, and none of the
-/// early-Z cost that alpha would bring on a tile-based GPU (`BOTWGrass.md`,
-/// law 3).
-const FADE_BAND_M: f32 = 8.0;
+/// nothing at the edge of a ring. Growth rather than fade because growth is
+/// geometry — no blending, no `discard`, no draw order, and none of the early-Z
+/// cost that alpha would bring on a tile-based GPU (`BOTWGrass.md`, law 3).
+///
+/// Short on purpose, and that is the opposite of what it looks like it should
+/// be. A blade that takes a metre to grow is one blade among hundreds doing
+/// nothing remarkable; what the eye catches is a *band* of them growing
+/// together. The width of the phenomenon is [`GROWTH_SPREAD_M`], not this.
+const GROWTH_RAMP_M: f32 = 1.0;
+
+/// Over how many metres, inward from each ring's edge, the blades' individual
+/// growth thresholds are spread by their hash.
+///
+/// **This is the fix for "el crecimiento del pasto está muy cerca y es muy
+/// notorio", and it took two tries to find because one constant was doing two
+/// jobs.** The first attempt shortened the single band from 8 m to 3 m, which
+/// moved the growth further out — and made it *more* noticeable, because a
+/// narrow band is a sharper wave. Both readings were right: the growth was too
+/// close *and* too abrupt, and no single number can fix both.
+///
+/// Split, they pull in opposite directions and each does its own job. At any
+/// given distance a different fraction of the ring is alive, so what the eye
+/// reads is density falling off with distance — which is what a real field does
+/// — instead of a front of grass sprouting as the player walks into it. The
+/// ring behind picks up the density that this one drops, and that is why
+/// `handover` in `ring_cells_with_slack` measures against this constant.
+const GROWTH_SPREAD_M: f32 = 6.0;
 
 /// At most one chunk is baked per frame **while rolling**.
 ///
@@ -238,17 +311,39 @@ const FILL_IN_ONE_FRAME: bool = true;
 /// it reads as a leaf rather than a strip of paper.
 const BLADE_WIDTH: f32 = 0.055;
 /// Fraction of the base width kept at the tip.
-const BLADE_TIP_TAPER: f32 = 0.35;
+///
+/// Was 0,35 until 2026-08-06 and the tip read as **cut square** rather than
+/// pointed — reported playing. 0,18 leaves a point without the two halves of the
+/// notch degenerating into slivers.
+const BLADE_TIP_TAPER: f32 = 0.18;
 /// How far down from the tip the notch between the two points sits, as a
 /// fraction of the blade's height. Deep enough to read as two points at arm's
 /// length, shallow enough not to turn the blade into a fork.
-const TIP_NOTCH_DEPTH: f32 = 0.82;
+///
+/// Lowered from 0,82 with the taper above: with a narrow tip the notch has to
+/// bite deeper to be visible at all, because the two points it separates are now
+/// close together.
+const TIP_NOTCH_DEPTH: f32 = 0.72;
 /// Blade height range in metres, picked per blade.
-const BLADE_HEIGHT_MIN: f32 = 0.26;
-const BLADE_HEIGHT_MAX: f32 = 0.52;
+///
+/// Raised from 0,26-0,52 on 2026-08-06: reported playing as "las briznas son muy
+/// pequeñas", and it was true — half a metre at the very top is shin-high on a
+/// 1,8 m capsule, so the field read as a mown lawn instead of a meadow. These
+/// reach the knee and the hip.
+///
+/// **The ceiling is one metre and it is a hard one**, not taste: the blade's
+/// height travels packed in the fraction of `uv1.y`, with the ring's reach in
+/// the whole part, and the shader splits them with `floor`/`fract`. A blade of
+/// one metre or more would be read as the next ring's reach. A test pins it.
+const BLADE_HEIGHT_MIN: f32 = 0.45;
+const BLADE_HEIGHT_MAX: f32 = 0.90;
 /// How far a tip may lean off vertical, in metres, so the field is not a bed of
 /// nails. Deterministic per blade — this is authored variety, not animation.
-const BLADE_LEAN: f32 = 0.16;
+///
+/// Scaled with the height above: kept at 0,16 the taller blades stood
+/// noticeably straighter than the short ones used to, which is the uniformity
+/// this constant exists to break.
+const BLADE_LEAN: f32 = 0.27;
 
 /// Root and tip colours. The root-to-tip gradient is the single biggest reason
 /// BOTW grass reads as grass; it used to be baked into a vertex colour and now
@@ -309,7 +404,7 @@ pub(crate) fn meadow_triangles() -> usize {
                 .enumerate()
                 .map(|(index, ring)| {
                     let per_blade = if ring.split_tips { 3 } else { 2 };
-                    ring_cells(index, focus).len()
+                    ring_cells(index, focus, REFERENCE_REACH).len()
                         * blades_per_chunk(ring, REFERENCE_DENSITY) as usize
                         * per_blade
                 })
@@ -356,7 +451,8 @@ fn neighbourhood_blades(focus: Vec2) -> usize {
         .iter()
         .enumerate()
         .map(|(index, ring)| {
-            ring_cells(index, focus).len() * blades_per_chunk(ring, REFERENCE_DENSITY) as usize
+            ring_cells(index, focus, REFERENCE_REACH).len()
+                * blades_per_chunk(ring, REFERENCE_DENSITY) as usize
         })
         .sum()
 }
@@ -384,8 +480,19 @@ fn blades_per_chunk(ring: &Ring, dial: f32) -> u32 {
 /// which is the exact artefact this system exists to prevent. The overlap this
 /// criterion allows instead is a strip up to half a chunk wide that is a little
 /// denser than derived, and denser is not a defect.
-fn ring_cells(index: usize, focus: Vec2) -> Vec<IVec2> {
-    ring_cells_with_slack(index, focus, 0.0)
+fn ring_cells(index: usize, focus: Vec2, reach_scale: f32) -> Vec<IVec2> {
+    ring_cells_with_slack(index, focus, 0.0, reach_scale)
+}
+
+/// A ring's reach with the reach dial applied, in **whole metres**.
+///
+/// Whole, and that is a hard constraint rather than tidiness: the reach travels
+/// in the integer part of `uv1.y` with the blade's height in the fraction, and
+/// the shader splits them with `floor`/`fract`. A reach of 11,5 m would make
+/// every blade in the ring report a height 0,5 m taller than it is. Never below
+/// one metre, so a dial step can shrink a ring but not erase it.
+fn ring_reach(index: usize, reach_scale: f32) -> f32 {
+    (RINGS[index].reach_m * reach_scale).round().max(1.0)
 }
 
 /// How far past its reach a chunk is kept before being dropped.
@@ -401,10 +508,12 @@ const KEEP_SLACK_M: f32 = 3.0;
     clippy::cast_possible_truncation,
     reason = "chunk coordinates are small integers by construction"
 )]
-fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32) -> Vec<IVec2> {
+fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32, reach_scale: f32) -> Vec<IVec2> {
     let ring = &RINGS[index];
-    let reach_m = ring.reach_m + slack;
-    let inner_reach = index.checked_sub(1).map_or(0.0, |i| RINGS[i].reach_m);
+    let reach_m = ring_reach(index, reach_scale) + slack;
+    let inner_reach = index
+        .checked_sub(1)
+        .map_or(0.0, |i| ring_reach(i, reach_scale));
     let half = ring.chunk_m * 0.5;
     // One cell of slack: a chunk can touch the ring while its centre sits
     // outside it.
@@ -421,11 +530,13 @@ fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32) -> Vec<IVec2> {
             let nearest = (offset - Vec2::splat(half)).max(Vec2::ZERO).max_element();
             let farthest = (offset + Vec2::splat(half)).max_element();
             // El anillo de afuera empieza *antes* de donde termina el de
-            // adentro, por el ancho de la banda de desvanecimiento: durante esa
-            // franja las briznas del interior se están encogiendo y las del
-            // exterior ya están enteras, así que la densidad cruza de una a otra
-            // en vez de caer a cero y saltar.
-            let handover = (inner_reach - FADE_BAND_M).max(0.0);
+            // adentro, por el ancho de la dispersión: en esa franja el interior
+            // se va raleando —a cada distancia sobrevive una fracción menor— y
+            // el exterior ya está entero, así que la densidad total cruza de una
+            // a otra sin escalón. Contra `GROWTH_SPREAD_M` y no contra la rampa,
+            // porque la primera brizna del interior empieza a irse al principio
+            // de la dispersión, no al final.
+            let handover = (inner_reach - GROWTH_SPREAD_M).max(0.0);
             if nearest > reach_m || farthest <= handover {
                 continue;
             }
@@ -505,16 +616,22 @@ pub(super) fn roll_meadow_grid(
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
-    mut dial: Local<Option<usize>>,
+    mut dial: Local<Option<(usize, usize)>>,
 ) {
     let Some(camera) = camera else {
         return;
     };
     let focus = camera.translation().xz();
+    let density = perf.grass_density();
+    let reach_scale = perf.grass_reach_scale();
 
-    // A density change invalidates every baked chunk, so it is the one event
-    // that clears the grid instead of rolling it.
-    if dial.replace(perf.grass_density_step) != Some(perf.grass_density_step) {
+    // Density and reach are both **baked into the mesh** — the blade count in the
+    // geometry, the ring's reach in a vertex attribute — so neither can be
+    // rolled into. They are the one event that clears the grid instead of
+    // rolling it, and they are checked together because a run that changed both
+    // and rebuilt for one would leave half the field describing the old dial.
+    let dials = (perf.grass_density_step, perf.grass_reach_step);
+    if dial.replace(dials) != Some(dials) {
         for entity in field.live.values() {
             commands.entity(*entity).despawn();
         }
@@ -525,7 +642,7 @@ pub(super) fn roll_meadow_grid(
         .iter()
         .enumerate()
         .flat_map(|(ring, _)| {
-            ring_cells(ring, focus)
+            ring_cells(ring, focus, reach_scale)
                 .into_iter()
                 .map(move |cell| ChunkKey { ring, cell })
         })
@@ -537,7 +654,7 @@ pub(super) fn roll_meadow_grid(
         .iter()
         .enumerate()
         .flat_map(|(ring, _)| {
-            ring_cells_with_slack(ring, focus, KEEP_SLACK_M)
+            ring_cells_with_slack(ring, focus, KEEP_SLACK_M, reach_scale)
                 .into_iter()
                 .map(move |cell| ChunkKey { ring, cell })
         })
@@ -551,7 +668,6 @@ pub(super) fn roll_meadow_grid(
         keep
     });
 
-    let density = perf.grass_density();
     // An empty grid is being filled, not rolled: bake it whole rather than
     // letting the meadow grow in around the player over several seconds.
     let budget = if FILL_IN_ONE_FRAME && field.live.is_empty() {
@@ -584,7 +700,7 @@ pub(super) fn roll_meadow_grid(
                 count: blades_per_chunk(ring, density),
                 width_scale: ring.width_scale,
                 split_tips: ring.split_tips,
-                ring_reach_m: ring.reach_m,
+                ring_reach_m: ring_reach(key.ring, reach_scale),
                 seed,
             },
             Some(&terrain),
@@ -646,7 +762,8 @@ pub(super) fn track_meadow_focus(
     };
     let data = &mut material.extension.grass_data;
     data.focus_xz = camera.translation().xz();
-    data.fade_band = FADE_BAND_M;
+    data.growth_ramp = GROWTH_RAMP_M;
+    data.growth_spread = GROWTH_SPREAD_M;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs
     // one uniform write a frame.
@@ -865,7 +982,7 @@ mod tests {
             .iter()
             .enumerate()
             .flat_map(|(index, ring)| {
-                ring_cells(index, focus)
+                ring_cells(index, focus, REFERENCE_REACH)
                     .into_iter()
                     .map(move |cell| (cell_centre(cell, ring.chunk_m), ring.chunk_m * 0.5))
             })
@@ -972,7 +1089,7 @@ mod tests {
             .flat_map(|z| (0..8).map(move |x| Vec2::new(x as f32, z as f32) * (period / 8.0)))
             .map(|focus| {
                 (0..RINGS.len())
-                    .map(|index| ring_cells(index, focus).len())
+                    .map(|index| ring_cells(index, focus, REFERENCE_REACH).len())
                     .sum::<usize>()
             })
             .max()
@@ -1063,6 +1180,66 @@ mod tests {
                 (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&height),
                 "every vertex carries its blade's height for the wind to scale"
             );
+        }
+    }
+
+    /// The packing in `uv1.y` only works while a blade is under a metre tall,
+    /// and the blades got a lot taller on 2026-08-06 — 0,90 m against a ceiling
+    /// of 1,00. Raising the range one more notch is the kind of edit that looks
+    /// like pure taste and silently makes every blade report the *next* ring's
+    /// reach, which the shader would read as "you are inside your band" and
+    /// collapse the whole field. Cheaper to fail here.
+    #[test]
+    fn a_blade_stays_under_the_metre_its_packing_allows() {
+        // Const block: the packing is a compile-time property of the constants,
+        // so the build is the right place to lose, not the test run.
+        const {
+            assert!(
+                BLADE_HEIGHT_MAX < 1.0,
+                "blade height rides in the fraction of uv1.y, next to the ring reach"
+            );
+            assert!(BLADE_HEIGHT_MIN > 0.0 && BLADE_HEIGHT_MIN < BLADE_HEIGHT_MAX);
+        }
+        for ring in &RINGS {
+            assert!(
+                (ring.reach_m - ring.reach_m.round()).abs() < f32::EPSILON,
+                "a ring's reach is the whole part of the same number, so it must \
+                 be a whole number of metres — {} is not",
+                ring.reach_m
+            );
+        }
+        // And the same has to hold for every position of the reach dial, which
+        // is why `ring_reach` rounds instead of multiplying straight through.
+        for scale in bof_domain::perf::GRASS_REACH_STEPS {
+            for index in 0..RINGS.len() {
+                let reach = ring_reach(index, scale);
+                assert!(
+                    (reach - reach.round()).abs() < f32::EPSILON && reach >= 1.0,
+                    "ring {index} at {scale}x reaches {reach} m, which does not pack"
+                );
+            }
+        }
+    }
+
+    /// Shrinking the reach has to shrink the *field*, not just the number: if
+    /// the dial moved the reach but the cells were chosen against the authored
+    /// value, the sweep would report that reach costs nothing at all.
+    #[test]
+    fn the_reach_dial_actually_removes_chunks() {
+        let focus = Vec2::new(3.7, -12.1);
+        let cells = |scale: f32| {
+            (0..RINGS.len())
+                .map(|index| ring_cells(index, focus, scale).len())
+                .sum::<usize>()
+        };
+        let full = cells(REFERENCE_REACH);
+        for scale in bof_domain::perf::GRASS_REACH_STEPS {
+            if scale < REFERENCE_REACH {
+                assert!(
+                    cells(scale) < full,
+                    "the dial at {scale}x kept every chunk the full reach did"
+                );
+            }
         }
     }
 

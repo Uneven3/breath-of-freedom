@@ -152,31 +152,26 @@ qué archivo carga cada escena en `src/scene/`.
 
 ### Relieve
 
-El relieve nace de un heightfield que es la fuente única de verdad. De esa grilla
-se derivan el `Collider::heightfield` y una malla flat-shaded, sincronizadas por
-change detection. La navegación **no se hornea**: emerge de la forma + la física.
+Heightfield como fuente única de verdad; de esa grilla salen el
+`Collider::heightfield` y una malla flat-shaded, sincronizados por change
+detection. La navegación **no se hornea**: emerge de la forma + la física.
 
-Seis pinceles con `1..6`, elegidos para **hacer mundos que valga la pena
-caminar** — formar, calmar, tener dónde pararse, **conectar** dos niveles,
-ensuciar lo que se ve a CAD, y escalonar una ladera para que sea un lugar:
+Seis pinceles con `1..6` —`1` Elevar · `2` Suavizar · `3` Aplanar · `4` Rampa ·
+`5` Rugosidad · `6` Terrazas—, elegidos para **hacer mundos que valga la pena
+caminar**. MMB suaviza siempre (el borrador de esculpir); rueda = radio,
+Shift+rueda o `[`/`]` = fuerza; Ctrl+Z/Y deshacen **por trazo**.
 
-`1` Elevar · `2` Suavizar · `3` Aplanar · `4` Rampa · `5` Rugosidad · `6` Terrazas
-
-- **MMB suaviza siempre**, sin cambiar de modo: es el borrador de esculpir.
-- Rueda = radio; **Shift+rueda o `[`/`]` = fuerza**. **Ctrl+Z/Y deshacen por
-  trazo**, no por frame.
 - `Terrain` es dueño del **cómo** cambia la grilla (un método por pincel sobre
   `brush_stroke`, que toma un *segmento* — un círculo es una cápsula de largo
-  cero); `editor/` solo decide **dónde y cuándo**. Un séptimo pincel es un método
-  + una fila, nunca un sistema nuevo.
+  cero); `editor/` sólo decide **dónde y cuándo**. Un séptimo pincel es un
+  método + una fila, nunca un sistema nuevo.
 - **La suavidad se arregló en la causa, no en la constante.** Aplicar
   `delta * falloff` a los mismos puntos cada frame *integra la curva de falloff
   en una carpa con pico*; ahora el trazo se relaja a sí mismo mientras sube
   (`RELAX_PER_METRE`). Un test lo fija.
 
-Formato **RON** (decisión del usuario para todo el workspace). Resolución y
-extent viajan dentro y `apply_ron` **remuestrea en espacio de mundo** si
-difieren, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los niveles.
+Formato **RON**. Resolución y extent viajan dentro y `apply_ron` **remuestrea en
+espacio de mundo**, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los niveles.
 
 ### Semántica por celda (2026-07-26, jugada y validada)
 
@@ -287,73 +282,53 @@ De los cinco problemas reportados el 2026-08-05, más los que salieron jugando:
 ### El suelo dejó de ser un color plano (2026-08-06)
 
 `Soil` es la celda por defecto del mundo y su textura era un marrón liso. El
-usuario generó una textura de pradera contra el contrato de este repo (512×512,
-cenital, luz plana, matas de 10-50 cm porque a 12 m por tile una brizna
-individual mide dos píxeles). Se midió antes de instalarla: la iluminación venía
-uniforme al 0,1% entre cuadrantes, y **tenía costura** —bordes opuestos 1,9×
-más distintos que dos columnas vecinas—, corregida con la **descomposición
-periódica de Moisan**, que a diferencia de un blend de bordes no duplica ni
-difumina detalle. Quedó en 0,5×.
-
-`GRASS_TINT_STRENGTH` bajó de 0,55 a **0,25**: era un sustituto de no tener
-textura y lo único que agregaba era aplastarle el grano al arte.
+usuario generó una textura de pradera contra el contrato del repo; se midió
+antes de instalarla (iluminación uniforme al 0,1% entre cuadrantes, y una
+costura que se corrigió con la **descomposición periódica de Moisan**, que no
+duplica ni difumina detalle como sí hace un blend de bordes). `GRASS_TINT_STRENGTH`
+bajó de 0,55 a 0,25: era un sustituto de no tener textura.
 
 **Y destapó un bug que llevaba ahí desde que existe el sistema.** El array de
-texturas nace como un fallback de 1×1 por capa; cuando los PNG llegaban se
-reescribía el contenido de esa imagen, pero wgpu no redimensiona texturas —crea
-una nueva— y el bind group del material seguía apuntando a la vieja. **El
-material mostró el fallback siempre.** Nadie podía verlo porque los cuatro PNG
-canónicos se generaron a partir de los mismos `placeholder_rgb`, así que
-fallback y arte real eran del mismo color. Se destapó con la primera textura que
-no se parece a su placeholder. El arreglo: entrar el array como asset nuevo y
-apuntar el material a ese handle, sin carrera posible.
+texturas nace como un fallback de 1×1 por capa; al llegar los PNG se reescribía
+esa imagen, pero wgpu no redimensiona texturas —crea una nueva— y el bind group
+del material seguía apuntando a la vieja. **El material mostró el fallback
+siempre.** Nadie podía verlo porque los cuatro PNG canónicos se generaron a
+partir de los mismos `placeholder_rgb`, así que fallback y arte real eran del
+mismo color. El arreglo: entrar el array como asset nuevo y apuntar el material
+a ese handle.
 
-**Lección que se lleva el log a todos lados:** `"packed 4 canonical PNGs"` era
-verdadero e inútil — se imprimía igual con el arte cargado que con el fallback.
-Un mensaje de éxito que no se distingue de un fracaso no es un mensaje de éxito.
-Ahora imprime el tamaño y el color medio de cada capa.
+**La lección se la lleva el log:** `"packed 4 canonical PNGs"` era verdadero e
+inútil — se imprimía igual con el arte cargado que con el fallback. Un mensaje
+de éxito que no se distingue de un fracaso no es un mensaje de éxito. Ahora
+imprime el tamaño y el color medio de cada capa.
 
 **Lo que la textura NO resolvió**, y es un resultado: la hipótesis era que el
-crecimiento se nota porque destapa tierra y que un suelo verde lo escondería.
-Veredicto jugando: *"la textura no maquilla ningún problema que estamos
-intentando solucionar"*. El fenómeno es geométrico. Por eso se pagó el anillo.
+crecimiento se nota porque destapa tierra. Veredicto jugando: *"la textura no
+maquilla ningún problema que estamos intentando solucionar"*.
 
-### La medición, que es lo primero que este sistema tiene
+### El estudio con fuentes, y las tres cosas que hay que probar
 
-Caja Pasto, altura de ojo, **tres corridas** cuyos números no coinciden: el costo
-del pasto salió 3,77 / 2,56 / 2,36 ms de GPU. La deriva *dentro* de cada corrida
-fue de 0,2 ms, así que la dispersión es externa — el usuario tenía **Blender
-abierto**, que compite por CPU y GPU. **Regla que sale de ahí: cerrar lo que
-compita por la GPU antes de medir**, porque el encabezado de contexto del
-reporte no puede declarar lo que no ve.
+Hecho el 2026-08-06 a pedido del usuario, con material público citado (GDC de
+Ghost of Tsushima; la serie de Godot de hexaquo). Vive completo en
+`BOTWGrass.md` → *Cómo lo hacen otros*. Tres hallazgos contradicen decisiones
+nuestras, y las tres correcciones cuestan **cero geometría**:
 
-Lo que aguanta las tres: la pradera es **entre el 45% y el 62% de la GPU** de su
-caja, y **es fill-bound** — en las tres, bajar la resolución a la mitad ahorra
-más que apagar el pasto entero, con la misma geometría. El alcance ahorra menos
-que la densidad. Tabla completa en `BOTWGrass.md`.
+1. **Teñimos el suelo hacia la raíz; GoT tiñe hacia la punta**, justamente para
+   fingir que la densidad a distancia no cambió. Nuestro comentario argumenta
+   que el suelo debe quedar más oscuro — cierto *debajo* del campo, falso *más
+   allá*: ahí el suelo se oscurece y el horizonte gana un borde.
+2. **Nuestro scatter es hash uniforme**; GoT agrupa en celdas de Voronoi con
+   parámetros por clump. Un campo uniforme se lee como alfombra por densa que
+   sea.
+3. **Bajamos densidad y mantenemos la brizna**; hexaquo baja el LOD de la
+   *brizna* (9 tris a 1) sin tocar la densidad. Lo nuestro es lo que abre el
+   vacío.
 
-Eso reordena las prioridades: **el conteo de triángulos no es lo que cuesta el
-frame en esta máquina**, y el cambio a 900p30 golpea la palanca correcta. La
-salvedad de siempre sigue en pie — un tiler cobra el vértice en bandwidth aunque
-no pinte un píxel, y eso no se mide acá.
-
-**Sin zanjar:** en la única corrida con frame utilizable, apagar el pasto bajó
-la GPU 2,56 ms y el frame sólo 0,31, lo que apunta a un techo de CPU de ~7,4 ms.
-Pero fue con Blender abierto y en build dev. Zanjarlo pide una corrida en
-release con la máquina limpia.
-
-**Costo declarado que se movió cuatro veces hoy:** 250.800 → 313.500 → 489.200
-→ 347.600 → **600.000** triángulos por vista
-(`perf::budget::MEADOW_VIEW_TRIANGLES`), seis veces el presupuesto móvil. El
-salto grande es el último, el anillo de 10 a 16 m, y se pagó recién después de
-agotar la alternativa barata. El desglose de qué compró cada salto está en
-`budget.rs`.
-
-**El tamaño de chunk dejó de ser cosmético.** Decide cuánta geometría se hornea
-*fuera* del anillo: con alcance 16, chunks de 7 m dan 509.488 triángulos y 103
-draws; de 10 m, 600.000 y menos de 100. Chunks chicos desperdician menos y
-cuestan más draws. Se eligió respetar `MOBILE_DRAWS`, porque en un tiler un draw
-cuesta más que triángulos que el frustum va a descartar.
+También quedó medido, en Blender, que **la brizna curva que yo proponía es la
+peor de las tres formas por triángulo** (530 px/tri contra 1399 de la plana).
+La ley 1 sale reforzada: con los mismos 4 triángulos, dos briznas planas dan más
+área que una cruz. El modelo y el barrido están en
+`art/blender/grass/grass_blade_shapes.blend`.
 
 ## La suite de medición (2026-08-06)
 
@@ -569,27 +544,19 @@ para decidir cuándo migrar `layout.rs`: reescribir `spawn_stair_segment` como u
   ordenadas. **Para volver a listarlas por nombre hay que activar la feature
   `debug` de `bevy_ecs` un rato**: sin ella Bevy imprime placeholders, y después
   de `initialize` el grafo ya no puede resolver nombres por ninguna otra vía.
-- **La pradera cuesta 489.200 triángulos por vista, casi 5× el presupuesto
-  móvil entero** — y desde el 2026-08-06 sabemos que en esta máquina *eso no es
-  lo que cuesta el frame*: es fill-bound, no vertex-bound (`BOTWGrass.md`). La
-  deuda sigue declarada porque el target es un tiler y ahí el vértice se paga en
-  bandwidth aunque no pinte, pero la palanca a tocar primero es el overdraw. El
-  histórico de por qué existe:
-- **La pradera costaba 52% del presupuesto del Mundo sobre el 0,6% de su área.**
-  Cerrar el hueco del presupuesto (2026-08-04: `meadow_triangles` era privado y
-  no la sumaba nadie) destapó que la escena Mundo declara **106.918 triángulos
-  contra 100.000** — coincide con lo que el medidor de runtime venía gritando.
-  El desglose: pradera 56.250, terreno 32.768, bosque 17.900. La pradera cubre
-  625 m² de 320×320, así que **no escala**: la forma "campo horneado de tamaño
-  fijo" no llega al mapa y afinarla no la va a hacer llegar. El exceso está
-  declarado con número en `perf::budget::WORLD_SCENE_OVERSHOOT` y el test falla
-  si crece. `BOTWGrass.md` se reescribió el 2026-08-04 contra el target real
-  (Android tile-based) y la salida es una **grilla rodante centrada en la
-  cámara** con densidad horneada por anillo, precedida por dos pasos que no
-  cambian la imagen: enchufar el `ExtendedMaterial` que lleva meses registrado y
-  sin usar, y **dejar el vértice en sólo la posición** (normal, color y uv son
-  derivables; la uv sale de `vertex_index & 3` porque la brizna son 4 vértices en
-  orden fijo) — 48 B a 12 B, imagen idéntica.
+- **La pradera cuesta 600.000 triángulos por vista, seis veces el presupuesto
+  móvil entero** (`perf::budget::MEADOW_VIEW_TRIANGLES`, con el desglose de los
+  cuatro saltos del 2026-08-06). Desde ese día sabemos que en esta máquina *eso
+  no es lo que cuesta el frame*: es fill-bound. La deuda sigue declarada porque
+  el target es un tiler y ahí el vértice se paga en bandwidth aunque no pinte,
+  pero **la palanca a tocar primero es el overdraw** — y el dial de overdraw del
+  hub existe desde siempre y nunca se usó. El anillo interior de 16 m es la
+  primera candidata a revertir: costó +73% y no compró nada verificable.
+- **Por qué la pradera es una grilla rodante y no un campo fijo:** el intento
+  anterior cubría 625 m² de un mundo de 320×320 y ya se llevaba el 52% del
+  presupuesto de la escena. La forma "campo horneado de tamaño fijo" **no
+  escala**, y afinarla no la iba a hacer escalar. El detalle está en
+  `BOTWGrass.md` y en git.
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

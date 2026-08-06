@@ -397,86 +397,6 @@ const BLADE_HEIGHT_MAX: f32 = 0.90;
 /// this constant exists to break.
 const BLADE_LEAN: f32 = 0.27;
 
-/// How big a clump is, in metres.
-///
-/// Grass does not grow one blade at a time — it grows in tufts, and a field of
-/// independently placed blades reads as carpet no matter how dense it gets,
-/// because uniform noise has no structure at any scale the eye looks for. This
-/// is the scale it gets. At the near ring's density a cell this size holds about
-/// a dozen blades, which is a tuft rather than a lawn tile.
-///
-/// Ghost of Tsushima's talk names the same four levers this block implements:
-/// pull toward the clump's centre, agree on a direction, and vary height and
-/// bend *per clump*. What follows is those four and nothing else.
-const CLUMP_M: f32 = 0.55;
-
-/// How far a blade is pulled from where it landed toward its clump's centre.
-///
-/// Zero is today's uniform scatter; one collapses every clump to a point. What
-/// this buys is not the tufts — it is the **gaps between them**, which is what
-/// a uniform field has none of and what makes ground visible as ground.
-const CLUMP_PULL: f32 = 0.5;
-
-/// How far the clump's centre wanders inside its cell, as a fraction of the
-/// cell.
-///
-/// Without it the clumps sit on a lattice and the field grows a visible grid —
-/// worse than the carpet it replaces. Held below half a cell on purpose: a
-/// centre that leaves its own cell would need a true Voronoi search over the
-/// nine neighbours to find which blades belong to it, and this buys the
-/// irregularity without that cost. If a grid ever shows up in a screenshot,
-/// **that** is the upgrade, and it is the reason this constant is separate.
-const CLUMP_JITTER: f32 = 0.3;
-
-/// How much the blades of one clump agree with each other, from 0 (each blade
-/// independent, today's behaviour) to 1 (identical).
-///
-/// Three of them because the three say different things. Direction is what makes
-/// a tuft read as one plant instead of a huddle. Height is what makes one tuft
-/// taller than the next, which is the variation the eye reads at middle
-/// distance. Bend is what keeps a clump from being a starburst.
-///
-/// None of the three touches the blade's *range* — a clump biases where inside
-/// the range its blades fall, never past it. That keeps
-/// [`BLADE_HEIGHT_MAX`]'s hard ceiling intact, which is a packing invariant and
-/// not a look decision.
-const CLUMP_ALIGN: f32 = 0.65;
-const CLUMP_HEIGHT_COHESION: f32 = 0.6;
-const CLUMP_BEND_COHESION: f32 = 0.5;
-
-/// Everything a blade inherits from the tuft it belongs to.
-struct Clump {
-    centre: Vec2,
-    yaw: f32,
-    height_bias: f32,
-    bend_bias: f32,
-}
-
-/// Which clump a point on the ground belongs to, and what that clump decided.
-///
-/// A pure function of world position — not of the chunk — and that is the whole
-/// reason it works: the same patch of ground is baked by different chunks at
-/// different distances, and two rings that disagreed about where the tufts are
-/// would make the handover between them a visible reshuffle.
-fn clump_at(xz: Vec2) -> Clump {
-    let cell = (xz / CLUMP_M).floor();
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "clump cells are small integers by construction"
-    )]
-    let seed = hash_u32((cell.x as i32 as u32) ^ (cell.y as i32 as u32).wrapping_mul(0x9e37_79b9));
-    let jitter = Vec2::new(
-        hash_unit(seed) - 0.5,
-        hash_unit(seed ^ 0x85eb_ca6b) - 0.5,
-    ) * (2.0 * CLUMP_JITTER * CLUMP_M);
-    Clump {
-        centre: (cell + 0.5) * CLUMP_M + jitter,
-        yaw: hash_unit(seed ^ 0xc2b2_ae35) * std::f32::consts::TAU,
-        height_bias: hash_unit(seed ^ 0x27d4_eb2f),
-        bend_bias: hash_unit(seed ^ 0x1656_67b1),
-    }
-}
-
 /// Root and tip colours. The root-to-tip gradient is the single biggest reason
 /// BOTW grass reads as grass; it used to be baked into a vertex colour and now
 /// travels as two uniforms, because it is a pure function of the vertex's
@@ -970,12 +890,7 @@ fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
         let u4 = hash_unit(hash ^ 0xdead_beef);
         let u5 = hash_unit(hash ^ 0x0f0f_0f0f);
 
-        // Scatter first, then let the tuft claim it. The pull has to land before
-        // the terrain is sampled or a blade would wear the height, slope and
-        // kind of the spot it was *going* to grow in.
-        let scattered = centre + Vec2::new(u1 - 0.5, u2 - 0.5) * chunk_m;
-        let clump = clump_at(scattered);
-        let xz = scattered.lerp(clump.centre, CLUMP_PULL);
+        let xz = centre + Vec2::new(u1 - 0.5, u2 - 0.5) * chunk_m;
         let ground = terrain.and_then(|t| t.height_at(xz)).unwrap_or(0.0);
         let slope = terrain.and_then(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
         // No terrain means a test harness, and a test wants blades: flat soil
@@ -990,19 +905,12 @@ fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
             continue;
         }
 
-        // The clump biases *where inside* each range this blade falls; it never
-        // moves a range. `BLADE_HEIGHT_MAX` stays the ceiling it was.
-        let height_t = u4.lerp(clump.height_bias, CLUMP_HEIGHT_COHESION);
-        let bend_t = u5.lerp(clump.bend_bias, CLUMP_BEND_COHESION);
-        let height = (BLADE_HEIGHT_MIN + height_t * (BLADE_HEIGHT_MAX - BLADE_HEIGHT_MIN)) * cover;
-        // Spread around the clump's direction rather than mixing two angles: an
-        // angle is on a circle, and a naive mix between 350° and 10° points the
-        // blade at 180° — which reads as one blade in a tuft facing backwards.
-        let yaw = clump.yaw + (u3 - 0.5) * std::f32::consts::TAU * (1.0 - CLUMP_ALIGN);
+        let height = (BLADE_HEIGHT_MIN + u4 * (BLADE_HEIGHT_MAX - BLADE_HEIGHT_MIN)) * cover;
+        let yaw = u3 * std::f32::consts::TAU;
         // The quad's width runs along `side`; the lean tips it over `side`'s
         // perpendicular so blades do not all fall the same way.
         let side = Vec2::new(yaw.cos(), yaw.sin()) * (BLADE_WIDTH * width_scale * 0.5);
-        let lean = Vec2::new(-yaw.sin(), yaw.cos()) * ((bend_t - 0.5) * 2.0 * BLADE_LEAN);
+        let lean = Vec2::new(-yaw.sin(), yaw.cos()) * ((u5 - 0.5) * 2.0 * BLADE_LEAN);
 
         let base = Vec3::new(xz.x, ground, xz.y);
         let tip = base + Vec3::new(lean.x, height, lean.y);

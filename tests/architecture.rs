@@ -165,6 +165,29 @@ fn installs_an_inner_simulation_plugin(contents: &str) -> bool {
         })
 }
 
+/// Materiales que se dibujan pero no llegan al presupuesto de escena.
+///
+/// Regla pura sobre texto para que el canario pueda plantarle una infracción: un
+/// test que afirma *ausencia* da verde igual si la ley se cumple que si el
+/// detector está ciego.
+fn materials_missing_from_budget(files: &[(String, String)], inventory: &str) -> Vec<String> {
+    const EXEMPT: &[&str] = &["AdditiveOverdrawMaterial"];
+    let mut missing = Vec::new();
+    for (path, contents) in files {
+        for tail in contents.split("MaterialPlugin::<").skip(1) {
+            let Some((material, _)) = tail.split_once('>') else {
+                continue;
+            };
+            let material = material.trim();
+            if EXEMPT.contains(&material) || inventory.contains(material) {
+                continue;
+            }
+            missing.push(format!("{material} (registrado en {path})"));
+        }
+    }
+    missing
+}
+
 fn names_the_simulation_crate(contents: &str) -> bool {
     contents.contains("bof_simulation")
 }
@@ -349,6 +372,25 @@ fn presentation_never_names_the_simulation_crate() {
 mod canaries {
     use super::*;
 
+    /// La ley del presupuesto nació de una omisión que duró meses; el canario
+    /// existe para que no vuelva a nacer ciega.
+    #[test]
+    fn the_budget_rule_sees_a_material_nobody_counts() {
+        let planted = vec![(
+            "src/visuals/water.rs".to_string(),
+            "app.add_plugins(MaterialPlugin::<WaterMaterial>::default());".to_string(),
+        )];
+        assert_eq!(
+            materials_missing_from_budget(&planted, "Query<TypedSceneMesh<StandardMaterial>>"),
+            vec!["WaterMaterial (registrado en src/visuals/water.rs)".to_string()],
+        );
+        assert!(
+            materials_missing_from_budget(&planted, "Query<TypedSceneMesh<WaterMaterial>>")
+                .is_empty(),
+            "un material que sí se cuenta no puede reportarse como faltante"
+        );
+    }
+
     #[test]
     fn the_hardware_rule_sees_a_planted_reader() {
         assert!(
@@ -481,5 +523,38 @@ fn no_file_is_mostly_commentary() {
         offenders.is_empty(),
         "§15 pone el techo en {CEILING_PERCENT}% de comentario por archivo; \
          el rationale largo va a docs/: {offenders:#?}"
+    );
+}
+
+/// Todo material que se registra tiene que contarse en el presupuesto.
+///
+/// La ausencia de esta ley costó meses: `GrassMaterial` existía desde que existe
+/// la pradera y `collect_scene` sólo consultaba `StandardMaterial` y
+/// `TerrainMaterial`, así que el grader calificaba la escena sin lo más caro que
+/// hay en ella — medido el 2026-08-06 en la caja Pasto: 33.792 triángulos
+/// declarados con cien mil briznas en pantalla.
+///
+/// Los triángulos ya no pueden perderse (`collect_scene` los cuenta por
+/// `Mesh3d`, sin mirar material), pero `draws` agrupa por `(malla, material)` y
+/// eso sí necesita el tipo. O sea que sigue habiendo una lista, y esto es lo que
+/// impide que se olvide de nuevo.
+///
+/// `AdditiveOverdrawMaterial` está exento y nombrado: es el material del
+/// diagnóstico de overdraw, y `collect_scene` se apaga entero mientras ese
+/// diagnóstico corre, justamente porque su escena no es una muestra válida.
+#[test]
+fn every_registered_material_reaches_the_scene_budget() {
+    let files = source_files();
+    let inventory = files
+        .iter()
+        .find(|(path, _)| path == "src/debug/collect.rs")
+        .map(|(_, contents)| contents.clone())
+        .expect("collect.rs debe existir");
+
+    let missing = materials_missing_from_budget(&files, &inventory);
+    assert!(
+        missing.is_empty(),
+        "estos materiales se dibujan pero no entran al presupuesto de escena; \
+         agregarlos a `collect_scene` o eximirlos con su razón: {missing:#?}"
     );
 }

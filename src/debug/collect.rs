@@ -2,10 +2,10 @@
 //! only place that turns values into strings; the HUD and the console sinks
 //! only arrange what they find here.
 
-use bevy::asset::AssetId;
+use bevy::asset::{AssetId, UntypedAssetId};
 use bevy::camera::visibility::{ViewVisibility, VisibilityRange};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
-use bevy::pbr::MeshMaterial3d;
+use bevy::pbr::{Material, MeshMaterial3d};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh3d;
@@ -225,28 +225,43 @@ pub(super) fn collect_mount(
     );
 }
 
-type SceneMesh<'a> = (
-    &'a ViewVisibility,
-    &'a Mesh3d,
-    &'a MeshMaterial3d<StandardMaterial>,
-);
-
-type TerrainSceneMesh<'a> = (
-    &'a ViewVisibility,
-    &'a Mesh3d,
-    &'a MeshMaterial3d<TerrainMaterial>,
-);
-
-/// La pradera, que hasta el 2026-08-06 este inventario no veía.
+/// Toda malla dibujada, sin mirar su material.
 ///
-/// `GrassMaterial` es un tercer tipo de material, así que no lo alcanzaba ni la
-/// consulta de `StandardMaterial` ni la del terreno: el grader de presupuesto
-/// calificaba la escena sin la cosa más cara que hay en ella.
-type MeadowSceneMesh<'a> = (
-    &'a ViewVisibility,
-    &'a Mesh3d,
-    &'a MeshMaterial3d<GrassMaterial>,
-);
+/// **Triángulos y mallas visibles se cuentan acá y sólo acá**, y eso es el
+/// arreglo del 2026-08-06: antes había una consulta por tipo de material, así
+/// que un material nuevo desaparecía del presupuesto sin que nada avisara.
+/// `GrassMaterial` fue el tercero y estuvo invisible desde que existe — el
+/// grader calificaba la escena sin la pradera, que es lo más caro que hay en
+/// ella. Un `Mesh3d` lo tiene todo lo que se dibuja, así que preguntarle a él es
+/// lo único que no puede quedarse corto.
+type AnySceneMesh<'a> = (&'a ViewVisibility, &'a Mesh3d);
+
+/// Una malla con su material, para lo único que sí necesita el tipo: agrupar por
+/// `(malla, material)`, que es como Bevy batchea.
+type TypedSceneMesh<'a, M> = (&'a ViewVisibility, &'a Mesh3d, &'a MeshMaterial3d<M>);
+
+/// Cuenta lotes y materiales de un tipo, en conjuntos *untyped* compartidos.
+///
+/// Untyped para que los tres tipos sumen en el mismo par de conjuntos: así
+/// `draws` es un número y no una suma que hay que acordarse de extender.
+/// Devuelve cuántas mallas visibles vio, que es con lo que
+/// [`collect_scene`] detecta un material sin contabilizar.
+fn tally<M: Material>(
+    query: &Query<TypedSceneMesh<M>>,
+    batches: &mut HashSet<(AssetId<Mesh>, UntypedAssetId)>,
+    materials: &mut HashSet<UntypedAssetId>,
+) -> u32 {
+    let mut seen = 0;
+    for (visibility, mesh3d, material) in query {
+        if !visibility.get() {
+            continue; // Frustum-, hierarchy- or range-culled: never submitted.
+        }
+        seen += 1;
+        batches.insert((mesh3d.0.id(), material.0.id().untyped()));
+        materials.insert(material.0.id().untyped());
+    }
+    seen
+}
 
 /// Static scene inventory — the numbers a mobile budget is actually spent on,
 /// distinct from the frame cost in `perf`. `draws` counts distinct
@@ -258,15 +273,17 @@ type MeadowSceneMesh<'a> = (
 /// console output ignores them.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn collect_scene(
-    meshes: Query<SceneMesh>,
-    terrain_meshes: Query<TerrainSceneMesh>,
-    meadow_meshes: Query<MeadowSceneMesh>,
+    all_meshes: Query<AnySceneMesh>,
+    standard: Query<TypedSceneMesh<StandardMaterial>>,
+    terrain: Query<TypedSceneMesh<TerrainMaterial>>,
+    meadow: Query<TypedSceneMesh<GrassMaterial>>,
     ranged: Query<&ViewVisibility, With<VisibilityRange>>,
     mesh_assets: Res<Assets<Mesh>>,
     perf: Res<PerfToggles>,
     diagnostic: Res<DiagnosticViewState>,
     mut inventory: ResMut<SceneInventory>,
     mut snapshot: ResMut<DebugSnapshot>,
+    mut warned: Local<bool>,
 ) {
     // The diagnostic replaces StandardMaterial handles, so its temporary
     // render representation is not a valid production budget sample.
@@ -275,21 +292,11 @@ pub(super) fn collect_scene(
     }
     let mut visible_meshes = 0u32;
     let mut triangles = 0usize;
-    let mut batches: HashSet<(AssetId<Mesh>, AssetId<StandardMaterial>)> = HashSet::default();
-    let mut materials: HashSet<AssetId<StandardMaterial>> = HashSet::default();
-    let mut terrain_batches: HashSet<(AssetId<Mesh>, AssetId<TerrainMaterial>)> =
-        HashSet::default();
-    let mut terrain_materials: HashSet<AssetId<TerrainMaterial>> = HashSet::default();
-    let mut meadow_batches: HashSet<(AssetId<Mesh>, AssetId<GrassMaterial>)> = HashSet::default();
-    let mut meadow_materials: HashSet<AssetId<GrassMaterial>> = HashSet::default();
-
-    for (visibility, mesh3d, material) in &meshes {
+    for (visibility, mesh3d) in &all_meshes {
         if !visibility.get() {
-            continue; // Frustum-, hierarchy- or range-culled: never submitted.
+            continue;
         }
         visible_meshes += 1;
-        batches.insert((mesh3d.0.id(), material.0.id()));
-        materials.insert(material.0.id());
         if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
             triangles += match mesh.indices() {
                 Some(indices) => indices.len() / 3,
@@ -298,34 +305,23 @@ pub(super) fn collect_scene(
             };
         }
     }
-    for (visibility, mesh3d, material) in &terrain_meshes {
-        if !visibility.get() {
-            continue;
-        }
-        visible_meshes += 1;
-        terrain_batches.insert((mesh3d.0.id(), material.0.id()));
-        terrain_materials.insert(material.0.id());
-        if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
-            triangles += match mesh.indices() {
-                Some(indices) => indices.len() / 3,
-                None => mesh.count_vertices() / 3,
-            };
-        }
-    }
 
-    for (visibility, mesh3d, material) in &meadow_meshes {
-        if !visibility.get() {
-            continue;
-        }
-        visible_meshes += 1;
-        meadow_batches.insert((mesh3d.0.id(), material.0.id()));
-        meadow_materials.insert(material.0.id());
-        if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
-            triangles += match mesh.indices() {
-                Some(indices) => indices.len() / 3,
-                None => mesh.count_vertices() / 3,
-            };
-        }
+    let mut batches: HashSet<(AssetId<Mesh>, UntypedAssetId)> = HashSet::default();
+    let mut materials: HashSet<UntypedAssetId> = HashSet::default();
+    let accounted = tally(&standard, &mut batches, &mut materials)
+        + tally(&terrain, &mut batches, &mut materials)
+        + tally(&meadow, &mut batches, &mut materials);
+
+    // El guardia que faltaba. `draws` y `materials` siguen necesitando el tipo,
+    // o sea que siguen siendo una lista que alguien tiene que extender — pero
+    // ahora olvidarse hace ruido en vez de mentir en silencio durante meses.
+    if accounted < visible_meshes && !*warned {
+        *warned = true;
+        warn!(
+            "[budget] {} mallas visibles y sólo {accounted} con material contabilizado: \
+             hay un tipo de material fuera de `collect_scene`, y sus draws no se cuentan",
+            visible_meshes,
+        );
     }
 
     // The distance-LOD ledger: how many range-gated meshes the camera dropped
@@ -342,8 +338,8 @@ pub(super) fn collect_scene(
     let scene = SceneInventory {
         visible_meshes,
         triangles,
-        draws: batches.len() + terrain_batches.len() + meadow_batches.len(),
-        materials: materials.len() + terrain_materials.len() + meadow_materials.len(),
+        draws: batches.len(),
+        materials: materials.len(),
         ranged_culled,
         ranged_total,
     };

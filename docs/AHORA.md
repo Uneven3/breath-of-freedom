@@ -20,12 +20,15 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   buena son tres: `cargo test`, `cargo test -p breath_of_freedom_simulation` y
   `cargo test -p breath_of_freedom_domain`. Con `--workspace` todo lo demás pasa
   y sólo cae ese smoke: si cae otro, es real.
-- **Medir en `cargo run` (dev), no en release.** Las deps ya compilan en
-  `opt-level 3` en dev, y el cuello es GPU: la diferencia de perfil medida en el
-  punto menos dependiente de la vista fue 0,38 ms contra deltas de 4-12 ms.
-  Release tarda ~9 min; se reserva para validar el número absoluto antes de dar
-  por cumplido un objetivo. Correr la secuencia **dos veces** y quedarse con la
-  limpia: la primera a veces trae outliers.
+- **Medir: `BOF_BENCH=<suite> cargo run`**, con la ventana visible y sin nada
+  más usando la GPU. Detalle y trampas en "La suite de medición".
+- **Medir en dev, no en release** — con una duda nueva. Las deps ya compilan en
+  `opt-level 3` y la diferencia de perfil medida fue 0,38 ms contra deltas de
+  4-12 ms. Pero el 2026-08-06 apareció evidencia de un **techo de CPU** que dev
+  podría estar inflando, así que la premisa "el cuello es GPU" dejó de ser
+  segura. Release tarda ~9 min y sigue reservado para validar un número absoluto
+  — y ahora también para zanjar eso. Correr la secuencia **dos veces** y
+  quedarse con la limpia.
 - El feeling se valida jugando (checkpoint, §10): lanzar **`cargo run` a secas**
   en background para el usuario, redirigiendo a un log; al cerrar la sesión,
   leerlo filtrando `error|panic|took|destroyed` antes de reportar. **No forzar
@@ -177,35 +180,26 @@ difieren, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los niveles.
 
 ### Semántica por celda (2026-07-26, jugada y validada)
 
-- **`world/terrain_kind.rs`**: `TerrainKind {Soil, Rock, TallGrass, Sand}` y una
-  **tabla** `KINDS` de la que salen las propiedades (`surface`, `flammable`,
-  `cuttable`). Decisión del usuario: se pinta *un significado*, no atributos
-  sueltos — así una celda no puede ser piedra inflamable, y cambiar qué significa
-  "pasto largo" es una fila, no repintar los niveles. **Agua no entra acá**: una
-  laguna necesita altura de superficie, no es propiedad de una celda.
+Se pinta **un significado**, no atributos sueltos: `TerrainKind {Soil, Rock,
+TallGrass, Sand}` y una tabla `KINDS` de la que salen `surface`, `flammable` y
+`cuttable` (decisión del usuario — así una celda no puede ser piedra inflamable,
+y cambiar qué significa "pasto largo" es una fila, no repintar los niveles).
+**Agua no entra acá**: una laguna necesita altura de superficie, no es propiedad
+de una celda.
+
 - **Dos canales en una grilla**: alturas en los `129×129` **vértices** (se
-  interpolan), kinds en las `128×128` **celdas** (no se interpolan). `paint_area`
-  no tiene falloff ni rate — no hay medio camino entre roca y arena — así que
-  pintar es **idempotente** y el borde de un parche es la grilla de 2,5 m.
-- **Capas de autoría** (`ToolLayer {Relief, Meaning}`, **F6** cambia; Tab no,
-  que ya abre el inventario). Undo es **una sola pila** para las dos capas:
+  interpolan), kinds en las `128×128` **celdas** (no). Pintar es **idempotente**
+  —sin falloff ni rate, no hay medio camino entre roca y arena— y el borde de un
+  parche es la grilla de 2,5 m.
+- **Undo es una sola pila** para las dos capas de autoría (`ToolLayer`, **F6**):
   Ctrl+Z es "lo último que hice", no "lo último en el modo en que estoy".
-- **Persistencia**: el canal semántico va **run-length** en el mismo `.ron`
-  (`kinds: [(16384, Soil)]` en un nivel virgen). `#[serde(default)]` mantiene
-  cargables los niveles viejos. El remuestreo es **vecino más cercano** — copiar
-  el camino bilineal habría inventado kinds que nadie pintó. Una lista de runs
-  que no suma se **rechaza**: correría el mapa entero de lugar en silencio.
-  Medido: 47 runs = **585 bytes**, contra 105.700 de las alturas.
-- **Simulación**: `GroundFacts::surface` sale de `kind_at(punto de contacto)` en
-  el terreno, y del `Surface` autorado en cajas y escalones. Al terreno se le
-  **quitó** el componente `Surface`: uno solo no puede describir 320 m.
-- **Presentación**: el color de vértice codifica capa + propiedades y un único
-  `ExtendedMaterial` muestrea cuatro PNG desde un `texture_2d_array`. F1 ofrece
-  `Arte/Tipo/Escalable/Inflamable/Cortable`; su arquitectura sigue bloqueada por
-  los puntos de auditoría arriba.
-- **Pintar no toca la física**: `Changed<Terrain>` no distingue canales, así que
-  `Terrain` lleva `relief_revision` y el rebuild del collider sale temprano si
-  las alturas no se movieron.
+- **Persistencia** run-length en el mismo `.ron`; remuestreo por **vecino más
+  cercano** (el camino bilineal habría inventado kinds que nadie pintó), y una
+  lista de runs que no suma se **rechaza** en vez de correr el mapa en silencio.
+  Medido: 47 runs = 585 bytes contra 105.700 de las alturas.
+- **Al terreno se le quitó `Surface`**: uno solo no puede describir 320 m.
+- **Pintar no toca la física**: `Terrain` lleva `relief_revision` y el rebuild
+  del collider sale temprano si las alturas no se movieron.
 
 Validado jugando (2026-07-26): pintado, `surface=Dirt→Stone→Dirt` bajo los pies,
 undo, y guardado en disco. **Falta** la relectura en vivo (F10 → menú → volver).
@@ -255,9 +249,10 @@ De los cinco problemas reportados el 2026-08-05:
 1. **Briznas muy chicas** → 0,26-0,52 m pasaron a **0,45-0,90 m**, con el lean
    escalado a la par. *Jugado y aceptado: "está mejor la altura y el feeling".*
 2. **Densidad insuficiente** (pedido en el mismo playtest) → los tres anillos
-   subieron a **56 / 28 / 10 briznas por m²**. Sin jugar.
-3. **Punta cuadrada** → taper 0,35 → **0,18**, muesca 0,82 → **0,72**. Sin
-   comentario del usuario todavía.
+   subieron a **56 / 28 / 10 briznas por m²**. Jugado dos veces sin comentario:
+   ni aceptado ni rechazado.
+3. **Punta cuadrada** → taper 0,35 → **0,18**, muesca 0,82 → **0,72**. Ídem —
+   ojo que el salto del taper es grande y puede haber quedado como aguja.
 4. **"Veo crecer el pasto muy cerca"** → **dos intentos, y el primero estuvo
    mal diagnosticado.** La banda de crecimiento hacía dos trabajos con una sola
    constante: cuánto tarda *una* brizna en crecer, y en cuántos metros se
@@ -265,7 +260,8 @@ De los cinco problemas reportados el 2026-08-05:
    fenómeno y lo hizo **más** brusco — el usuario lo volvió a reportar como "muy
    notorio". Ahora son dos constantes: `GROWTH_RAMP_M` = 1 m (una brizna) y
    `GROWTH_SPREAD_M` = 6 m (la dispersión). Lo que se ve pasa de una ola que
-   avanza con el jugador a un campo que ralea con la distancia. Sin jugar.
+   avanza con el jugador a un campo que ralea con la distancia. Jugado dos veces
+   sin volver a reportarse, que es indicio pero no confirmación.
 5. **Falta abundancia en el horizonte** → sin hacer. El anillo externo subió de
    6 a 10/m², que ayuda pero no es el arreglo.
 6. **El parpadeo** → **resuelto y confirmado jugando**, y no era ninguna de las
@@ -313,47 +309,41 @@ pagó a sabiendas bajo la regla vigente.
 a la caja de la suite, se para en su mirador, mide, escribe la tabla y cierra el
 proceso. Tres suites, en `perf/suite.rs` como **dato**: `grass`, `general`,
 `shadows`. Agregar una es una variante y una tabla — el motor (`sequence.rs`) no
-se toca. También hay un botón por suite en el hub F1.
+se toca. También hay un botón por suite en el hub F1. Los porqués están en los
+doc-comments de `suite.rs` y `auto.rs`; acá sólo lo que no se deduce del código.
 
 Reglas que los tests cobran sobre toda suite, presente y futura: empieza y
 termina en el baseline (la diferencia es la deriva), cada paso mueve **un** eje,
-y el baseline es la configuración que se envía.
+y el baseline es la configuración que se envía. El reporte abre declarando
+suite, pregunta, escena, perfil, ventana, MSAA, render scale, densidad y alcance
+del pasto, sombras y mirador.
+
+**Perillas nuevas:** `msaa` y `grass-reach`, más un paso de **0 briznas/m²** que
+convierte "cuánto cuesta el pasto" de extrapolación en resta.
 
 **Tres trampas de esta máquina, encontradas corriendo:**
 
 - **Cerrar Blender (o cualquier cosa que use la GPU) antes de medir.** Con él
   abierto, tres corridas de la misma configuración dieron costos del pasto entre
-  2,36 y 3,77 ms, con derivas internas de 0,2. Lo externo no aparece en la
-  tabla.
-
+  2,36 y 3,77 ms, con derivas internas de 0,2. Lo externo no aparece en la tabla.
 - **La ventana tiene que estar visible.** En Wayland nativo el compositor no
   manda frame callbacks a una superficie oculta y el juego entero se duerme —
   1,9 s de CPU en 105 de reloj, sin medir nada. Para correr en segundo plano:
   `WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= BOF_BENCH=grass cargo run`. **Sólo
   para medir**; el juego se juega en Wayland nativo.
-- **El frame suele quedar clavado por la presentación** (16,67 ms en todos los
-  pasos) mientras la GPU varía de 2,15 a 8,17. El reporte lo detecta solo y
-  avisa que hay que leer `d-gpu` y descartar `d-frame`. El criterio no nombra
-  ningún refresh: compara cuánto se movió el frame contra cuánto la GPU.
-
-El reporte abre declarando **suite, pregunta, escena, perfil, ventana, MSAA,
-render scale, densidad y alcance del pasto, sombras y mirador**, porque una
-tabla de milisegundos sin contexto no se compara con otra de la semana que
-viene — el 2026-08-06 hubo que deducir de un delta en qué escena había corrido
-una tabla.
-
-**Perillas nuevas:** `msaa` (1/4/2 muestras) y `grass-reach` (100/75/50% del
-alcance de los anillos), más un paso de **0 briznas/m²** que convierte "cuánto
-cuesta el pasto" de extrapolación en resta.
+- **El frame suele quedar clavado por la presentación** mientras la GPU varía.
+  El reporte lo detecta y avisa que hay que leer `d-gpu`. El criterio compara
+  los dos recorridos entre sí y no cada uno contra un umbral — la primera
+  versión usaba umbrales sueltos y dejó pasar una corrida con la GPU al 203% y
+  el frame al 6,3%.
 
 **Pendiente que la suite destapó:** ocultar el bosque entero desde el mirador
 canónico vale 0,34 ms, lo que sugiere que **el mirador "del bosque" no mira al
 bosque**. Autorearlo con F4 sigue sin hacerse y ahora tiene evidencia.
 
-**Ruido de Bevy, no nuestro:** cada corrida imprime ~260 líneas
-`bevy_render::slab_allocator: Use-after-free`. Aparecen al despawnear muchas
-mallas de golpe (cambiar densidad o alcance re-hornea la grilla entera). No
-rompe la corrida ni los números; ensucia el log y no está investigado.
+**Ruido de Bevy, no nuestro:** cada corrida imprime ~270 líneas
+`bevy_render::slab_allocator: Use-after-free`, al despawnear muchas mallas de
+golpe. No rompe la corrida ni los números; ensucia el log y no está investigado.
 
 ## Crates: cerrado (2026-08-04), y lo que quedó vivo de ahí
 

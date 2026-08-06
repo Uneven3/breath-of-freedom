@@ -203,8 +203,8 @@ mod tests {
     /// tiene sentido para algo que existe alrededor de la cámara y no en un
     /// lugar del mapa.
     ///
-    /// **Hoy es tres veces y media el presupuesto móvil entero, y está acá para
-    /// que eso no se pueda ignorar.**
+    /// **Hoy es seis veces el presupuesto móvil entero, y está acá para que eso
+    /// no se pueda ignorar.**
     ///
     /// El número que la aritmética pedía eran ~49.000: 100.000 del presupuesto
     /// móvil menos 32.768 de terreno y ~17.900 de bosque. La primera versión de
@@ -232,8 +232,15 @@ mod tests {
     /// - 489.200 → 347.600 (−29%): las tres a **40/20/7**, jugado de nuevo. 56
     ///   resultó ser más de lo necesario. La condición que el usuario puso al
     ///   bajarla importa más que el número: *"para que las texturas hagan el
-    ///   resto de la pega"* — o sea que esta cuenta asume un suelo que hoy no
-    ///   existe, porque el terreno sólo tiene un tinte plano.
+    ///   resto de la pega"* — condición que después se cumplió, con una textura
+    ///   de pradera authored en la capa `Soil`.
+    /// - 347.600 → 600.000 (+73%): el anillo interior de 10 a **16 m**, que es
+    ///   lo único que mueve *a qué distancia* crece el pasto. Es el salto más
+    ///   caro del día y se pagó último, después de agotar la alternativa
+    ///   barata: la hipótesis era que el crecimiento se nota porque destapa
+    ///   tierra, y que un suelo con textura de pradera lo escondería. La textura
+    ///   entró y el veredicto jugando fue que *"no maquilla ningún problema"*.
+    ///   El fenómeno es geométrico y sólo la geometría lo mueve.
     ///
     /// **Y lo que dice el barrido del 2026-08-06 sobre si esto importa:** en esta
     /// máquina el pasto es *fill-bound*, no vertex-bound. Bajar la densidad a
@@ -259,7 +266,7 @@ mod tests {
     /// tenga números, "el pasto cuesta demasiado" sigue siendo una hipótesis —
     /// que el conteo entre no prueba que corra en un teléfono, y que no entre
     /// tampoco prueba que no.
-    const MEADOW_VIEW_TRIANGLES: usize = 350_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 600_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -274,7 +281,7 @@ mod tests {
         let ground = terrain_cost();
         let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            over <= 425_000,
+            over <= 535_000,
             "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
              past the debt this file declares"
         );

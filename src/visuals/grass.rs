@@ -167,15 +167,36 @@ struct Ring {
 /// above theirs.
 const RINGS: [Ring; 3] = [
     Ring {
-        // 10 y no 8 desde el 2026-08-06, y es la otra mitad del arreglo del
-        // "veo crecer el pasto muy cerca del player": la banda de crecimiento se
-        // acortó a 3 m, pero una banda vive *adentro* del anillo que gobierna,
-        // así que el anillo tiene que ser bastante más ancho que ella o el
-        // jugador camina siempre dentro de la rampa. Cuesta briznas —el área
-        // crece con el cuadrado— y ese costo está declarado en
-        // `perf::budget::MEADOW_VIEW_TRIANGLES`.
-        reach_m: 10.0,
-        chunk_m: 5.0,
+        // 8 → 10 → **16**, las tres veces por el mismo reporte jugando: *"el
+        // crecimiento del pasto está muy cerca del player"*. Este alcance es lo
+        // único que decide **a qué distancia** ocurre el crecimiento, porque la
+        // dispersión vive adentro del anillo: con 10 m la rampa caía entre 4 y
+        // 10 metros, o sea a los pies del jugador, por corta que fuera.
+        //
+        // Lo que destrabó el paso fue que el usuario separara las dos cosas:
+        // *"crece parejo a medida que uno camina, y crece bien — no sé qué es lo
+        // que hay que arreglar ahí"*. O sea que el mecanismo
+        // ([`GROWTH_RAMP_M`] y [`GROWTH_SPREAD_M`]) ya estaba bien y lo que
+        // faltaba era **distancia**, que es otra perilla. Con 16 m la rampa vive
+        // entre 10 y 16.
+        //
+        // **Se intentó no pagarlo y no alcanzó.** La hipótesis previa era que el
+        // crecimiento se nota porque una brizna que se encoge destapa tierra, y
+        // que con una textura de pradera en el suelo el contraste desaparecería.
+        // La textura entró (y quedó buena), pero el veredicto fue *"la textura
+        // no maquilla ningún problema que estamos intentando solucionar"*. El
+        // fenómeno es geométrico, no de color.
+        //
+        // El costo es real: 347.600 → 600.000 triángulos declarados, +73%. El
+        // área crece con el cuadrado del alcance y éste es el anillo más denso.
+        reach_m: 16.0,
+        // 10 y no 5, y el tamaño de chunk **no es cosmético**: decide cuánta
+        // geometría se hornea fuera del anillo. Medido con este alcance, chunks
+        // de 7 dan 509.488 triángulos y 103 draws; de 10, 600.000 y menos de
+        // 100. Chunks chicos desperdician menos y cuestan más draws; grandes al
+        // revés. Se eligió el lado que respeta `MOBILE_DRAWS`, porque un draw en
+        // un tiler cuesta más que unos triángulos que el frustum va a tirar.
+        chunk_m: 10.0,
         // 45 → 56 → **40**, y las tres las decidió el ojo del usuario jugando.
         // La última es la interesante: 56 le pareció más de lo necesario y 30
         // —el paso del barrido que probó— demasiado poco. 40 es su estimación
@@ -189,8 +210,11 @@ const RINGS: [Ring; 3] = [
         split_tips: true,
     },
     Ring {
-        reach_m: 16.0,
-        chunk_m: 10.0,
+        // Corridos hacia afuera con el interior, manteniendo la proporción: si
+        // los anillos se apretaran, el de en medio quedaría demasiado angosto
+        // para absorber lo que el interior suelta en 6 m de dispersión.
+        reach_m: 24.0,
+        chunk_m: 15.0,
         // Sigue al anillo interior en la misma proporción, y no por prolijidad:
         // este anillo es el que **recibe** lo que el interior va soltando
         // durante los 6 m de dispersión. Si la razón entre los dos cambia, el

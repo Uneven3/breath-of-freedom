@@ -56,6 +56,7 @@ struct GrassUniform {
     wind_strength: f32,
     wind_speed: f32,
     tint_variation: f32,
+    gradient_bias: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -269,7 +270,28 @@ fn fragment(
 
     let factor = blade_height_factor(in.uv);
     let blade_hash = abs(in.uv_b.x);
-    var colour = mix(grass_data.root_color, grass_data.tip_color, factor);
+    // El degradado va sesgado hacia la raíz, no lineal: el campo se ve desde
+    // arriba, así que lo que llena la pantalla son puntas, y un degradado
+    // lineal deja al campo entero en el promedio de sus dos colores. Sesgado, la
+    // brizna se queda oscura casi hasta el final y sólo el último tramo se
+    // ilumina — que es lo que hace un dosel de verdad. Ver `gradient_bias` en
+    // `grass_material.rs`, con la medición que lo eligió.
+    //
+    // Una interpolación entre la rampa lineal y su cuadrado, y **no `pow`**.
+    // `pow` con exponente variable son dos transcendentales por fragmento, y
+    // este frame es fill-bound (eso sí está medido, 2026-08-06): lo que se paga
+    // por píxel se paga muchas veces por píxel. Un multiply y un mix dan la
+    // misma curva a ojo.
+    //
+    // **Cuánto ahorra no se sabe.** Se intentó medirlo el mismo día y las tres
+    // corridas dieron 10,89, 11,88 y 3,83 ms para el mismo pasto, con Blender,
+    // Firefox y Discord abiertos. La forma barata se elige por principio, no por
+    // una medición — y esta nota está acá para que nadie la cite como una.
+    //
+    // Sólo el color: el viento y el crecimiento siguen leyendo `factor` crudo,
+    // porque sesgarles la altura les cambia la física, no el look.
+    let shade = mix(factor, factor * factor, grass_data.gradient_bias);
+    var colour = mix(grass_data.root_color, grass_data.tip_color, shade);
 
     // Variación por brizna: un corrimiento de tono y valor que rompe la lectura
     // de superficie única. Es de las cosas más baratas del sistema y de las que

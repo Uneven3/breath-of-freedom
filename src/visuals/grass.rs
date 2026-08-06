@@ -482,8 +482,30 @@ fn clump_at(xz: Vec2) -> Clump {
 /// travels as two uniforms, because it is a pure function of the vertex's
 /// height along the blade and a `mix` in the shader costs nothing per frame
 /// while sixteen bytes per vertex cost bandwidth on every one of them.
-pub(super) const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.13, 0.24, 0.09);
-const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.42, 0.70, 0.22);
+/// **Both are derived from `T_GroundGrass_Albedo.png`, not chosen by eye**, and
+/// that is the point rather than a shortcut. The texture is the meadow's other
+/// half — the ground the blades stand in and the thing the eye sees where no
+/// blade reaches — so a palette that disagrees with it makes geometry and ground
+/// two different plants. Taking the pair from the art means they agree by
+/// construction, and re-authoring the texture moves the blades with it.
+///
+/// Read off the texture on 2026-08-06 as the mean colour of its darkest and
+/// lightest seventh: `#566b31` (luminance 99, saturation 37%) and `#b1cf55`
+/// (192, 56%).
+///
+/// What that replaced, and why it was wrong — measured, not argued:
+///
+/// | | antes | textura |
+/// |---|---|---|
+/// | raíz | `#658855` — lum 124, sat **22%** | `#566b31` — lum 99, sat **37%** |
+/// | punta | `#ADDA81` — lum 202, sat 55% | `#b1cf55` — lum 192, sat 56% |
+///
+/// The tip was already right. The **root** was both too light and half as
+/// saturated as the art, and since a field seen from standing height is mostly
+/// canopy, that one colour is what made the whole meadow read as a pale haze
+/// instead of grass.
+pub(super) const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.093, 0.147, 0.031);
+const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.440, 0.624, 0.091);
 
 /// One baked chunk of the meadow: a single mesh holding all its blades.
 #[derive(Component)]

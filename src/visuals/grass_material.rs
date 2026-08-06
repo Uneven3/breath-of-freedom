@@ -41,6 +41,32 @@ pub struct GrassUniform {
     /// How much a blade's colour may drift from the shared gradient. Without it
     /// a field of one green reads as carpet, however dense it is.
     pub tint_variation: f32,
+    /// How far up the blade the root's colour holds before the tip's takes over.
+    ///
+    /// The gradient used to be linear, and linear is why the field read as a
+    /// pale haze. Measured on a screenshot on 2026-08-06: the meadow averaged
+    /// luminance 171,8 — which is exactly the midpoint of a linear ramp between
+    /// this project's root (122) and tip (217). A textured grass mesh sitting in
+    /// the same frame, and reading far better as grass, averaged 148 over the
+    /// *same* range. The blades' extremes were already right; their
+    /// distribution was not.
+    ///
+    /// So the ramp bends toward the root: the blade stays near its root colour
+    /// for most of its length and only the last stretch catches the light, which
+    /// is what a canopy actually does — the bright part of a meadow is its top
+    /// few centimetres and everything under that is in its own shade. It stands
+    /// in for the ambient occlusion this field does not compute and the
+    /// self-shadowing it deliberately does not pay for.
+    ///
+    /// **0 is the old linear ramp and 1 is its square**, so this is also the
+    /// knob that undoes the experiment. A blend between two cheap curves rather
+    /// than the `pow` this started as: a variable exponent is two transcendentals
+    /// per fragment and this frame is fill-bound, so a per-pixel cost is paid
+    /// many times per pixel. **How much that saves is unmeasured** — the attempt
+    /// on 2026-08-06 gave 10,89, 11,88 and 3,83 ms for the same meadow on three
+    /// runs with other applications on the machine. Cheap by principle, not by
+    /// evidence.
+    pub gradient_bias: f32,
 }
 
 impl Default for GrassUniform {
@@ -65,6 +91,7 @@ impl Default for GrassUniform {
             wind_strength: 0.22,
             wind_speed: 1.7,
             tint_variation: 0.16,
+            gradient_bias: 1.0,
         }
     }
 }

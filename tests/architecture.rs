@@ -443,3 +443,43 @@ mod canaries {
         );
     }
 }
+
+/// §15 con dientes. La ley decía "comentarios solo para invariantes" desde
+/// siempre y no alcanzó: el 2026-08-06 `visuals/grass.rs` llegó a 46% de
+/// comentario — 637 líneas sobre 1371 — y cada bloque era defendible por
+/// separado. Lo que ninguno de ellos podía ver es el total.
+///
+/// El techo se cobra por archivo y no por proyecto a propósito: un promedio
+/// sano esconde exactamente el caso que hubo, un módulo enterrado en prosa
+/// mientras el resto respira.
+#[test]
+fn no_file_is_mostly_commentary() {
+    const CEILING_PERCENT: usize = 30;
+    // Debajo de esto el porcentaje es ruido: en un archivo de 40 líneas, doce
+    // de comentario ya lo pasan y no hay nada que arreglar.
+    const MINIMUM_LINES: usize = 100;
+
+    let offenders: Vec<String> = source_files()
+        .into_iter()
+        .filter_map(|(path, contents)| {
+            let lines: Vec<&str> = contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect();
+            if lines.len() < MINIMUM_LINES {
+                return None;
+            }
+            let commented = lines.iter().filter(|line| line.starts_with("//")).count();
+            let percent = commented * 100 / lines.len();
+            (percent > CEILING_PERCENT)
+                .then(|| format!("{path} {percent}% ({commented}/{})", lines.len()))
+        })
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "§15 pone el techo en {CEILING_PERCENT}% de comentario por archivo; \
+         el rationale largo va a docs/: {offenders:#?}"
+    );
+}

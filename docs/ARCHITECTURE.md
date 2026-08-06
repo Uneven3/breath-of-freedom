@@ -27,7 +27,13 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§13** `[lints]` en `deny` + `cargo fmt` y Clippy antes de terminar; `#[allow]`
   solo con justificación puntual.
 - **§14** Un plugin por sistema, carpeta propia en su crate.
-- **§15** Comentarios solo para invariantes/restricciones/workarounds. Nunca el *qué*.
+- **§15** Comentarios solo para invariantes/restricciones/workarounds. Nunca el
+  *qué*. **Techo: 30% de las líneas de un archivo**, `//`, `///` y `//!` juntos,
+  y ningún bloque más largo que el ítem que documenta. Un test lo cobra. La ley
+  existía sin límite y no alcanzó: el 2026-08-06 `grass.rs` llegó a **46%** —
+  637 líneas de comentario sobre 1371— con cada bloque defendible por separado.
+  El rationale largo va a `docs/`, que es donde se puede leer sin scrollear el
+  código que explica.
 - **§16** ~300 líneas es señal de dividir, no bloqueo.
 - **§17** Dependencia nueva en `Cargo.toml` requiere OK humano previo.
 - **§18** Sin allocations en el hot path de `FixedUpdate`.

@@ -30,7 +30,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 use super::suite::BenchSuite;
 use crate::scene::AppState;
@@ -150,12 +150,12 @@ pub fn drive_auto_shot(
                 return;
             }
             let path = shot.path();
-            if let Some(parent) = path.parent() {
-                if let Err(error) = std::fs::create_dir_all(parent) {
-                    error!("[shot] no se pudo crear {}: {error}", parent.display());
-                    exit.write(AppExit::error());
-                    return;
-                }
+            if let Some(parent) = path.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                error!("[shot] no se pudo crear {}: {error}", parent.display());
+                exit.write(AppExit::error());
+                return;
             }
             let (position, facing) = shot.suite.vantage();
             info!(
@@ -219,7 +219,10 @@ mod tests {
     /// la escena que todavía está viva.
     #[test]
     fn nothing_is_framed_before_the_scene_is_entered() {
-        assert_eq!(shot_pose(&shot(BenchSuite::Grass, Stage::EnteringScene)), None);
+        assert_eq!(
+            shot_pose(&shot(BenchSuite::Grass, Stage::EnteringScene)),
+            None
+        );
     }
 
     /// Una foto por suite, con el nombre de la suite: dos corridas seguidas se

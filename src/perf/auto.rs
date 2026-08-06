@@ -1,32 +1,13 @@
 //! Correr una suite **sin tocar el juego**: `BOF_BENCH=grass cargo run`.
 //!
-//! # Por qué existe
+//! Medir era un ritual de seis pasos que terminaba en no moverse durante
+//! cuarenta segundos, con tres consecuencias que se pagaron: nadie mide lo que
+//! no piensa medir, dos corridas no se comparan, y **yo no puedo jugar**, así
+//! que cada número dependía de que el usuario dejara lo suyo.
 //!
-//! Hasta hoy, medir era un ritual de seis pasos: lanzar, elegir la escena,
-//! caminar hasta el lugar, abrir F1, encontrar el botón, y después **no
-//! moverse** durante cuarenta segundos — porque el runner invalida cualquier
-//! paso en el que la cámara se corra más de 75 cm. Eso tiene tres consecuencias
-//! que se pagaron de verdad:
-//!
-//! - **Nadie mide lo que no piensa medir.** El barrido del pasto existía desde
-//!   el 2026-08-04 y se corrió por primera vez el 2026-08-06.
-//! - **Las corridas no se comparan.** Media hora de juego antes cambia la
-//!   temperatura del chip, y el mirador a mano era reproducible a medio metro,
-//!   que en el bosque valía ~1 ms.
-//! - **Yo no puedo medir.** Un agente no puede jugar, así que cada número
-//!   dependía de que el usuario dejara lo que estaba haciendo.
-//!
-//! Con esto, una corrida es un comando: arranca en la escena de la suite, se
-//! para en su mirador, mide, escribe la tabla y **cierra el proceso**. Se puede
-//! poner en un script, correr dos veces y comparar, o dejarla mientras uno hace
-//! otra cosa.
-//!
-//! # Lo que deliberadamente NO hace
-//!
-//! No corre sin ventana. La medición es de GPU y una corrida headless mediría
-//! un renderer que no existe; lo que se automatiza es el *ritual*, no el
-//! hardware. Y no toca ninguna perilla por su cuenta: el que decide qué se mide
-//! sigue siendo la suite.
+//! No corre sin ventana: la medición es de GPU y una corrida headless mediría un
+//! renderer que no existe. Lo que se automatiza es el ritual, no el hardware. Y
+//! no toca ninguna perilla por su cuenta — qué se mide lo decide la suite.
 
 use bevy::prelude::*;
 

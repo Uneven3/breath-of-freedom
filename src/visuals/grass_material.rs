@@ -15,22 +15,18 @@ pub struct GrassUniform {
     pub sun_direction: Vec3,
     pub sss_amount: f32,
     pub time: f32,
-    /// Where the camera stands, in world XZ. The outermost blades shrink with
-    /// their distance to this point, so a chunk is always culled *after* its
-    /// blades have already gone to nothing.
+    /// Where the camera stands, in world XZ. A chunk is always culled *after*
+    /// its blades have already shrunk to nothing.
     pub focus_xz: Vec2,
-    /// How many metres **one** blade takes to grow from nothing to full height.
-    /// Short: a single blade growing is invisible, what the eye catches is a
-    /// whole band of them growing at once.
+    /// How many metres **one** blade takes to grow to full height. Short — one
+    /// blade growing is invisible, a whole band growing at once is not.
     pub growth_ramp: f32,
-    /// Over how many metres, inward from each ring's edge, the blades'
-    /// individual thresholds are spread by their hash. Long: this is what turns
-    /// a wave travelling with the player into a field that thins out with
-    /// distance. See `blade_growth` in `grass.wgsl`.
+    /// Over how many metres the blades' thresholds are spread by their hash.
+    /// Long — this is what turns a wave travelling with the player into a field
+    /// that thins with distance.
     pub growth_spread: f32,
-    /// How far **below** the ground a blade collapses to as it shrinks, in
-    /// metres. Collapsing to ground level leaves a flat quad lying coplanar with
-    /// the terrain, which z-fights and flickers; see the vertex shader.
+    /// How far **below** the ground a blade collapses to. Not zero: coplanar
+    /// with the terrain it z-fights, which on screen is a flicker.
     pub growth_sink: f32,
     /// Wind direction in world XZ, normalised, and how far a tip travels at
     /// full gust as a fraction of the blade's height.
@@ -41,53 +37,33 @@ pub struct GrassUniform {
     /// How much a blade's colour may drift from the shared gradient. Without it
     /// a field of one green reads as carpet, however dense it is.
     pub tint_variation: f32,
-    /// How far up the blade the root's colour holds before the tip's takes over.
+    /// How far the root's colour holds up the blade before the tip's takes
+    /// over. **0 is a linear ramp and 1 is its square**, so this also undoes the
+    /// experiment.
     ///
-    /// The gradient used to be linear, and linear is why the field read as a
-    /// pale haze. Measured on a screenshot on 2026-08-06: the meadow averaged
-    /// luminance 171,8 — which is exactly the midpoint of a linear ramp between
-    /// this project's root (122) and tip (217). A textured grass mesh sitting in
-    /// the same frame, and reading far better as grass, averaged 148 over the
-    /// *same* range. The blades' extremes were already right; their
-    /// distribution was not.
-    ///
-    /// So the ramp bends toward the root: the blade stays near its root colour
-    /// for most of its length and only the last stretch catches the light, which
-    /// is what a canopy actually does — the bright part of a meadow is its top
-    /// few centimetres and everything under that is in its own shade. It stands
-    /// in for the ambient occlusion this field does not compute and the
-    /// self-shadowing it deliberately does not pay for.
-    ///
-    /// **0 is the old linear ramp and 1 is its square**, so this is also the
-    /// knob that undoes the experiment. A blend between two cheap curves rather
-    /// than the `pow` this started as: a variable exponent is two transcendentals
-    /// per fragment and this frame is fill-bound, so a per-pixel cost is paid
-    /// many times per pixel. **How much that saves is unmeasured** — the attempt
-    /// on 2026-08-06 gave 10,89, 11,88 and 3,83 ms for the same meadow on three
-    /// runs with other applications on the machine. Cheap by principle, not by
-    /// evidence.
+    /// Linear is why the field read as a pale haze: a canopy is mostly tips, so
+    /// the meadow landed on the midpoint of its two colours. Two cheap curves
+    /// and not `pow`, whose variable exponent is two transcendentals per
+    /// fragment in a fill-bound frame — the saving is **unmeasured**.
     pub gradient_bias: f32,
 }
 
 impl Default for GrassUniform {
     fn default() -> Self {
         Self {
-            // The meadow overrides these with its own authored pair; the
-            // defaults exist so the material is usable without one.
+            // The meadow overrides these with its own authored pair.
             root_color: LinearRgba::from(Color::srgb(0.22, 0.40, 0.18)),
             tip_color: LinearRgba::from(Color::srgb(0.35, 0.65, 0.20)),
             sun_direction: Vec3::new(0.3, 0.8, 0.5).normalize(),
             sss_amount: 0.4,
             time: 0.0,
             focus_xz: Vec2::ZERO,
-            // Shrinks nothing by default: the meadow overwrites both every
-            // frame, and a material used without one should not shrink.
+            // Shrinks nothing by default; the meadow overwrites these.
             growth_ramp: 0.0,
             growth_spread: 0.0,
             growth_sink: 0.0,
             wind_dir: Vec2::new(0.80, 0.60),
-            // A tip leaning a fifth of its height at full gust. Grass that
-            // bends further reads as wheat.
+            // A fifth of its height at full gust; further reads as wheat.
             wind_strength: 0.22,
             wind_speed: 1.7,
             tint_variation: 0.16,

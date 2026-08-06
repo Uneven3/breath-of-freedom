@@ -199,73 +199,26 @@ mod tests {
         }
     }
 
-    /// Lo que la pradera puede costar **por vista**, que es la única unidad que
-    /// tiene sentido para algo que existe alrededor de la cámara y no en un
-    /// lugar del mapa.
+    /// Lo que la pradera puede costar **por vista** — la única unidad con
+    /// sentido para algo que existe alrededor de la cámara y no en un lugar del
+    /// mapa.
     ///
     /// **Hoy es seis veces el presupuesto móvil entero, y está acá para que eso
-    /// no se pueda ignorar.**
+    /// no se pueda ignorar.** Es deuda con número, no una tolerancia: no se paga
+    /// bajando el listón. La historia de los cuatro saltos del 2026-08-06 y qué
+    /// compró cada uno está en `docs/BOTWGrass.md`.
     ///
-    /// El número que la aritmética pedía eran ~49.000: 100.000 del presupuesto
-    /// móvil menos 32.768 de terreno y ~17.900 de bosque. La primera versión de
-    /// los anillos entraba en 59.696 cumpliendo al pie de la letra la densidad
-    /// mínima derivada — y **se jugó el 2026-08-05 y se rechazó de entrada**:
-    /// tapaba el suelo y leía como púas ralas. Tapar el suelo y parecer una
-    /// pradera son dos varas distintas, y la segunda es más alta.
+    /// Es el **peor caso barrido** sobre todas las alineaciones de la cámara
+    /// contra la grilla, no una cómoda — una versión anterior declaraba el origen
+    /// y lo llamaba el peor caso, y no lo era.
     ///
-    /// Hoy la vecindad son **347.600 triángulos** declarados en los 360°. Los dos
-    /// anillos internos gastan un triángulo más por brizna en la punta partida,
-    /// para que una brizna cercana no lea como tira de papel. El frustum descarta
-    /// buena parte antes de dibujar —cuánta es una incógnita, no una medición—
-    /// pero *declarado* es lo que este test mide.
-    ///
-    /// **El 2026-08-06 este número se movió tres veces en un día, y las tres
-    /// las decidió el ojo del usuario jugando.** Vale tener a mano cuál costó
-    /// qué, porque es el registro de qué se compró con cada salto:
-    ///
-    /// - 250.800 → 313.500 (+25%): el anillo interior de 8 a 10 m de alcance.
-    ///   Arreglo de "veo crecer el pasto muy cerca del player" — la dispersión
-    ///   del crecimiento vive adentro del anillo, así que acortarla no alcanza
-    ///   si el anillo no se ensancha. El área crece con el cuadrado.
-    /// - 313.500 → 489.200 (+56%): las tres densidades a 56/28/10, pedido
-    ///   jugando ("la densidad tiene que ser un poco más alta").
-    /// - 489.200 → 347.600 (−29%): las tres a **40/20/7**, jugado de nuevo. 56
-    ///   resultó ser más de lo necesario. La condición que el usuario puso al
-    ///   bajarla importa más que el número: *"para que las texturas hagan el
-    ///   resto de la pega"* — condición que después se cumplió, con una textura
-    ///   de pradera authored en la capa `Soil`.
-    /// - 347.600 → 600.000 (+73%): el anillo interior de 10 a **16 m**, que es
-    ///   lo único que mueve *a qué distancia* crece el pasto. Es el salto más
-    ///   caro del día y se pagó último, después de agotar la alternativa
-    ///   barata: la hipótesis era que el crecimiento se nota porque destapa
-    ///   tierra, y que un suelo con textura de pradera lo escondería. La textura
-    ///   entró y el veredicto jugando fue que *"no maquilla ningún problema"*.
-    ///   El fenómeno es geométrico y sólo la geometría lo mueve.
-    ///
-    /// **Y lo que dice el barrido del 2026-08-06 sobre si esto importa:** en esta
-    /// máquina el pasto es *fill-bound*, no vertex-bound. Bajar la densidad a
-    /// menos de un cuarto ahorró 1,66 ms; bajar la resolución a la mitad —misma
-    /// geometría, mismos triángulos— tiró la GPU de 5,82 a 1,97 ms. O sea que el
-    /// conteo de este archivo **no es lo que está costando el frame acá**. Sigue
-    /// siendo el guardrail correcto para el target, porque en un tiler un vértice
-    /// se paga en bandwidth aunque no produzca un píxel *(propiedad del hardware,
-    /// no medición nuestra)* — pero mientras la fase estética siga abierta, el
-    /// número que manda es el de fill y no éste.
-    ///
-    /// El número es el **peor caso barrido** sobre todas las alineaciones posibles
-    /// de la cámara contra la grilla, no una alineación cómoda: contra el origen
-    /// la vecindad es bastante menor que este número. Una versión
-    /// anterior declaraba el origen y afirmaba en un comentario que era el peor
-    /// caso; no lo era, y un presupuesto que toma el mejor caso y lo llama el peor
-    /// es peor que no tener presupuesto.
-    ///
-    /// **Es deuda con número, no una tolerancia.** No se paga bajando el listón:
-    /// se paga midiendo con los dos barridos del hub y viendo cuál de las dos
-    /// causas manda. Si resulta fill-bound, la palanca es la densidad del anillo
-    /// interior; si resulta vertex-bound, es el alcance. Hasta que ese cuadro
-    /// tenga números, "el pasto cuesta demasiado" sigue siendo una hipótesis —
-    /// que el conteo entre no prueba que corra en un teléfono, y que no entre
-    /// tampoco prueba que no.
+    /// **Y el barrido dice que acá esto no es lo que cuesta:** la pradera es
+    /// *fill-bound*. Bajar la resolución a la mitad, con los mismos triángulos,
+    /// ahorra más que sacarle tres cuartos de las briznas. Sigue siendo el
+    /// guardrail correcto para el target —en un tiler un vértice se paga en
+    /// bandwidth aunque no produzca un píxel *(propiedad del hardware, no
+    /// medición nuestra)*— pero el número que manda mientras la fase estética
+    /// siga abierta es el de fill.
     const MEADOW_VIEW_TRIANGLES: usize = 600_000;
 
     #[test]

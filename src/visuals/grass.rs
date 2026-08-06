@@ -112,18 +112,24 @@ struct Ring {
 /// `1/d`. The near ring keeps the 45/m² that was judged by eye long before any
 /// of this; the outer two sit at roughly twice their derived minimum.
 ///
-/// Chunks are half the ring's reach: coarser chunks spend less draw budget but
-/// overshoot the ring's boundary, and that overshoot is baked geometry nobody
-/// asked for. Measured both ways, `reach/2` cost 59.696 triangles against
-/// 116.352 for `reach/1`.
+/// Chunks are about two thirds of the ring's reach, and that ratio was counted
+/// rather than picked. Finer chunks hug the ring's boundary and waste less baked
+/// geometry, but each one is a draw; coarser chunks overshoot the boundary and
+/// bake blades nobody asked for. Counted three ways with the handover overlap in
+/// place: `reach/2` gave 108 chunks and 236.160 triangles, `reach/1` gave 48
+/// chunks and 419.840, and 5/10/20 m gives **48 chunks and 164.000** — better on
+/// both axes than either extreme.
 ///
-/// **What this costs, stated plainly:** 107.840 blades, 215.680 triangles
-/// declared across the full 360°, 100 chunks. That is over twice the mobile
-/// triangle budget, and `perf::budget` declares it as debt with a number rather
-/// than hiding it. The frustum throws away roughly two thirds before anything
-/// draws, but the honest position is that this has not been measured yet — the
-/// two sweeps in the hub are what decide whether the reach or the near density
-/// is the thing to cut.
+/// **What this costs, stated plainly:** 103.600 blades, 207.200 triangles
+/// declared across the full 360°, 48 chunks, at the worst alignment of the
+/// camera against the grid. (At the friendliest alignment it is 82.000
+/// triangles; the budget takes the worst, because that is the one the frame has
+/// to survive.) That is over the mobile triangle budget, and `perf::budget`
+/// declares it as debt with a number rather than hiding it. The frustum throws away a large part of it before anything
+/// draws — how much is *unmeasured*, and the honest position is that no
+/// millisecond of this system has been measured at all. The two sweeps in the
+/// hub are what decide whether the reach or the near density is the thing to
+/// cut.
 ///
 /// **The minimum is a floor, not a target.** The first version planted every
 /// ring at 1,25× its derived minimum, which is what the formula says is needed
@@ -135,21 +141,21 @@ struct Ring {
 const RINGS: [Ring; 3] = [
     Ring {
         reach_m: 8.0,
-        chunk_m: 4.0,
+        chunk_m: 5.0,
         density: 45.0,
         width_scale: 1.0,
         split_tips: true,
     },
     Ring {
         reach_m: 16.0,
-        chunk_m: 8.0,
+        chunk_m: 10.0,
         density: 16.0,
         width_scale: 1.0,
         split_tips: false,
     },
     Ring {
         reach_m: 32.0,
-        chunk_m: 16.0,
+        chunk_m: 20.0,
         density: 6.0,
         width_scale: 1.0,
         split_tips: false,
@@ -280,16 +286,39 @@ pub(super) struct GrassField {
 /// mapa. Ese cambio es el punto entero del Paso 4.
 #[cfg(test)]
 pub(crate) fn meadow_triangles() -> usize {
-    neighbourhood_blades(Vec2::ZERO) * 2
+    worst_case_blades() * 2
+}
+
+/// The most blades the meadow can ever have standing at once.
+///
+/// The count wobbles with where the camera falls against the chunk grid: on a
+/// boundary a ring needs an extra row of chunks that it does not need in the
+/// middle of a cell. An earlier version of this file declared the cost at the
+/// origin and asserted in a comment that the origin was the worst alignment,
+/// because every ring's grid meets there. **That was wrong** — measured, the
+/// origin gives 82.000 blades and an offset camera gives 101.725. A budget that
+/// takes the best case and calls it the worst is worse than no budget.
+///
+/// So it is swept: every alignment inside one cell of the largest chunk, which
+/// is the period after which the pattern repeats.
+#[cfg(test)]
+fn worst_case_blades() -> usize {
+    let period = RINGS
+        .iter()
+        .map(|ring| ring.chunk_m)
+        .fold(0.0_f32, f32::max);
+    let steps = 8;
+    let mut worst = 0;
+    for z in 0..steps {
+        for x in 0..steps {
+            let offset = Vec2::new(x as f32, z as f32) * (period / steps as f32);
+            worst = worst.max(neighbourhood_blades(offset));
+        }
+    }
+    worst
 }
 
 /// Blades standing around a camera at `focus`.
-///
-/// The count wobbles with where the camera falls against the chunk grid — a
-/// camera on a boundary needs one more row of chunks than one in the middle of a
-/// cell — so the declared cost is taken at the origin, which is the worst
-/// alignment there is: every ring's grid lines up there at once. Anywhere else
-/// is cheaper, never dearer.
 #[cfg(test)]
 fn neighbourhood_blades(focus: Vec2) -> usize {
     RINGS
@@ -346,7 +375,13 @@ fn ring_cells(index: usize, focus: Vec2) -> Vec<IVec2> {
             // is the one that never cuts a chunk in half.
             let nearest = (offset - Vec2::splat(half)).max(Vec2::ZERO).max_element();
             let farthest = (offset + Vec2::splat(half)).max_element();
-            if nearest > ring.reach_m || farthest <= inner_reach {
+            // El anillo de afuera empieza *antes* de donde termina el de
+            // adentro, por el ancho de la banda de desvanecimiento: durante esa
+            // franja las briznas del interior se están encogiendo y las del
+            // exterior ya están enteras, así que la densidad cruza de una a otra
+            // en vez de caer a cero y saltar.
+            let handover = (inner_reach - FADE_BAND_M).max(0.0);
+            if nearest > ring.reach_m || farthest <= handover {
                 continue;
             }
             cells.push(cell);
@@ -486,12 +521,15 @@ pub(super) fn roll_meadow_grid(
                 ^ ring_salt.wrapping_mul(0xc2b2_ae35),
         );
         let mesh = build_chunk_mesh(
-            cell_centre(key.cell, ring.chunk_m),
-            ring.chunk_m,
-            blades_per_chunk(ring, density),
-            ring.width_scale,
-            ring.split_tips,
-            seed,
+            &ChunkSpec {
+                centre: cell_centre(key.cell, ring.chunk_m),
+                chunk_m: ring.chunk_m,
+                count: blades_per_chunk(ring, density),
+                width_scale: ring.width_scale,
+                split_tips: ring.split_tips,
+                ring_reach_m: ring.reach_m,
+                seed,
+            },
             Some(&terrain),
         );
         let entity = commands
@@ -549,11 +587,9 @@ pub(super) fn track_meadow_focus(
     let Some(mut material) = materials.get_mut(&field.material) else {
         return;
     };
-    let outermost = RINGS[RINGS.len() - 1].reach_m;
     let data = &mut material.extension.grass_data;
     data.focus_xz = camera.translation().xz();
-    data.fade_start = outermost - FADE_BAND_M;
-    data.fade_end = outermost;
+    data.fade_band = FADE_BAND_M;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs
     // one uniform write a frame.
@@ -570,15 +606,27 @@ pub(super) fn track_meadow_focus(
 /// Vertices carry world positions (the chunk entity sits at the origin), so a
 /// blade sits on the ground wherever the terrain put it without the chunk having
 /// to track a height of its own.
-fn build_chunk_mesh(
+/// Everything one chunk needs to know about itself to bake its blades.
+struct ChunkSpec {
     centre: Vec2,
     chunk_m: f32,
     count: u32,
     width_scale: f32,
     split_tips: bool,
+    ring_reach_m: f32,
     seed: u32,
-    terrain: Option<&TerrainAccess>,
-) -> Mesh {
+}
+
+fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
+    let ChunkSpec {
+        centre,
+        chunk_m,
+        count,
+        width_scale,
+        split_tips,
+        ring_reach_m,
+        seed,
+    } = *spec;
     let capacity = count as usize;
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(capacity * 5);
     let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(capacity * 5);
@@ -657,10 +705,16 @@ fn build_chunk_mesh(
         //   blade further than a short one instead of shearing the whole field
         //   by the same amount.
         let tint = hash_unit(hash ^ 0x2545_f491);
-        blade_data.push([-tint, height]);
-        blade_data.push([tint, height]);
-        blade_data.push([tint, height]);
-        blade_data.push([-tint, height]);
+        // `y` packs two numbers into one channel: the ring's reach in whole
+        // metres and the blade's height in the fraction. A blade is never a
+        // metre tall and a reach is always a whole number, so `floor` and
+        // `fract` separate them exactly — which is cheaper than an attribute
+        // nobody would otherwise need.
+        let packed = ring_reach_m + height;
+        blade_data.push([-tint, packed]);
+        blade_data.push([tint, packed]);
+        blade_data.push([tint, packed]);
+        blade_data.push([-tint, packed]);
 
         if split_tips {
             // The notched tip: a fifth vertex dipping between the two corners,
@@ -671,7 +725,7 @@ fn build_chunk_mesh(
             let notch = base.lerp(tip, TIP_NOTCH_DEPTH);
             positions.push([notch.x, notch.y, notch.z]);
             uvs.push([base.y, TIP_NOTCH_DEPTH]);
-            blade_data.push([tint, height]);
+            blade_data.push([tint, packed]);
             let notch_index = first + 4;
             indices.extend_from_slice(&[first, first + 1, first + 2]);
             indices.extend_from_slice(&[first, first + 2, notch_index]);
@@ -696,6 +750,20 @@ fn build_chunk_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-ring chunk for the shape tests, so each of them names only what it
+    /// actually cares about.
+    fn spec(count: u32, split_tips: bool, seed: u32) -> ChunkSpec {
+        ChunkSpec {
+            centre: Vec2::ZERO,
+            chunk_m: 5.0,
+            count,
+            width_scale: 1.0,
+            split_tips,
+            ring_reach_m: 8.0,
+            seed,
+        }
+    }
 
     #[test]
     fn the_density_knob_is_what_actually_lands_on_the_ground() {
@@ -807,7 +875,7 @@ mod tests {
     /// wearing a different shape.
     #[test]
     fn the_neighbourhood_costs_the_same_far_from_the_origin_as_near_it() {
-        let declared = neighbourhood_blades(Vec2::ZERO);
+        let declared = worst_case_blades();
         for focus in [
             Vec2::new(137.0, -488.0),
             Vec2::new(-2049.5, 903.25),
@@ -837,9 +905,21 @@ mod tests {
     fn the_neighbourhood_is_bounded() {
         let blades = neighbourhood_blades(Vec2::ZERO);
         assert!(blades > 0, "a meadow with no blades is not a meadow");
-        let chunks: usize = (0..RINGS.len())
-            .map(|index| ring_cells(index, Vec2::ZERO).len())
-            .sum();
+        // El peor caso, por lo mismo que el conteo de briznas: la alineación
+        // cómoda no es la que hay que aguantar.
+        let period = RINGS
+            .iter()
+            .map(|ring| ring.chunk_m)
+            .fold(0.0_f32, f32::max);
+        let chunks: usize = (0..8)
+            .flat_map(|z| (0..8).map(move |x| Vec2::new(x as f32, z as f32) * (period / 8.0)))
+            .map(|focus| {
+                (0..RINGS.len())
+                    .map(|index| ring_cells(index, focus).len())
+                    .sum::<usize>()
+            })
+            .max()
+            .unwrap_or(0);
         assert!(
             chunks <= crate::perf::budget::MOBILE_DRAWS,
             "{chunks} chunks is over the {} draw budget before anything else draws",
@@ -851,8 +931,8 @@ mod tests {
     fn blades_are_deterministic_per_chunk() {
         // Same chunk, same blades: a field that reshuffles when it is rebuilt
         // makes every visual comparison worthless.
-        let a = build_chunk_mesh(Vec2::new(5.0, -5.0), 5.0, 64, 1.0, false, 11, None);
-        let b = build_chunk_mesh(Vec2::new(5.0, -5.0), 5.0, 64, 1.0, false, 11, None);
+        let a = build_chunk_mesh(&spec(64, false, 11), None);
+        let b = build_chunk_mesh(&spec(64, false, 11), None);
         assert_eq!(
             a.attribute(Mesh::ATTRIBUTE_POSITION)
                 .map(|values| values.len()),
@@ -867,7 +947,7 @@ mod tests {
     /// nothing on screen would show it.
     #[test]
     fn the_vertex_carries_only_position_and_the_two_derived_values() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 8, 1.0, false, 5, None);
+        let mesh = build_chunk_mesh(&spec(8, false, 5), None);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
         assert!(
@@ -885,7 +965,7 @@ mod tests {
     /// tip, tip in that order.
     #[test]
     fn a_blades_four_vertices_keep_their_authored_order() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 5, None);
+        let mesh = build_chunk_mesh(&spec(1, false, 5), None);
         let bevy::mesh::VertexAttributeValues::Float32x2(uvs) =
             mesh.attribute(Mesh::ATTRIBUTE_UV_0).expect("uvs")
         else {
@@ -906,7 +986,7 @@ mod tests {
     /// nothing at all, and would be found by nobody.
     #[test]
     fn the_two_edges_of_a_blade_carry_the_same_hash_with_opposite_signs() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 9, None);
+        let mesh = build_chunk_mesh(&spec(1, false, 9), None);
         let bevy::mesh::VertexAttributeValues::Float32x2(data) =
             mesh.attribute(Mesh::ATTRIBUTE_UV_1).expect("blade data")
         else {
@@ -918,8 +998,12 @@ mod tests {
             "both edges belong to the same blade and share its hash"
         );
         for vertex in data {
+            // `y` packs the ring's reach in the whole part and the blade's
+            // height in the fraction — the shader splits them with floor/fract.
+            let (reach, height) = (vertex[1].floor(), vertex[1].fract());
+            assert_eq!(reach, 8.0, "the blade carries its own ring's reach");
             assert!(
-                (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&vertex[1]),
+                (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&height),
                 "every vertex carries its blade's height for the wind to scale"
             );
         }
@@ -929,8 +1013,8 @@ mod tests {
     /// out there the extra triangle buys a silhouette nobody can resolve.
     #[test]
     fn only_split_tips_pay_for_the_extra_triangle() {
-        let plain = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 9, None);
-        let split = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, true, 9, None);
+        let plain = build_chunk_mesh(&spec(1, false, 9), None);
+        let split = build_chunk_mesh(&spec(1, true, 9), None);
         let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
         assert_eq!(triangles(&plain), 2, "a plain blade is two triangles");
         assert_eq!(triangles(&split), 3, "a notched tip costs exactly one more");
@@ -944,7 +1028,7 @@ mod tests {
 
     #[test]
     fn a_blade_stands_on_the_ground_and_reaches_its_height() {
-        let mesh = build_chunk_mesh(Vec2::ZERO, 5.0, 1, 1.0, false, 3, None);
+        let mesh = build_chunk_mesh(&spec(1, false, 3), None);
         let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("positions")
         else {

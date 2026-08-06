@@ -215,10 +215,17 @@ mod tests {
     ///
     /// Con densidad de verdad cerca (45/m² hasta 8 m, la que se juzgó por ojo
     /// mucho antes de todo esto) y briznas finas en todos los anillos, la
-    /// vecindad son 215.680 triángulos declarados en los 360°. El frustum
-    /// descarta del orden de dos tercios, así que lo dibujado ronda los 72.000 —
+    /// vecindad son 207.200 triángulos declarados en los 360°. El frustum
+    /// descarta buena parte antes de dibujar —cuánta es una incógnita, no una medición—
     /// pero *declarado* es lo que este test mide, y declarado es el doble del
     /// móvil.
+    ///
+    /// El número es el **peor caso barrido** sobre todas las alineaciones posibles
+    /// de la cámara contra la grilla, no una alineación cómoda: en el origen la
+    /// vecindad son 164.000 triángulos y desplazada llega a 207.200. Una versión
+    /// anterior declaraba el origen y afirmaba en un comentario que era el peor
+    /// caso; no lo era, y un presupuesto que toma el mejor caso y lo llama el peor
+    /// es peor que no tener presupuesto.
     ///
     /// **Es deuda con número, no una tolerancia.** No se paga bajando el listón:
     /// se paga midiendo con los dos barridos del hub y viendo cuál de las dos
@@ -227,7 +234,7 @@ mod tests {
     /// tenga números, "el pasto cuesta demasiado" sigue siendo una hipótesis —
     /// que el conteo entre no prueba que corra en un teléfono, y que no entre
     /// tampoco prueba que no.
-    const MEADOW_VIEW_TRIANGLES: usize = 216_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 210_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -242,7 +249,7 @@ mod tests {
         let ground = terrain_cost();
         let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            over <= 150_000,
+            over <= 145_000,
             "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
              past the debt this file declares"
         );

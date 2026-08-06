@@ -49,8 +49,7 @@ struct GrassUniform {
     sss_amount: f32,
     time: f32,
     focus_xz: vec2<f32>,
-    fade_start: f32,
-    fade_end: f32,
+    fade_band: f32,
     wind_dir: vec2<f32>,
     wind_strength: f32,
     wind_speed: f32,
@@ -79,9 +78,27 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// raíz y desaparece siendo geometría, sin blending, sin `discard` y sin orden
 /// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
 /// ventaja principal del chip (ley 3 de `BOTWGrass.md`).
-fn blade_growth(world_xz: vec2<f32>) -> f32 {
+///
+/// Dos cosas que la primera versión no hacía y por las que el pasto "aparecía
+/// de golpe" al caminar:
+///
+/// 1. **La banda es del borde de *su* anillo, no del anillo más lejano.** Los
+///    anillos internos también ruedan: al caminar nacen chunks de 45 briznas/m²
+///    a ocho metros de la cámara, y sin banda propia nacían enteros y de una.
+///    `ring_reach` viaja por vértice justamente para esto.
+/// 2. **Cada brizna se apaga en un punto distinto de la banda**, corrido por su
+///    hash. Si todas se encogen a la vez el campo entero baja como una persiana,
+///    que es un artefacto tan visible como el pop que reemplaza; escalonadas, lo
+///    que se ve es un campo que se va raleando.
+fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
-    return 1.0 - smoothstep(grass_data.fade_start, grass_data.fade_end, distance);
+    // El corrimiento por brizna se come media banda, así que la banda efectiva
+    // es más ancha que `fade_band` y ninguna brizna sobrevive más allá del
+    // alcance de su anillo.
+    let stagger = grass_data.fade_band * 0.5 * blade_hash;
+    let ends = ring_reach - stagger;
+    let starts = ends - grass_data.fade_band * 0.5;
+    return 1.0 - smoothstep(starts, ends, distance);
 }
 
 /// Ruido barato y determinista, para la ráfaga.
@@ -140,7 +157,10 @@ fn wind_offset(world_xz: vec2<f32>, height_factor: f32, blade_height: f32, phase
 /// viaja: el signo del hash dice de qué borde del quad es este vértice.
 fn blade_normal(side: f32, world_xz: vec2<f32>) -> vec3<f32> {
     let across = normalize(vec3<f32>(-grass_data.wind_dir.y, 0.0, grass_data.wind_dir.x));
-    return normalize(vec3<f32>(0.0, 1.0, 0.0) + across * side * 0.35);
+    // 0,35 abría tanto la normal que un borde entero de la brizna quedaba
+    // notablemente más oscuro que el otro y el campo se veía moteado. 0,18
+    // insinúa el cilindro sin llegar a leerse como dos caras distintas.
+    return normalize(vec3<f32>(0.0, 1.0, 0.0) + across * side * 0.18);
 }
 
 #ifndef PREPASS_PIPELINE
@@ -157,7 +177,10 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     let height_factor = blade_height_factor(vertex.uv);
     let blade_hash = abs(vertex.uv_b.x);
     let side = sign(vertex.uv_b.x);
-    let blade_height = vertex.uv_b.y;
+    // `uv1.y` lleva dos números en uno: el alcance del anillo en metros enteros
+    // y la altura de la brizna en la fracción.
+    let ring_reach = floor(vertex.uv_b.y);
+    let blade_height = fract(vertex.uv_b.y);
 
     // Viento primero, sobre la posición horneada.
     let sway = wind_offset(world_position.xz, height_factor, blade_height, blade_hash);
@@ -172,7 +195,11 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     // lleva la altura del suelo justamente para esto: sin ella el shader no sabe
     // dónde está la base y no puede encogerla hacia ella.
     let ground_y = vertex.uv.x;
-    world_position.y = mix(ground_y, world_position.y, blade_growth(world_position.xz));
+    world_position.y = mix(
+        ground_y,
+        world_position.y,
+        blade_growth(world_position.xz, ring_reach, blade_hash),
+    );
 
     out.world_position = world_position;
     // Clip space, no world space: la posición que sale del vertex shader es la
@@ -199,6 +226,20 @@ fn fragment(
     // y sin niebla, que es exactamente lo que `ExtendedMaterial` existe para
     // conservar.
     var pbr_input = pbr_input_from_standard_material(in, is_front);
+
+    // **El arreglo del pasto negro.** El material es `double_sided`, y para una
+    // cara trasera Bevy invierte la normal (`prepare_world_normal`: multiplica
+    // por -1 cuando `!is_front`). Nuestra normal apunta a +Y, así que invertida
+    // apunta al suelo: cero luz del sol, brizna negra. Con yaw al azar, la mitad
+    // del campo le da la espalda a la cámara, y de ahí el moteado oscuro.
+    //
+    // La brizna no tiene reverso: es una hoja, y las dos caras miran al cielo
+    // por la misma razón por la que la normal es +Y y no la de la cara. Así que
+    // se reponen las dos normales que el PBR usa — `world_normal` para el
+    // sombreado de sombras y `N` para la iluminación.
+    let lit_normal = normalize(in.world_normal);
+    pbr_input.world_normal = lit_normal;
+    pbr_input.N = lit_normal;
 
     let factor = blade_height_factor(in.uv);
     let blade_hash = abs(in.uv_b.x);

@@ -176,23 +176,28 @@ const RINGS: [Ring; 3] = [
         // `perf::budget::MEADOW_VIEW_TRIANGLES`.
         reach_m: 10.0,
         chunk_m: 5.0,
-        // 56 y no 45 desde el 2026-08-06, pedido jugando. El costo no es
-        // gratis y está medido: bajar el conjunto de 45 a 25/m² ahorró 0,94 ms
-        // de frame, así que subir un 24% cuesta del orden de dos décimas
-        // *(estimado por la pendiente de esa medición, no medido)*.
-        density: 56.0,
+        // 45 → 56 → **40**, y las tres las decidió el ojo del usuario jugando.
+        // La última es la interesante: 56 le pareció más de lo necesario y 30
+        // —el paso del barrido que probó— demasiado poco. 40 es su estimación
+        // del punto justo, con una condición explícita: *"para que las texturas
+        // hagan el resto de la pega"*. O sea que esta densidad no se sostiene
+        // sola; asume que el suelo debajo aporta, y hoy el suelo sólo tiene un
+        // tinte plano hacia [`ROOT_COLOR`]. Bajar más sin darle textura al
+        // terreno primero es cómo se vuelve a un césped ralo sobre tierra.
+        density: 40.0,
         width_scale: 1.0,
         split_tips: true,
     },
     Ring {
         reach_m: 16.0,
         chunk_m: 10.0,
-        // 28 y no 16, y esta subida no es sólo por densidad: este anillo es el
-        // que **recibe** lo que el interior va soltando durante los 6 m de
-        // dispersión. Con 16 el traspaso se leía como un escalón de densidad
-        // moviéndose con el jugador, que es la mitad del artefacto que
-        // `GROWTH_SPREAD_M` ataca por el otro lado.
-        density: 28.0,
+        // Sigue al anillo interior en la misma proporción, y no por prolijidad:
+        // este anillo es el que **recibe** lo que el interior va soltando
+        // durante los 6 m de dispersión. Si la razón entre los dos cambia, el
+        // traspaso vuelve a leerse como un escalón de densidad moviéndose con
+        // el jugador, que es la mitad del artefacto que `GROWTH_SPREAD_M` ataca
+        // por el otro lado.
+        density: 20.0,
         width_scale: 1.0,
         // También parte la punta, y no por gusto: como los anillos se solapan
         // durante la banda de transición, este empieza en 2 m — o sea que sus
@@ -204,11 +209,10 @@ const RINGS: [Ring; 3] = [
     Ring {
         reach_m: 32.0,
         chunk_m: 20.0,
-        // 10 y no 6, por la misma razón que el anillo de en medio: recibe su
-        // raleo. Es el anillo más barato por brizna en pantalla —a 16-32 m una
-        // brizna ocupa poquísimos píxeles— y el que más hace por la sensación
-        // de que el campo sigue.
-        density: 10.0,
+        // Ídem, y es el anillo más barato por brizna en pantalla —a 16-32 m una
+        // brizna ocupa poquísimos píxeles— además del que más hace por la
+        // sensación de que el campo sigue.
+        density: 7.0,
         width_scale: 1.0,
         split_tips: false,
     },

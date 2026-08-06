@@ -75,7 +75,7 @@ pub const SHADOW_MAP_STEPS: [usize; 3] = [2048, 1024, 512];
 /// contestar: cuánto cuesta la pradera *entera*. Con el paso más ralo en 10/m²
 /// lo más que se sabía era la pendiente de la curva, y extrapolar a cero es una
 /// estimación, no una medición. Un paso en cero la convierte en resta.
-pub const GRASS_DENSITY_STEPS: [f32; 5] = [56.0, 80.0, 30.0, 12.0, 0.0];
+pub const GRASS_DENSITY_STEPS: [f32; 5] = [40.0, 64.0, 30.0, 12.0, 0.0];
 
 /// Scale applied to every ring's reach, for the sweep that separates *how much
 /// grass is near the camera* from *how far the field goes*.

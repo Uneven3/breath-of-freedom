@@ -203,7 +203,7 @@ mod tests {
     /// tiene sentido para algo que existe alrededor de la cámara y no en un
     /// lugar del mapa.
     ///
-    /// **Hoy es casi cinco veces el presupuesto móvil entero, y está acá para
+    /// **Hoy es tres veces y media el presupuesto móvil entero, y está acá para
     /// que eso no se pueda ignorar.**
     ///
     /// El número que la aritmética pedía eran ~49.000: 100.000 del presupuesto
@@ -213,24 +213,27 @@ mod tests {
     /// tapaba el suelo y leía como púas ralas. Tapar el suelo y parecer una
     /// pradera son dos varas distintas, y la segunda es más alta.
     ///
-    /// Hoy la vecindad son **489.200 triángulos** declarados en los 360°. Los dos
+    /// Hoy la vecindad son **347.600 triángulos** declarados en los 360°. Los dos
     /// anillos internos gastan un triángulo más por brizna en la punta partida,
     /// para que una brizna cercana no lea como tira de papel. El frustum descarta
     /// buena parte antes de dibujar —cuánta es una incógnita, no una medición—
     /// pero *declarado* es lo que este test mide.
     ///
-    /// **El 2026-08-06 pasó de 250.800 a 489.200 en dos saltos, los dos jugados
-    /// y pedidos**, y conviene tener a mano cuál costó qué:
+    /// **El 2026-08-06 este número se movió tres veces en un día, y las tres
+    /// las decidió el ojo del usuario jugando.** Vale tener a mano cuál costó
+    /// qué, porque es el registro de qué se compró con cada salto:
     ///
     /// - 250.800 → 313.500 (+25%): el anillo interior de 8 a 10 m de alcance.
     ///   Arreglo de "veo crecer el pasto muy cerca del player" — la dispersión
     ///   del crecimiento vive adentro del anillo, así que acortarla no alcanza
     ///   si el anillo no se ensancha. El área crece con el cuadrado.
-    /// - 313.500 → 489.200 (+56%): las tres densidades, 45→56, 16→28 y 6→10.
-    ///   La primera es "la densidad tiene que ser un poco más alta", pedida
-    ///   jugando; las otras dos son estructurales — son los anillos que reciben
-    ///   lo que el interior suelta durante la dispersión, y con las densidades
-    ///   viejas el traspaso se leía como un escalón moviéndose con el jugador.
+    /// - 313.500 → 489.200 (+56%): las tres densidades a 56/28/10, pedido
+    ///   jugando ("la densidad tiene que ser un poco más alta").
+    /// - 489.200 → 347.600 (−29%): las tres a **40/20/7**, jugado de nuevo. 56
+    ///   resultó ser más de lo necesario. La condición que el usuario puso al
+    ///   bajarla importa más que el número: *"para que las texturas hagan el
+    ///   resto de la pega"* — o sea que esta cuenta asume un suelo que hoy no
+    ///   existe, porque el terreno sólo tiene un tinte plano.
     ///
     /// **Y lo que dice el barrido del 2026-08-06 sobre si esto importa:** en esta
     /// máquina el pasto es *fill-bound*, no vertex-bound. Bajar la densidad a
@@ -256,7 +259,7 @@ mod tests {
     /// tenga números, "el pasto cuesta demasiado" sigue siendo una hipótesis —
     /// que el conteo entre no prueba que corra en un teléfono, y que no entre
     /// tampoco prueba que no.
-    const MEADOW_VIEW_TRIANGLES: usize = 490_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 350_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {

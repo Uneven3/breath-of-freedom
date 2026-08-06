@@ -82,7 +82,9 @@ impl BenchmarkStep {
 /// `bof_domain::perf`, y hay un test que verifica que sigan apuntando a lo que
 /// su nombre dice — un paso insertado en el medio los correría en silencio.
 mod step {
-    /// `GRASS_DENSITY_STEPS`: 80, 30, 12 y 0 briznas/m².
+    /// `GRASS_DENSITY_STEPS`: 64, 30, 12 y 0 briznas/m². El 30 se conserva
+    /// aunque la escalera se haya reescalado, porque es el paso que el usuario
+    /// juzgó por ojo ("sigue siendo poco") y con el que va a comparar.
     pub const GRASS_DENSE: usize = 1;
     pub const GRASS_SPARSE: usize = 2;
     pub const GRASS_SPARSEST: usize = 3;
@@ -272,7 +274,7 @@ const GRASS_STEPS: [BenchmarkStep; 11] = [
     },
     BenchmarkStep {
         grass_density_step: step::GRASS_DENSE,
-        ..BenchmarkStep::baseline("grass 80/m2")
+        ..BenchmarkStep::baseline("grass 64/m2")
     },
     BenchmarkStep {
         grass_density_step: step::GRASS_SPARSE,
@@ -352,7 +354,7 @@ mod tests {
     #[test]
     fn the_named_indices_still_point_at_what_they_are_named_after() {
         assert_eq!(GRASS_DENSITY_STEPS[step::GRASS_OFF], 0.0);
-        assert_eq!(GRASS_DENSITY_STEPS[step::GRASS_DENSE], 80.0);
+        assert_eq!(GRASS_DENSITY_STEPS[step::GRASS_DENSE], 64.0);
         assert_eq!(GRASS_DENSITY_STEPS[step::GRASS_SPARSE], 30.0);
         assert_eq!(GRASS_DENSITY_STEPS[step::GRASS_SPARSEST], 12.0);
         assert_eq!(GRASS_REACH_STEPS[step::REACH_75], 0.75);

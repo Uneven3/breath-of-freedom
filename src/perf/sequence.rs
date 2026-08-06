@@ -607,34 +607,43 @@ fn warn_if_presentation_capped(results: &[StepResult]) {
         return;
     }
     warn!(
-        "[bench] el frame casi no se movió entre pasos mientras la GPU sí — está clavado por \
-         la presentación, no por el trabajo. **Leé la columna d-gpu y descartá d-frame.** \
-         Suele pasar con la ventana en segundo plano."
+        "[bench] el frame no siguió a la GPU: se movió mucho menos que ella entre pasos. \
+         **Leé la columna d-gpu y descartá d-frame.** O la presentación lo está clavando \
+         (típico con la ventana en segundo plano) o la CPU lo está topando; este criterio \
+         no distingue cuál, y para leer la tabla da igual."
     );
 }
 
 /// El criterio, aparte para poder probarlo.
 ///
-/// **Compara los dos recorridos entre sí, no cada uno contra un umbral**, y esa
-/// es la segunda versión: la primera pedía que el frame variara menos del 5% y
-/// que la GPU variara más del 20%, y **dejó pasar la corrida del 2026-08-06
-/// donde la GPU varió 203% y el frame 6,3%**. Con umbrales sueltos, un caso
-/// evidente falla por un decimal en uno de los dos.
+/// **Compara los dos recorridos en milisegundos, no en porcentaje**, y esa es la
+/// tercera versión. Las dos anteriores fallaron por el mismo motivo de fondo —
+/// medir "cuánto se movió" en relativo:
 ///
-/// La razón entre ambos no tiene ese problema: en una corrida sana el frame
-/// sigue a la GPU y la razón ronda 1; con la presentación mandando, la GPU se
-/// mueve decenas de veces más que el frame. No nombra ningún refresh, así que
-/// vale a 60 Hz, a 144 y en una máquina que no conocemos.
+/// 1. Umbrales sueltos (frame <5%, GPU >20%) dejaron pasar una corrida con la
+///    GPU al 203% y el frame al 6,3%: falló por un decimal en uno de los dos.
+/// 2. La razón entre porcentajes marcó **clavada una corrida sana**, porque el
+///    frame tiene un piso —no baja de lo que la CPU tarde— y la GPU no. Con un
+///    piso, el porcentaje del frame se achica solo y la razón se dispara aunque
+///    el frame esté siguiendo perfectamente bien.
+///
+/// En milisegundos no hay ese sesgo: si la GPU se movió 5 ms y el frame 4, el
+/// frame está midiendo el trabajo; si la GPU se movió 5 y el frame 0,03, no.
+///
+/// Y el aviso **no afirma la causa**, porque este criterio no la distingue: un
+/// frame que no sigue a la GPU puede estar clavado por la presentación o topado
+/// por la CPU. Las dos cosas quieren la misma respuesta del lector — leer la
+/// columna de GPU — así que decir las dos es más honesto que elegir una.
 fn presentation_capped(results: &[StepResult]) -> bool {
-    /// Cuántas veces más tiene que moverse la GPU que el frame. Con 4 hay
-    /// margen de sobra contra el ~1 de una corrida sana y contra el 32 de una
-    /// clavada, y no hace falta afinarlo: los dos casos no están cerca.
-    const SWING_RATIO: f64 = 4.0;
-    /// Debajo de esto la GPU no se movió lo suficiente como para que su
-    /// comparación con el frame signifique algo — una suite cuyos pasos no
-    /// mueven la GPU (`shadows` desde el mirador de hoy) no está clavada, sólo
-    /// no tiene nada que medir.
-    const MIN_GPU_SWING: f64 = 0.20;
+    /// Cuántas veces más tiene que haberse movido la GPU que el frame, **en
+    /// milisegundos**. Contra las cuatro corridas del 2026-08-06: las dos sanas
+    /// dan 1,3 y 2,1; las dos clavadas, 4,8 y 194.
+    const SWING_RATIO: f64 = 3.0;
+    /// Debajo de esto la GPU no se movió lo suficiente como para que la
+    /// comparación signifique algo. Una suite cuyos pasos no mueven la GPU
+    /// (`shadows` desde el mirador de hoy) no está clavada: no tiene nada que
+    /// medir, que es distinto.
+    const MIN_GPU_SWING_MS: f64 = 0.5;
 
     let spread = |values: &mut dyn Iterator<Item = f64>| {
         let (mut low, mut high) = (f64::MAX, 0.0_f64);
@@ -642,24 +651,19 @@ fn presentation_capped(results: &[StepResult]) -> bool {
             low = low.min(value);
             high = high.max(value);
         }
-        (low <= high).then_some((low, high))
+        (low <= high).then_some(high - low)
     };
     let valid: Vec<&StepResult> = results.iter().filter(|step| !step.invalid).collect();
     if valid.len() < 3 {
         return false;
     }
-    let (Some((frame_low, frame_high)), Some((gpu_low, gpu_high))) = (
+    let (Some(frame_swing), Some(gpu_swing)) = (
         spread(&mut valid.iter().map(|step| step.frame_mean)),
         spread(&mut valid.iter().map(|step| step.gpu_mean)),
     ) else {
         return false;
     };
-    if frame_low <= 0.0 || gpu_low <= 0.0 {
-        return false;
-    }
-    let frame_swing = (frame_high - frame_low) / frame_low;
-    let gpu_swing = (gpu_high - gpu_low) / gpu_low;
-    if gpu_swing < MIN_GPU_SWING {
+    if gpu_swing < MIN_GPU_SWING_MS {
         return false;
     }
     // Un frame perfectamente plano contra una GPU que se mueve es el caso más
@@ -859,6 +863,17 @@ mod tests {
             .map(|(frame, gpu)| result(frame, gpu))
             .collect();
         assert!(!presentation_capped(&flat));
+
+        // **El falso positivo que costó la segunda versión del criterio.** Una
+        // corrida sana con la máquina limpia: la GPU se movió de 1,55 a 6,81 y
+        // el frame de 4,83 a 8,88, o sea que lo siguió. En porcentaje el frame
+        // parecía plano —tiene un piso de CPU y la GPU no— y el aviso saltaba.
+        let healthy_with_a_floor: Vec<StepResult> =
+            [(5.68, 4.17), (4.83, 2.30), (8.88, 6.81), (6.47, 1.55)]
+                .into_iter()
+                .map(|(frame, gpu)| result(frame, gpu))
+                .collect();
+        assert!(!presentation_capped(&healthy_with_a_floor));
 
         // Y una corrida sana no dispara el aviso: acá el frame sigue a la GPU.
         let healthy: Vec<StepResult> = [(7.47, 5.82), (5.51, 4.90), (5.80, 4.25)]

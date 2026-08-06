@@ -420,20 +420,77 @@ proyectada por brizna es *más caro*, no más eficiente, y la métrica que manda
 pasa a ser cobertura útil por píxel pintado — o sea **overdraw**. El dial de
 overdraw del hub existe desde siempre y sigue sin usarse.
 
-### Lo que este estudio dice que probemos, en orden
+### Lo que el estudio mandó probar, y qué pasó con cada uno
 
-Ninguna de las tres primeras cuesta geometría, y las tres salen de material
-documentado, no de una idea mía:
+Se probaron los cuatro el 2026-08-06, en orden. **Ninguno de los dos primeros
+sobrevivió**, y las dos razones valen más que las técnicas:
 
-1. **Teñir el suelo hacia la punta y no hacia la raíz** (GoT, punto 1). Es
-   cambiar `ROOT_COLOR` por `TIP_COLOR` en `grass_tint()` y volver a juzgar el
-   horizonte. Una línea.
-2. **Clumping** (GoT, punto 2). Cambiar la función de siembra para que las
-   briznas se agrupen y compartan orientación y altura por grupo. Cero
-   triángulos, y es lo que separa un campo de una alfombra.
-3. **Que el terreno responda al ángulo de visión** (hexaquo, 6 y 7), con el
-   normal map que ya está en el repo sin usar.
-4. Y sólo si hace falta: **LOD de la brizna en vez del campo** (hexaquo, 4).
+**1. Teñir el suelo hacia la punta y no hacia la raíz** (GoT, punto 1).
+Implementado y **rechazado por medición propia**, antes de mostrárselo al
+usuario. El horizonte quedó en luminancia 196 contra 172 del pasto del primer
+plano — *el fondo más claro que la primera fila* — y la variación de media
+distancia bajó de 13,3 a 10,4. Aplanaba la distancia en vez de poblarla.
+
+*Por qué falla acá y funciona en su juego:* la técnica presupone que el color de
+la punta **lee como masa de pasto**. La nuestra era `#ADDA81`, un verde casi
+blanco; aplicada fuerte borra el grano de la textura y deja un plano liso.
+
+**2. Clumping** (GoT, punto 2). Implementado y **rechazado por el usuario**, con
+un argumento que generaliza y que conviene no perder:
+
+> Tsushima es un campo de pasto alto barrido por el viento, con matas y claros a
+> propósito. El clumping *compra* estructura pagando con uniformidad. **Nuestro
+> objetivo es una alfombra que cubra toda la escena**, así que paga exactamente
+> lo que queremos conservar.
+
+La medición coincidió sin explicarlo: +1,0% de variación, o sea nada. Lo que el
+efecto realmente producía eran huecos, y el hueco es el defecto.
+
+**3. Que el terreno responda al ángulo de visión** (hexaquo, 6 y 7), con el
+normal map que sigue en el repo sin usar. **Sin tocar.**
+
+**4. LOD de la brizna en vez del campo** (hexaquo, 4). **Hecho.** `split_tips:
+bool` pasó a `BladeShape` con tres niveles — 3, 2 y 1 triángulo. El anillo
+exterior bajó a un triángulo: dos vértices en la base y uno en la punta. Jugado:
+*"se siente igual que antes"*, o sea geometría gratis. El anillo medio se queda
+en 3 porque sus chunks se solapan hasta ~2 m de la cámara.
+
+Lo empujó el usuario preguntando directo si usábamos LOD de brizna — y este
+documento **ya tenía la respuesta escrita** en la sección de hexaquo sin haber
+actuado sobre ella.
+
+### Lo que sí movió la aguja, y no estaba en la lista
+
+**La paleta de la brizna.** El campo promediaba luminancia 171,9, que es
+exactamente el punto medio de una rampa lineal entre nuestra raíz y nuestra
+punta: veíamos el degradado entero, parejo. Dos cambios, los dos derivados:
+
+- **El degradado se sesga hacia la raíz.** Un dosel visto desde parado es casi
+  todo puntas. Sustituye a la oclusión ambiental que no calculamos.
+- **La paleta sale del suelo donde se paran las briznas** (`T_GroundSoil`, tono
+  84°, sat 37%). La raíz estaba a 100° y **22%** — 16° de tono y la mitad de
+  saturación contra el suelo del que brota.
+
+| zona de pasto | lum | sd | sat |
+|---|---:|---:|---:|
+| antes | 171,9 | 16,8 | 32,1% |
+| después | 153,7 | 19,3 | 34,7% |
+
+**Y dos errores de método que costaron una ronda de confianza, anotados porque
+son más reutilizables que el resultado:**
+
+1. La paleta se leyó de `T_GroundGrass_Albedo.png`, que **no es una de las cuatro
+   texturas canónicas** y nunca llega a la escena. Que cayera cerca fue suerte.
+2. El objetivo se eligió *a ojo* —"esa malla lee mejor como pasto"— y después se
+   midió la distancia hasta él con tres decimales. **La precisión era real y el
+   blanco supuesto.** El usuario: *"si no me dices el porqué algo es mejor de lo
+   que ya teníamos, no sé si creerte"*. La versión defendible es un criterio
+   comprobable —el tono del suelo, que se verifica caminando a un claro— y no un
+   promedio de píxeles hacia una preferencia mía.
+
+Aparte y sin arreglar: `T_GroundTallGrass_Albedo.png` está en **tono 113°**, a
+29° del suelo que tiene al lado. Dos texturas de suelo tan separadas en la misma
+escena es un defecto de arte que la paleta de las briznas no puede tapar.
 
 **Sources:**
 - [Procedural Grass in 'Ghost of Tsushima' — GDC Vault](https://gdcvault.com/play/1027033/Advanced-Graphics-Summit-Procedural-Grass)
@@ -570,8 +627,7 @@ cosmético del borde, es lo que hace pagables las densidades de los anillos.
 
 ### Los anillos
 
-Densidades con un factor de seguridad ×2,5 sobre el mínimo, porque las briznas
-no se reparten perfecto y algo de solape se quiere:
+**La tabla derivada**, con un factor de seguridad ×2,5 sobre el mínimo:
 
 | anillo | radio | chunk | densidad | briznas | tris |
 |---|---:|---:|---:|---:|---:|
@@ -581,24 +637,30 @@ no se reparten perfecto y algo de solape se quiere:
 | 3 | > 35 m | — | — | terreno teñido | 0 |
 | | | | **total** | **22.064** | **44.128** |
 
-Contra el campo de hoy (28.125 briznas, 56.250 tris, 625 m²): **6,2× el área por
-el 78% del costo.** Chunks totales ~35, de los que el frustum descarta la
-mayoría — del orden de 15 draws, contra 11 hoy y un techo de 100.
+**Y lo que el código hace hoy (2026-08-06), que es cinco veces más:**
+
+| | derivado | código |
+|---|---|---|
+| anillos | 0–6 / 6–18 / 18–35 m | 0–16 / 16–24 / 24–32 m |
+| densidades | 40 / 10 / 3 | 40 / **20** / **7** |
+| tris por brizna | 2 / 2 / 2 | 3 / 3 / **1** |
+| triángulos 360° | **44.128** | **224.768** |
+
+El anillo medio corre al doble de lo derivado y el exterior a más del doble. El
+interior mantiene 40/m² hasta los 16 m cuando la tabla de arriba dice que a 5 m
+alcanzan 15. Cada salto tiene su razón registrada en `visuals/grass.rs` y todos
+los decidió el ojo del usuario jugando — pero **la suma nunca se volvió a
+comparar contra la derivación**, y esa distancia es el número que hay que mirar
+antes del próximo ajuste.
+
+**El disparador que este documento dejó armado ya se cumplió.** Decía: *"si el
+barrido de densidad confirma que el pasto es fill-bound, bajar el anillo 0 es la
+palanca más barata del sistema entero — más barata que cualquier shader"*. El
+barrido corre desde el 2026-08-05 y confirmó fill-bound. La acción sigue sin
+tomarse, y ésa es la deuda concreta de esta sección.
 
 *Los radios y densidades son estimaciones derivadas de la tabla de arriba; se
 ajustan por ojo en la caja `Pasto`. Lo que no se ajusta es la forma de la curva.*
-
-Dos cosas que el anillo 0 obliga a decir en voz alta:
-
-- **Baja de 45/m² a 40/m².** `BLADES_PER_SQUARE_METRE` se eligió por ojo (25 se
-  veía delgado, 45 no) y 40 está dentro del ruido de ese juicio, pero es un
-  cambio en lo que se ve y se valida mirando, no asumiendo.
-- **Y 45 puede estar de más incluso cerca.** La tabla dice que a 2 m alcanzan
-  36/m²; a 5 m, 15. Lo que sobra se paga entero en overdraw, así que **si el
-  barrido de densidad confirma que el pasto es fill-bound, bajar el anillo 0 es
-  la palanca más barata del sistema entero** — más barata que cualquier shader.
-  Ese barrido es el Paso 0 del plan y todavía no se puede correr; ver
-  *Presupuesto*.
 
 ### Billboards: tres cosas distintas, las tres descartadas
 
@@ -607,8 +669,35 @@ separarlas porque sólo una es tentadora de verdad:
 
 **1. Brizna que gira hacia la cámara.** No ahorra nada: sigue siendo un quad de
 2 triángulos. Agrega trabajo por frame, y briznas que pivotean al mover la cámara
-se leen como un error. Es lo que suele significar "pasto con billboards" y es la
-peor de las tres.
+se leen como un error. Es lo que suele significar "pasto con billboards".
+
+> **Ese rechazo contesta otra pregunta, y el usuario lo cazó el 2026-08-06.**
+> Evalúa la técnica como *ahorro*, que no lo es. La razón por la que otros juegos
+> la usan es distinta: **que la brizna nunca quede de canto**. Este documento
+> describe ese problema con todo detalle en el Paso 8 —yaw uniforme, promedio de
+> `|sin|` = 2/π, "las que caen cerca de canto rinden casi cero pagando sus tres
+> triángulos igual"— y el barrido en Blender lo midió: **la brizna plana a 90°
+> proyecta 0 píxeles**. Pero la única solución que el documento ofrecía era la
+> brizna curva, que cuesta más triángulos. Que se pueda atacar lo mismo sesgando
+> el yaw —gratis— no estaba considerado en ninguna parte.
+>
+> **Y no es tan gratis como suena.** El yaw se hornea en las posiciones de los
+> vértices cuando se construye el chunk, y la cámara gira después. Para que
+> "nunca ortogonal" signifique algo *relativo a la cámara* hay que reconstruir el
+> quad en el vertex shader — o sea que las dos técnicas son la misma, y su costo
+> real es por frame, no por triángulo.
+>
+> **El caso extremo es el cenital**, reportado jugando el mismo día: con la
+> cámara sobre el player mirando abajo, el campo se lee mucho más ralo. Medido
+> con las constantes propias: de costado una brizna tapa 0,0236 m², desde arriba
+> 0,0074 — **el 31%**. La cobertura del campo cae de 95% del suelo a 30%.
+>
+> Ahí hubo dos afirmaciones mías y **una era falsa**. Dije que no se dibujaban
+> menos briznas: el contador dice que sí, 233.992 → 197.792 triángulos al
+> inclinar la cámara de −0,64 a −0,84. Lo que sí resultó cierto es que esa baja
+> es culling correcto — forzar los 41 chunks descartados (415.000 triángulos más)
+> cambia la imagen **menos que el propio ruido del viento** (4,53% contra un piso
+> de 5,03%, medido con dos corridas idénticas).
 
 **2. Carta de grupo** — un quad texturizado con la silueta de 20-30 briznas.
 Es la única que ahorra geometría de verdad, y es la que está en todos los
@@ -919,6 +1008,46 @@ esa mitad del problema sigue sin evidencia.
   afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que la medición daba
   35-46 FPS.
 
+### Ver, no sólo medir (2026-08-06)
+
+Medir sin el usuario se resolvió con `BOF_BENCH`. Faltaba la otra mitad y en un
+problema visual es la que importa: **el agente no puede ver**, así que cada
+cambio de aspecto viajaba hasta el usuario para su veredicto y una idea
+equivocada costaba una sesión de juego suya. Tres herramientas cierran eso:
+
+| comando | para qué |
+|---|---|
+| `BOF_SHOT=<suite> cargo run` | entra a la escena de la suite, se para en su mirador, deja un PNG en `target/shots/` y sale |
+| `BOF_SHOT_POSE="x,y,z:dx,dy,dz"` | encuadre a mano — **para reproducir una queja**, no para comparar mediciones |
+| `BOF_SCENE=Pasto cargo run` | arranca dentro de la caja, sin pasar por el menú |
+| **F7 en el juego** | el usuario captura lo que está viendo; el log imprime la pose ya formateada como `BOF_SHOT_POSE` |
+
+La foto reusa escena y mirador de `BenchSuite` a propósito: *"se ve mejor"* y
+*"cuesta 3 ms más"* sólo forman una decisión si son del mismo lugar.
+
+**Lo que una captura sí y no puede decir:**
+
+- **Las estadísticas de píxeles son deterministas.** Luminancia, saturación y
+  variación no las contamina que el usuario tenga Firefox abierto — al revés que
+  los tiempos, que el mismo día dieron 10,89 / 11,88 / **3,83 ms** para el mismo
+  pasto en tres corridas. Antes de cualquier `BOF_BENCH`, **preguntar qué tiene
+  abierto**.
+- **El piso de ruido de una comparación de imágenes es 5%.** Medido con dos
+  corridas idénticas: el viento mueve las briznas entre disparos, así que
+  cualquier diferencia visual menor que eso no significa nada. Sin ese control,
+  un experimento del día casi se lee al revés.
+- **Cada captura imprime el inventario de escena** (mallas visibles, triángulos,
+  draws), porque una foto no puede distinguir "se dibuja menos" de "se proyecta
+  menos" y esa distinción fue justamente la que hubo que resolver.
+
+**Y buscando eso apareció un bug de meses:** el inventario consultaba mallas por
+tipo de material —`StandardMaterial` y `TerrainMaterial`— y `GrassMaterial` es un
+tercero, así que **el presupuesto de escena nunca contó la pradera**. En la caja
+Pasto declaraba 33.792 triángulos con cien mil briznas en pantalla. Hoy los
+triángulos se cuentan por `Mesh3d`, sin mirar el material, y una ley en
+`tests/architecture.rs` exige que todo `MaterialPlugin` registrado aparezca en
+`collect_scene`.
+
 ## Errores que este documento ya cometió — no reintroducir
 
 Se listan porque el archivo lleva varias reescrituras y los tres volvieron a
@@ -942,9 +1071,30 @@ sonar razonables cada vez:
    de la matriz A/B: lo que produce es una impresión cronometrada a mano, que es
    justo lo que `perf/sequence.rs` existe para impedir.
 
-El patrón detrás de los cinco es el mismo: **una técnica se descarta con un
-número, no con una intuición sobre su complejidad.** Cuando este documento
+7. **"La brizna curva rinde más área por triángulo."** Propuesta mía el
+   2026-08-05 y **refutada por mi propia medición** al día siguiente: barrido de
+   cámara de 0° a 90° en Blender contando píxeles de silueta, plana 1399 px por
+   triángulo, cruz 1006, curva **530** — la peor de las tres. Corolario que
+   refuerza la ley 1: con los mismos 4 triángulos, dos briznas planas dan más
+   área que una cruz.
+8. **"Teñir el suelo hacia la punta llena el horizonte."** Lo dice Ghost of
+   Tsushima y acá lo vacía: probado y medido el 2026-08-06, deja el horizonte más
+   claro que el primer plano. La técnica presupone una punta que lea como masa de
+   pasto, y la nuestra era casi blanca.
+9. **"El clumping es correcto y gratis, así que se queda."** Gratis sí, correcto
+   no — *para nuestro objetivo*. Compra estructura pagando uniformidad, y lo que
+   este juego quiere es una alfombra. Una técnica se juzga contra el objetivo, no
+   contra su prestigio.
+
+El patrón detrás de los cinco primeros es el mismo: **una técnica se descarta con
+un número, no con una intuición sobre su complejidad.** Cuando este documento
 descartó algo por "es complicado" o "no encaja", se equivocó.
+
+Los tres últimos agregan un patrón distinto, del 2026-08-06: **un número tampoco
+sirve si el objetivo contra el que mide se eligió a ojo.** Medir con tres
+decimales la distancia hasta un blanco supuesto es precisión, no evidencia — y
+las dos veces que pasó ese día, el blanco venía de una preferencia mía o de un
+juego que resuelve otro problema.
 
 ## Fuera de alcance (a propósito)
 

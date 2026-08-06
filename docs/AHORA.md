@@ -21,7 +21,19 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   `cargo test -p breath_of_freedom_domain`. Con `--workspace` todo lo demás pasa
   y sólo cae ese smoke: si cae otro, es real.
 - **Medir: `BOF_BENCH=<suite> cargo run`**, con la ventana visible y sin nada
-  más usando la GPU. Detalle y trampas en "La suite de medición".
+  más usando la GPU. **Preguntarle al usuario qué tiene abierto antes de la
+  primera corrida**: el 2026-08-06 tres barridos dieron 10,89 / 11,88 / 3,83 ms
+  para el mismo pasto con Blender y Firefox arriba. Detalle en "La suite de
+  medición".
+- **Ver sin jugar: `BOF_SHOT=<suite> cargo run`** deja un PNG en `target/shots/`
+  y sale; `BOF_SHOT_POSE="x,y,z:dx,dy,dz"` fuerza un encuadre para reproducir una
+  queja; `BOF_SCENE=Pasto cargo run` arranca dentro de una caja sin pasar por el
+  menú. **A diferencia de los tiempos, la estadística de píxeles de una captura
+  es determinista** y no la contamina la carga de la máquina — pero su piso de
+  ruido es **5%**, porque el viento mueve las briznas entre disparos.
+- **F7 en el juego captura lo que el usuario está viendo**, numerada, con la pose
+  de cámara impresa ya formateada como `BOF_SHOT_POSE`. Es la única forma de que
+  un reporte visual suyo llegue sin pasar por mi interpretación.
 - **Medir en dev, no en release** — con una duda nueva. Las deps ya compilan en
   `opt-level 3` y la diferencia de perfil medida fue 0,38 ms contra deltas de
   4-12 ms. Pero el 2026-08-06 apareció evidencia de un **techo de CPU** que dev
@@ -249,86 +261,93 @@ llena la pantalla de pasto con una fracción de este hardware. No es un problema
 de plata, es de técnica. El registro de los cuatro intentos y por qué cada uno
 falló está en `BOTWGrass.md` → *Cuatro intentos que fallaron*.
 
-### Lo que se arregló hoy, y qué falta validar jugando
+### Los cinco problemas del 2026-08-05, y en qué quedaron
 
-De los cinco problemas reportados el 2026-08-05, más los que salieron jugando:
-
-1. **Briznas muy chicas** → 0,26-0,52 m pasaron a **0,45-0,90 m**, con el lean
-   escalado a la par. *Jugado y aceptado: "está mejor la altura y el feeling".*
-2. **Densidad** → 45 → 56 → **40 / 20 / 7** por anillo, las tres decididas por
-   ojo. 56 resultó más de lo necesario y 30 poco. La condición que el usuario
-   puso al bajarla importa más que el número: *"para que las texturas hagan el
-   resto de la pega"* — y esa condición después se cumplió.
-3. **Punta cuadrada** → taper 0,35 → **0,18**, muesca 0,82 → **0,72**. Jugado
-   sin comentario: ni aceptado ni rechazado.
+1. **Briznas muy chicas** → 0,45-0,90 m. *Aceptado jugando.*
+2. **Densidad** → 45 → 56 → **40 / 20 / 7** por anillo, las tres por ojo, con
+   una condición explícita al bajarla: *"para que las texturas hagan el resto de
+   la pega"* — que después se cumplió.
+3. **Punta cuadrada** → taper 0,18, muesca 0,72. Ni aceptado ni rechazado.
 4. **El crecimiento demasiado cerca** → **medio arreglado, y ahí se acabó lo que
-   este camino podía dar.** Lo que sí funcionó: separar `GROWTH_RAMP_M` (1 m,
-   cuánto tarda *una* brizna) de `GROWTH_SPREAD_M` (6 m, en cuántos metros se
-   reparten los umbrales *entre* briznas). Antes una sola constante gobernaba
-   los dos fenómenos y acortarla los acortaba a la vez, lo que alejó la ola y la
-   hizo **más** brusca. Con las dos separadas el mecanismo quedó bien —*"crece
-   parejo a medida que uno camina, y crece bien"*—, pero **se sigue notando**, y
-   agrandar el anillo de 10 a 16 m no lo resolvió.
-5. **Falta abundancia en el horizonte** → **no resuelto, y es el mismo problema
-   que el 4.** *"Nuestro pasto llega hasta ahí y no llena la escena."* El suelo
-   ya es pradera y no alcanzó.
-6. **El parpadeo** → **resuelto y confirmado jugando**, y no era ninguna de las
-   dos cosas que se venían suponiendo. Era **z-fighting**: al encogerse, la
-   brizna colapsaba a la altura del suelo y quedaba como un cuadrilátero plano
-   coplanar con el terreno, agitado por el viento. Ahora colapsa 18 cm **bajo**
-   tierra (`GROWTH_SINK_M`) y de paso brota del suelo, que es el efecto que el
-   doc pedía. La hipótesis de MSAA, sostenida dos días, era falsa.
+   ese camino daba.** Lo que funcionó fue separar `GROWTH_RAMP_M` (cuánto tarda
+   *una* brizna) de `GROWTH_SPREAD_M` (en cuántos metros se reparten los umbrales
+   *entre* briznas): antes una sola constante gobernaba los dos fenómenos, así
+   que acortarla alejaba la ola y la hacía **más** brusca. Sigue notándose.
+5. **Falta abundancia en el horizonte** → **no resuelto**, y es el mismo problema
+   que el 4.
+6. **El parpadeo** → **resuelto y confirmado**, y no era ninguna de las dos cosas
+   que se suponían. Era **z-fighting**: la brizna colapsaba coplanar con el
+   terreno. Ahora se hunde 18 cm (`GROWTH_SINK_M`) y de paso brota del suelo. La
+   hipótesis de MSAA, sostenida dos días, era falsa.
 
 ### El suelo dejó de ser un color plano (2026-08-06)
 
-`Soil` es la celda por defecto del mundo y su textura era un marrón liso. El
-usuario generó una textura de pradera contra el contrato del repo; se midió
-antes de instalarla (iluminación uniforme al 0,1% entre cuadrantes, y una
-costura que se corrigió con la **descomposición periódica de Moisan**, que no
-duplica ni difumina detalle como sí hace un blend de bordes). `GRASS_TINT_STRENGTH`
-bajó de 0,55 a 0,25: era un sustituto de no tener textura.
+`Soil` es la celda por defecto y su textura era un marrón liso. El usuario generó
+una de pradera; se midió antes de instalarla y la costura se corrigió con la
+**descomposición periódica de Moisan**. `GRASS_TINT_STRENGTH` bajó de 0,55 a 0,25
+porque era un sustituto de no tener textura.
 
 **Y destapó un bug que llevaba ahí desde que existe el sistema.** El array de
-texturas nace como un fallback de 1×1 por capa; al llegar los PNG se reescribía
-esa imagen, pero wgpu no redimensiona texturas —crea una nueva— y el bind group
-del material seguía apuntando a la vieja. **El material mostró el fallback
-siempre.** Nadie podía verlo porque los cuatro PNG canónicos se generaron a
-partir de los mismos `placeholder_rgb`, así que fallback y arte real eran del
-mismo color. El arreglo: entrar el array como asset nuevo y apuntar el material
-a ese handle.
+texturas nace como fallback de 1×1 por capa; al llegar los PNG se reescribía esa
+imagen, pero wgpu no redimensiona texturas —crea una nueva— y el bind group
+seguía apuntando a la vieja. **El material mostró el fallback siempre**, y nadie
+podía verlo porque los cuatro PNG canónicos se generaron de los mismos
+`placeholder_rgb`: fallback y arte eran del mismo color.
 
 **La lección se la lleva el log:** `"packed 4 canonical PNGs"` era verdadero e
-inútil — se imprimía igual con el arte cargado que con el fallback. Un mensaje
-de éxito que no se distingue de un fracaso no es un mensaje de éxito. Ahora
-imprime el tamaño y el color medio de cada capa.
+inútil — se imprimía igual con el arte que con el fallback. **Un mensaje de éxito
+que no se distingue de un fracaso no es un mensaje de éxito.** Ahora imprime el
+tamaño y el color medio de cada capa.
 
-**Lo que la textura NO resolvió**, y es un resultado: la hipótesis era que el
-crecimiento se nota porque destapa tierra. Veredicto jugando: *"la textura no
-maquilla ningún problema que estamos intentando solucionar"*.
+Lo que la textura **no** resolvió: *"no maquilla ningún problema que estamos
+intentando solucionar"*. El crecimiento es geométrico, no de color.
 
-### El estudio con fuentes, y las tres cosas que hay que probar
+### El estudio, y qué pasó con cada cosa que mandó probar
 
-Hecho el 2026-08-06 a pedido del usuario, con material público citado (GDC de
-Ghost of Tsushima; la serie de Godot de hexaquo). Vive completo en
-`BOTWGrass.md` → *Cómo lo hacen otros*. Tres hallazgos contradicen decisiones
-nuestras, y las tres correcciones cuestan **cero geometría**:
+Hecho el 2026-08-06 con material público citado (GDC de Ghost of Tsushima; la
+serie de Godot de hexaquo) y **probado el mismo día**. Vive completo en
+`BOTWGrass.md`; acá el saldo:
 
-1. **Teñimos el suelo hacia la raíz; GoT tiñe hacia la punta**, justamente para
-   fingir que la densidad a distancia no cambió. Nuestro comentario argumenta
-   que el suelo debe quedar más oscuro — cierto *debajo* del campo, falso *más
-   allá*: ahí el suelo se oscurece y el horizonte gana un borde.
-2. **Nuestro scatter es hash uniforme**; GoT agrupa en celdas de Voronoi con
-   parámetros por clump. Un campo uniforme se lee como alfombra por densa que
-   sea.
-3. **Bajamos densidad y mantenemos la brizna**; hexaquo baja el LOD de la
-   *brizna* (9 tris a 1) sin tocar la densidad. Lo nuestro es lo que abre el
-   vacío.
+| lo que el estudio mandó | resultado |
+|---|---|
+| teñir el suelo hacia la punta | **rechazado por medición** — deja el horizonte más claro que el primer plano |
+| clumping | **rechazado por el usuario** — compra estructura pagando uniformidad, y queremos alfombra |
+| terreno que responda al ángulo de visión | sin tocar |
+| LOD de la brizna, no del campo | **hecho** — 3/2/1 triángulos por anillo, *"se siente igual"*, o sea gratis |
 
-También quedó medido, en Blender, que **la brizna curva que yo proponía es la
-peor de las tres formas por triángulo** (530 px/tri contra 1399 de la plana).
-La ley 1 sale reforzada: con los mismos 4 triángulos, dos briznas planas dan más
-área que una cruz. El modelo y el barrido están en
+**Lo que sí movió la aguja no estaba en la lista: la paleta.** El campo
+promediaba luminancia 171,9 — el punto medio exacto de una rampa lineal entre su
+raíz y su punta. Se sesgó el degradado hacia la raíz (un dosel es casi todo
+puntas) y se derivó la paleta del **suelo donde se paran las briznas**: la raíz
+estaba a 16° de tono y la mitad de saturación de su propio suelo. Quedó 153,7 de
+luminancia y 34,7% de saturación. Jugado: *"la textura del suelo y del pasto se
+ven más uniformes"*.
+
+**Dos errores de método, que valen más que el resultado:** la paleta se leyó de
+un PNG que no es canónico y nunca llega a la escena; y el objetivo se eligió a
+ojo para después medir la distancia hasta él con tres decimales. *La precisión
+era real y el blanco supuesto.* Registrados en `BOTWGrass.md` →
+*Errores que este documento ya cometió*.
+
+También quedó medido que **la brizna curva que yo proponía es la peor de las tres
+formas por triángulo** (530 px/tri contra 1399 de la plana), en
 `art/blender/grass/grass_blade_shapes.blend`.
+
+### Lo que sigue abierto en el pasto
+
+1. **El crecimiento se sigue notando al avanzar.** El problema más viejo; cuatro
+   intentos fallidos registrados.
+2. **Desde arriba el campo se lee ralo.** Diagnosticado: una brizna vertical tapa
+   0,0236 m² de costado y 0,0074 desde el cenit —el 31%—, así que la cobertura
+   cae de 95% a 30%. La baja de triángulos que la acompaña **es culling
+   correcto**: forzar los chunks descartados cambia la imagen menos que el ruido
+   del viento. Lo atacan tres cosas, y sólo una es gratis: subir `BLADE_LEAN`,
+   la brizna curva, o girarla hacia la cámara.
+3. **El horizonte no se llena.** Sin tocar.
+4. **La tabla de anillos del código está 5× por encima de la derivada**, y el
+   disparador que `BOTWGrass.md` dejó armado —*"si el barrido confirma
+   fill-bound, bajar el anillo 0 es la palanca más barata"*— ya se cumplió sin
+   que nadie actuara.
 
 ## La suite de medición (2026-08-06)
 

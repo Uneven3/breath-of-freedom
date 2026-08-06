@@ -180,6 +180,24 @@ impl SceneId {
         SceneId::World,
     ];
 
+    /// The scene whose label matches `raw`, case- and accent-insensitively
+    /// enough for typing it into an environment variable.
+    pub fn from_label(raw: &str) -> Option<Self> {
+        let raw = raw.trim().to_lowercase();
+        Self::ALL
+            .into_iter()
+            .find(|id| id.def().label.to_lowercase() == raw)
+    }
+
+    /// The labels a human may type, for the error message when they mistype one.
+    pub fn labels() -> String {
+        Self::ALL
+            .iter()
+            .map(|id| id.def().label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn def(self) -> &'static SceneDef {
         match self {
             SceneId::Traversal => &SCENES[0],
@@ -222,11 +240,36 @@ pub fn scene_has(wants: fn(&Contents) -> bool) -> impl Fn(Res<State<AppState>>) 
     move |state: Res<State<AppState>>| current_scene(&state).is_some_and(|def| wants(&def.contents))
 }
 
+/// Lee `BOF_SCENE`. Un nombre que no existe **no arranca en el menú en
+/// silencio**: avisa y nombra las escenas válidas, porque pedir una caja y
+/// recibir otra es exactamente el error que esta variable existe para evitar.
+fn configured_boot_scene() -> Option<SceneId> {
+    let raw = std::env::var("BOF_SCENE").ok()?;
+    match SceneId::from_label(&raw) {
+        Some(id) => Some(id),
+        None => {
+            error!(
+                "[scene] BOF_SCENE={raw} no nombra ninguna escena; hay: {}",
+                SceneId::labels()
+            );
+            None
+        }
+    }
+}
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<AppState>();
+        // `BOF_SCENE=Pasto cargo run` arranca dentro de la caja en vez del menú.
+        // Trabajar un sistema es entrar a su caja decenas de veces al día, y el
+        // menú de por medio hace que la escena bajo prueba dependa de que nadie
+        // se equivoque de botón — el 2026-08-06 se juzgó el pasto en el Mundo
+        // por eso mismo.
+        if let Some(id) = configured_boot_scene() {
+            app.insert_state(AppState::Scene(id));
+        }
         app.add_plugins(menu::MenuPlugin);
         for id in SceneId::ALL {
             app.configure_sets(

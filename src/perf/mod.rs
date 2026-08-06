@@ -18,6 +18,7 @@ pub(crate) mod budget;
 pub mod data;
 pub mod flythrough;
 pub mod sequence;
+pub mod shot;
 pub mod suite;
 
 use bevy::diagnostic::DiagnosticsStore;
@@ -38,6 +39,9 @@ impl Plugin for PerfPlugin {
         // se gatean con `resource_exists`: sin la variable, nada de esto corre
         // ni cuesta un frame.
         if let Some(auto) = auto::configured_auto_bench() {
+            app.insert_resource(auto);
+        }
+        if let Some(auto) = shot::configured_auto_shot() {
             app.insert_resource(auto);
         }
         app.init_resource::<Benchmark>();
@@ -63,6 +67,7 @@ impl Plugin for PerfPlugin {
                 apply_present_mode,
                 budget::warn_scene_budget,
                 auto::drive_auto_bench.run_if(resource_exists::<auto::AutoBench>),
+                shot::drive_auto_shot.run_if(resource_exists::<shot::AutoShot>),
             )
                 .chain(),
         );
@@ -110,14 +115,19 @@ pub struct ScriptedCameraPose(pub Option<(Vec3, Vec3)>);
 
 /// Benchmark wins over the flythrough if both somehow ran; the cross-guards
 /// mean only one runs at a time in practice.
+///
+/// The screenshot harness is last and needs no guard against the others: it only
+/// exists when `BOF_SHOT` asked for it, and that run never starts a benchmark.
 fn reconcile_scripted_camera_pose(
     benchmark: Res<Benchmark>,
     flythrough: Res<Flythrough>,
+    shot: Option<Res<shot::AutoShot>>,
     mut pose: ResMut<ScriptedCameraPose>,
 ) {
     pose.0 = benchmark
         .parked_pose()
-        .or_else(|| flythrough.desired_pose());
+        .or_else(|| flythrough.desired_pose())
+        .or_else(|| shot.as_deref().and_then(shot::shot_pose));
 }
 
 /// Presentation asks; `perf` owns the knobs and applies them (§7).

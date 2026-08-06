@@ -243,6 +243,19 @@ pub fn scene_has(wants: fn(&Contents) -> bool) -> impl Fn(Res<State<AppState>>) 
 /// Lee `BOF_SCENE`. Un nombre que no existe **no arranca en el menú en
 /// silencio**: avisa y nombra las escenas válidas, porque pedir una caja y
 /// recibir otra es exactamente el error que esta variable existe para evitar.
+/// Pide la escena de `BOF_SCENE` desde `Startup`, y no con `insert_state`.
+///
+/// La diferencia costó un panic: arrancar ya dentro del estado hace correr el
+/// `OnEnter` de la escena en el mismo frame que `Startup`, o sea antes de que
+/// existan los recursos que ese `OnEnter` da por sentados — `reset_meadow`
+/// murió buscando `GrassField`. Pidiéndolo acá la transición ocurre en el frame
+/// siguiente, por exactamente el mismo camino que un clic en el menú.
+fn enter_configured_boot_scene(mut next: ResMut<NextState<AppState>>) {
+    if let Some(id) = configured_boot_scene() {
+        next.set(AppState::Scene(id));
+    }
+}
+
 fn configured_boot_scene() -> Option<SceneId> {
     let raw = std::env::var("BOF_SCENE").ok()?;
     match SceneId::from_label(&raw) {
@@ -267,9 +280,7 @@ impl Plugin for ScenePlugin {
         // menú de por medio hace que la escena bajo prueba dependa de que nadie
         // se equivoque de botón — el 2026-08-06 se juzgó el pasto en el Mundo
         // por eso mismo.
-        if let Some(id) = configured_boot_scene() {
-            app.insert_state(AppState::Scene(id));
-        }
+        app.add_systems(Startup, enter_configured_boot_scene);
         app.add_plugins(menu::MenuPlugin);
         for id in SceneId::ALL {
             app.configure_sets(

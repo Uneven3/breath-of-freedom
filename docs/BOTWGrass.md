@@ -328,6 +328,120 @@ Las anoto porque las dos suenan sensatas y van a volver a tentar:
 
 ---
 
+## Cómo lo hacen otros — con fuentes, no de memoria (2026-08-06)
+
+Estudio pedido por el usuario tras el día de los cuatro intentos fallidos. Todo
+lo de acá sale de material público citado al final; **lo que es inferencia mía
+va marcado**. La regla que lo motivó: *"tu ayuda es realmente valiosa cuando no
+inventas técnicas"*.
+
+### Ghost of Tsushima (GDC 2022, Advanced Graphics Summit)
+
+Briznas generadas en GPU por compute, con tiles jerárquicos que se subdividen y
+submuestrean del padre altura del terreno, tipo de pasto, factor de clumping,
+tamaño y viento.
+
+De ahí, **tres cosas que contradicen decisiones nuestras**:
+
+1. **El terreno lejano se tiñe hacia el color de la PUNTA de la brizna**, para
+   *"dar la ilusión de que la densidad a distancia es la misma, aunque esté
+   fuertemente culleada"*. **Nosotros teñimos hacia la RAÍZ** (`grass_tint()`
+   usa `ROOT_COLOR`), y el comentario de esa función dice explícitamente que lo
+   que mantiene legible el pasto es *"que el suelo siga siendo más oscuro que
+   él"*. Eso es cierto **debajo** del campo y falso **más allá** de él: un campo
+   visto en ángulo rasante se lee del color de sus puntas, así que donde el
+   pasto termina, nuestro suelo se oscurece — y un cambio de valor en el
+   horizonte es exactamente lo que se ve como borde.
+2. **Clumping por celdas de Voronoi**, con un `clump ID` por celda y parámetros
+   autorados por tipo: *pull to centre*, *point in same direction*, y variación
+   de altura, ancho, tilt y bend por clump. Nuestro scatter es hash uniforme:
+   cada brizna es independiente de sus vecinas, que es la definición de alfombra.
+3. **La normal de la brizna se interpola hacia la normal del terreno con la
+   distancia**, para reducir el granulado, y el AO se desvanece. Nosotros usamos
+   +Y fijo a toda distancia.
+
+Su brizna, para calibrar: **15 vértices sobre una curva de Bézier cúbica
+evaluada en el vertex shader**, con control de height/width/tilt/bend. Es una
+brizna de ~13 triángulos — muy lejos de nuestra ley 1 —, pero es PS5 y no es el
+target de este documento.
+
+### La serie de Godot de hexaquo (LOD para llanuras infinitas)
+
+Es el material más cercano a nuestro problema exacto, porque su pregunta es
+literalmente "pasto hasta el horizonte":
+
+4. **El LOD es la brizna, no el campo.** Colapsan la brizna de **9 triángulos a
+   1** con la distancia — ~90% menos geometría **sin tocar la densidad**.
+   Nosotros hacemos lo contrario: mantenemos la brizna y bajamos la densidad,
+   que es precisamente lo que abre el vacío.
+5. **El impostor es el suelo, no un billboard.** Más allá del alcance renderizan
+   *"el suelo —un plano simple, sin geometría extra— y lo hacen actuar como si
+   tuviera briznas encima"*. No es "terreno con textura de pasto": es un plano
+   que simula el sombreado de un campo.
+6. **Compensación por ángulo de visión:** calculan el ángulo entre la dirección
+   de cámara y la normal para ajustar albedo y normales, *"evitando que el
+   impostor se vea plano a la altura de los ojos"*. **Nuestro terreno no hace
+   nada de esto**, y por eso a media distancia se lee como plástico verde.
+7. **Normal map horneado del propio pasto**: capturan el buffer de normales de
+   la geometría real vista desde arriba y lo usan en el plano. El detalle de
+   sombreado sobrevive aunque la geometría no.
+8. Transición con solapamiento largo y explícito (empieza a 5, impostor completo
+   a 10, geometría desaparecida a 20).
+
+### El experimento propio: cuánto área proyecta cada forma de brizna
+
+Medido en Blender el 2026-08-06, barriendo el ángulo de cámara de 0° a 90° y
+contando píxeles de silueta de cada forma por separado *(tipo a: medición
+nuestra, en área proyectada — no en milisegundos)*:
+
+| ángulo | plana (2 tris) | teja (6 tris) | cruz (4 tris) |
+|---|---:|---:|---:|
+| 0° | 4384 | 4691 | 4384 |
+| 45° | 3211 | 3452 | 3211 |
+| 90° | **0** | 1182 | 4384 |
+| **media** | 2797 | 3180 | 4023 |
+| **mínimo** | **0** | 1182 | 3211 |
+| **por triángulo** | **1399** | 530 | 1006 |
+
+**Esto refutó la propuesta con la que empecé.** Yo había argumentado que una
+brizna curva aporta más masa visual por triángulo; **es la peor de las tres**,
+530 px/tri contra 1399 de la plana. La aritmética del ángulo muerto sí se
+confirmó —la plana promedia 0,64 de su máximo, que es exactamente 2/π, y a 90°
+proyecta **cero**— pero la conclusión que saqué de ella era falsa.
+
+Y hay un corolario que refuerza la ley 1 en vez de romperla: con los mismos 4
+triángulos, **dos briznas planas dan 5594 px de media contra los 4023 de una
+cruz**. La respuesta a "falta masa" es más briznas planas, no briznas más caras.
+
+**La advertencia que va con esta tabla:** el área proyectada es la métrica
+correcta si el sistema es *vertex-bound*, y el 2026-08-06 medimos que es
+**fill-bound**. Cuando lo que cuesta son los píxeles pintados, más área
+proyectada por brizna es *más caro*, no más eficiente, y la métrica que manda
+pasa a ser cobertura útil por píxel pintado — o sea **overdraw**. El dial de
+overdraw del hub existe desde siempre y sigue sin usarse.
+
+### Lo que este estudio dice que probemos, en orden
+
+Ninguna de las tres primeras cuesta geometría, y las tres salen de material
+documentado, no de una idea mía:
+
+1. **Teñir el suelo hacia la punta y no hacia la raíz** (GoT, punto 1). Es
+   cambiar `ROOT_COLOR` por `TIP_COLOR` en `grass_tint()` y volver a juzgar el
+   horizonte. Una línea.
+2. **Clumping** (GoT, punto 2). Cambiar la función de siembra para que las
+   briznas se agrupen y compartan orientación y altura por grupo. Cero
+   triángulos, y es lo que separa un campo de una alfombra.
+3. **Que el terreno responda al ángulo de visión** (hexaquo, 6 y 7), con el
+   normal map que ya está en el repo sin usar.
+4. Y sólo si hace falta: **LOD de la brizna en vez del campo** (hexaquo, 4).
+
+**Sources:**
+- [Procedural Grass in 'Ghost of Tsushima' — GDC Vault](https://gdcvault.com/play/1027033/Advanced-Graphics-Summit-Procedural-Grass)
+- [Unity-Grass, implementación documentada de la charla de GoT](https://cainrademan.github.io/Unity-Grass/)
+- [hexaquo — Grass Rendering Series Part 4: LOD Tricks for Infinite Plains of Grass in Godot](https://hexaquo.at/pages/grass-rendering-series-part-4-level-of-detail-tricks-for-infinite-plains-of-grass-in-godot/)
+
+---
+
 ## Fase 0 — Poder medir, y pagar menos por lo mismo
 
 Nada de esta fase cambia la imagen.

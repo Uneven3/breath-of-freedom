@@ -203,10 +203,21 @@ mod tests {
     /// sentido para algo que existe alrededor de la cámara y no en un lugar del
     /// mapa.
     ///
-    /// **Hoy es seis veces el presupuesto móvil entero, y está acá para que eso
-    /// no se pueda ignorar.** Es deuda con número, no una tolerancia: no se paga
-    /// bajando el listón. La historia de los cuatro saltos del 2026-08-06 y qué
-    /// compró cada uno está en `docs/BOTWGrass.md`.
+    /// **Hoy es diez veces el presupuesto móvil entero, y está acá para que eso
+    /// no se pueda ignorar.** Es deuda con número, no una tolerancia — y por
+    /// primera vez es deuda *deliberada*: este número es el techo de una rampa
+    /// que se va a bajar, no un límite que se respetó.
+    ///
+    /// **El último salto lo pidió el usuario y cambia la estrategia**, así que
+    /// vale escribir el porqué: hasta el 2026-08-06 se venía con poco pasto
+    /// tratando de mejorarlo, y su instrucción fue al revés — *"hacer crecer
+    /// mucho más la distancia de renderizado, y trabajar desde ahí hacia
+    /// abajo"*. El alcance pasó de 32 a **64 m** y esto de 600.000 a 800.000.
+    ///
+    /// Que sean +28% y no ×4 es consecuencia directa de la ley `1/d`: las
+    /// densidades de los anillos externos ya no se eligen por proporción, salen
+    /// de la derivación, así que el área nueva se planta con la fracción que le
+    /// corresponde. Sin ese cambio, este alcance no era pagable.
     ///
     /// Es el **peor caso barrido** sobre todas las alineaciones de la cámara
     /// contra la grilla, no una cómoda — una versión anterior declaraba el origen
@@ -219,7 +230,7 @@ mod tests {
     /// bandwidth aunque no produzca un píxel *(propiedad del hardware, no
     /// medición nuestra)*— pero el número que manda mientras la fase estética
     /// siga abierta es el de fill.
-    const MEADOW_VIEW_TRIANGLES: usize = 600_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 1_000_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -231,10 +242,11 @@ mod tests {
         );
         // Y lo que de verdad hay que vigilar mientras la deuda exista: cuánto
         // se pasa del móvil, para que crecer sea una decisión y no un descuido.
+        // 895.128 al 2026-08-06, con el alcance de 64 m en cuatro anillos.
         let ground = terrain_cost();
         let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            over <= 535_000,
+            over <= 900_000,
             "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
              past the debt this file declares"
         );

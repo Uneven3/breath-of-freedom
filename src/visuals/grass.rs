@@ -84,57 +84,44 @@ impl BladeShape {
 ///
 /// Derivation and cost in `docs/BOTWGrass.md`. The fact that governs decisions
 /// here: the meadow is **fill-bound**, so the triangle count is a guardrail.
-const RINGS: [Ring; 3] = [
+const RINGS: [Ring; 4] = [
     Ring {
-        // 8 → 10 → **16**, las tres por el mismo reporte jugando: se nota
-        // dónde crece el pasto. La forma de la rampa ya estaba bien y lo que
-        // faltaba era distancia. Cuesta +73% de triángulos y no está verificado
-        // que lo compre — ver `docs/BOTWGrass.md`.
-        reach_m: 16.0,
-        // El tamaño de chunk decide cuánta geometría se hornea fuera del
-        // anillo: chico desperdicia menos y cuesta más draws, grande al revés.
-        // Se elige el lado que respeta `MOBILE_DRAWS` — un draw en un tiler
-        // cuesta más que triángulos que el frustum va a tirar.
-        chunk_m: 10.0,
-        // 45 → 56 → **40**, las tres decididas por el ojo del usuario jugando,
-        // la última con una condición explícita: *"para que las texturas hagan
-        // el resto de la pega"*. Esta densidad no se sostiene sola.
+        reach_m: 8.0,
+        chunk_m: 8.0,
+        // La única densidad que sigue eligiendo el ojo. Las otras tres salen de
+        // `1/d` evaluada en el medio de su franja.
         density: 40.0,
         width_scale: 1.0,
         shape: BladeShape::Notched,
     },
     Ring {
-        // Corridos hacia afuera con el interior, manteniendo la proporción: si
-        // los anillos se apretaran, el de en medio quedaría demasiado angosto
-        // para absorber lo que el interior suelta en 6 m de dispersión.
-        reach_m: 24.0,
-        chunk_m: 15.0,
-        // Sigue al anillo interior en la misma proporción, y no por prolijidad:
-        // este anillo es el que **recibe** lo que el interior va soltando
-        // durante los 6 m de dispersión. Si la razón entre los dos cambia, el
-        // traspaso vuelve a leerse como un escalón de densidad moviéndose con
-        // el jugador, que es la mitad del artefacto que `GROWTH_SPREAD_M` ataca
-        // por el otro lado.
-        density: 20.0,
+        reach_m: 20.0,
+        chunk_m: 16.0,
+        density: 23.0,
         width_scale: 1.0,
-        // También parte la punta, y no por gusto: como los anillos se solapan
-        // durante la banda de transición, este empieza en 2 m — o sea que sus
-        // briznas se mezclan con las del anillo interior justo delante de la
-        // cámara. Con la punta recta, la mitad de las briznas cercanas se veían
-        // distintas de la otra mitad.
         shape: BladeShape::Notched,
     },
     Ring {
-        reach_m: 32.0,
-        chunk_m: 20.0,
-        // Ídem, y es el anillo más barato por brizna en pantalla —a 16-32 m una
-        // brizna ocupa poquísimos píxeles— además del que más hace por la
-        // sensación de que el campo sigue.
-        density: 7.0,
+        reach_m: 40.0,
+        chunk_m: 32.0,
+        density: 11.0,
+        width_scale: 1.0,
+        shape: BladeShape::Quad,
+    },
+    Ring {
+        // **El anillo que el usuario pidió: trabajar desde lejos hacia adentro.**
+        reach_m: 64.0,
+        chunk_m: 32.0,
+        density: 6.0,
         width_scale: 1.0,
         shape: BladeShape::Spike,
     },
 ];
+
+// Los tamaños de chunk se dividen entre sí (8 | 16 | 32) a propósito: el barrido
+// del peor caso recorre un período igual al chunk más grande, y con tamaños
+// primos entre sí ese período no cubre todas las alineaciones — el test del peor
+// caso pasaba a ciegas.
 
 /// Assumed camera height above the ground, in metres, for the coverage
 /// derivation. Not the camera's real height — the rings are baked once and

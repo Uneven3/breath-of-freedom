@@ -241,6 +241,57 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
+## Mañana: el pasto, y **primero que se vea bien** (2026-08-05)
+
+**Decisión del usuario, y cambia el orden del documento:** primero se hace que
+el pasto se vea bien, después se optimiza. `BOTWGrass.md` manda medir antes de
+cada paso; esa regla queda suspendida para la parte estética y vuelve en cuanto
+la imagen esté aceptada. El target además pasó a **900p a 30 FPS** (`NORTE.md`
+todavía dice 1080p60 y hay que actualizarlo — es decisión del usuario, no se
+tocó). 900p30 contra 1080p60 es del orden de 2,6× menos píxeles por segundo, así
+que el margen es bastante mayor del que veníamos suponiendo.
+
+Cinco cosas reportadas jugando, en el orden en que las dijo. **Ninguna está
+medida; dos tienen diagnóstico y tres son hipótesis.**
+
+1. **Las briznas son muy pequeñas.** Hoy `BLADE_HEIGHT_MIN/MAX` = 0,26-0,52 m y
+   `BLADE_WIDTH` = 0,055 m. Es autoría pura: subirlas y mirar. Ojo que la altura
+   entra en la fórmula de cobertura (`minimum_density`), así que briznas más
+   altas *bajan* la densidad mínima — el test lo va a decir solo.
+2. **Todavía parpadea.** La histéresis de chunks (`KEEP_SLACK_M`) no lo mató, así
+   que la causa era otra. **Sospecha principal: aliasing temporal.** El perfil de
+   escritorio corre con `msaa=off` (se ve en el log de arranque) y una brizna
+   fina sub-píxel titila sin remedio sin MSAA. **Prueba barata que lo zanja:**
+   correr con `BOF_PROFILE=mobile`, que pone `Sample4`, y ver si desaparece. Si
+   desaparece, el arreglo es MSAA y no la grilla. Otras dos candidatas: geometría
+   coplanar entre anillos que se solapan, y el escalonado del fade.
+3. **La punta es muy cuadrada.** `BLADE_TIP_TAPER` = 0,35 deja la punta ancha y
+   `TIP_NOTCH_DEPTH` = 0,82 hace la muesca poco profunda. Afinar las dos.
+4. **"Veo crecer el pasto muy cerca del player."** *Este tiene causa clara:*
+   `FADE_BAND_M` son 6 m y el anillo interior llega a 8 m, así que su banda de
+   crecimiento va de 2 a 8 metros — o sea que el jugador ve encogerse y crecer
+   briznas prácticamente a sus pies. La banda no puede medir el 75% del anillo
+   que gobierna. Dos salidas: banda mucho más corta, o anillo interior más
+   grande. Probablemente las dos.
+5. **Falta abundancia en el horizonte.** No hay nada más allá de 32 m salvo el
+   tinte del suelo. Acá entra lo que el usuario venía pidiendo como "el pasto
+   pequeño que sólo se renderiza a lo lejos": algo barato que dé masa a la
+   distancia. Candidatos, y el primero es el más barato: **textura de pasto en el
+   terreno** (`T_GroundTallGrass_Albedo.png` ya está en el repo y hoy sólo se
+   aplica un tinte plano), matas bajas horneadas a densidad ínfima, y **cartas de
+   grupo** — que `BOTWGrass.md` descarta por el `discard` contra LRZ, pero ese
+   veredicto se escribió contra 1080p60 y merece revisarse contra 900p30.
+
+Además, sin hacer y ya escrito: **acentos** (flores, tallos secos, matas altas al
+1-3%), que el documento llama lo que separa "campo" de "césped", y el **aplastado
+al caminar** (Paso 9).
+
+**Estado de lo que sí quedó hecho hoy:** Pasos 0 a 7 del documento más la punta
+partida y el pasto sin sombras. Contado: 103.600 briznas, 250.800 triángulos y 48
+chunks en el peor caso de alineación, contra un presupuesto móvil de 100.000 —
+declarado como deuda con número en `perf::budget::MEADOW_VIEW_TRIANGLES`.
+**Medido: nada, ni un milisegundo.** El barrido A/B existe (F1) y no se corrió.
+
 ## Dónde se retoma (2026-08-04)
 
 **Checkpoint fase 7 jugado y aceptado (2026-08-04):** combate con combos (daño

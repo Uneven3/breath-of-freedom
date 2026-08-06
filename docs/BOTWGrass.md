@@ -9,6 +9,15 @@ mediciones se conservan íntegras; el marco que las interpreta cambió.
 > entregable **jugado** en la caja `Pasto` (`grass.ron`) y medido con el hub F1
 > antes de abrir el siguiente. Un paso que no se puede validar no se implementa.
 >
+> **Excepción vigente desde el 2026-08-05, por decisión del usuario:** primero se
+> hace que el pasto **se vea bien**, después se optimiza. La regla de medir antes
+> de cada paso queda suspendida para la parte estética y vuelve en cuanto la
+> imagen esté aceptada. El motivo es de sentido: optimizar algo que todavía no se
+> ve como uno quiere es afinar el objeto equivocado. **El target también cambió a
+> 900p30**, contra el 1080p60 que dice `NORTE.md` — unas 2,6 veces menos píxeles
+> por segundo, así que varios veredictos escritos acá contra el target viejo
+> (empezando por el de las cartas de grupo) hay que revisarlos.
+>
 > **Honestidad de fuentes.** Nintendo no publicó su implementación. Lo que sigue
 > separa **lo observable en el juego** de **la técnica conocida que produce ese
 > resultado**. Donde algo es inferencia, se dice.

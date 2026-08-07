@@ -133,6 +133,13 @@ pub(crate) struct SubjectTally {
     /// aparato; un triángulo barato de dibujar puede ser caro de tener. Es
     /// también el número que decide si conviene instancing o vertex pulling,
     /// que hasta ahora se discutía con aritmética de servilleta.
+    ///
+    /// **Por malla única, no por entidad**, y la diferencia dejó de ser teórica
+    /// el 2026-08-07: desde que un nivel de la pradera usa una malla índice
+    /// compartida por todos sus chunks, sumar por entidad la contaba una vez por
+    /// chunk — diez copias de algo que existe una vez, y el ahorro entero del
+    /// Paso 2 invisible. Los triángulos sí van por entidad: ésos se dibujan
+    /// tantas veces como instancias haya.
     pub vertex_bytes: usize,
 }
 
@@ -152,6 +159,9 @@ pub(crate) struct SceneCensus {
     batches: HashSet<(AssetId<Mesh>, UntypedAssetId)>,
     subject_batches: [HashSet<(AssetId<Mesh>, UntypedAssetId)>; BUCKETS],
     materials: HashSet<UntypedAssetId>,
+    /// Las mallas cuyos bytes ya se contaron este frame. Una malla compartida por
+    /// varias entidades ocupa la GPU una vez.
+    counted_meshes: HashSet<AssetId<Mesh>>,
 }
 
 impl SceneCensus {
@@ -163,6 +173,7 @@ impl SceneCensus {
             set.clear();
         }
         self.materials.clear();
+        self.counted_meshes.clear();
     }
 
     fn record(
@@ -177,10 +188,13 @@ impl SceneCensus {
         self.batches.insert((mesh, material));
         self.materials.insert(material);
         self.subject_batches[bucket].insert((mesh, material));
+        let first_sighting = self.counted_meshes.insert(mesh);
         let tally = &mut self.subjects[bucket];
         tally.meshes += 1;
         tally.triangles += cost.triangles;
-        tally.vertex_bytes += cost.vertex_bytes;
+        if first_sighting {
+            tally.vertex_bytes += cost.vertex_bytes;
+        }
     }
 
     /// Los draws no se pueden sumar mientras se cuenta —son la cardinalidad de

@@ -86,12 +86,15 @@ constante. Un radio en metros describe una resolución, no un campo.
 | 2 | 24-40 m | púa de 1 triángulo | 40 |
 | 3 | 40-64 m | carta de 2 triángulos, silueta recortada | 5 |
 
+**El nivel 3 ya no hornea**: sus briznas son registros en un `ShaderBuffer` y sus
+chunks comparten una malla índice (Paso 2, spike).
+
 **Medido desde el mirador canónico, caja Pasto** *(a, 2026-08-07, con la huella
-corregida y la carta recortada)*: **449.250 triángulos** de pradera en 32 draws,
-31,6 MB residentes, y **ninguna banda de distancia por debajo del 94,7%** —
-contra 92,1% de la mañana. Los 368.330 triángulos y 26,0 MB anteriores son los de
-la derivación vieja: 22% más barata, con un hueco a 22-32 m y con el horizonte
-leyéndose como una hilera de bloques.
+corregida, la carta recortada y el nivel 3 grabado)*: **449.250 triángulos** de
+pradera en **23 draws** —eran 32—, 29,6 MB de mallas más 0,75 MB de buffer, y
+**ninguna banda de distancia por debajo del 94,7%**. Los 368.330 triángulos, 32
+draws y 26,0 MB de la mañana son los de la derivación vieja: más barata, con un
+hueco a 22-32 m y con el horizonte leyéndose como una hilera de bloques.
 
 ### La brizna: dos triángulos unidos por una arista horizontal
 
@@ -438,7 +441,73 @@ correlación entre cartas alineadas era una hipótesis razonable y era falsa.
   quedó igual o mejor: 99,8% → 97,4% en la banda más lejana, sobre un objetivo
   de 95%. Cuesta 434.510 → 449.250 triángulos (+3,4%). Ataca el desperdicio **4**.
 
-### Paso 2 — La brizna deja de ser geometría *(el desbloqueo grande)*
+### Paso 2 — La brizna deja de ser geometría — **SPIKE HECHO (2026-08-07)**
+
+Convertido **un nivel**, el 3, que ya era casi un vertex pull. Los cuatro puntos
+de plomería quedaron verificados corriendo, y **dos de ellos escondían una
+trampa que el plan no vio**:
+
+| punto | resultado |
+|---|---|
+| Malla índice por nivel → batching | ✓ los draws de pradera bajan de **32 a 23** |
+| Stride fijo + `MeshTag` como casillero | ✓ con reciclado de casilleros al rodar |
+| `vertex_index` en un struct propio | ✓ **pero** ver la trampa 1 |
+| `Aabb` a mano | ✓ **pero** ver la trampa 2 |
+
+**Trampa 1: el struct propio pierde los `#ifdef`.** El `Vertex` de `forward_io`
+declara cada atributo dentro del suyo, así que se encoge solo hasta calzar con la
+malla. Escrito a mano no hay nada que lo encoja, y declarar `normal` en el
+location 1 —que el de Bevy tiene— pide a la etapa anterior un `Float32x3` que la
+pradera **nunca hornea**: su normal es +Y, calculada. El pipeline no compila y
+wgpu lo dice con el número de location, que es lo único que lo hizo barato.
+
+**Trampa 2: poner el `Aabb` a mano no alcanza.** `calculate_bounds` tiene *dos*
+queries: uno inserta el AABB donde falta, y **el otro lo sobrescribe cuando
+`Mesh3d` cambia** (`bevy_camera/src/visibility/mod.rs:568-575`) — y un chunk
+recién nacido siempre lo tiene cambiado. Así que Bevy pisaba el AABB del chunk
+con el de la malla índice, cuyas posiciones son todas cero: un punto en el
+origen, y el nivel entero culleado. La salida está en el mismo código:
+`NoAutoAabb`.
+
+**Y así es como se vio.** Con el nivel culleado, la foto normal **se veía bien**:
+el terreno está teñido del verde de la raíz, así que a 45-64 m el pasto ausente y
+el suelo son casi del mismo color. Lo delató `grass-view=medir` en una línea —
+`a3 = 0,0%`, la banda al 8,9%—. Sin esa vista, este bug entraba al repositorio.
+
+**Lo que costó, contado:** *(a)* el nivel 3 pasa de **6,41 MB a 0,98 MB** — 28
+mallas de 1766 briznas contra una malla índice (0,23 MB) más el buffer de
+registros (0,75 MB). **6,5×**, dentro del 6-8,5× que el plan estimó. La cobertura
+queda igual dentro del punto: 96,4% contra 97,4% en la banda de 45-64 m, y la
+diferencia es que el hash pasó a salir de la posición en vez del atributo, así
+que la ley `1/d` ralea otras briznas.
+
+**Dos cosas quedan pendientes y conviene decirlas ahora:**
+
+- La malla índice **conserva los atributos dummy** (posición, uv, uv1 en cero)
+  porque quitarlos cambia los shader defs del pipeline y el fragment es
+  compartido con los niveles horneados. Son 0,23 de los 0,98 MB: recortarlos
+  llevaría el ahorro a ~8×.
+- El horneado inicial dio **2,31 ms por chunk de media** contra los 5,53 medidos
+  antes, pero **la comparación no es limpia**: entre medio cambió la densidad y
+  la media mezcla chunks grabados con horneados. Cuando los cuatro niveles estén
+  convertidos se vuelve a medir.
+
+#### Y el medidor mentía sobre la memoria
+
+`SceneCensus` sumaba `vertex_bytes` **por entidad**. Con una malla por chunk eso
+era correcto; con una malla índice compartida por diez chunks, contaba diez
+copias de algo que existe una vez — o sea que el ahorro entero de este paso era
+invisible para el instrumento que tenía que medirlo. Corregido a **por malla
+única**; los triángulos siguen por entidad, porque ésos sí se dibujan tantas
+veces como instancias haya.
+
+Queda una ceguera **declarada**: el inventario cuenta mallas, no
+`ShaderBuffer`s. La memoria que este paso mueve de la malla al buffer no aparece
+ahí, y por eso el buffer se loguea aparte en cada corrida. Cuando los cuatro
+niveles estén convertidos, el inventario tiene que aprender a verlo o va a
+declarar una caída que es en parte mudanza.
+
+### El plan original del Paso 2 *(el desbloqueo grande)*
 
 Los datos por brizna en un `ShaderBuffer` —**ése es el nombre en 0.19**, no
 `ShaderStorageBuffer`, que es de una versión vieja— leído vía `#[storage]` en
@@ -596,6 +665,15 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
     cobertura de la banda más lejana — 99,8% → 86,8%, sin que nada en el código
     lo dijera. Toda primitiva que descarta fragmentos tiene una huella menor que
     su geometría, y la derivación de densidad lee la geometría.
+12. **Un medidor que se escribió para una técnica deja de medir cuando la
+    técnica cambia.** `vertex_bytes` por entidad era correcto mientras cada chunk
+    tuviera su malla; con una malla compartida contaba diez copias de una. El
+    instrumento no falló: siguió dando un número creíble del mundo anterior.
+13. **Poner el AABB a mano no alcanza si algo lo puede pisar.** El plan decía
+    "insertarlo" y era la mitad: `calculate_bounds` lo sobrescribe en cuanto
+    `Mesh3d` cambia. Verificar una API leyendo su firma no es lo mismo que leer
+    su cuerpo.
+
 
 
 ---

@@ -10,9 +10,12 @@
 //! ([`BladeShape`]) and density falls as `1/d`, a floor rather than a recipe.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::camera::primitives::Aabb;
+use bevy::camera::visibility::NoAutoAabb;
+use bevy::mesh::{Indices, MeshTag, PrimitiveTopology};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use bevy::render::storage::ShaderBuffer;
 
 use crate::visuals::grass_cover;
 use crate::visuals::grass_debug;
@@ -391,6 +394,54 @@ const BLADE_LEAN: f32 = 0.27;
 pub(super) const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.093, 0.147, 0.031);
 const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.340, 0.622, 0.089);
 
+/// El nivel cuyas briznas son **registros** y no geometría.
+///
+/// Uno solo mientras el Paso 2 es un spike: el de las cartas, que ya era casi un
+/// vertex pull —sus cuatro vértices nacen en el mismo punto y el shader los
+/// abre— así que es donde el cambio se verifica con menos piezas móviles. Los
+/// otros tres siguen horneando, y conviven porque lo que los separa es un número
+/// del uniform (`record_stride`), no una variante de pipeline.
+const RECORDED_RING: usize = 3;
+
+/// Un registro por brizna, en el orden que `BladeRecord` declara en el shader.
+/// **Las dos definiciones son la misma cosa y no hay nada que las ate**, así que
+/// se tocan juntas.
+fn blade_record(xz: Vec2, ground_y: f32, packed: f32) -> [f32; 4] {
+    [xz.x, xz.y, ground_y, packed]
+}
+
+/// Los casilleros del buffer: qué chunk vive en cuál.
+///
+/// Stride fijo, que es lo que vuelve trivial esta pieza. Como todos los chunks
+/// de un nivel tienen **exactamente la misma cantidad de briznas**
+/// —`blades_per_chunk` depende del nivel y de las perillas, no de la celda— el
+/// casillero es un índice y no un rango, y no hace falta un allocator con
+/// fragmentación. Ver `BOTWGrass.md` → Paso 2.
+#[derive(Default)]
+struct SlotBook {
+    free: Vec<u32>,
+    next: u32,
+}
+
+impl SlotBook {
+    fn take(&mut self) -> u32 {
+        self.free.pop().unwrap_or_else(|| {
+            let slot = self.next;
+            self.next += 1;
+            slot
+        })
+    }
+
+    fn give_back(&mut self, slot: u32) {
+        self.free.push(slot);
+    }
+
+    fn clear(&mut self) {
+        self.free.clear();
+        self.next = 0;
+    }
+}
+
 /// One baked chunk of the meadow: a single mesh holding all its blades.
 #[derive(Component)]
 pub(super) struct GrassChunk;
@@ -414,6 +465,25 @@ pub(super) struct GrassField {
     material: Handle<GrassMaterial>,
     card_material: Handle<GrassMaterial>,
     live: HashMap<ChunkKey, Entity>,
+    /// La malla índice del nivel que ya no hornea, y el buffer de sus registros.
+    /// Se rehacen cuando cambia cuántas briznas lleva un chunk, o sea cuando se
+    /// mueve una perilla.
+    index_mesh: Option<Handle<Mesh>>,
+    records: Handle<ShaderBuffer>,
+    record_data: Vec<u8>,
+    slots: SlotBook,
+    chunk_slot: HashMap<ChunkKey, u32>,
+    stride: u32,
+}
+
+impl GrassField {
+    /// Suelta el casillero de un chunk que se va. Sin esto el buffer sólo crece:
+    /// la grilla rueda todo el tiempo, y cada chunk nuevo pediría uno nuevo.
+    fn release(&mut self, key: &ChunkKey) {
+        if let Some(slot) = self.chunk_slot.remove(key) {
+            self.slots.give_back(slot);
+        }
+    }
 }
 
 /// Triángulos que la pradera declara a la escena, para `perf::budget`.
@@ -574,16 +644,88 @@ pub(super) fn reset_meadow(mut field: ResMut<GrassField>) {
 pub(super) fn init_meadow_material(
     mut commands: Commands,
     mut materials: ResMut<Assets<GrassMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
+    // Un registro de relleno: los niveles que todavía hornean no lo leen, pero
+    // el binding no es opcional y un buffer vacío no es un binding válido.
+    let records = buffers.add(ShaderBuffer::new(
+        &[0_u8; RECORD_BYTES],
+        RenderAssetUsages::RENDER_WORLD,
+    ));
+    let mut plain = grass_material();
+    plain.extension.blade_records = records.clone();
     let mut card = grass_material();
+    card.extension.blade_records = records.clone();
     // El umbral no importa —el shader ya descartó con `discard` y lo que queda
     // sale opaco—; lo que compra es que Bevy no trate el draw como opaco.
     card.base.alpha_mode = AlphaMode::Mask(0.5);
     commands.insert_resource(GrassField {
-        material: materials.add(grass_material()),
+        material: materials.add(plain),
         card_material: materials.add(card),
         live: HashMap::default(),
+        index_mesh: None,
+        records,
+        record_data: Vec::new(),
+        slots: SlotBook::default(),
+        chunk_slot: HashMap::default(),
+        stride: 0,
     });
+}
+
+/// Cuánto pesa un registro: cuatro `f32`.
+const RECORD_BYTES: usize = 16;
+
+/// Copia los registros de un chunk a su casillero del buffer en CPU.
+///
+/// El buffer crece hasta el máximo de casilleros que la grilla llegó a pedir y
+/// no se encoge: rodar la grilla los recicla, así que la marca de agua se
+/// estabiliza en cuanto el jugador dio una vuelta.
+fn write_records(field: &mut GrassField, slot: u32, records: &[[f32; 4]]) {
+    let stride = field.stride as usize;
+    let needed = (slot as usize + 1) * stride * RECORD_BYTES;
+    if field.record_data.len() < needed {
+        field.record_data.resize(needed, 0);
+    }
+    let start = slot as usize * stride * RECORD_BYTES;
+    for (index, record) in records.iter().take(stride).enumerate() {
+        let at = start + index * RECORD_BYTES;
+        for (lane, value) in record.iter().enumerate() {
+            field.record_data[at + lane * 4..at + lane * 4 + 4]
+                .copy_from_slice(&value.to_le_bytes());
+        }
+    }
+}
+
+/// Sube al GPU lo que el horneado dejó escrito, y sólo cuando cambió.
+///
+/// Separado del rodado porque `Assets<ShaderBuffer>` es otro recurso y porque una
+/// escritura por chunk sería una subida por chunk: acá es una por frame en que
+/// algo se movió.
+pub(super) fn upload_meadow_records(
+    field: Res<GrassField>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+) {
+    if field.record_data.is_empty() || !field.is_changed() {
+        return;
+    }
+    let Some(mut buffer) = buffers.get_mut(&field.records.clone()) else {
+        return;
+    };
+    buffer.data = Some(field.record_data.clone());
+    buffer.buffer_description.size = field.record_data.len() as u64;
+    info!(
+        "[grass] buffer: {} bytes, stride {}, {} chunks grabados",
+        field.record_data.len(),
+        field.stride,
+        field.chunk_slot.len(),
+    );
+}
+
+/// Si esta corrida planta este anillo. Con uno aislado la foto mide cuánta
+/// cobertura **aporta** ese nivel solo — lo que `medir` sobre el campo entero no
+/// puede decir, porque ahí cada píxel lo gana uno y el de atrás tapaba igual.
+fn planted_ring(perf: &crate::perf::PerfToggles, ring: usize) -> bool {
+    perf.grass_only_ring().is_none_or(|only| only == ring)
 }
 
 /// The meadow's material: PBR plus the grass extension.
@@ -612,6 +754,9 @@ fn grass_material() -> GrassMaterial {
                 ..default()
             },
             interaction_map: None,
+            // El campo lo llena `init_meadow_material`, que es quien tiene el
+            // `Assets<ShaderBuffer>`.
+            blade_records: Handle::default(),
         },
     }
 }
@@ -676,12 +821,24 @@ pub(super) fn roll_meadow_grid(
             commands.entity(*entity).despawn();
         }
         field.live.clear();
+        // La malla índice tiene tantos vértices como briznas lleva un chunk, así
+        // que una perilla que cambia esa cuenta la invalida entera — igual que
+        // invalida los chunks horneados.
+        field.chunk_slot.clear();
+        field.slots.clear();
+        field.index_mesh = None;
+        field.record_data.clear();
     }
 
-    // Con un anillo aislado la foto mide cuánta cobertura aporta ese nivel solo
-    // — lo que `medir` sobre el campo entero no puede decir, porque ahí cada
-    // píxel lo gana uno y el de atrás tapaba igual. Ver `GRASS_RINGS_STEPS`.
-    let planted = |ring: usize| perf.grass_only_ring().is_none_or(|only| only == ring);
+    // La malla índice del nivel que no hornea, creada una vez por configuración.
+    let recorded_blades = blades_per_chunk(RECORDED_RING, density, scale, reach_scale);
+    if field.index_mesh.is_none() && planted_ring(&perf, RECORDED_RING) && recorded_blades > 0 {
+        field.index_mesh = Some(meshes.add(ring_index_mesh(recorded_blades)));
+        field.stride = recorded_blades;
+        info!("[grass] malla índice del nivel {RECORDED_RING}: {recorded_blades} briznas");
+    }
+
+    let planted = |ring: usize| planted_ring(&perf, ring);
 
     let wanted: HashSet<ChunkKey> = RINGS
         .iter()
@@ -707,13 +864,18 @@ pub(super) fn roll_meadow_grid(
         })
         .collect();
 
+    let mut dropped: Vec<ChunkKey> = Vec::new();
     field.live.retain(|key, entity| {
         let keep = keep_set.contains(key);
         if !keep {
             commands.entity(*entity).despawn();
+            dropped.push(*key);
         }
         keep
     });
+    for key in dropped {
+        field.release(&key);
+    }
 
     // An empty grid is being filled, not rolled: bake it whole rather than
     // letting the meadow grow in around the player over several seconds.
@@ -747,17 +909,49 @@ pub(super) fn roll_meadow_grid(
                 ^ key.cell.y.cast_unsigned().wrapping_mul(0x85eb_ca6b)
                 ^ ring_salt.wrapping_mul(0xc2b2_ae35),
         );
-        let mesh = build_chunk_mesh(
-            &ChunkSpec {
-                centre: cell_centre(key.cell, ring.chunk_m),
-                chunk_m: ring.chunk_m,
-                count: blades_per_chunk(key.ring, density, scale, reach_scale),
-                shape,
-                ring_reach_m: ring_reach(key.ring, reach_scale),
-                seed,
-            },
-            Some(&terrain),
-        );
+        let centre = cell_centre(key.cell, ring.chunk_m);
+        let spec = ChunkSpec {
+            centre,
+            chunk_m: ring.chunk_m,
+            count: blades_per_chunk(key.ring, density, scale, reach_scale),
+            shape,
+            ring_reach_m: ring_reach(key.ring, reach_scale),
+            seed,
+        };
+
+        // **Los dos caminos.** El nivel grabado escribe registros y reusa la
+        // malla índice; los demás siguen horneando la suya. Lo que el chunk
+        // recibe cambia; lo que la escena ve de él, no.
+        let recorded = key.ring == RECORDED_RING && field.index_mesh.is_some();
+        let (mesh_handle, slot, aabb) = if recorded {
+            let slot = match field.chunk_slot.get(key) {
+                Some(slot) => *slot,
+                None => {
+                    let slot = field.slots.take();
+                    field.chunk_slot.insert(*key, slot);
+                    slot
+                }
+            };
+            let records = build_chunk_records(&spec, Some(&terrain));
+            write_records(&mut field, slot, &records);
+            (
+                field.index_mesh.clone().unwrap_or_default(),
+                slot,
+                // **El AABB va a mano.** Bevy lo deriva de las posiciones de la
+                // malla, y las de la malla índice son todas cero: sin esto el
+                // culling trabajaría sobre un punto en el origen y el nivel
+                // entero desaparecería salvo cuando ese punto estuviera en
+                // cuadro. Media celda de lado, y alto de sobra para la carta.
+                Some(Aabb::from_min_max(
+                    Vec3::new(-ring.chunk_m * 0.5, -1.0, -ring.chunk_m * 0.5)
+                        + Vec3::new(centre.x, 0.0, centre.y),
+                    Vec3::new(ring.chunk_m * 0.5, BLADE_HEIGHT_MAX + 1.0, ring.chunk_m * 0.5)
+                        + Vec3::new(centre.x, 0.0, centre.y),
+                )),
+            )
+        } else {
+            (meshes.add(build_chunk_mesh(&spec, Some(&terrain))), 0, None)
+        };
         let entity = commands
             .spawn((
                 DespawnOnExit(*scene.get()),
@@ -775,7 +969,8 @@ pub(super) fn roll_meadow_grid(
                 // watchdog de mallas pesadas es para assets, y el presupuesto de
                 // la pradera se cobra en `perf::budget`.
                 crate::visuals::budget::BakedByDesign,
-                Mesh3d(meshes.add(mesh)),
+                Mesh3d(mesh_handle),
+                MeshTag(slot),
                 MeshMaterial3d(if shape.faces_camera() {
                     field.card_material.clone()
                 } else {
@@ -794,6 +989,9 @@ pub(super) fn roll_meadow_grid(
                 Transform::default(),
             ))
             .id();
+        if let Some(aabb) = aabb {
+            commands.entity(entity).insert((aabb, NoAutoAabb));
+        }
         field.live.insert(*key, entity);
     }
     if !missing.is_empty() {
@@ -824,8 +1022,8 @@ pub(super) fn roll_meadow_grid(
 /// before their chunk disappears.
 ///
 /// Dos materiales para toda la pradera significa **dos** escrituras de uniform
-/// por frame, no una por chunk — y las dos con el mismo valor, porque lo único
-/// que los separa es el modo de alfa.
+/// por frame, no una por chunk. Casi el mismo valor: lo que los separa es el modo
+/// de alfa y el `record_stride`.
 pub(super) fn track_meadow_focus(
     field: Res<GrassField>,
     mut materials: ResMut<Assets<GrassMaterial>>,
@@ -838,9 +1036,30 @@ pub(super) fn track_meadow_focus(
         return;
     };
     let data = meadow_uniform(&camera, sun.as_deref().map(|sun| &**sun), &perf, &time);
-    for handle in [&field.material, &field.card_material] {
+    // **El stride sólo va al material del nivel grabado.** Es lo que le dice al
+    // vertex shader que lea el buffer en vez de los atributos, así que mandárselo
+    // al material equivocado deja a ese nivel leyendo registros que no son suyos
+    // — y no mandárselo a ninguno deja al nivel grabado leyendo atributos que
+    // están todos en cero, que es cómo desapareció la primera vez.
+    let recorded_uses_cards = shape_for_ring(
+        RECORDED_RING,
+        reference_scale(),
+        perf.grass_reach_scale(),
+    )
+    .faces_camera();
+    debug_assert!(
+        recorded_uses_cards,
+        "el nivel grabado dejó de ser carta: su stride está yendo al material equivocado",
+    );
+    for (handle, stride) in [
+        (&field.material, 0),
+        (&field.card_material, field.stride),
+    ] {
         if let Some(mut material) = materials.get_mut(handle) {
-            material.extension.grass_data = data;
+            material.extension.grass_data = GrassUniform {
+                record_stride: stride,
+                ..data
+            };
         }
     }
 }
@@ -882,6 +1101,7 @@ fn meadow_uniform(
         *colour = Vec4::from(grass_debug::slot_color(slot).to_f32_array());
     }
     data.growth_sink = GROWTH_SINK_M;
+    data.blade_root_sink = BLADE_ROOT_SINK;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs
     // one uniform write a frame.
@@ -938,6 +1158,81 @@ struct ChunkSpec {
     shape: BladeShape,
     ring_reach_m: f32,
     seed: u32,
+}
+
+/// La malla **índice** de un nivel: la comparten todos sus chunks.
+///
+/// No lleva posiciones útiles — la posición sale del registro— pero sí los cuatro
+/// atributos, y eso no es descuido: los shader defs del pipeline salen de qué
+/// atributos tiene la malla, y quitarlos dejaría a `VertexOutput` sin `uv`
+/// mientras el fragment —compartido con los niveles horneados— los usa.
+///
+/// **El ahorro no está en el vértice sino en cuántas veces existe.** Un chunk
+/// horneado paga sus 136 B por hoja; acá los paga *el nivel entero* una vez, y
+/// cada chunk agrega 16 B por brizna en el buffer.
+///
+/// El batching automático de Bevy exige el **mismo `Handle<Mesh>`**, y por eso
+/// esto es una malla por nivel y no una por chunk: es lo único que hace que 12
+/// chunks se dibujen juntos.
+fn ring_index_mesh(blades: u32) -> Mesh {
+    let vertices = blades as usize * 4;
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; vertices]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32; 2]; vertices]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.0_f32; 2]; vertices]);
+    let mut indices: Vec<u32> = Vec::with_capacity(blades as usize * 6);
+    for blade in 0..blades {
+        let first = blade * 4;
+        // El mismo orden de esquinas que hornea `BladeShape::Card`, porque el
+        // vertex shader deduce el lado y la altura de `vertex_index % 4`.
+        indices.extend_from_slice(&[first, first + 1, first + 2]);
+        indices.extend_from_slice(&[first, first + 2, first + 3]);
+    }
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// Los registros de un chunk, en el orden en que el shader los indexa.
+///
+/// Es el mismo sorteo que [`build_chunk_mesh`] —misma semilla, mismo hash, mismo
+/// filtro por cobertura— porque lo que cambia es **dónde termina el dato**, no
+/// qué brizna nace. Lo que no viaja es la geometría: el yaw y el lean no le
+/// sirven a una carta, que se abre contra la cámara.
+///
+/// **Las briznas filtradas no se saltan: se emiten con altura cero.** El
+/// casillero de un chunk es un rango de stride fijo, así que saltear una dejaría
+/// a todas las siguientes corridas de lugar; con altura cero, el vertex shader
+/// las colapsa y no cuestan un fragmento.
+fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Vec<[f32; 4]> {
+    let ChunkSpec {
+        centre,
+        chunk_m,
+        count,
+        ring_reach_m,
+        seed,
+        ..
+    } = *spec;
+    let mut records = Vec::with_capacity(count as usize);
+    for blade in 0..count {
+        let hash = hash_u32(seed ^ blade.wrapping_mul(0x0019_6f3d));
+        let u1 = hash_unit(hash);
+        let u2 = hash_unit(hash ^ 0x1234_5678);
+        let u4 = hash_unit(hash ^ 0xdead_beef);
+
+        let xz = centre + Vec2::new(u1 - 0.5, u2 - 0.5) * chunk_m;
+        let ground = terrain.and_then(|t| t.height_at(xz)).unwrap_or(0.0);
+        let slope = terrain.and_then(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
+        let kind = terrain
+            .and_then(|t| t.kind_at(xz))
+            .unwrap_or(crate::world::TerrainKind::Soil);
+        let cover = grass_cover::coverage(kind, slope);
+        let height = (BLADE_HEIGHT_MIN + u4 * (BLADE_HEIGHT_MAX - BLADE_HEIGHT_MIN)) * cover;
+        records.push(blade_record(xz, ground, ring_reach_m + height));
+    }
+    records
 }
 
 /// Bake `count` blades into one mesh, in world space, around `centre`.

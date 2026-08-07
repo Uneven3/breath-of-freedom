@@ -67,6 +67,8 @@ struct GrassUniform {
     ring_cards_a: vec4<f32>,
     ring_cards_b: vec4<f32>,
     card_half_width: f32,
+    record_stride: u32,
+    blade_root_sink: f32,
     ring_colors: array<vec4<f32>, 8>,
 }
 
@@ -453,9 +455,62 @@ fn blade_normal(side: f32, world_xz: vec2<f32>) -> vec3<f32> {
     return normalize(vec3<f32>(0.0, 1.0, 0.0) + across * side * 0.18);
 }
 
+/// El vértice que este material lee, declarado acá y no importado.
+///
+/// Es el `Vertex` de `bevy_pbr::forward_io` **más `vertex_index`**, que allá sólo
+/// existe bajo `#ifdef MORPH_TARGETS` (`forward_io.wgsl:26-28`) y que acá hace
+/// falta siempre: es lo que le dice a una brizna cuál de los registros del
+/// buffer le toca. Es un builtin, así que no consume un `location`.
+///
+/// **Y no lleva `normal`, aunque el de Bevy la declare en el location 1.** Ésa es
+/// la trampa de escribir el struct a mano: allá cada campo vive dentro de su
+/// `#ifdef`, así que el struct se encoge solo hasta calzar con los atributos que
+/// la malla realmente tiene. Acá no hay nada que lo encoja, y la pradera **no
+/// hornea normales** —la suya es +Y, calculada— así que declararla pide a la
+/// etapa anterior un `Float32x3` que nadie provee y el pipeline no compila. El
+/// error de validación de wgpu lo dice con el número de location, que es lo
+/// único que hizo esto barato de encontrar.
+struct GrassVertex {
+    @builtin(instance_index) instance_index: u32,
+    @builtin(vertex_index) vertex_index: u32,
+    @location(0) position: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) uv_b: vec2<f32>,
+}
+
+/// Un registro por primitiva: dónde nace y qué forma tiene.
+///
+/// **16 bytes contra los 136 que pesa una hoja horneada** (cuatro vértices de 28
+/// B más seis índices de 4). Es el canje del Paso 2 de `BOTWGrass.md`: la brizna
+/// deja de ser geometría y pasa a ser un dato, y la malla se convierte en un
+/// índice que todos los chunks del nivel comparten.
+/// `xy` es la base en XZ de mundo, `z` la altura del terreno debajo, y `w` el
+/// alcance del anillo en la parte entera con la altura de la brizna en la
+/// fracción — el mismo empaquetado que viajaba en `uv1.y`. **El orden vive acá y
+/// en `blade_record` de `grass.rs`, y en ningún otro lado.**
+struct BladeRecord {
+    base_and_shape: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(103)
+var<storage, read> blade_records: array<BladeRecord>;
+
+/// Cuántos vértices gasta una carta. Cuatro, como la hoja horneada.
+const VERTICES_PER_CARD: u32 = 4u;
+
+/// El hash de una brizna a partir de dónde está parada.
+///
+/// **De la posición y no del índice del registro**, y no es un detalle: los
+/// casilleros se reasignan cuando la grilla rueda, así que un hash atado al
+/// casillero cambiaría el umbral de crecimiento de una brizna mientras el
+/// jugador camina — que es el artefacto que todo este sistema evita.
+fn hash_position(world_xz: vec2<f32>) -> f32 {
+    return fract(sin(dot(world_xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
 #ifndef PREPASS_PIPELINE
 @vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
+fn vertex(vertex: GrassVertex) -> VertexOutput {
     var out: VertexOutput;
 
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
@@ -464,13 +519,47 @@ fn vertex(vertex: Vertex) -> VertexOutput {
         vec4<f32>(vertex.position, 1.0),
     );
 
-    let height_factor = blade_height_factor(vertex.uv);
-    let blade_hash = abs(vertex.uv_b.x);
-    let side = sign(vertex.uv_b.x);
+    var height_factor = blade_height_factor(vertex.uv);
+    var blade_hash = abs(vertex.uv_b.x);
+    var side = sign(vertex.uv_b.x);
     // `uv1.y` lleva dos números en uno: el alcance del anillo en metros enteros
     // y la altura de la brizna en la fracción.
-    let ring_reach = floor(vertex.uv_b.y);
-    let blade_height = fract(vertex.uv_b.y);
+    var ring_reach = floor(vertex.uv_b.y);
+    var blade_height = fract(vertex.uv_b.y);
+
+    // **El nivel que se lee del buffer.** Su malla es un índice compartido: sus
+    // vértices no llevan posición útil, sólo su lugar dentro de la primitiva. El
+    // registro se localiza con el `MeshTag` del chunk —su casillero dentro del
+    // nivel, con stride fijo— más cuál de las primitivas de ese chunk es ésta.
+    if grass_data.record_stride > 0u {
+        let slot = mesh_functions::get_tag(vertex.instance_index);
+        let record = blade_records[
+            slot * grass_data.record_stride + vertex.vertex_index / VERTICES_PER_CARD
+        ].base_and_shape;
+        let corner = vertex.vertex_index % VERTICES_PER_CARD;
+
+        ring_reach = floor(record.w);
+        blade_height = fract(record.w);
+        blade_hash = hash_position(record.xy);
+        // Los cuatro vértices nacen en el centro de la base y el shader los abre;
+        // sólo hace falta saber de qué esquina es éste. El orden es el mismo que
+        // hornea `BladeShape::Card`: abajo-izq, abajo-der, arriba-der, arriba-izq.
+        side = select(-1.0, 1.0, corner == 1u || corner == 2u);
+        height_factor = select(0.0, 1.0, corner >= 2u);
+        // La base, hundida como la hornea el otro camino: en el suelo mismo la
+        // primitiva deja ver tierra donde nace.
+        world_position = vec4<f32>(
+            record.x,
+            record.z - grass_data.blade_root_sink,
+            record.y,
+            1.0,
+        );
+        out.uv = vec2<f32>(record.z, height_factor);
+        out.uv_b = vec2<f32>(side * blade_hash, record.w);
+    } else {
+        out.uv = vertex.uv;
+        out.uv_b = vertex.uv_b;
+    }
 
     // **La carta se abre acá.** Sus cuatro vértices vienen horneados en el mismo
     // punto —el centro de la base— y se separan contra el eje derecho de la
@@ -530,19 +619,16 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     // que el rasterizador proyecta.
     out.position = position_world_to_clip(world_position.xyz);
     out.world_normal = blade_normal(side, world_position.xz);
-    out.uv = vertex.uv;
-    out.uv_b = vertex.uv_b;
     // **La carta cambia lo que lleva en `uv_b.x`**: en vez del hash con el lado
     // en el signo, el lado a secas. Interpolado a lo ancho da −1 en un borde y
     // +1 en el otro, que es la coordenada que la silueta necesita y que de otro
     // modo no existiría — el hash es un número distinto por primitiva, así que
     // no se puede normalizar en el fragment sin mandarlo aparte.
     //
-    // El hash ya hizo su trabajo acá arriba (el umbral de crecimiento lo lee del
-    // atributo), así que no se pierde nada más que la vista `brizna` sobre las
-    // cartas, que pasa a ser un degradado a lo ancho.
+    // El hash ya hizo su trabajo acá arriba, así que no se pierde nada más que la
+    // vista `brizna` sobre las cartas, que pasa a ser un degradado a lo ancho.
     if ring_is_card(ring_reach) {
-        out.uv_b = vec2<f32>(side, vertex.uv_b.y);
+        out.uv_b = vec2<f32>(side, out.uv_b.y);
     }
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = vertex.instance_index;

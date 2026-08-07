@@ -122,6 +122,8 @@ impl Plugin for VisualsPlugin {
                 // walks a blade — the chunks are baked meshes.
                 (
                     grass::roll_meadow_grid,
+                    // Después de rodar: sube lo que el rodado dejó escrito.
+                    grass::upload_meadow_records,
                     grass::track_meadow_focus,
                     grass_debug::announce_grass_debug_view,
                 )

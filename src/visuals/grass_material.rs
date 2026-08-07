@@ -6,6 +6,7 @@
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 use crate::visuals::material_registry::InstrumentedMaterialAppExt;
@@ -17,29 +18,27 @@ pub struct GrassUniform {
     pub sun_direction: Vec3,
     pub sss_amount: f32,
     pub time: f32,
-    /// Where the camera stands, in world XZ. A chunk is always culled *after*
-    /// its blades have already shrunk to nothing.
+    /// Dónde está la cámara en XZ: un chunk se descarta *después* de que sus
+    /// briznas ya encogieron a nada.
     pub focus_xz: Vec2,
-    /// How many metres **one** blade takes to grow to full height. Short — one
-    /// blade growing is invisible, a whole band growing at once is not.
+    /// Cuántos metros tarda **una** brizna en crecer entera. Corto: una brizna
+    /// creciendo es invisible, una banda entera creciendo a la vez no.
     pub growth_ramp: f32,
-    /// Over how many metres the blades' thresholds are spread by their hash.
-    /// Long — this is what turns a wave travelling with the player into a field
-    /// that thins with distance.
+    /// En cuántos metros se reparten los umbrales por su hash. Largo: es lo que
+    /// convierte una ola que viaja con el jugador en un raleo con la distancia.
     pub growth_spread: f32,
-    /// How far **below** the ground a blade collapses to. Not zero: coplanar
-    /// with the terrain it z-fights, which on screen is a flicker.
+    /// Hasta cuánto **bajo** el suelo colapsa una brizna. No cero: coplanar con
+    /// el terreno hace z-fighting, que en pantalla es un parpadeo.
     pub growth_sink: f32,
     /// Dirección del viento en XZ y cuánto viaja la punta a ráfaga plena.
     pub wind_dir: Vec2,
     pub wind_strength: f32,
     pub wind_speed: f32,
-    /// How much a blade's colour may drift from the shared gradient. Without it
-    /// a field of one green reads as carpet, however dense it is.
+    /// Cuánto puede apartarse el color de una brizna del degradado común. Sin
+    /// esto, un campo de un solo verde se lee como alfombra por densa que sea.
     pub tint_variation: f32,
-    /// How far the root's colour holds before the tip's takes over: **0 es una
-    /// rampa lineal y 1 su cuadrado**. Lineal el campo caía en el punto medio de
-    /// sus dos colores; el porqué está en `BOTWGrass.md`.
+    /// Cuánto aguanta el color de la raíz antes de ceder al de la punta: **0 es
+    /// rampa lineal y 1 su cuadrado**. El porqué, en `BOTWGrass.md`.
     pub gradient_bias: f32,
     /// Desde qué distancia ralea la pradera. Ver `GROWTH_START_M`.
     pub growth_start: f32,
@@ -47,21 +46,27 @@ pub struct GrassUniform {
     pub debug_view: u32,
     /// Ancho de brizna en metros; la vista `subpixel` divide por él.
     pub blade_width: f32,
-    /// Los alcances de los anillos, para que el shader deduzca el borde interno
-    /// del anillo de cada brizna y ancle ahí su ley `1/d`. Ver `ring_inner`.
+    /// Los alcances de los anillos: con ellos el shader ancla la ley `1/d` en el
+    /// borde interno del anillo de cada brizna. Ver `ring_inner`.
     pub ring_reaches_a: Vec4,
     pub ring_reaches_b: Vec4,
-    /// El tamaño de chunk de cada anillo, en el orden de los alcances: con él el
-    /// fragment deduce de qué celda —o sea de qué draw— salió una brizna.
+    /// El tamaño de chunk de cada anillo: con él el fragment deduce de qué celda
+    /// —o sea de qué draw— salió una brizna.
     pub ring_chunks_a: Vec4,
     pub ring_chunks_b: Vec4,
     /// Qué anillos son cartas: 1 si su primitiva se abre mirando a la cámara.
-    /// Por anillo y no como shader def, porque toda la pradera comparte un
-    /// material y una variante por forma duplicaría sus draws.
+    /// Por anillo y no como shader def, que duplicaría los draws.
     pub ring_cards_a: Vec4,
     pub ring_cards_b: Vec4,
     /// Medio ancho de una carta, en metros.
     pub card_half_width: f32,
+    /// Registros del buffer por chunk, o **cero si sus briznas siguen
+    /// horneadas**: es lo que separa las dos formas de plantar que conviven en
+    /// el Paso 2 (`BOTWGrass.md`).
+    pub record_stride: u32,
+    /// Cuánto se hunde la base bajo el suelo. Lo necesita el camino de
+    /// registros, donde la posición ya no viene horneada.
+    pub blade_root_sink: f32,
     /// La paleta de diagnóstico, un color por anillo.
     pub ring_colors: [Vec4; crate::visuals::grass_debug::PALETTE_SLOTS],
 }
@@ -99,6 +104,8 @@ impl Default for GrassUniform {
             ring_cards_a: Vec4::ZERO,
             ring_cards_b: Vec4::ZERO,
             card_half_width: 0.0,
+            record_stride: 0,
+            blade_root_sink: 0.0,
             ring_colors: [Vec4::ONE; crate::visuals::grass_debug::PALETTE_SLOTS],
         }
     }
@@ -111,6 +118,10 @@ pub struct GrassExtension {
     #[texture(101)]
     #[sampler(102)]
     pub interaction_map: Option<Handle<Image>>,
+    /// Un registro por brizna del nivel que ya no hornea. **No es opcional
+    /// aunque el nivel no lo use**: el macro no pasa por `Option`.
+    #[storage(103, read_only)]
+    pub blade_records: Handle<ShaderBuffer>,
 }
 
 impl MaterialExtension for GrassExtension {

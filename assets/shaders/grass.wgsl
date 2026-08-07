@@ -67,8 +67,14 @@ struct GrassUniform {
     ring_cards_a: vec4<f32>,
     ring_cards_b: vec4<f32>,
     card_half_width: f32,
-    record_stride: u32,
     blade_root_sink: f32,
+    blade_lean: f32,
+    blade_waist: f32,
+    /// `x` = registros por chunk, `y` = forma. **En un `vec4` y no como dos
+    /// escalares sueltos**: así su alineación es la del bloque de 16 bytes y no
+    /// depende de cuántos `f32` los precedan, que es donde un campo agregado al
+    /// final corre en silencio todo lo que viene después.
+    record_layout: vec4<u32>,
     ring_colors: array<vec4<f32>, 8>,
 }
 
@@ -457,25 +463,23 @@ fn blade_normal(side: f32, world_xz: vec2<f32>) -> vec3<f32> {
 
 /// El vértice que este material lee, declarado acá y no importado.
 ///
-/// Es el `Vertex` de `bevy_pbr::forward_io` **más `vertex_index`**, que allá sólo
-/// existe bajo `#ifdef MORPH_TARGETS` (`forward_io.wgsl:26-28`) y que acá hace
-/// falta siempre: es lo que le dice a una brizna cuál de los registros del
-/// buffer le toca. Es un builtin, así que no consume un `location`.
+/// **Dos builtins y una posición que nadie lee.** `vertex_index` es lo único que
+/// este shader necesita de la malla —cuál de los registros le toca a esta brizna
+/// y cuál de sus esquinas es este vértice— y en `bevy_pbr::forward_io` sólo
+/// existe bajo `#ifdef MORPH_TARGETS` (`forward_io.wgsl:26-28`), así que el
+/// struct se declara acá.
 ///
-/// **Y no lleva `normal`, aunque el de Bevy la declare en el location 1.** Ésa es
-/// la trampa de escribir el struct a mano: allá cada campo vive dentro de su
-/// `#ifdef`, así que el struct se encoge solo hasta calzar con los atributos que
-/// la malla realmente tiene. Acá no hay nada que lo encoja, y la pradera **no
-/// hornea normales** —la suya es +Y, calculada— así que declararla pide a la
-/// etapa anterior un `Float32x3` que nadie provee y el pipeline no compila. El
-/// error de validación de wgpu lo dice con el número de location, que es lo
-/// único que hizo esto barato de encontrar.
+/// **Y lleva sólo los atributos que la malla índice tiene.** Ésa es la trampa de
+/// escribirlo a mano: en el de Bevy cada campo vive dentro de su `#ifdef` y el
+/// struct se encoge solo hasta calzar con la malla. Acá no hay nada que lo
+/// encoja, así que declarar un atributo de más —`normal`, en el location 1— pide
+/// a la etapa anterior un `Float32x3` que nadie provee, y el pipeline no
+/// compila. wgpu lo dice con el número de location, que es lo único que hizo
+/// esto barato de encontrar.
 struct GrassVertex {
     @builtin(instance_index) instance_index: u32,
     @builtin(vertex_index) vertex_index: u32,
     @location(0) position: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) uv_b: vec2<f32>,
 }
 
 /// Un registro por primitiva: dónde nace y qué forma tiene.
@@ -495,8 +499,15 @@ struct BladeRecord {
 @group(#{MATERIAL_BIND_GROUP}) @binding(103)
 var<storage, read> blade_records: array<BladeRecord>;
 
-/// Cuántos vértices gasta una carta. Cuatro, como la hoja horneada.
-const VERTICES_PER_CARD: u32 = 4u;
+/// Las tres formas, en el orden de `BladeShape` de `grass.rs`.
+const SHAPE_LEAF: u32 = 0u;
+const SHAPE_SPIKE: u32 = 1u;
+const SHAPE_CARD: u32 = 2u;
+
+/// Cuántos vértices reserva la malla índice por brizna, **para toda forma**. La
+/// púa usa tres y deja el cuarto sin referenciar; ver `VERTICES_PER_BLADE` en
+/// `grass_records.rs`, que es de donde sale este número y por qué es uno solo.
+const VERTICES_PER_BLADE: u32 = 4u;
 
 /// El hash de una brizna a partir de dónde está parada.
 ///
@@ -504,62 +515,152 @@ const VERTICES_PER_CARD: u32 = 4u;
 /// casilleros se reasignan cuando la grilla rueda, así que un hash atado al
 /// casillero cambiaría el umbral de crecimiento de una brizna mientras el
 /// jugador camina — que es el artefacto que todo este sistema evita.
-fn hash_position(world_xz: vec2<f32>) -> f32 {
-    return fract(sin(dot(world_xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+///
+/// `salt` da varios números independientes de la misma posición: la orientación
+/// y la inclinación salen de acá en vez de viajar en el registro, que es lo que
+/// lo mantiene en 16 bytes.
+///
+/// **Mezcla de enteros, no `fract(sin(...))`.** El truco del seno se degrada
+/// justamente donde este campo vive: con coordenadas de mundo de hasta ±160 m el
+/// argumento llega a los diez mil, y en `f32` el seno de eso pierde tantos bits
+/// que el resultado se agrupa en unos pocos valores. Medido *(a, 2026-08-07)*: el
+/// umbral de crecimiento sale de este hash, y con el seno la banda de 45-64 m
+/// caía al 44,8% donde debía dar 96%.
+fn hash_position(world_xz: vec2<f32>, salt: u32) -> f32 {
+    // A milímetros, que es más fino que cualquier separación entre briznas y
+    // entra de sobra en un i32 para un mundo de 320 m.
+    let q = vec2<i32>(floor(world_xz * 1000.0));
+    var h = bitcast<u32>(q.x) * 0x9e3779b9u
+        ^ bitcast<u32>(q.y) * 0x85ebca6bu
+        ^ (salt + 1u) * 0xc2b2ae35u;
+    // Wang hash: cinco operaciones enteras y una avalancha decente.
+    h = (h ^ 61u) ^ (h >> 16u);
+    h = h + (h << 3u);
+    h = h ^ (h >> 4u);
+    h = h * 0x27d4eb2du;
+    h = h ^ (h >> 15u);
+    return f32(h & 0x00ffffffu) / f32(0x01000000u);
 }
+
+/// La geometría de una brizna, construida en el vertex shader.
+///
+/// **Esto es lo que antes se horneaba.** Los cuatro (o tres) vértices salen de un
+/// registro de 16 bytes más dos hashes de su posición; lo que la malla aporta es
+/// sólo cuál de ellos es éste. La forma es la misma que tenía
+/// `build_chunk_mesh`: la hoja termina en punta por los dos lados y lleva una
+/// fila de vértices en la cintura, que es lo que le permite arquearse.
+struct BladeVertex {
+    offset: vec3<f32>,
+    along: f32,
+    side: f32,
+}
+
+fn blade_vertex(shape: u32, corner: u32, height: f32, world_xz: vec2<f32>) -> BladeVertex {
+    // **Inicializados, no dados por cero.** WGSL no promete que un `var` sin
+    // inicializar valga cero, y las esquinas de la base no escriben `along`: una
+    // altura basura ahí manda el vértice a cualquier parte, que es un triángulo
+    // gigante cruzando el campo.
+    var out: BladeVertex;
+    out.offset = vec3<f32>(0.0, 0.0, 0.0);
+    out.along = 0.0;
+    out.side = -1.0;
+    if shape == SHAPE_CARD {
+        // La carta nace entera en el centro de la base; el shader la abre más
+        // abajo, contra el eje derecho de la cámara.
+        //
+        // **Las esquinas van en filas, no en ciclo**, y eso lo manda la malla
+        // índice: sus dos triángulos son `(0,1,2)` y `(1,3,2)`, que es la
+        // triangulación de una tira —abajo-izq, abajo-der, arriba-izq,
+        // arriba-der—. Numeradas en ciclo, el segundo triángulo no contiene al
+        // vértice 0 y **media carta no se dibuja**: medido *(a)*, la banda de
+        // 45-64 m se cayó de 97,4% a 45,0% sin que la forma se viera rota.
+        out.offset = vec3<f32>(0.0, 0.0, 0.0);
+        out.side = select(-1.0, 1.0, (corner & 1u) == 1u);
+        out.along = select(0.0, 1.0, corner >= 2u);
+        return out;
+    }
+
+    let yaw = hash_position(world_xz, 1u) * TAU;
+    let across = vec2<f32>(cos(yaw), sin(yaw)) * (grass_data.blade_width * 0.5);
+    // La inclinación va contra la perpendicular del ancho, para que las briznas
+    // no se caigan todas para el mismo lado.
+    let lean_amount = (hash_position(world_xz, 2u) - 0.5) * 2.0 * grass_data.blade_lean;
+    let lean = vec2<f32>(-sin(yaw), cos(yaw)) * lean_amount;
+    let tip = vec3<f32>(lean.x, height, lean.y);
+
+    if shape == SHAPE_SPIKE {
+        // Un triángulo: dos esquinas en la base y una punta.
+        if corner == 0u {
+            out.offset = vec3<f32>(-across.x, 0.0, -across.y);
+            out.side = -1.0;
+        } else if corner == 1u {
+            out.offset = vec3<f32>(across.x, 0.0, across.y);
+            out.side = 1.0;
+        } else {
+            out.offset = tip;
+            out.along = 1.0;
+            out.side = 1.0;
+        }
+        return out;
+    }
+
+    // La hoja: raíz hundida, dos vértices de cintura y punta.
+    let waist = tip * grass_data.blade_waist;
+    if corner == 0u {
+        out.offset = vec3<f32>(0.0, -grass_data.blade_root_sink, 0.0);
+        out.side = -1.0;
+    } else if corner == 1u {
+        out.offset = vec3<f32>(waist.x - across.x, waist.y, waist.z - across.y);
+        out.along = grass_data.blade_waist;
+        out.side = -1.0;
+    } else if corner == 2u {
+        out.offset = vec3<f32>(waist.x + across.x, waist.y, waist.z + across.y);
+        out.along = grass_data.blade_waist;
+        out.side = 1.0;
+    } else {
+        out.offset = tip;
+        out.along = 1.0;
+        out.side = 1.0;
+    }
+    return out;
+}
+
+const TAU: f32 = 6.2831853;
 
 #ifndef PREPASS_PIPELINE
 @vertex
 fn vertex(vertex: GrassVertex) -> VertexOutput {
     var out: VertexOutput;
 
-    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
-    var world_position = mesh_functions::mesh_position_local_to_world(
-        world_from_local,
-        vec4<f32>(vertex.position, 1.0),
+    // **Nada de esto viene de la malla.** Su único aporte es `vertex_index`: cuál
+    // de las primitivas del chunk es ésta y cuál de sus esquinas. Todo lo demás
+    // sale de un registro de 16 bytes que el chunk tiene en el buffer, ubicado
+    // por el `MeshTag` —su casillero dentro del nivel, con stride fijo—.
+    let slot = mesh_functions::get_tag(vertex.instance_index);
+    let record = blade_records[
+        slot * grass_data.record_layout.x + vertex.vertex_index / VERTICES_PER_BLADE
+    ].base_and_shape;
+    let corner = vertex.vertex_index % VERTICES_PER_BLADE;
+
+    // `uv1.y` llevaba dos números en uno y el registro los sigue llevando: el
+    // alcance del anillo en metros enteros y la altura de la brizna en la
+    // fracción.
+    let ring_reach = floor(record.w);
+    let blade_height = fract(record.w);
+    let blade_hash = hash_position(record.xy, 0u);
+
+    let built = blade_vertex(grass_data.record_layout.y, corner, blade_height, record.xy);
+    let side = built.side;
+    let height_factor = built.along;
+    // `record.z` es la altura del terreno: lo que `uv0.x` llevaba por vértice.
+    var world_position = vec4<f32>(
+        record.x + built.offset.x,
+        record.z + built.offset.y,
+        record.y + built.offset.z,
+        1.0,
     );
-
-    var height_factor = blade_height_factor(vertex.uv);
-    var blade_hash = abs(vertex.uv_b.x);
-    var side = sign(vertex.uv_b.x);
-    // `uv1.y` lleva dos números en uno: el alcance del anillo en metros enteros
-    // y la altura de la brizna en la fracción.
-    var ring_reach = floor(vertex.uv_b.y);
-    var blade_height = fract(vertex.uv_b.y);
-
-    // **El nivel que se lee del buffer.** Su malla es un índice compartido: sus
-    // vértices no llevan posición útil, sólo su lugar dentro de la primitiva. El
-    // registro se localiza con el `MeshTag` del chunk —su casillero dentro del
-    // nivel, con stride fijo— más cuál de las primitivas de ese chunk es ésta.
-    if grass_data.record_stride > 0u {
-        let slot = mesh_functions::get_tag(vertex.instance_index);
-        let record = blade_records[
-            slot * grass_data.record_stride + vertex.vertex_index / VERTICES_PER_CARD
-        ].base_and_shape;
-        let corner = vertex.vertex_index % VERTICES_PER_CARD;
-
-        ring_reach = floor(record.w);
-        blade_height = fract(record.w);
-        blade_hash = hash_position(record.xy);
-        // Los cuatro vértices nacen en el centro de la base y el shader los abre;
-        // sólo hace falta saber de qué esquina es éste. El orden es el mismo que
-        // hornea `BladeShape::Card`: abajo-izq, abajo-der, arriba-der, arriba-izq.
-        side = select(-1.0, 1.0, corner == 1u || corner == 2u);
-        height_factor = select(0.0, 1.0, corner >= 2u);
-        // La base, hundida como la hornea el otro camino: en el suelo mismo la
-        // primitiva deja ver tierra donde nace.
-        world_position = vec4<f32>(
-            record.x,
-            record.z - grass_data.blade_root_sink,
-            record.y,
-            1.0,
-        );
-        out.uv = vec2<f32>(record.z, height_factor);
-        out.uv_b = vec2<f32>(side * blade_hash, record.w);
-    } else {
-        out.uv = vertex.uv;
-        out.uv_b = vertex.uv_b;
-    }
+    out.uv = vec2<f32>(record.z, height_factor);
+    out.uv_b = vec2<f32>(side * blade_hash, record.w);
 
     // **La carta se abre acá.** Sus cuatro vértices vienen horneados en el mismo
     // punto —el centro de la base— y se separan contra el eje derecho de la
@@ -607,7 +708,9 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // sistema quería desde el principio: la brizna **brota del suelo** en vez de
     // aparecer aplastada sobre él. Emerge cuando el crecimiento pasa de
     // `sink / (altura + sink)`, o sea alrededor de un quinto de la rampa.
-    let ground_y = vertex.uv.x;
+    // La altura del terreno sale del registro, que es donde vive desde que el
+    // vértice dejó de llevarla.
+    let ground_y = record.z;
     world_position.y = mix(
         ground_y - grass_data.growth_sink,
         world_position.y,

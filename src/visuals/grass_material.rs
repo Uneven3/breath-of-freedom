@@ -60,13 +60,14 @@ pub struct GrassUniform {
     pub ring_cards_b: Vec4,
     /// Medio ancho de una carta, en metros.
     pub card_half_width: f32,
-    /// Registros del buffer por chunk, o **cero si sus briznas siguen
-    /// horneadas**: es lo que separa las dos formas de plantar que conviven en
-    /// el Paso 2 (`BOTWGrass.md`).
-    pub record_stride: u32,
-    /// Cuánto se hunde la base bajo el suelo. Lo necesita el camino de
-    /// registros, donde la posición ya no viene horneada.
+    /// Cuánto se hunde la base bajo el suelo, cuánto puede inclinarse la punta y
+    /// a qué altura está la cintura. Los necesita el vertex shader, que ahora
+    /// construye la brizna entera.
     pub blade_root_sink: f32,
+    pub blade_lean: f32,
+    pub blade_waist: f32,
+    /// `x` = registros por chunk de este nivel, `y` = su forma (`BladeShape`).
+    pub record_layout: UVec4,
     /// La paleta de diagnóstico, un color por anillo.
     pub ring_colors: [Vec4; crate::visuals::grass_debug::PALETTE_SLOTS],
 }
@@ -104,8 +105,10 @@ impl Default for GrassUniform {
             ring_cards_a: Vec4::ZERO,
             ring_cards_b: Vec4::ZERO,
             card_half_width: 0.0,
-            record_stride: 0,
             blade_root_sink: 0.0,
+            blade_lean: 0.0,
+            blade_waist: 0.0,
+            record_layout: UVec4::ZERO,
             ring_colors: [Vec4::ONE; crate::visuals::grass_debug::PALETTE_SLOTS],
         }
     }

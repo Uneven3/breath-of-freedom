@@ -26,6 +26,7 @@ pub(crate) mod grass;
 mod grass_cover;
 pub(crate) mod grass_debug;
 pub mod grass_material;
+mod grass_records;
 pub mod horse;
 pub(crate) mod material_registry;
 pub mod player;
@@ -69,6 +70,7 @@ impl Plugin for VisualsPlugin {
         // cápsulas y a todo lo demás en el inventario y en la vista de overdraw.
         app.add_instrumented_material::<StandardMaterial>();
         app.init_resource::<VisualCatalog>();
+        app.init_resource::<grass::MeadowRecordMemory>();
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content
         // (`crate::scene`), so they are built on entry and die on exit.

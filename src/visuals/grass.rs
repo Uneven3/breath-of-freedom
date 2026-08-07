@@ -1,23 +1,27 @@
-//! The grass meadow: a **rolling grid of baked chunks, centred on the camera**.
+//! La pradera: una **grilla rodante de chunks centrada en la cámara**.
 //!
-//! Pure presentation — no collider, no simulation meaning; the ground beneath
-//! already reports `Surface(Grass)` for footstep audio.
+//! Presentación pura — sin collider ni sentido de simulación; el suelo debajo ya
+//! reporta `Surface(Grass)` para el audio de pasos.
 //!
-//! Two decisions carry the module, both argued in `docs/BOTWGrass.md`: a chunk
-//! bakes its blades into **one mesh** (a blade is not an entity), and the field
-//! is a **neighbourhood, not a place** — rings around wherever the camera is, so
-//! the budget is *per view*. The unit is the two-triangle blade
-//! ([`BladeShape`]) and density falls as `1/d`, a floor rather than a recipe.
+//! Este módulo decide **qué se planta**: qué anillo, a qué densidad, con qué
+//! forma y en qué celdas. Cómo eso llega a la GPU lo decide
+//! [`super::grass_records`], desde que la brizna dejó de ser geometría y pasó a
+//! ser un registro (Paso 2 de `docs/BOTWGrass.md`).
+//!
+//! Dos decisiones cargan el diseño: una brizna **no es una entidad** —el ECS ve
+//! una por chunk— y el campo es un **vecindario, no un lugar**. La densidad cae
+//! como `1/d`, que es un piso y no una receta.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::NoAutoAabb;
-use bevy::mesh::{Indices, MeshTag, PrimitiveTopology};
+use bevy::mesh::MeshTag;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 
 use crate::visuals::grass_cover;
+use crate::visuals::grass_records::{RECORD_BYTES, RingRecords, blade_record, ring_index_mesh};
 use crate::visuals::grass_debug;
 use crate::visuals::grass_material::{GrassExtension, GrassMaterial, GrassUniform};
 use crate::world::TerrainAccess;
@@ -51,15 +55,9 @@ fn width_in_pixels(width_m: f32, distance_m: f32, scale: f32) -> f32 {
 
 /// Qué primitiva corresponde a esta distancia.
 ///
-/// **La decisión es el tamaño en pantalla, no un radio.** Un radio en metros
-/// describe una resolución concreta: los mismos 40 m que a 1080p dejan la brizna
-/// en 1,8 px, a 900p la dejan en 1,5. Con umbrales en píxeles la escalera se
-/// mueve sola con el viewport, que es lo que un LOD tiene que hacer.
-///
-/// Los dos umbrales son de ojo y se pueden discutir; lo que no se discute es la
-/// unidad. Medido el 2026-08-07: el 96,7% del campo se resuelve entero, así que
-/// ninguna de estas fronteras se esconde — cambiar de primitiva **se ve**, y por
-/// eso los umbrales son generosos.
+/// **La decisión es el tamaño en pantalla, no un radio**, y ésa es la parte que
+/// no se discute: un radio en metros describe una resolución, no un campo. Los
+/// dos umbrales sí son de ojo. El porqué, en `BOTWGrass.md`.
 fn shape_at(distance_m: f32, scale: f32) -> BladeShape {
     let pixels = width_in_pixels(BLADE_WIDTH, distance_m, scale);
     if pixels >= LEAF_MIN_PIXELS {
@@ -92,22 +90,17 @@ enum BladeShape {
     /// Three vertices, one triangle: two base corners and a single tip. The
     /// floor — a blade that no longer resolves does not need a waist.
     Spike,
-    /// Cuatro vértices, dos triángulos: una **carta opaca** del tamaño de un
-    /// matojo, que el vertex shader abre mirando a la cámara — sus cuatro
-    /// vértices se hornean en el centro de la base.
-    ///
-    /// Opaca y no con alfa recortado, que es la carta que `BOTWGrass.md`
-    /// descartó por la ley 3. El porqué y la referencia de escala, en el doc.
+    /// Dos triángulos del tamaño de un matojo que el vertex shader abre mirando
+    /// a la cámara, y que el fragment recorta en una silueta de puntas.
     Card,
 }
 
 impl BladeShape {
-    /// Vertices and triangles per blade. One place, because several is how the
-    /// budget quietly stops matching the mesh.
-    const fn vertices(self) -> usize {
+    /// Triángulos por brizna, en el tipo que la malla índice usa para contar.
+    const fn triangle_count(self) -> u32 {
         match self {
-            Self::Leaf | Self::Card => 4,
-            Self::Spike => 3,
+            Self::Leaf | Self::Card => 2,
+            Self::Spike => 1,
         }
     }
 
@@ -135,16 +128,22 @@ impl BladeShape {
     const fn faces_camera(self) -> bool {
         matches!(self, Self::Card)
     }
+
+    /// El número con que el shader la reconoce. Un test lo cobra contra las
+    /// constantes `SHAPE_*` de `grass.wgsl`, que es lo único que las ata.
+    const fn shader_index(self) -> u32 {
+        match self {
+            Self::Leaf => 0,
+            Self::Spike => 1,
+            Self::Card => 2,
+        }
+    }
 }
 
 /// Los cuatro anillos, de la cámara hacia afuera. **Un anillo no es un escalón
-/// de densidad: es un tamaño de chunk** — la forma sale de [`shape_at`] y la
-/// densidad de [`density_at`], las dos a partir de la distancia.
-///
-/// Cada uno se planta a la densidad que la derivación pide en su **borde
-/// interno**, y el shader ancla ahí su ley `1/d` (`ring_inner` en `grass.wgsl`),
-/// así que dentro del anillo la densidad viva es `C/d` exacta. Derivación,
-/// costo y por qué el escalón plano por anillo no servía: `docs/BOTWGrass.md`.
+/// de densidad: es un tamaño de chunk.** Cada uno se planta a lo que la
+/// derivación pide en su **borde interno**, y el shader ancla ahí su ley `1/d`
+/// (`ring_inner` en `grass.wgsl`). Todo el porqué, en `docs/BOTWGrass.md`.
 const RINGS: [Ring; 4] = [
     Ring {
         reach_m: 13.0,
@@ -178,13 +177,9 @@ fn shape_for_ring(index: usize, scale: f32, reach_scale: f32) -> BladeShape {
     shape_at(band_midpoint(index, reach_scale), scale)
 }
 
-/// La densidad sale de su **borde interno**, que es el punto más exigente: ahí
-/// sus primitivas se ven desde más cerca y cada una tapa menos suelo.
-///
-/// Dos puntos distintos para dos preguntas distintas, y no es una inconsistencia:
-/// una forma equivocada se ve en todo el anillo, una densidad corta se ve sólo
-/// donde falta. Se elige el promedio para la primera y el peor caso para la
-/// segunda.
+/// La densidad sale de su **borde interno**, el punto más exigente. La forma sale
+/// de la distancia media, y no es inconsistencia: una forma equivocada se ve en
+/// todo el anillo, una densidad corta sólo donde falta.
 fn density_for_ring(index: usize, scale: f32, reach_scale: f32) -> f32 {
     let shape = shape_for_ring(index, scale, reach_scale);
     density_at(band_inner(index, reach_scale), shape)
@@ -229,11 +224,9 @@ fn ring_reaches(reach_scale: f32) -> (Vec4, Vec4) {
     slots(|index, _| ring_reach(index, reach_scale), 0.0)
 }
 
-/// Los tamaños de chunk, en el mismo orden. Con ellos el fragment deduce de qué
-/// celda —o sea de qué draw call— salió una brizna, sin un byte más por vértice.
-///
-/// No los escala la perilla: el alcance decide cuántos chunks hay, no de qué
-/// tamaño son.
+/// Los tamaños de chunk, en el mismo orden: con ellos el fragment deduce de qué
+/// celda salió una brizna. No los escala la perilla de alcance, que decide
+/// cuántos chunks hay y no de qué tamaño son.
 fn ring_chunks() -> (Vec4, Vec4) {
     slots(|_, ring| ring.chunk_m, 1.0)
 }
@@ -250,11 +243,8 @@ fn ring_cards(scale: f32, reach_scale: f32) -> (Vec4, Vec4) {
     )
 }
 
-/// Un dato por anillo repartido en los ocho casilleros que el uniform tiene.
-///
-/// El tope se cobra en compilación: un anillo de más desbordaría el uniform y se
-/// quedaría sin color propio, y las dos cosas son silenciosas en tiempo de
-/// ejecución — la brizna saldría gris y el shader no encontraría su anillo.
+/// Un dato por anillo en los ocho casilleros del uniform. El tope se cobra en
+/// compilación: uno de más desbordaría en silencio.
 const _: () = assert!(
     RINGS.len() <= grass_debug::PALETTE_SLOTS,
     "hay más anillos que casilleros en el uniform y en la paleta"
@@ -302,7 +292,10 @@ const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 
 /// The reach scale the rings are written against, so the budget and the tests
 /// measure the shipped field rather than whatever the dial happens to be on.
-#[cfg(test)]
+///
+/// Lo usa además el armado de materiales, que corre una vez al entrar a la
+/// escena: qué forma tiene un nivel decide si su material recorta alfa, y esa
+/// pregunta no puede depender de dónde quedó una perilla.
 const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 
 /// Cuántos metros tarda **una** brizna en pasar de nada a entera. Larga sólo
@@ -310,33 +303,23 @@ const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 /// las dos se mueven juntas o ninguna. El porqué, en `BOTWGrass.md`.
 const GROWTH_RAMP_M: f32 = 6.0;
 
-/// Over how many metres, inward from a ring's edge, the thresholds are spread.
-///
-/// Separate from the ramp on purpose: **one blade growing is invisible, a whole
-/// band growing at once is not.** Shortening both together made it worse.
+/// En cuántos metros se reparten los umbrales hacia adentro del borde. Separado
+/// de la rampa a propósito: **una brizna creciendo es invisible, una banda entera
+/// no.**
 const GROWTH_SPREAD_M: f32 = 6.0;
 
-/// A partir de qué distancia ralea la pradera, en metros. Los umbrales se
-/// reparten como `start / (1 - hash)`, así que la fracción viva a distancia `d`
-/// es `start / d` — la ley 1/d. **No ahorra un triángulo**: encoge en el vertex
-/// shader, arregla la imagen y no el costo. El barrido que eligió el valor está
-/// en `BOTWGrass.md`.
+/// Desde qué distancia ralea la pradera. Los umbrales van como
+/// `start / (1 - hash)`, así que la fracción viva a `d` es `start / d`. **No
+/// ahorra un triángulo**: arregla la imagen, no el costo.
 const GROWTH_START_M: f32 = 24.0;
 
-/// How far **below** the ground a blade collapses to, in metres.
-///
-/// Not zero, and that is the whole point: collapsed at ground level the quad
-/// lies coplanar with the terrain and z-fights, which on screen is the flicker
-/// that took three wrong diagnoses to name. Sunk, the blade is simply behind the
-/// ground and the depth test settles it.
+/// Hasta cuánto **bajo** el suelo colapsa una brizna. No cero, y ahí está todo:
+/// al ras queda coplanar con el terreno y hace z-fighting, que en pantalla es el
+/// parpadeo que costó tres diagnósticos equivocados.
 const GROWTH_SINK_M: f32 = 0.18;
 
-/// At most one chunk is baked per frame **while rolling**.
-///
-/// Re-baking while the player walks is the only per-frame work this system will
-/// ever have, and a frame spike at a chunk boundary would be exactly the kind of
-/// stutter the whole design exists to avoid. One per frame means crossing a
-/// boundary costs one chunk, not a ring.
+/// Como mucho un chunk se rehace por frame **mientras la grilla rueda**: cruzar
+/// una frontera cuesta un chunk, no un anillo.
 const CHUNKS_BAKED_PER_FRAME: usize = 1;
 
 /// Filling an empty grid ignores the per-frame limit and bakes the lot in one
@@ -355,12 +338,7 @@ const BLADE_WAIST: f32 = 0.30;
 const BLADE_ROOT_SINK: f32 = 0.06;
 
 /// Ancho de una carta, en metros: el de un **matojo de unas pocas briznas**, no
-/// el de una pared de pasto.
-///
-/// La escala sale de una captura de BOTW que el usuario encontró (2026-08-07):
-/// los trazos agrupados que se ven a media distancia son del tamaño de las
-/// flores que tienen al lado, no de un arbusto. La primera versión de esto usaba
-/// 1,6 m y era tres veces más grande de lo que la referencia muestra.
+/// el de una pared. La escala salió de una captura de BOTW; ver `BOTWGrass.md`.
 const CARD_WIDTH: f32 = 0.5;
 
 /// Qué fracción de su rectángulo conserva la carta al recortar su silueta:
@@ -394,55 +372,7 @@ const BLADE_LEAN: f32 = 0.27;
 pub(super) const ROOT_COLOR: LinearRgba = LinearRgba::rgb(0.093, 0.147, 0.031);
 const TIP_COLOR: LinearRgba = LinearRgba::rgb(0.340, 0.622, 0.089);
 
-/// El nivel cuyas briznas son **registros** y no geometría.
-///
-/// Uno solo mientras el Paso 2 es un spike: el de las cartas, que ya era casi un
-/// vertex pull —sus cuatro vértices nacen en el mismo punto y el shader los
-/// abre— así que es donde el cambio se verifica con menos piezas móviles. Los
-/// otros tres siguen horneando, y conviven porque lo que los separa es un número
-/// del uniform (`record_stride`), no una variante de pipeline.
-const RECORDED_RING: usize = 3;
-
-/// Un registro por brizna, en el orden que `BladeRecord` declara en el shader.
-/// **Las dos definiciones son la misma cosa y no hay nada que las ate**, así que
-/// se tocan juntas.
-fn blade_record(xz: Vec2, ground_y: f32, packed: f32) -> [f32; 4] {
-    [xz.x, xz.y, ground_y, packed]
-}
-
-/// Los casilleros del buffer: qué chunk vive en cuál.
-///
-/// Stride fijo, que es lo que vuelve trivial esta pieza. Como todos los chunks
-/// de un nivel tienen **exactamente la misma cantidad de briznas**
-/// —`blades_per_chunk` depende del nivel y de las perillas, no de la celda— el
-/// casillero es un índice y no un rango, y no hace falta un allocator con
-/// fragmentación. Ver `BOTWGrass.md` → Paso 2.
-#[derive(Default)]
-struct SlotBook {
-    free: Vec<u32>,
-    next: u32,
-}
-
-impl SlotBook {
-    fn take(&mut self) -> u32 {
-        self.free.pop().unwrap_or_else(|| {
-            let slot = self.next;
-            self.next += 1;
-            slot
-        })
-    }
-
-    fn give_back(&mut self, slot: u32) {
-        self.free.push(slot);
-    }
-
-    fn clear(&mut self) {
-        self.free.clear();
-        self.next = 0;
-    }
-}
-
-/// One baked chunk of the meadow: a single mesh holding all its blades.
+/// Un chunk de la pradera: una entidad, un casillero del buffer de su nivel.
 #[derive(Component)]
 pub(super) struct GrassChunk;
 
@@ -454,36 +384,15 @@ struct ChunkKey {
     cell: IVec2,
 }
 
-/// The live grid: which chunks exist right now, and the materials they share.
+/// La grilla viva: qué chunks existen ahora y lo que cada nivel tiene en la GPU.
 ///
-/// **Dos, no uno.** La carta recorta su silueta y necesita `AlphaMode::Mask`,
-/// que cuesta el early-Z del draw que lo use; con un material único lo pagaría
-/// también el primer plano, que es donde más fragmentos hay. No cuesta un draw
-/// de más: cada chunk ya es el suyo.
+/// **Un material por nivel**: cada uno lleva su stride y su forma, y el de las
+/// cartas además `AlphaMode::Mask`. No cuesta draws — es lo que los junta.
 #[derive(Resource)]
 pub(super) struct GrassField {
-    material: Handle<GrassMaterial>,
-    card_material: Handle<GrassMaterial>,
+    materials: [Handle<GrassMaterial>; RINGS.len()],
+    records: [RingRecords; RINGS.len()],
     live: HashMap<ChunkKey, Entity>,
-    /// La malla índice del nivel que ya no hornea, y el buffer de sus registros.
-    /// Se rehacen cuando cambia cuántas briznas lleva un chunk, o sea cuando se
-    /// mueve una perilla.
-    index_mesh: Option<Handle<Mesh>>,
-    records: Handle<ShaderBuffer>,
-    record_data: Vec<u8>,
-    slots: SlotBook,
-    chunk_slot: HashMap<ChunkKey, u32>,
-    stride: u32,
-}
-
-impl GrassField {
-    /// Suelta el casillero de un chunk que se va. Sin esto el buffer sólo crece:
-    /// la grilla rueda todo el tiempo, y cada chunk nuevo pediría uno nuevo.
-    fn release(&mut self, key: &ChunkKey) {
-        if let Some(slot) = self.chunk_slot.remove(key) {
-            self.slots.give_back(slot);
-        }
-    }
 }
 
 /// Triángulos que la pradera declara a la escena, para `perf::budget`.
@@ -646,79 +555,78 @@ pub(super) fn init_meadow_material(
     mut materials: ResMut<Assets<GrassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    // Un registro de relleno: los niveles que todavía hornean no lo leen, pero
-    // el binding no es opcional y un buffer vacío no es un binding válido.
-    let records = buffers.add(ShaderBuffer::new(
-        &[0_u8; RECORD_BYTES],
-        RenderAssetUsages::RENDER_WORLD,
-    ));
-    let mut plain = grass_material();
-    plain.extension.blade_records = records.clone();
-    let mut card = grass_material();
-    card.extension.blade_records = records.clone();
-    // El umbral no importa —el shader ya descartó con `discard` y lo que queda
-    // sale opaco—; lo que compra es que Bevy no trate el draw como opaco.
-    card.base.alpha_mode = AlphaMode::Mask(0.5);
+    // Un buffer y un material por nivel. El buffer arranca con un registro de
+    // relleno porque un `ShaderBuffer` vacío no es un binding válido, y el
+    // material no puede declararlo opcional: el macro de `AsBindGroup` no pasa
+    // por `Option`.
+    let records = std::array::from_fn(|_| {
+        // `default()` y no `RENDER_WORLD`: con este último Bevy suelta el dato de
+        // CPU en cuanto lo sube, y este buffer se reescribe cada vez que la
+        // grilla rueda.
+        RingRecords::new(buffers.add(ShaderBuffer::new(
+            &[0_u8; RECORD_BYTES],
+            RenderAssetUsages::default(),
+        )))
+    });
+    let materials = std::array::from_fn(|ring| {
+        let mut material = grass_material();
+        material.extension.blade_records = records[ring].buffer.clone();
+        if shape_for_ring(ring, reference_scale(), REFERENCE_REACH).faces_camera() {
+            // El umbral no importa —el shader ya descartó con `discard` y lo que
+            // queda sale opaco—; lo que compra es que Bevy no trate el draw como
+            // opaco. Sólo las cartas recortan silueta, y el `discard` cuesta el
+            // early-Z del draw que lo usa.
+            material.base.alpha_mode = AlphaMode::Mask(0.5);
+        }
+        materials.add(material)
+    });
     commands.insert_resource(GrassField {
-        material: materials.add(plain),
-        card_material: materials.add(card),
-        live: HashMap::default(),
-        index_mesh: None,
+        materials,
         records,
-        record_data: Vec::new(),
-        slots: SlotBook::default(),
-        chunk_slot: HashMap::default(),
-        stride: 0,
+        live: HashMap::default(),
     });
 }
 
-/// Cuánto pesa un registro: cuatro `f32`.
-const RECORD_BYTES: usize = 16;
-
-/// Copia los registros de un chunk a su casillero del buffer en CPU.
+/// Sube al GPU lo que el rodado dejó escrito, un buffer por nivel.
 ///
-/// El buffer crece hasta el máximo de casilleros que la grilla llegó a pedir y
-/// no se encoge: rodar la grilla los recicla, así que la marca de agua se
-/// estabiliza en cuanto el jugador dio una vuelta.
-fn write_records(field: &mut GrassField, slot: u32, records: &[[f32; 4]]) {
-    let stride = field.stride as usize;
-    let needed = (slot as usize + 1) * stride * RECORD_BYTES;
-    if field.record_data.len() < needed {
-        field.record_data.resize(needed, 0);
+/// Separado del rodado porque `Assets<ShaderBuffer>` es otro recurso, y porque
+/// una escritura por chunk sería una subida por chunk: acá es una por nivel y
+/// sólo en los frames en que algo se movió.
+pub(super) fn upload_meadow_records(
+    mut field: ResMut<GrassField>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut memory: ResMut<MeadowRecordMemory>,
+) {
+    if !field.is_changed() {
+        return;
     }
-    let start = slot as usize * stride * RECORD_BYTES;
-    for (index, record) in records.iter().take(stride).enumerate() {
-        let at = start + index * RECORD_BYTES;
-        for (lane, value) in record.iter().enumerate() {
-            field.record_data[at + lane * 4..at + lane * 4 + 4]
-                .copy_from_slice(&value.to_le_bytes());
-        }
+    for ring in &mut field.records {
+        ring.upload(&mut buffers);
     }
+    memory.bytes = field.records.iter().map(RingRecords::buffer_bytes).sum();
+    memory.chunks = field.records.iter().map(RingRecords::chunks).sum();
 }
 
-/// Sube al GPU lo que el horneado dejó escrito, y sólo cuando cambió.
+/// Lo que la pradera tiene en buffers de registros, publicado para que una
+/// corrida lo pueda declarar.
 ///
-/// Separado del rodado porque `Assets<ShaderBuffer>` es otro recurso y porque una
-/// escritura por chunk sería una subida por chunk: acá es una por frame en que
-/// algo se movió.
-pub(super) fn upload_meadow_records(
-    field: Res<GrassField>,
-    mut buffers: ResMut<Assets<ShaderBuffer>>,
-) {
-    if field.record_data.is_empty() || !field.is_changed() {
-        return;
-    }
-    let Some(mut buffer) = buffers.get_mut(&field.records.clone()) else {
-        return;
-    };
-    buffer.data = Some(field.record_data.clone());
-    buffer.buffer_description.size = field.record_data.len() as u64;
-    info!(
-        "[grass] buffer: {} bytes, stride {}, {} chunks grabados",
-        field.record_data.len(),
-        field.stride,
-        field.chunk_slot.len(),
-    );
+/// **El inventario de la escena cuenta mallas y no `ShaderBuffer`s**, así que sin
+/// esto la memoria que el Paso 2 mudó de una cosa a la otra no la ve nadie y una
+/// corrida declararía una caída que es en parte mudanza.
+#[derive(Resource, Default, Clone, Copy)]
+pub(crate) struct MeadowRecordMemory {
+    pub bytes: usize,
+    pub chunks: usize,
+}
+
+/// La caja de un chunk, en mundo. El `Transform` es identidad, así que su
+/// espacio local es el del mundo y este AABB vale tal cual.
+fn chunk_bounds(centre: Vec2, chunk_m: f32) -> Aabb {
+    let at = Vec3::new(centre.x, 0.0, centre.y);
+    Aabb::from_min_max(
+        at + Vec3::new(-chunk_m * 0.5, -1.0, -chunk_m * 0.5),
+        at + Vec3::new(chunk_m * 0.5, BLADE_HEIGHT_MAX + 1.0, chunk_m * 0.5),
+    )
 }
 
 /// Si esta corrida planta este anillo. Con uno aislado la foto mide cuánta
@@ -804,13 +712,11 @@ pub(super) fn roll_meadow_grid(
         Projection::Orthographic(_) | Projection::Custom(_) => reference_scale(),
     };
 
-    // Density and reach are both **baked into the mesh** — the blade count in the
-    // geometry, the ring's reach in a vertex attribute — so neither can be
-    // rolled into. They are the one event that clears the grid instead of
-    // rolling it, and they are checked together because a run that changed both
-    // and rebuilt for one would leave half the field describing the old dial.
-    // La de anillos va con ellas: apagar uno es dejar de hornearlo, no de
-    // pintarlo.
+    // Densidad, alcance y anillos cambian **cuántas briznas** tiene un chunk, y
+    // de eso depende la malla índice del nivel entero. Son el único evento que
+    // tira la grilla en vez de rodarla, y se miran juntos porque una corrida que
+    // cambiara dos y reconstruyera por uno dejaría medio campo describiendo la
+    // perilla vieja.
     let dials = (
         perf.grass_density_step,
         perf.grass_reach_step,
@@ -824,18 +730,22 @@ pub(super) fn roll_meadow_grid(
         // La malla índice tiene tantos vértices como briznas lleva un chunk, así
         // que una perilla que cambia esa cuenta la invalida entera — igual que
         // invalida los chunks horneados.
-        field.chunk_slot.clear();
-        field.slots.clear();
-        field.index_mesh = None;
-        field.record_data.clear();
+        for ring in &mut field.records {
+            ring.reset();
+        }
     }
 
-    // La malla índice del nivel que no hornea, creada una vez por configuración.
-    let recorded_blades = blades_per_chunk(RECORDED_RING, density, scale, reach_scale);
-    if field.index_mesh.is_none() && planted_ring(&perf, RECORDED_RING) && recorded_blades > 0 {
-        field.index_mesh = Some(meshes.add(ring_index_mesh(recorded_blades)));
-        field.stride = recorded_blades;
-        info!("[grass] malla índice del nivel {RECORDED_RING}: {recorded_blades} briznas");
+    // Una malla índice por nivel, creada una vez por configuración. Es lo que
+    // hace que sus chunks batcheen: Bevy exige el mismo `Handle<Mesh>`, y todos
+    // los chunks de un nivel llevan la misma cantidad de briznas.
+    for ring in 0..RINGS.len() {
+        let blades = blades_per_chunk(ring, density, scale, reach_scale);
+        if field.records[ring].mesh.is_none() && planted_ring(&perf, ring) && blades > 0 {
+            let triangles = shape_for_ring(ring, scale, reach_scale).triangle_count();
+            field.records[ring].mesh = Some(meshes.add(ring_index_mesh(blades, triangles)));
+            field.records[ring].stride = blades;
+
+        }
     }
 
     let planted = |ring: usize| planted_ring(&perf, ring);
@@ -874,7 +784,7 @@ pub(super) fn roll_meadow_grid(
         keep
     });
     for key in dropped {
-        field.release(&key);
+        field.records[key.ring].release(key.cell);
     }
 
     // An empty grid is being filled, not rolled: bake it whole rather than
@@ -891,15 +801,12 @@ pub(super) fn roll_meadow_grid(
         .take(budget)
         .copied()
         .collect();
-    // El único trabajo por frame que este sistema tiene, y hasta el 2026-08-07
-    // el único sin medir: está limitado a un chunk por frame *porque se supone
-    // caro*. Cronometrarlo es lo que convierte "conviene instancing" de opinión
-    // en decisión — con instancing serían unos bytes por brizna en vez de cuatro
-    // vértices y seis índices.
+    // El único trabajo por frame que este sistema tiene. Desde el Paso 2 no
+    // hornea geometría: sortea las briznas y escribe sus registros, que es lo que
+    // convirtió "conviene instancing" de opinión en decisión.
     let bake_started = std::time::Instant::now();
     for key in &missing {
         let ring = &RINGS[key.ring];
-        let shape = shape_for_ring(key.ring, scale, reach_scale);
         // Seeded by ring and cell, not by spawn order: the same ground grows the
         // same blades every session, and walking away and back does not reshuffle
         // the field.
@@ -910,48 +817,18 @@ pub(super) fn roll_meadow_grid(
                 ^ ring_salt.wrapping_mul(0xc2b2_ae35),
         );
         let centre = cell_centre(key.cell, ring.chunk_m);
-        let spec = ChunkSpec {
-            centre,
-            chunk_m: ring.chunk_m,
-            count: blades_per_chunk(key.ring, density, scale, reach_scale),
-            shape,
-            ring_reach_m: ring_reach(key.ring, reach_scale),
-            seed,
-        };
-
-        // **Los dos caminos.** El nivel grabado escribe registros y reusa la
-        // malla índice; los demás siguen horneando la suya. Lo que el chunk
-        // recibe cambia; lo que la escena ve de él, no.
-        let recorded = key.ring == RECORDED_RING && field.index_mesh.is_some();
-        let (mesh_handle, slot, aabb) = if recorded {
-            let slot = match field.chunk_slot.get(key) {
-                Some(slot) => *slot,
-                None => {
-                    let slot = field.slots.take();
-                    field.chunk_slot.insert(*key, slot);
-                    slot
-                }
-            };
-            let records = build_chunk_records(&spec, Some(&terrain));
-            write_records(&mut field, slot, &records);
-            (
-                field.index_mesh.clone().unwrap_or_default(),
-                slot,
-                // **El AABB va a mano.** Bevy lo deriva de las posiciones de la
-                // malla, y las de la malla índice son todas cero: sin esto el
-                // culling trabajaría sobre un punto en el origen y el nivel
-                // entero desaparecería salvo cuando ese punto estuviera en
-                // cuadro. Media celda de lado, y alto de sobra para la carta.
-                Some(Aabb::from_min_max(
-                    Vec3::new(-ring.chunk_m * 0.5, -1.0, -ring.chunk_m * 0.5)
-                        + Vec3::new(centre.x, 0.0, centre.y),
-                    Vec3::new(ring.chunk_m * 0.5, BLADE_HEIGHT_MAX + 1.0, ring.chunk_m * 0.5)
-                        + Vec3::new(centre.x, 0.0, centre.y),
-                )),
-            )
-        } else {
-            (meshes.add(build_chunk_mesh(&spec, Some(&terrain))), 0, None)
-        };
+        let records = build_chunk_records(
+            &ChunkSpec {
+                centre,
+                chunk_m: ring.chunk_m,
+                count: blades_per_chunk(key.ring, density, scale, reach_scale),
+                ring_reach_m: ring_reach(key.ring, reach_scale),
+                seed,
+            },
+            Some(&terrain),
+        );
+        let slot = field.records[key.ring].slot_for(key.cell);
+        field.records[key.ring].write(slot, &records);
         let entity = commands
             .spawn((
                 DespawnOnExit(*scene.get()),
@@ -969,13 +846,17 @@ pub(super) fn roll_meadow_grid(
                 // watchdog de mallas pesadas es para assets, y el presupuesto de
                 // la pradera se cobra en `perf::budget`.
                 crate::visuals::budget::BakedByDesign,
-                Mesh3d(mesh_handle),
+                Mesh3d(field.records[key.ring].mesh.clone().unwrap_or_default()),
                 MeshTag(slot),
-                MeshMaterial3d(if shape.faces_camera() {
-                    field.card_material.clone()
-                } else {
-                    field.material.clone()
-                }),
+                MeshMaterial3d(field.materials[key.ring].clone()),
+                // **El AABB va a mano, y con `NoAutoAabb`.** Bevy lo deriva de
+                // las posiciones de la malla, que en una malla índice son todas
+                // cero — un punto en el origen, y el nivel entero culleado. Y no
+                // alcanza con insertarlo: `calculate_bounds` lo *sobrescribe*
+                // cuando `Mesh3d` cambia, cosa que pasa en todo chunk recién
+                // nacido, así que hace falta además marcarlo.
+                chunk_bounds(centre, ring.chunk_m),
+                NoAutoAabb,
                 // Blades cast no shadows: thousands of alpha-free slivers in the
                 // cascades buy noise, not depth.
                 bevy::light::NotShadowCaster,
@@ -989,9 +870,6 @@ pub(super) fn roll_meadow_grid(
                 Transform::default(),
             ))
             .id();
-        if let Some(aabb) = aabb {
-            commands.entity(entity).insert((aabb, NoAutoAabb));
-        }
         field.live.insert(*key, entity);
     }
     if !missing.is_empty() {
@@ -1036,28 +914,20 @@ pub(super) fn track_meadow_focus(
         return;
     };
     let data = meadow_uniform(&camera, sun.as_deref().map(|sun| &**sun), &perf, &time);
-    // **El stride sólo va al material del nivel grabado.** Es lo que le dice al
-    // vertex shader que lea el buffer en vez de los atributos, así que mandárselo
-    // al material equivocado deja a ese nivel leyendo registros que no son suyos
-    // — y no mandárselo a ninguno deja al nivel grabado leyendo atributos que
-    // están todos en cero, que es cómo desapareció la primera vez.
-    let recorded_uses_cards = shape_for_ring(
-        RECORDED_RING,
-        reference_scale(),
-        perf.grass_reach_scale(),
-    )
-    .faces_camera();
-    debug_assert!(
-        recorded_uses_cards,
-        "el nivel grabado dejó de ser carta: su stride está yendo al material equivocado",
-    );
-    for (handle, stride) in [
-        (&field.material, 0),
-        (&field.card_material, field.stride),
-    ] {
+    // **Cada nivel recibe su stride y su forma.** Son lo que le dice al vertex
+    // shader dónde está el registro de una brizna y qué construir con él; cruzados
+    // entre niveles, un nivel leería los registros de otro.
+    let scale = reference_scale();
+    let reach_scale = perf.grass_reach_scale();
+    for (ring, handle) in field.materials.iter().enumerate() {
         if let Some(mut material) = materials.get_mut(handle) {
             material.extension.grass_data = GrassUniform {
-                record_stride: stride,
+                record_layout: UVec4::new(
+                    field.records[ring].stride,
+                    shape_for_ring(ring, scale, reach_scale).shader_index(),
+                    0,
+                    0,
+                ),
                 ..data
             };
         }
@@ -1102,6 +972,8 @@ fn meadow_uniform(
     }
     data.growth_sink = GROWTH_SINK_M;
     data.blade_root_sink = BLADE_ROOT_SINK;
+    data.blade_lean = BLADE_LEAN;
+    data.blade_waist = BLADE_WAIST;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs
     // one uniform write a frame.
@@ -1151,61 +1023,23 @@ pub(super) fn ring_facts(perf: &crate::perf::PerfToggles) -> Vec<RingFacts> {
         .collect()
 }
 
+/// Lo que hace falta para sortear las briznas de un chunk. **Sin forma**: la
+/// forma la construye el vertex shader desde el registro, y acá sólo se decide
+/// dónde nace cada brizna y cuánto mide.
 struct ChunkSpec {
     centre: Vec2,
     chunk_m: f32,
     count: u32,
-    shape: BladeShape,
     ring_reach_m: f32,
     seed: u32,
 }
 
-/// La malla **índice** de un nivel: la comparten todos sus chunks.
-///
-/// No lleva posiciones útiles — la posición sale del registro— pero sí los cuatro
-/// atributos, y eso no es descuido: los shader defs del pipeline salen de qué
-/// atributos tiene la malla, y quitarlos dejaría a `VertexOutput` sin `uv`
-/// mientras el fragment —compartido con los niveles horneados— los usa.
-///
-/// **El ahorro no está en el vértice sino en cuántas veces existe.** Un chunk
-/// horneado paga sus 136 B por hoja; acá los paga *el nivel entero* una vez, y
-/// cada chunk agrega 16 B por brizna en el buffer.
-///
-/// El batching automático de Bevy exige el **mismo `Handle<Mesh>`**, y por eso
-/// esto es una malla por nivel y no una por chunk: es lo único que hace que 12
-/// chunks se dibujen juntos.
-fn ring_index_mesh(blades: u32) -> Mesh {
-    let vertices = blades as usize * 4;
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; vertices]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32; 2]; vertices]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.0_f32; 2]; vertices]);
-    let mut indices: Vec<u32> = Vec::with_capacity(blades as usize * 6);
-    for blade in 0..blades {
-        let first = blade * 4;
-        // El mismo orden de esquinas que hornea `BladeShape::Card`, porque el
-        // vertex shader deduce el lado y la altura de `vertex_index % 4`.
-        indices.extend_from_slice(&[first, first + 1, first + 2]);
-        indices.extend_from_slice(&[first, first + 2, first + 3]);
-    }
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
-}
-
 /// Los registros de un chunk, en el orden en que el shader los indexa.
 ///
-/// Es el mismo sorteo que [`build_chunk_mesh`] —misma semilla, mismo hash, mismo
-/// filtro por cobertura— porque lo que cambia es **dónde termina el dato**, no
-/// qué brizna nace. Lo que no viaja es la geometría: el yaw y el lean no le
-/// sirven a una carta, que se abre contra la cámara.
-///
 /// **Las briznas filtradas no se saltan: se emiten con altura cero.** El
-/// casillero de un chunk es un rango de stride fijo, así que saltear una dejaría
-/// a todas las siguientes corridas de lugar; con altura cero, el vertex shader
-/// las colapsa y no cuestan un fragmento.
+/// casillero es un rango de stride fijo, así que saltear una correría de lugar a
+/// todas las siguientes; con altura cero el shader las colapsa y no cuestan un
+/// fragmento.
 fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Vec<[f32; 4]> {
     let ChunkSpec {
         centre,
@@ -1235,162 +1069,107 @@ fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Vec
     records
 }
 
-/// Bake `count` blades into one mesh, in world space, around `centre`.
-fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
-    let ChunkSpec {
-        centre,
-        chunk_m,
-        count,
-        shape,
-        ring_reach_m,
-        seed,
-    } = *spec;
-    // Reserved from the shape rather than from the worst shape: a `Spike` chunk
-    // asked to hold five vertices a blade allocates nearly twice what it fills,
-    // and chunks are rebaked continuously as the grid rolls.
-    let capacity = count as usize;
-    let vertices = capacity * shape.vertices();
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(vertices);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(vertices);
-    let mut blade_data: Vec<[f32; 2]> = Vec::with_capacity(vertices);
-    let mut indices: Vec<u32> = Vec::with_capacity(capacity * shape.triangles() * 3);
-
-    for blade in 0..count {
-        let hash = hash_u32(seed ^ blade.wrapping_mul(0x0019_6f3d));
-        let u1 = hash_unit(hash);
-        let u2 = hash_unit(hash ^ 0x1234_5678);
-        let u3 = hash_unit(hash ^ 0x8765_4321);
-        let u4 = hash_unit(hash ^ 0xdead_beef);
-        let u5 = hash_unit(hash ^ 0x0f0f_0f0f);
-
-        let xz = centre + Vec2::new(u1 - 0.5, u2 - 0.5) * chunk_m;
-        let ground = terrain.and_then(|t| t.height_at(xz)).unwrap_or(0.0);
-        let slope = terrain.and_then(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
-        // No terrain means a test harness, and a test wants blades: flat soil
-        // is what the real default cell is anyway.
-        let kind = terrain
-            .and_then(|t| t.kind_at(xz))
-            .unwrap_or(crate::world::TerrainKind::Soil);
-        // One rule, shared with the terrain tint — see `grass_cover`. Bare
-        // ground here has to be bare ground there or the field grows an edge.
-        let cover = grass_cover::coverage(kind, slope);
-        if cover <= 0.0 {
-            continue;
-        }
-
-        let height = (BLADE_HEIGHT_MIN + u4 * (BLADE_HEIGHT_MAX - BLADE_HEIGHT_MIN)) * cover;
-        let yaw = u3 * std::f32::consts::TAU;
-        // The quad's width runs along `side`; the lean tips it over `side`'s
-        // perpendicular so blades do not all fall the same way.
-        let side = Vec2::new(yaw.cos(), yaw.sin()) * (BLADE_WIDTH * 0.5);
-        let lean = Vec2::new(-yaw.sin(), yaw.cos()) * ((u5 - 0.5) * 2.0 * BLADE_LEAN);
-
-        let base = Vec3::new(xz.x, ground, xz.y);
-        let tip = base + Vec3::new(lean.x, height, lean.y);
-        let Ok(first) = u32::try_from(positions.len()) else {
-            error!("grass chunk exceeded the u32 mesh-index limit");
-            break;
-        };
-
-        // `uv` is not a texture coordinate — nothing samples one. `y` is the
-        // vertex's height along the blade (0 root, 1 tip); `x` is the ground
-        // height under it, which is what lets the shader collapse a blade toward
-        // its own root without a per-vertex blade height.
-        //
-        // `uv1.x` carries the blade's hash with the *side* of the blade in its
-        // sign; `uv1.y` packs the ring's reach in whole metres and the blade's
-        // height in the fraction, which `floor`/`fract` separate exactly. El
-        // signo va por mitades —el borde izquierdo negativo, el derecho
-        // positivo— y **la magnitud es la misma en todos los vértices**: el
-        // vertex shader saca de ahí el umbral de crecimiento, y un vértice con
-        // otro hash deformaría la brizna en vez de encogerla entera.
-        let tint = hash_unit(hash ^ 0x2545_f491);
-        let packed = ring_reach_m + height;
-        let mut vertex = |point: Vec3, along: f32, side_sign: f32| {
-            positions.push([point.x, point.y, point.z]);
-            uvs.push([base.y, along]);
-            blade_data.push([side_sign * tint, packed]);
-        };
-
-        match shape {
-            BladeShape::Leaf => {
-                // La brizna de dos triángulos unidos por una arista
-                // **horizontal**: uno apunta abajo y otro arriba.
-                let waist = base.lerp(tip, BLADE_WAIST);
-                vertex(base - Vec3::Y * BLADE_ROOT_SINK, 0.0, -1.0);
-                vertex(
-                    Vec3::new(waist.x - side.x, waist.y, waist.z - side.y),
-                    BLADE_WAIST,
-                    -1.0,
-                );
-                vertex(
-                    Vec3::new(waist.x + side.x, waist.y, waist.z + side.y),
-                    BLADE_WAIST,
-                    1.0,
-                );
-                vertex(tip, 1.0, 1.0);
-                indices.extend_from_slice(&[first, first + 1, first + 2]);
-                indices.extend_from_slice(&[first + 1, first + 3, first + 2]);
-            }
-            BladeShape::Card => {
-                // Los cuatro vértices **en el mismo punto**, el centro de la
-                // base. El vertex shader los abre contra el eje derecho de la
-                // cámara, así que la carta siempre da la cara. Lo que decide
-                // qué esquina es cada vértice ya viaja: el signo del hash dice
-                // izquierda o derecha, y `uv.y` dice abajo o arriba.
-                let base_centre = base - Vec3::Y * BLADE_ROOT_SINK;
-                vertex(base_centre, 0.0, -1.0);
-                vertex(base_centre, 0.0, 1.0);
-                vertex(base_centre, 1.0, 1.0);
-                vertex(base_centre, 1.0, -1.0);
-                indices.extend_from_slice(&[first, first + 1, first + 2]);
-                indices.extend_from_slice(&[first, first + 2, first + 3]);
-            }
-            BladeShape::Spike => {
-                // Un triángulo: dos esquinas en la base y una punta. El piso de
-                // la escalera, donde una brizna ya no se resuelve.
-                vertex(
-                    Vec3::new(base.x - side.x, base.y, base.z - side.y),
-                    0.0,
-                    -1.0,
-                );
-                vertex(
-                    Vec3::new(base.x + side.x, base.y, base.z + side.y),
-                    0.0,
-                    1.0,
-                );
-                vertex(tip, 1.0, 1.0);
-                indices.extend_from_slice(&[first, first + 1, first + 2]);
-            }
-        }
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, blade_data);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A one-ring chunk for the shape tests, so each of them names only what it
     /// actually cares about.
-    fn spec(count: u32, shape: BladeShape, seed: u32) -> ChunkSpec {
+    fn spec(count: u32, seed: u32) -> ChunkSpec {
         ChunkSpec {
             centre: Vec2::ZERO,
             chunk_m: 5.0,
             count,
-            shape,
             ring_reach_m: 8.0,
             seed,
         }
+    }
+
+    /// El sorteo tiene que ser **determinista**: el mismo chunk crece el mismo
+    /// campo cada sesión, o caminar y volver reordena la pradera y toda
+    /// comparación de capturas —que compara dos fotos del mismo encuadre— deja
+    /// de valer.
+    ///
+    /// Compara los registros, no sus longitudes: comparar longitudes pasaba
+    /// igual si cada brizna se plantaba en otro lado, que es exactamente el
+    /// fallo que este nombre promete atrapar.
+    #[test]
+    fn blades_are_deterministic_per_chunk() {
+        let a = build_chunk_records(&spec(64, 11), None);
+        let b = build_chunk_records(&spec(64, 11), None);
+        assert!(!a.is_empty(), "un chunk vacío volvería esto vacuo");
+        assert_eq!(a, b, "el mismo chunk sorteó otro campo");
+        // Y la otra mitad, que sin ella lo pasaría un generador constante.
+        let other = build_chunk_records(&spec(64, 12), None);
+        assert_ne!(a, other, "dos chunks con semillas distintas dieron lo mismo");
+    }
+
+    /// Un registro son **cuatro números y nada más**: base en XZ, suelo, y el
+    /// alcance con la altura empaquetada. Cualquier cosa que se agregue acá
+    /// multiplica por la cantidad de briznas del campo, que es el costo que este
+    /// paso vino a bajar.
+    #[test]
+    fn a_record_is_four_numbers_and_lands_inside_its_chunk() {
+        let spec = spec(64, 5);
+        for record in build_chunk_records(&spec, None) {
+            assert_eq!(record.len() * 4, RECORD_BYTES);
+            let half = spec.chunk_m * 0.5;
+            assert!(
+                (record[0] - spec.centre.x).abs() <= half
+                    && (record[1] - spec.centre.y).abs() <= half,
+                "una brizna nació fuera de su chunk: {record:?}",
+            );
+            assert_eq!(record[2], 0.0, "el terreno de prueba es plano en y = 0");
+        }
+    }
+
+    /// **El techo de un metro es duro**: la altura viaja en la fracción de un
+    /// número que lleva el alcance del anillo en su parte entera, así que una
+    /// brizna de 1,2 m se leería como otro anillo. `floor`/`fract` tienen que
+    /// separarlos exactos.
+    #[test]
+    fn the_packed_reach_and_height_survive_floor_and_fract() {
+        let spec = spec(256, 3);
+        for record in build_chunk_records(&spec, None) {
+            let packed = record[3];
+            assert_eq!(packed.floor(), spec.ring_reach_m, "el alcance no vuelve entero");
+            let height = packed.fract();
+            assert!(
+                (0.0..=BLADE_HEIGHT_MAX).contains(&height),
+                "altura fuera de rango: {height}",
+            );
+        }
+        const {
+            assert!(BLADE_HEIGHT_MAX < 1.0);
+        }
+    }
+
+    /// **El índice de cada forma está escrito en los dos lados**, y nada en el
+    /// tipo los ata: desincronizarlos no da error, da una brizna con otra forma.
+    /// Esto lee el WGSL y los compara.
+    #[test]
+    fn the_shader_agrees_on_the_numbers_it_shares_with_this_module() {
+        let wgsl = std::fs::read_to_string("assets/shaders/grass.wgsl")
+            .expect("el shader de la pradera tiene que estar donde el material lo pide");
+        for (shape, name) in [
+            (BladeShape::Leaf, "SHAPE_LEAF"),
+            (BladeShape::Spike, "SHAPE_SPIKE"),
+            (BladeShape::Card, "SHAPE_CARD"),
+        ] {
+            let declared = format!("const {name}: u32 = {}u;", shape.shader_index());
+            assert!(
+                wgsl.contains(&declared),
+                "el shader no declara `{declared}` — su `{name}` y el de este \
+                 módulo dejaron de ser el mismo número",
+            );
+        }
+        // La cintura y la inclinación no se comparan porque **no están
+        // duplicadas**: viajan por uniform desde este módulo, que es la única
+        // forma de que no puedan discrepar.
+        assert!(
+            !wgsl.contains("const BLADE_WAIST"),
+            "la cintura volvió a estar escrita en el shader: mandala por uniform",
+        );
     }
 
     #[test]
@@ -1613,152 +1392,6 @@ mod tests {
         );
     }
 
-    /// Same chunk, same blades: a field that reshuffles when it is rebuilt makes
-    /// every visual comparison worthless — y desde el 2026-08-07, también toda
-    /// medición de píxeles, que compara dos capturas del mismo encuadre.
-    ///
-    /// **Este test comparaba longitudes.** O sea que pasaba igual si cada brizna
-    /// del chunk se plantaba en otro lado, que es exactamente el fallo que su
-    /// nombre promete atrapar. Ahora compara las posiciones.
-    #[test]
-    fn blades_are_deterministic_per_chunk() {
-        let positions = |mesh: &Mesh| match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
-            Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) => values.clone(),
-            _ => panic!("a chunk must carry Float32x3 positions"),
-        };
-        let a = positions(&build_chunk_mesh(&spec(64, BladeShape::Leaf, 11), None));
-        let b = positions(&build_chunk_mesh(&spec(64, BladeShape::Leaf, 11), None));
-        assert!(!a.is_empty(), "an empty chunk would make this vacuous");
-        assert_eq!(a, b, "the same chunk grew a different field");
-
-        // Y la otra mitad, que sin ella el test lo pasaría un generador que
-        // devuelve siempre lo mismo: dos chunks distintos son campos distintos.
-        let other = positions(&build_chunk_mesh(&spec(64, BladeShape::Leaf, 12), None));
-        assert_ne!(
-            a, other,
-            "two chunks with different seeds grew the same field"
-        );
-    }
-
-    /// The vertex carries only what cannot be derived. Normal and colour are
-    /// constants of the system rebuilt in `grass.wgsl`; baking them again would
-    /// silently put back the 28 bytes per vertex this system removed, and
-    /// nothing on screen would show it.
-    #[test]
-    fn the_vertex_carries_only_position_and_the_two_derived_values() {
-        let mesh = build_chunk_mesh(&spec(8, BladeShape::Leaf, 5), None);
-        assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
-        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
-        assert!(
-            mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_none(),
-            "the normal is +Y for every blade — the shader rebuilds it"
-        );
-        assert!(
-            mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_none(),
-            "the gradient is a function of uv.y between two uniforms"
-        );
-    }
-
-    /// El shader lee `uv.y` como altura a lo largo de la brizna, así que el orden
-    /// de los cuatro vértices **es** el contrato: punta abajo, cintura, cintura,
-    /// punta arriba.
-    ///
-    /// Y la fila del medio es lo que este test existe para congelar: sin ella los
-    /// bordes van rectos de la raíz a la punta y la brizna no puede arquearse,
-    /// que es lo que pasaba con el quad partido en diagonal.
-    #[test]
-    fn a_blades_four_vertices_keep_their_authored_order() {
-        let mesh = build_chunk_mesh(&spec(1, BladeShape::Leaf, 5), None);
-        let bevy::mesh::VertexAttributeValues::Float32x2(uvs) =
-            mesh.attribute(Mesh::ATTRIBUTE_UV_0).expect("uvs")
-        else {
-            panic!("uvs must be Float32x2");
-        };
-        assert_eq!(uvs[0][1], 0.0, "la punta de abajo es la raíz");
-        assert_eq!(uvs[1][1], BLADE_WAIST, "cintura izquierda");
-        assert_eq!(uvs[2][1], BLADE_WAIST, "cintura derecha");
-        assert_eq!(uvs[3][1], 1.0, "la punta de arriba");
-        // Propiedad de las constantes, así que se pierde compilando y no
-        // corriendo: sin una fila estrictamente entre raíz y punta, los bordes
-        // van rectos y la brizna no puede arquearse.
-        const {
-            assert!(BLADE_WAIST > 0.0 && BLADE_WAIST < 1.0);
-        }
-        for uv in uvs {
-            assert_eq!(uv[0], 0.0, "flat test ground is at y = 0 for every vertex");
-        }
-    }
-
-    /// The shader reads the blade hash out of the *sign* of `uv1.x`, so the two
-    /// edges of a quad have to disagree in sign and agree in magnitude. Get this
-    /// wrong and the normal bows the same way on both sides — which looks like
-    /// nothing at all, and would be found by nobody.
-    #[test]
-    fn the_two_edges_of_a_blade_carry_the_same_hash_with_opposite_signs() {
-        let mesh = build_chunk_mesh(&spec(1, BladeShape::Leaf, 9), None);
-        let bevy::mesh::VertexAttributeValues::Float32x2(data) =
-            mesh.attribute(Mesh::ATTRIBUTE_UV_1).expect("blade data")
-        else {
-            panic!("blade data must be Float32x2");
-        };
-        assert!(
-            data[1][0] < 0.0 && data[2][0] > 0.0,
-            "las dos esquinas de la cintura son los dos bordes y tienen que discrepar"
-        );
-        let magnitude = data[0][0].abs();
-        for vertex in data {
-            assert!(
-                (vertex[0].abs() - magnitude).abs() < f32::EPSILON,
-                "todos los vértices son de la misma brizna y comparten su hash: el \
-                 vertex shader saca de ahí el umbral de crecimiento, y uno distinto \
-                 deformaría la brizna en vez de encogerla entera"
-            );
-        }
-        for vertex in data {
-            // `y` packs the ring's reach in the whole part and the blade's
-            // height in the fraction — the shader splits them with floor/fract.
-            let (reach, height) = (vertex[1].floor(), vertex[1].fract());
-            assert_eq!(reach, 8.0, "the blade carries its own ring's reach");
-            assert!(
-                (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&height),
-                "every vertex carries its blade's height for the wind to scale"
-            );
-        }
-    }
-
-    /// The packing in `uv1.y` only works while a blade is under a metre.
-    #[test]
-    fn a_blade_stays_under_the_metre_its_packing_allows() {
-        // Const block: the packing is a compile-time property of the constants,
-        // so the build is the right place to lose, not the test run.
-        const {
-            assert!(
-                BLADE_HEIGHT_MAX < 1.0,
-                "blade height rides in the fraction of uv1.y, next to the ring reach"
-            );
-            assert!(BLADE_HEIGHT_MIN > 0.0 && BLADE_HEIGHT_MIN < BLADE_HEIGHT_MAX);
-        }
-        for ring in &RINGS {
-            assert!(
-                (ring.reach_m - ring.reach_m.round()).abs() < f32::EPSILON,
-                "a ring's reach is the whole part of the same number, so it must \
-                 be a whole number of metres — {} is not",
-                ring.reach_m
-            );
-        }
-        // And the same has to hold for every position of the reach dial, which
-        // is why `ring_reach` rounds instead of multiplying straight through.
-        for scale in bof_domain::perf::GRASS_REACH_STEPS {
-            for index in 0..RINGS.len() {
-                let reach = ring_reach(index, scale);
-                assert!(
-                    (reach - reach.round()).abs() < f32::EPSILON && reach >= 1.0,
-                    "ring {index} at {scale}x reaches {reach} m, which does not pack"
-                );
-            }
-        }
-    }
-
     /// **Lo que el uniform dice tiene que existir en la malla.** El shader busca
     /// el alcance de la brizna en la tabla del uniform; si no coincide no falla,
     /// *no encuentra nada*, y `ring_inner` ancla la ley `1/d` en cero sin que se
@@ -1821,51 +1454,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// La escalera baja, y lo que baja son **triángulos por metro cuadrado de
-    /// suelo**, no por primitiva: una carta son dos triángulos —más que la púa de
-    /// uno— y cubre el suelo de decenas de briznas. Hoy: 80 / 80 / 40 / 3.
-    #[test]
-    fn each_rung_of_the_ladder_costs_what_it_claims() {
-        let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
-        for shape in [BladeShape::Leaf, BladeShape::Spike, BladeShape::Card] {
-            let mesh = build_chunk_mesh(&spec(1, shape, 9), None);
-            assert_eq!(triangles(&mesh), shape.triangles(), "{shape:?}");
-            assert_eq!(mesh.count_vertices(), shape.vertices(), "{shape:?}");
-        }
-        let scale = reference_scale();
-        let per_square_metre: Vec<f32> = (0..RINGS.len())
-            .map(|index| {
-                density_for_ring(index, scale, REFERENCE_REACH)
-                    * shape_for_ring(index, scale, REFERENCE_REACH).triangles() as f32
-            })
-            .collect();
-        assert!(
-            per_square_metre.windows(2).all(|pair| pair[0] >= pair[1]),
-            "un anillo más lejano no puede costar más triángulos por m2: {per_square_metre:?}"
-        );
-    }
-
-    #[test]
-    fn a_blade_stands_on_the_ground_and_reaches_its_height() {
-        let mesh = build_chunk_mesh(&spec(1, BladeShape::Leaf, 3), None);
-        let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("positions")
-        else {
-            panic!("positions must be Float32x3");
-        };
-        let root = positions[0][1];
-        let tip = positions[3][1];
-        // La punta de abajo se hunde: en el suelo mismo la brizna sería
-        // infinitamente angosta y dejaría ver tierra donde nace.
-        assert!(
-            (root + BLADE_ROOT_SINK).abs() < 0.001,
-            "la punta de abajo tiene que quedar hundida, quedó en {root}"
-        );
-        assert!(
-            (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&tip),
-            "blade height {tip} outside its authored range"
-        );
     }
 }

@@ -182,6 +182,7 @@ pub fn capture_on_request(
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     terrain: crate::world::TerrainAccess,
     broken: Res<BrokenAssets>,
+    records: Res<crate::visuals::grass::MeadowRecordMemory>,
     mut taken: Local<u32>,
 ) {
     if requests.read().count() == 0 {
@@ -219,7 +220,7 @@ pub fn capture_on_request(
         f.z,
     );
     warn_on_broken_assets(&broken);
-    log_framing(&inventory);
+    log_framing(&inventory, &records);
     let geometry = shot_geometry(
         camera_pose,
         projection,
@@ -462,7 +463,7 @@ fn write_legend(
 /// Una foto sola no dice si lo que cambió es lo que se estaba mirando. Con el
 /// reparto al lado, "se ve distinto" y "hay 40% menos pradera en cuadro" dejan
 /// de ser la misma frase.
-fn log_framing(inventory: &SceneInventory) {
+fn log_framing(inventory: &SceneInventory, records: &crate::visuals::grass::MeadowRecordMemory) {
     let mut parts: Vec<String> = Vec::new();
     for subject in Subject::ALL {
         let tally = inventory.subject(subject);
@@ -478,12 +479,19 @@ fn log_framing(inventory: &SceneInventory) {
             inventory.triangle_share_of(subject) * 100.0,
         ));
     }
+    // Los buffers de registros van aparte porque el inventario cuenta mallas y
+    // no `ShaderBuffer`s: desde el Paso 2 la pradera guarda ahí la mayor parte de
+    // lo que antes eran vértices, y sin esta línea una corrida declararía una
+    // caída de memoria que es en parte mudanza.
     info!(
-        "[shot] escena: {} mallas visibles, {} triángulos, {} draws · {}",
+        "[shot] escena: {} mallas visibles, {} triángulos, {} draws · {} · registros de pradera \
+         {:.2} MB en {} chunks",
         inventory.visible_meshes,
         inventory.triangles,
         inventory.draws,
         parts.join(" · "),
+        records.bytes as f64 / 1_048_576.0,
+        records.chunks,
     );
 }
 
@@ -507,6 +515,7 @@ pub fn drive_auto_shot(
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     terrain: crate::world::TerrainAccess,
     broken: Res<BrokenAssets>,
+    records: Res<crate::visuals::grass::MeadowRecordMemory>,
 ) {
     match shot.stage {
         Stage::EnteringScene => {
@@ -566,7 +575,7 @@ pub fn drive_auto_shot(
             // Lo que la foto no puede mostrar: si dos encuadres discrepan, hace
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
             warn_on_broken_assets(&broken);
-            log_framing(&inventory);
+            log_framing(&inventory, &records);
             // La geometría sale de la cámara **real**, no del mirador pedido:
             // si las dos discrepan el aviso de arriba ya sonó, y una conversión
             // a metros hecha sobre una pose que la foto no tiene sería un

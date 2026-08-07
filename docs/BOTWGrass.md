@@ -88,45 +88,83 @@ constante. Un radio en metros describe una resolución, no un campo.
 | 2 | 24-40 m | púa de 1 triángulo | 40 |
 | 3 | 40-64 m | carta de 2 triángulos, silueta recortada | 5 |
 
-> ## El veredicto del 2026-08-07, jugando
+> ## El veredicto del 2026-08-07, jugando — y qué resultó ser
 >
 > **"No se siente bien el pasto. Siento que retrocedimos más que avanzamos, y
 > siento que es por muchas razones pequeñas."** — el usuario, después de jugar la
 > versión con los Pasos 0, 1 y 2 aplicados.
 >
-> Sus tres quejas, y qué dice la medición de cada una:
+> Sus tres quejas eran **dos bugs**, no muchas razones pequeñas:
 >
-> 1. **"Los billboards están muy cerca y se notan mucho; la idea era que fueran
->    la capa más lejana."** Confirmado y es un bug, no una impresión: aislando el
->    anillo 3 desde su propia pose, **planta cartas a un metro de la cámara**.
-> 2. **"El pasto desaparece por cuadrados enteros."** Confirmado por sus propias
->    capturas: caminando tres metros, la pradera pasa de 509.510 a 357.870
->    triángulos y de 35 a 25 mallas visibles. **Un tercio del campo entra y sale
->    de golpe.**
-> 3. **"Sigo pensando que el sistema de anillos no está bien."** Es el problema
->    de fondo que este documento arrastra desde tres sesiones, y esta sesión lo
->    **empeoró**: el Paso 2 hizo su trabajo en draws y memoria, pero el campo se
->    ve peor.
+> 1. **"Los billboards están muy cerca."** El chunk decidía, no la brizna:
+>    aislando el anillo 3 se plantaban **cartas a un metro de la cámara**.
+>    Arreglado con `blade_birth` — el anillo 3 aislado da hoy **0% adentro de los
+>    22 m** y 98,8% en 45-64.
+> 2. **"El pasto desaparece por cuadrados enteros."** No era el rodado ni el
+>    culling: `@builtin(vertex_index)` **no arranca en cero**. Ver abajo.
+> 3. **"El sistema de anillos no está bien."** Era el mismo bug: lo que se veía
+>    era un nivel entero apagándose.
 >
-> **La lección, que este documento ya tenía escrita y no se respetó:** *primero
-> se ve bien, después se optimiza*. Los Pasos 1 y 2 optimizaron sobre una imagen
-> que nunca se aceptó jugando — sólo por capturas desde un mirador fijo, que es
-> justamente donde estos tres síntomas no aparecen.
+> **La lección que este documento tenía escrita y no se respetó:** *primero se ve
+> bien, después se optimiza*. Los Pasos 1 y 2 optimizaron sobre una imagen que
+> nunca se aceptó jugando — y el bug del `vertex_index` estaba ahí desde el Paso
+> 2, invisible para toda captura desde el mirador fijo porque **el nivel que
+> apagaba cambiaba en cada corrida**.
+
+## El bug que se llevaba el campo: `vertex_index` no arranca en cero
+
+Encontrado el 2026-08-07 después de descartar, midiendo, el rodado, el frustum
+culling, el crecimiento, el modo de alfa, el tamaño del buffer y los registros en
+CPU. El síntoma: **dos corridas idénticas, misma pose y mismo código, daban
+campos distintos** — a veces el anillo 3 cubría el 93% de su banda, a veces el
+0%.
+
+El vertex shader ubicaba la brizna así:
+
+```wgsl
+let record = blade_records[slot * stride + vertex.vertex_index / 4u];
+```
+
+En un draw **indexado**, `@builtin(vertex_index)` vale el índice **más el
+`base_vertex`** que Bevy le da a la malla dentro de su buffer compartido
+(`MeshAllocator`). Una malla grande se lleva un slab propio y arranca en cero —de
+ahí que los tres niveles cercanos anduvieran—, pero **una chica comparte slab y
+arranca corrida**: el nivel leía fuera de su casillero, recibía ceros, y con
+ceros una carta no se abre (sus cuatro vértices se hornean en el mismo punto).
+Nivel entero ausente, sin un solo error.
+
+Cuál nivel caía dependía del orden de asignación de mallas, que cambia entre
+corridas. **Verificado por el reverso:** subiéndole la densidad al anillo 3 para
+que su malla pasara a tener slab propio, las tres corridas salieron completas.
+
+**El arreglo:** la dirección de la brizna —cuál es y cuál esquina— viaja en
+`UV_0`, que la malla índice ya tenía como relleno. Un atributo viaja *con* el
+vértice y no sabe nada de dónde vive la malla. Cuesta cero bytes: el atributo ya
+estaba. Dos tests lo cobran, uno sobre la malla y otro sobre el shader.
+
+**Lo que esto enseña sobre el instrumental** (ver `docs/AHORA.md`): un bug no
+determinista pasa por "cambió el viento" en una sola captura. Lo que lo delató
+fue **repetir la misma captura tres veces**, no mirarla mejor.
 
 **Medido desde el mirador canónico, caja Pasto** *(a, 2026-08-07, al cerrar la
-sesión)*: 556.032 triángulos de pradera en **4 draws** —eran 32—, 4,5 MB de
-mallas más 10,0 MB de buffers de registros, contra 31,6 MB de mallas antes.
+sesión)*: 364.200 triángulos de pradera en 4 draws, 4,5 MB de mallas más 8,5 MB
+de buffers, 70 chunks. Contra el estado del mediodía —mismo aparato, misma
+pose— eran 449.250 triángulos y 84 chunks: **menos geometría y más campo**.
 
-**Y esos números son exactamente el problema.** Son mejores que los de la mañana
-en todo lo que se puede contar, y el campo se ve peor jugando. Ver el veredicto
-de arriba: draws y megabytes no eran el objetivo.
+| banda | mediodía (Pasos 0-2) | ahora | |
+|---|---:|---:|---|
+| 3-4 m | 99,7% | 99,3% | |
+| 4-6 m | 99,9% | 99,9% | |
+| 6-8 m | 99,8% | 99,7% | |
+| 8-11 m | 95,8% | 96,5% | |
+| 11-16 m | 88,9% | **94,5%** | |
+| 16-22 m | 88,0% | **96,9%** | |
+| 22-32 m | 73,6% | **93,4%** | |
+| 32-45 m | 61,1% | **99,0%** | |
+| 45-64 m | 48,3% | **98,8%** | |
 
-| banda | horneado (mañana) | ahora |
-|---|---:|---:|
-| 3-4 m | 99,8% | **87,7%** |
-| 8-11 m | 99,5% | 96,2% |
-| 22-32 m | 94,7% | **84,0%** |
-| 45-64 m | 97,4% | 98,9% |
+Ninguna banda baja de 93%, y las cinco lejanas eran el agujero del campo. **Las
+tres corridas repetidas dan el mismo número** — que es la mitad del resultado.
 
 ### La brizna: dos triángulos unidos por una arista horizontal
 
@@ -337,42 +375,43 @@ densidad.
 
 ---
 
-## Las tres quejas son un solo bug: **el chunk decide, no la brizna**
+## La brizna decide, no el chunk — **HECHO (2026-08-07)**
 
-Diagnosticado el 2026-08-07 con las capturas del usuario y `grass-rings`.
+`ring_cells_with_slack` decidía qué se ve mirando el chunk **entero**: si
+cualquier parte de él caía más allá de la frontera de traspaso, se plantaba
+completo. Los chunks del anillo 3 miden **32 metros**, así que uno que asomaba la
+punta más allá de la frontera traía un cuadrado que **contenía a la cámara**, con
+sus cartas a tamaño completo — la ley `1/d` sólo ralea lo lejano, nunca lo
+cercano. De ahí *"los billboards están muy cerca"*.
 
-`ring_cells_with_slack` decide qué chunks existen mirando el chunk **entero**: si
-cualquier parte de él cae más allá de la frontera de traspaso, se planta
-**completo**. Los chunks del anillo 3 miden **32 metros**, así que uno que asoma
-la punta más allá de los 34 m de frontera trae consigo un cuadrado de 32 m que
-**contiene a la cámara** — y sus cartas cercanas se dibujan a tamaño completo,
-porque la ley `1/d` sólo ralea lo lejano, nunca lo cercano.
+**El arreglo es simétrico al borde de afuera**: `blade_birth` en `grass.wgsl`. La
+brizna **nace** con la distancia en vez de morir con ella, con su umbral repartido
+por hash sobre la banda `[inner − spread − ramp, inner]`. Tres propiedades que
+hacen que funcione donde el intento anterior dejó un pozo:
 
-De ahí salen las tres quejas a la vez:
+- **Es una banda, no un corte.** Un umbral duro sería un círculo de cartas
+  apareciendo a distancia fija que se mueve con el jugador: el mismo pop con otra
+  forma.
+- **Termina en el borde interno del anillo**, que es donde el de adentro todavía
+  está entero. Por eso el traspaso no deja costura: uno muere mientras el otro
+  nace, sobre el mismo tramo.
+- **No toca el solapamiento que paga.** El Paso 0 midió que de 8 a 22 m el
+  solapamiento vale hasta 22 puntos de cobertura; lo que se recorta es sólo de la
+  frontera hacia adentro.
 
-- **Los billboards cerca**: son las cartas de ese chunk, plantadas a un metro.
-- **Los cuadrados que desaparecen**: la unidad de aparición es ese chunk de 32 m,
-  no la brizna. Cuando entra o sale, se lleva un tercio del campo.
-- **Los anillos no están bien**: porque el nivel sigue decidiendo por chunk lo
-  que tendría que decidirse por brizna.
+Medido, anillo 3 aislado desde el mirador *(a, 2026-08-07)*: **0,0% adentro de
+los 22 m** —antes plantaba cartas a un metro—, 91,8% en 32-45 y 98,8% en 45-64.
+Los billboards volvieron a ser la capa más lejana.
 
-**Y no es del Paso 2: es viejo.** En el Paso 0 se midió `a3 = 0,0%` en las bandas
-cercanas — las cartas ya estaban ahí, pero el anillo 0 las tapaba enteras. Al
-perder densidad el primer plano (99,8% → 87,7%), **asomó la basura que siempre
-estuvo debajo**. Las dos cosas que se venían arrastrando eran la misma.
+### Y el borde de un nivel dejó de ser un cuadrado
 
-### El arreglo, y su advertencia
-
-Que la brizna se descarte **por su propia distancia**, no por la de su chunk:
-colapsarla si está más cerca que el borde interno de su anillo. En el shader es
-una línea —`ring_inner(reach)` ya existe— y es literalmente *el LOD por brizna*
-que el Paso 2 vino a habilitar; hasta ahora la decisión seguía siendo por chunk.
-
-**La advertencia está medida:** el Paso 0 encontró que el solapamiento **de 8 a
-22 m paga cobertura** (quitarlo cuesta hasta 22 puntos) y que **de 3 a 8 m es
-desperdicio puro** (0,3 puntos). Así que el corte no puede ser "matar todo lo
-interno" o se cambia un artefacto por un campo ralo. La curva del Paso 0 ya da
-con qué calibrarlo.
+El selector medía en Chebyshev, así que el alcance era un cuadrado cuantizado a
+la grilla. **Se podía porque el chunk decidía la imagen; ahora que decide la
+brizna, el selector sólo dice qué se tiene en memoria** y puede medir en
+euclídeas sin que se vea nada. Con eso el borde es un círculo y —esto sí importa—
+el test *"todas las briznas de un chunk descartado ya están muertas"* pasa a ser
+cierto: en Chebyshev no lo era, porque la esquina de un cuadrado está a √2 de su
+lado.
 
 ## El problema abierto: los anillos
 
@@ -413,19 +452,11 @@ Tres hallazgos:
    constante. Antes de reintentarlo hay que medir **la curva de cobertura contra
    densidad a varias distancias**, que las herramientas ya permiten sacar.
 
-### Y el borde de un nivel es un **cuadrado**
-
-`ring_cells_with_slack` usa distancia de Chebyshev, así que el alcance es un
-cuadrado cuantizado a la grilla de chunks. Estuvo siempre; se hizo visible el
-2026-08-07 cuando las densidades derivadas quedaron 155/70/30/1 en vez de
-40/40/40/24 y cada escalón cuadrado pasó a leerse como un parche rectangular.
-
-**Todo esto sale de la misma decisión: el LOD está horneado en mallas estáticas
-por chunk.** De ahí salen la frontera cuadrada, el reshuffling, el
-esconder-pero-pagar, los 5-9 ms de horneado y los megabytes. La salida es que la
-brizna deje de ser geometría y pase a ser **un registro**: `MeshTag` +
-`ShaderStorageBuffer` + instancing automático, que Bevy soporta de fábrica
-conservando `ExtendedMaterial`. Con eso el LOD se decide por brizna y por frame.
+**Todo esto salía de la misma decisión: el LOD horneado en mallas estáticas por
+chunk.** De ahí la frontera cuadrada, el reshuffling, el esconder-pero-pagar, los
+5-9 ms de horneado y los megabytes. El Paso 2 lo desarmó —la brizna es un
+registro— y recién con eso el LOD pudo pasar a decidirse por brizna y por frame,
+que es lo que arriba se hizo.
 
 ---
 
@@ -696,29 +727,33 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 | Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
 | El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
 
-## Por dónde retomar (escrito el 2026-08-07, al cerrar la sesión)
+## Por dónde retomar (2026-08-07, segunda sesión del día)
 
-En orden, y el orden importa: **nada de lo de abajo se toca hasta que el campo
-se sienta bien jugando.** No hay más optimización pendiente que valga la pena
-antes de eso.
+**Lo primero es jugarlo.** Todo lo de esta tanda está medido con capturas
+repetidas y ninguna cifra baja de 93%, pero el veredicto de la mañana enseñó que
+los números buenos no son el objetivo. Hasta que el campo pase por sus manos
+caminando, no se toca nada más.
 
-1. **La brizna decide, no el chunk.** El arreglo de arriba. Es la causa común de
-   las tres quejas y la única que hace falta para que el campo deje de romperse
-   al caminar. Se valida **jugando**, no con capturas: los tres síntomas no
-   aparecen desde el mirador fijo.
-2. **Recuperar la cobertura del primer plano.** 87,7% contra 99,8% del estado
-   horneado, sin diagnosticar. Descartados por medición: el raleo `1/d`
-   (apagarlo mueve 4 puntos) y el hash del seno (cambiarlo por enteros no movió
-   nada). La sospecha viva es que el yaw y la inclinación salen ahora de la
-   posición en vez de venir horneados, y que el hash tiene correlación local.
-3. **Recién ahí, el Paso 3** (praderas anidadas), que ya puede calcular su costo
-   con la aritmética del Paso 0.
+Después, en orden:
 
-**Y una decisión que no es mía:** si el campo no se recupera con (1) y (2), lo
-honesto es **revertir el Paso 2** y quedarse con la pradera horneada, que se veía
-mejor. El Paso 2 cumplió sus números —32 → 4 draws, 31,6 → 14 MB— pero esos
-números no eran el objetivo: el objetivo es el *feeling* de BOTW, y el usuario
-jugó y dijo que empeoró. `git log` tiene el estado horneado intacto.
+1. **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con el
+   comentario "cruzar una frontera cuesta un chunk". **Es falso:** cruzar una
+   frontera del anillo 0 pide una *fila* de chunks, y las cuatro grillas ruedan a
+   la vez. No está medido que se vea —el bug del `vertex_index` explicaba lo que
+   se le achacaba— pero el razonamiento no se sostiene. Medir el costo de hornear
+   un chunk del anillo 0 (11.700 briznas) antes de elegir el número.
+2. **La semilla de la brizna todavía incluye el nivel.** Es el cuarto eje del
+   problema de los anillos, el único sin separar: cruzar una frontera *reemplaza*
+   briznas en vez de agregarlas. El intento anidado está medido y revertido más
+   arriba.
+3. **El Paso 5, el viento**, que quedó explícitamente aplazado hasta que el resto
+   estuviera bien.
+
+**Ya no está pendiente** lo que la sesión anterior dejó anotado: la cobertura del
+primer plano no era un problema de hash ni de raleo —el estado de hoy da 99,3% a
+3-4 m con el mismo shader— y la decisión de revertir el Paso 2 ya no tiene
+sentido: el Paso 2 no era el culpable, sino un bug suyo, y arreglado deja el
+campo mejor de lo que estuvo nunca.
 
 ## Errores que este documento ya cometió — no reintroducir
 
@@ -795,6 +830,26 @@ Polaris 11 de 2016 no los tiene.
 por frame (<1% del bandwidth, ruido) y **no miraba la memoria residente ni el
 horneado**, que son 26-76 MB y 5-9 ms por chunk. Con esos dos números sobre la
 mesa el veredicto se cae.
+
+16. **Un bug no determinista se disfraza de "cambió el viento".** El del
+    `vertex_index` apagaba un nivel entero, y cuál nivel cambiaba en cada corrida.
+    Cada captura suelta parecía una configuración distinta con una explicación
+    plausible: "el anillo 3 no llega", "el primer plano perdió densidad". Lo que
+    lo delató fue **repetir la misma captura tres veces con todo idéntico** — y
+    eso cuesta tres minutos. Antes de explicar una diferencia entre dos
+    configuraciones, verificar que la misma configuración se repite a sí misma.
+
+17. **Cuando algo desaparece, sospechar del direccionamiento antes que del
+    contenido.** Se descartaron, midiendo, el rodado, el frustum culling, el
+    crecimiento, el modo de alfa, el tamaño del buffer y los registros en CPU —
+    todos "el dato está mal"— antes de mirar *cómo se lo busca*. Con vertex
+    pulling, un índice corrido no da error: da ceros, y los ceros se ven como
+    "no se plantó".
+
+18. **Un builtin del shader es una API, y hay que leerla.** `@builtin(vertex_index)`
+    parece un contador desde cero y no lo es: en un draw indexado incluye el
+    `base_vertex`. Lo que hizo el bug caro es que **funciona igual** mientras la
+    malla sea grande, porque una malla grande se lleva un slab propio.
 
 ---
 

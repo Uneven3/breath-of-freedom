@@ -46,6 +46,13 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   el perfil por bandas si la cámara está inclinada**: ahí la fila de pantalla ya
   no ordena por distancia, así que el perfil describiría algo que no existe. Lo
   verifica contra la pose que la corrida escribió, no lo supone.
+- **Antes de explicar una diferencia entre dos configuraciones, sacar la misma
+  captura dos veces.** Cuesta tres minutos y el 2026-08-07 fue lo único que
+  destapó un bug que apagaba un nivel entero de la pradera con resultado distinto
+  en cada corrida: cada foto suelta parecía una configuración con su explicación
+  plausible. La estadística de píxeles es determinista salvo el viento (piso 5%),
+  así que **una diferencia grande entre dos corridas idénticas es un bug, no
+  ruido**.
 - **F7 en el juego captura lo que el usuario está viendo**, numerada, con la pose
   de cámara impresa ya formateada como `BOF_SHOT_POSE`. Es la única forma de que
   un reporte visual suyo llegue sin pasar por mi interpretación.

@@ -3,18 +3,15 @@
 //! Cada nivel de la pradera tiene acá tres cosas: una **malla índice** que todos
 //! sus chunks comparten, un **buffer** con un registro de 16 bytes por brizna, y
 //! un libro de **casilleros** que dice qué chunk ocupa cuál. El vertex shader
-//! junta las tres: `MeshTag` le da el casillero, `vertex_index` le da la brizna y
-//! la esquina, y de ahí construye los vértices que antes venían horneados.
+//! junta las tres: `MeshTag` le da el casillero, `UV_0` le da la brizna y la
+//! esquina, y de ahí construye los vértices que antes venían horneados.
 //!
 //! Existe aparte de `grass.rs` porque son dos preguntas distintas: aquél decide
 //! **qué se planta**, esto **cómo llega a la GPU**.
 //!
-//! # Lo que hace que el batching funcione
-//!
 //! El batching automático de Bevy exige el **mismo `Handle<Mesh>`**, y una malla
 //! por chunk lo impedía. Acá todos los chunks de un nivel comparten una, y eso se
-//! puede porque **todos tienen exactamente la misma cantidad de briznas**:
-//! `blades_per_chunk` depende del nivel y de las perillas, no de la celda. De la
+//! puede porque **todos tienen exactamente la misma cantidad de briznas**. De la
 //! misma propiedad sale que el casillero sea un índice con stride fijo y no un
 //! rango — sin ella haría falta un allocator con fragmentación.
 
@@ -123,7 +120,8 @@ impl RingRecords {
         }
     }
 
-    /// Copia los registros de un chunk a su casillero.
+    /// Copia los registros de un chunk a su casillero, agrandando el buffer si
+    /// hace falta.
     pub fn write(&mut self, slot: u32, records: &[[f32; 4]]) {
         let stride = self.stride as usize;
         let needed = (slot as usize + 1) * stride * RECORD_BYTES;
@@ -166,28 +164,41 @@ impl RingRecords {
 }
 
 /// Cuántos vértices reserva la malla índice por brizna: **cuatro para todas las
-/// formas, incluida la púa que sólo usa tres.**
-///
-/// Uniforme a propósito. Con dos zancadas conviviendo, el shader deduce la suya
-/// de un uniforme, y en cuanto ese número no coincide con la malla del draw los
-/// índices dejan de agrupar los vértices de una misma brizna: salen triángulos
-/// que cruzan el campo. Que no pueda pasar cuesta un vértice sin usar por púa en
-/// una malla que existe una vez por nivel, y ni un triángulo.
+/// formas, incluida la púa que sólo usa tres.** Uniforme a propósito: cuesta un
+/// vértice sin referenciar por púa y ahorra que dos zancadas convivan.
 pub(super) const VERTICES_PER_BLADE: u32 = 4;
 
 /// La malla **índice** de un nivel: la comparten todos sus chunks.
 ///
 /// No lleva posiciones útiles —salen del registro— pero sí los tres atributos:
-/// los shader defs salen de qué atributos tiene la malla, y sin `UV_0`/`UV_1` el
-/// `VertexOutput` de Bevy pierde campos que el fragment usa.
+/// sin `UV_0`/`UV_1` el `VertexOutput` de Bevy pierde campos que el fragment usa.
+///
+/// **`UV_0` lleva cuál brizna y cuál esquina es este vértice, y eso no es un
+/// adorno: es la corrección del 2026-08-07.** Antes salían de dividir
+/// `@builtin(vertex_index)`, y ese número **no empieza en cero**: para un draw
+/// indexado vale el índice más el `base_vertex` que Bevy le da a la malla dentro
+/// de su buffer compartido (`MeshAllocator`). Una malla grande se lleva un slab
+/// propio y arranca en cero —por eso los tres niveles cercanos andaban—, pero una
+/// chica comparte slab y arranca corrida: el nivel entero leía registros fuera de
+/// su casillero, o sea **ceros**, y desaparecía. Cuál nivel caía dependía del
+/// orden de asignación, así que dos corridas idénticas daban campos distintos.
+/// Un atributo viaja con el vértice y no sabe nada de dónde vive la malla.
 pub(super) fn ring_index_mesh(blades: u32, triangles_per_blade: u32) -> Mesh {
     let vertices = blades as usize * VERTICES_PER_BLADE as usize;
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
+    let addresses: Vec<[f32; 2]> = (0..vertices)
+        .map(|vertex| {
+            [
+                (vertex / VERTICES_PER_BLADE as usize) as f32,
+                (vertex % VERTICES_PER_BLADE as usize) as f32,
+            ]
+        })
+        .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; vertices]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32; 2]; vertices]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, addresses);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.0_f32; 2]; vertices]);
     let mut indices: Vec<u32> = Vec::new();
     for blade in 0..blades {
@@ -207,6 +218,45 @@ pub(super) fn ring_index_mesh(blades: u32, triangles_per_blade: u32) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **La dirección de una brizna viaja en el vértice, no en un contador.**
+    ///
+    /// El test que faltaba el 2026-08-07: mientras salía de `vertex_index`, un
+    /// nivel entero podía leer fuera de su casillero porque ese builtin arranca en
+    /// el `base_vertex` de la malla, y desaparecía sin un error. Acá se cobra que
+    /// `UV_0` lleve `(brizna, esquina)` — lo único que hace que el shader no
+    /// dependa de dónde vive la malla.
+    #[test]
+    fn every_vertex_carries_which_blade_and_corner_it_is() {
+        let mesh = ring_index_mesh(3, 2);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x2(address)) =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("la malla índice tiene que llevar la dirección en UV_0");
+        };
+        assert_eq!(address.len(), 3 * VERTICES_PER_BLADE as usize);
+        for (vertex, [blade, corner]) in address.iter().copied().enumerate() {
+            let vertex = u32::try_from(vertex).expect("malla chica de test");
+            assert_eq!(blade, (vertex / VERTICES_PER_BLADE) as f32);
+            assert_eq!(corner, (vertex % VERTICES_PER_BLADE) as f32);
+        }
+    }
+
+    /// Y el shader tiene que leerla de ahí. Con `vertex_index` la malla índice
+    /// puede estar perfecta y el campo desaparecer igual.
+    #[test]
+    fn the_shader_addresses_blades_by_attribute_not_by_vertex_index() {
+        let wgsl = include_str!("../../assets/shaders/grass.wgsl");
+        assert!(
+            !wgsl.contains("vertex.vertex_index"),
+            "el shader volvió a direccionar por `vertex_index`, que arranca en el \
+             `base_vertex` de la malla y hace desaparecer niveles enteros",
+        );
+        assert!(
+            wgsl.contains("vertex.address"),
+            "el shader dejó de leer la dirección que la malla índice le pone en UV_0",
+        );
+    }
 
     /// Un casillero liberado se reusa, o el buffer crece sin techo mientras el
     /// jugador camina — que es el modo de falla que este libro existe para

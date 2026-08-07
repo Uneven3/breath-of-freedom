@@ -479,10 +479,11 @@ fn blades_per_chunk(index: usize, dial: f32, scale: f32, reach_scale: f32) -> u3
     (ring.chunk_m * ring.chunk_m * density).round().max(0.0) as u32
 }
 
-/// Which cells of `ring` should exist with the camera at `focus`.
-///
-/// Chebyshev square, not a circle: the chunks are a square grid, so a square
-/// boundary keeps a chunk wholly in a ring or wholly out.
+/// Qué celdas de un nivel existen con la cámara en `focus`. **Decide qué se
+/// tiene en memoria, no qué se ve**: desde que la brizna se descarta por su
+/// propia distancia (`blade_growth` en `grass.wgsl`), esto es un test conservador
+/// —se conserva el chunk que pueda tener *alguna* brizna viva—. Cuando decidía la
+/// imagen, el campo aparecía y desaparecía en cuadrados de 32 m.
 fn ring_cells(index: usize, focus: Vec2, reach_scale: f32) -> Vec<IVec2> {
     ring_cells_with_slack(index, focus, 0.0, reach_scale)
 }
@@ -519,15 +520,17 @@ fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32, reach_scale: f32
         for dx in -span..=span {
             let cell = base + IVec2::new(dx, dz);
             let offset = (cell_centre(cell, ring.chunk_m) - focus).abs();
-            // Chebyshev, because the chunks are a square grid: a square boundary
-            // is the one that never cuts a chunk in half.
-            let nearest = (offset - Vec2::splat(half)).max(Vec2::ZERO).max_element();
-            let farthest = (offset + Vec2::splat(half)).max_element();
-            // El anillo de afuera empieza *antes* de donde termina el de
-            // adentro, por el ancho de la dispersión: en esa franja el interior
-            // ralea y el exterior ya está entero, así que la densidad cruza sin
-            // escalón.
-            let handover = (inner_reach - GROWTH_SPREAD_M).max(0.0);
+            // **Euclídeas, no Chebyshev**: el shader mide con `length()`, y esto
+            // sólo puede descartar un chunk cuyas briznas ya estén *todas*
+            // muertas para él. La esquina de un cuadrado está a √2 de su lado, y
+            // de ahí salían chunks que se iban con briznas vivas adentro y un
+            // borde de anillo que se veía cuadrado.
+            let nearest = (offset - Vec2::splat(half)).max(Vec2::ZERO).length();
+            let farthest = (offset + Vec2::splat(half)).length();
+            // Donde el anillo empieza a **nacer**: `spread + ramp` antes de su
+            // borde interno (`blade_birth` en `grass.wgsl`). El `slack` le da a
+            // este lado la misma histéresis que al de afuera.
+            let handover = (inner_reach - GROWTH_SPREAD_M - GROWTH_RAMP_M - slack).max(0.0);
             if nearest > reach_m || farthest <= handover {
                 continue;
             }
@@ -607,12 +610,9 @@ pub(super) fn upload_meadow_records(
     memory.chunks = field.records.iter().map(RingRecords::chunks).sum();
 }
 
-/// Lo que la pradera tiene en buffers de registros, publicado para que una
-/// corrida lo pueda declarar.
-///
-/// **El inventario de la escena cuenta mallas y no `ShaderBuffer`s**, así que sin
-/// esto la memoria que el Paso 2 mudó de una cosa a la otra no la ve nadie y una
-/// corrida declararía una caída que es en parte mudanza.
+/// Lo que la pradera tiene en buffers de registros. **El inventario de la escena
+/// cuenta mallas y no `ShaderBuffer`s**, así que sin esto una corrida declararía
+/// como caída lo que el Paso 2 sólo mudó de una cosa a la otra.
 #[derive(Resource, Default, Clone, Copy)]
 pub(crate) struct MeadowRecordMemory {
     pub bytes: usize,
@@ -621,14 +621,10 @@ pub(crate) struct MeadowRecordMemory {
 
 /// La caja de un chunk, en mundo. El `Transform` es identidad, así que su
 /// espacio local es el del mundo y este AABB vale tal cual.
-/// **La altura sale del terreno que se muestreó, no de cero.** La primera versión
-/// daba la caja entre `y = −1` y `y = 1,9` absolutos: correcto sólo sobre suelo
-/// plano, y en cuanto hay relieve las briznas quedan fuera de su propia caja y el
-/// chunk se descarta con el jugador mirándolo.
-///
-/// A lo ancho es la celda entera, que es donde caen las bases. El margen cubre lo
-/// que el vertex shader agrega después: el hundido de la raíz, la inclinación de
-/// la punta y la carta abriéndose contra la cámara.
+/// **La altura sale del terreno que se muestreó, no de cero**: fija entre `−1` y
+/// `1,9` sólo valía sobre suelo plano, y con relieve el chunk se descartaba con
+/// el jugador mirándolo. El margen cubre lo que el vertex shader agrega después
+/// —raíz hundida, punta inclinada, carta abriéndose contra la cámara—.
 fn chunk_bounds(centre: Vec2, chunk_m: f32, ground: std::ops::RangeInclusive<f32>) -> Aabb {
     let half = chunk_m * 0.5 + CHUNK_BOUNDS_MARGIN_M;
     Aabb::from_min_max(
@@ -723,13 +719,13 @@ pub(super) fn roll_meadow_grid(
     // del viewport deciden cuántos píxeles mide una brizna a cada distancia, y de
     // ahí sale qué primitiva le toca. Si no hay ventana todavía, la referencia:
     // vale más hornear con la escalera del escritorio que no hornear.
+    let viewport_height = window.map_or(REFERENCE_VIEWPORT_HEIGHT, |window| {
+        window.physical_height() as f32
+    });
     let scale = match projection {
-        Projection::Perspective(perspective) => metres_per_pixel_at_one_metre(
-            perspective.fov,
-            window.map_or(REFERENCE_VIEWPORT_HEIGHT, |window| {
-                window.physical_height() as f32
-            }),
-        ),
+        Projection::Perspective(perspective) => {
+            metres_per_pixel_at_one_metre(perspective.fov, viewport_height)
+        }
         // Sin perspectiva no hay "píxeles por metro a distancia d": una
         // ortográfica los tiene constantes. La referencia es lo honesto.
         Projection::Orthographic(_) | Projection::Custom(_) => reference_scale(),
@@ -767,7 +763,6 @@ pub(super) fn roll_meadow_grid(
             let triangles = shape_for_ring(ring, scale, reach_scale).triangle_count();
             field.records[ring].mesh = Some(meshes.add(ring_index_mesh(blades, triangles)));
             field.records[ring].stride = blades;
-
         }
     }
 
@@ -933,26 +928,38 @@ pub(super) fn track_meadow_focus(
     perf: Res<crate::perf::PerfToggles>,
     time: Res<Time>,
 ) {
-    let Some(camera) = camera else {
-        return;
-    };
-    let data = meadow_uniform(&camera, sun.as_deref().map(|sun| &**sun), &perf, &time);
-    // **Cada nivel recibe su stride y su forma.** Son lo que le dice al vertex
-    // shader dónde está el registro de una brizna y qué construir con él; cruzados
-    // entre niveles, un nivel leería los registros de otro.
+    // **El reparto del buffer se escribe aunque no haya cámara**, y ésa es la
+    // corrección del 2026-08-07. `record_layout.x` es el stride del nivel: con
+    // cero, `slot * stride` es cero para todo chunk y **el nivel entero lee los
+    // registros del casillero 0** — sus chunks se apilan sobre uno solo y el resto
+    // del campo queda pelado. Y `y` es la forma: con cero, las cartas se
+    // construyen como hojas de 5,5 cm y el anillo lejano desaparece.
+    //
+    // Salía de un `GrassUniform` armado desde la cámara, así que un frame sin
+    // cámara única —una transición de escena con dos `Camera3d`— dejaba el uniform
+    // en su default. El síntoma no era un parpadeo de un frame: era el estado con
+    // el que quedaba el material hasta la siguiente escritura, y de ahí los
+    // cuadrados que aparecían y desaparecían sin patrón entre corridas iguales.
     let scale = reference_scale();
     let reach_scale = perf.grass_reach_scale();
+    let layouts: Vec<UVec4> = (0..RINGS.len())
+        .map(|ring| {
+            UVec4::new(
+                field.records[ring].stride,
+                shape_for_ring(ring, scale, reach_scale).shader_index(),
+                0,
+                0,
+            )
+        })
+        .collect();
+    let data = camera
+        .map(|camera| meadow_uniform(&camera, sun.as_deref().map(|sun| &**sun), &perf, &time));
     for (ring, handle) in field.materials.iter().enumerate() {
         if let Some(mut material) = materials.get_mut(handle) {
-            material.extension.grass_data = GrassUniform {
-                record_layout: UVec4::new(
-                    field.records[ring].stride,
-                    shape_for_ring(ring, scale, reach_scale).shader_index(),
-                    0,
-                    0,
-                ),
-                ..data
-            };
+            if let Some(data) = &data {
+                material.extension.grass_data = GrassUniform { ..*data };
+            }
+            material.extension.grass_data.record_layout = layouts[ring];
         }
     }
 }
@@ -1295,8 +1302,9 @@ mod tests {
         }
     }
 
-    /// The rings have to tile the ground, not stack on it: a cell covered by two
-    /// rings is a patch paying twice for grass nobody asked for.
+    /// Todo lo que está **dentro del alcance** cae en algún chunk — y alcance
+    /// quiere decir **círculo**, desde que el selector mide en euclídeas. Las
+    /// esquinas del cuadrado de 64 m están a 89 m y ningún nivel las prometió.
     #[test]
     fn no_point_inside_the_reach_is_left_uncovered() {
         let focus = Vec2::new(3.7, -11.2);
@@ -1316,6 +1324,10 @@ mod tests {
             let mut across = -outermost;
             while across <= outermost {
                 let point = focus + Vec2::new(along, across);
+                if Vec2::new(along, across).length() > outermost {
+                    across += 1.7;
+                    continue;
+                }
                 let inside = covered.iter().any(|(centre, half)| {
                     let offset = (point - *centre).abs();
                     offset.x <= *half && offset.y <= *half
@@ -1328,6 +1340,41 @@ mod tests {
                 across += 1.7;
             }
             along += 1.7;
+        }
+    }
+
+    /// **Ningún nivel se queda sin chunk donde sus briznas están vivas.**
+    ///
+    /// Es el contrato entre este módulo y `blade_growth`: allá la brizna nace
+    /// `spread + ramp` antes del borde interno de su anillo, así que si acá el
+    /// traspaso se recortara antes, el shader querría dibujar briznas de un chunk
+    /// que no existe — y lo que se ve es una franja pelada que sigue al jugador.
+    /// El fallo que este test atrapa es mover una de las dos constantes sin la
+    /// otra.
+    #[test]
+    fn every_ring_has_chunks_wherever_its_blades_are_alive() {
+        let focus = Vec2::new(3.7, -11.2);
+        for (index, ring) in RINGS.iter().enumerate() {
+            let cells = ring_cells(index, focus, REFERENCE_REACH);
+            let reach = ring_reach(index, REFERENCE_REACH);
+            let born = (band_inner(index, REFERENCE_REACH) - GROWTH_SPREAD_M - GROWTH_RAMP_M)
+                .max(0.0)
+                .max(NEAREST_INTEREST_M);
+            for step in 0_u8..48 {
+                let angle = f32::from(step) * std::f32::consts::TAU / 48.0;
+                let direction = Vec2::new(angle.cos(), angle.sin());
+                for distance in [born, f32::midpoint(born, reach), reach * 0.999] {
+                    let point = focus + direction * distance;
+                    let half = ring.chunk_m * 0.5;
+                    assert!(
+                        cells.iter().any(|cell| {
+                            let offset = (point - cell_centre(*cell, ring.chunk_m)).abs();
+                            offset.x <= half && offset.y <= half
+                        }),
+                        "el anillo {index} tiene briznas vivas a {distance:.1} m y ningún chunk ahí",
+                    );
+                }
+            }
         }
     }
 

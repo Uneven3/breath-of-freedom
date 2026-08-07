@@ -253,15 +253,23 @@ fn ring_chunk_m(slot: u32) -> f32 {
 }
 
 /// Un pastel determinista a partir de una semilla: tres canales de ruido
-/// arrastrados hacia el blanco. Desaturado a propósito — el campo tiene que
-/// seguir viéndose mientras se lo diagnostica.
-fn pastel(seed: vec2<f32>) -> vec3<f32> {
+/// arrastrados hacia el blanco.
+///
+/// `whiten` no es una preferencia. Con categorías grandes —un chunk ocupa media
+/// pantalla— conviene desaturar, porque el campo tiene que seguir viéndose
+/// mientras se lo diagnostica. Con categorías **más chicas que un píxel**, que
+/// es lo que es una brizna a diez metros, cada píxel promedia decenas de
+/// colores y el promedio de colores claros al azar es un beige uniforme:
+/// medido, la vista de brizna salía lisa. Ahí hay que saturar, porque lo que
+/// distingue no es el color de una categoría sino el **contraste** entre
+/// vecinas.
+fn pastel(seed: vec2<f32>, whiten: f32) -> vec3<f32> {
     let raw = vec3<f32>(
         value_noise(seed),
         value_noise(seed + vec2<f32>(37.0, 17.0)),
         value_noise(seed + vec2<f32>(11.0, 91.0)),
     );
-    return mix(raw, vec3<f32>(1.0), 0.45);
+    return mix(raw, vec3<f32>(1.0), whiten);
 }
 
 /// El color de la vista puesta, ya mezclado con el color real.
@@ -270,7 +278,13 @@ fn pastel(seed: vec2<f32>) -> vec3<f32> {
 /// inclinada a menos de 27 cm del borde de su chunk puede tener la punta del
 /// color del chunk vecino. Es la inclinación horneada haciéndose visible; en
 /// chunks de 8 a 32 m afecta un fleco y ninguna vista de medición lo usa.
-fn debug_colour(base: vec3<f32>, world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> vec3<f32> {
+fn debug_colour(
+    base: vec3<f32>,
+    world_xz: vec2<f32>,
+    ring_reach: f32,
+    blade_hash: f32,
+    blade_height: f32,
+) -> vec3<f32> {
     let view = grass_data.debug_view;
     if view == DEBUG_OFF || view == DEBUG_MEASURE {
         return base;
@@ -283,9 +297,23 @@ fn debug_colour(base: vec3<f32>, world_xz: vec2<f32>, ring_reach: f32, blade_has
         // Una celda es una malla y un draw call: esta vista es también el mapa
         // de draws de la pradera.
         let cell = floor(world_xz / ring_chunk_m(slot));
-        tint = pastel(cell * 13.0 + f32(slot) * 101.0);
+        tint = pastel(cell * 13.0 + f32(slot) * 101.0, 0.45);
     } else if view == DEBUG_BLADE {
-        tint = pastel(vec2<f32>(blade_hash * 127.0, blade_hash * 331.0));
+        // **La semilla es la altura, no el hash.** `blade_hash` sale de
+        // `abs(uv1.x)`, que lleva el lado del quad en el signo: en el *vértice*
+        // vale exactamente el hash, pero interpolado a lo ancho de la brizna
+        // barre de +h a −h pasando por cero, así que en el fragment **no es
+        // constante por brizna**. Con él, esta vista salía como ruido RGB por
+        // píxel en vez de un color por brizna — así se encontró.
+        //
+        // `fract(uv1.y)` es la altura en metros y viaja igual en los cinco
+        // vértices, así que sí identifica la brizna. Rinde [0,45; 0,90], que es
+        // un aleatorio determinista por brizna y alcanza de sobra como semilla.
+        //
+        // Sin desaturar: una brizna es más chica que un píxel en casi todo el
+        // cuadro, y el promedio de pasteles claros es un beige liso.
+        let per_blade = fract(blade_height);
+        tint = pastel(vec2<f32>(per_blade * 813.0, per_blade * 271.0), 0.0);
     } else if view == DEBUG_GROWTH {
         // Dos entradas de la paleta y no dos colores nuevos: el shader no
         // inventa colores, los recibe.
@@ -468,7 +496,13 @@ fn fragment(
     // vista apagada esto devuelve `colour` sin tocar — un branch por uniforme,
     // igual para todo el draw, no por fragmento divergente.
     colour = vec4<f32>(
-        debug_colour(colour.rgb, in.world_position.xz, floor(in.uv_b.y), blade_hash),
+        debug_colour(
+            colour.rgb,
+            in.world_position.xz,
+            floor(in.uv_b.y),
+            blade_hash,
+            in.uv_b.y,
+        ),
         colour.a,
     );
 

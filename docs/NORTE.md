@@ -37,11 +37,16 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 
 ## Dirección visual y sonora
 
-- **Low-poly por elección, no por defecto.** Sin artista dedicado, low-poly es
-  lo único cost-efficient de autorear, y a la vez es lo que corre en el piso
-  objetivo: **móvil de gama media (~2021)**. La restricción de autoría y la meta
-  de rendimiento coinciden. Los assets actuales (Quaternius, MegaKits, Modular
-  Dungeon) son de prueba, reemplazables.
+- **El norte es el *feeling* de Breath of the Wild, en low-poly.** No su
+  fidelidad ni su escala: la sensación — el mundo que invita a caminarlo, el
+  pasto que responde, la luz que cambia la hora. Cuando una decisión visual esté
+  en duda, la pregunta es *"¿se siente como BOTW?"*, y la respuesta se da
+  jugando.
+- **Low-poly porque los assets son más fáciles de hacer.** Ésa es la razón, y es
+  suficiente: sin artista dedicado, es lo único cost-efficient de autorear. No
+  depende de ninguna meta de rendimiento — si el target cambia, low-poly se
+  queda. Los assets actuales (Quaternius, MegaKits, Modular Dungeon) son de
+  prueba, reemplazables.
 - **Dirección artística por sobre fidelidad.** La belleza es *luz + color +
   atmósfera*, no detalle geométrico ni texturas complejas; silueta legible y
   paleta coherente antes que polígonos. Referencias: Journey (norte
@@ -54,14 +59,26 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
   toon, outline y pases fullscreen quedan como diagnósticos opt-in.
 - Assets de prototipado reemplazables mediante catálogo de presentación:
   identidad de gameplay, visual y colisión permanecen independientes.
-- **Rendimiento: 60 FPS en un Android de gama media ~2021** (Adreno 619/642L,
-  Mali-G57). Esa clase es tile-based: el costo no son los polígonos sino
-  fill-rate/overdraw, bandwidth de vértices, sombras y draw calls; y manda el
-  frame **sostenido** (~11 ms), no el pico. El costo escala con lo que se **ve**,
-  no con el tamaño del mundo (frustum culling), mientras la distancia de dibujo
-  esté acotada — pero más mundo no justifica degradar la respuesta del control.
-- **Se mide en una AMD Polaris 11 (RX 460), 2016** — la del dev. Sirve, pero es
-  modo inmediato: sus milisegundos **no** transfieren al target; el overdraw sí.
+- **Primero el feeling, después el rendimiento — y el móvil deja de ser un veto
+  (2026-08-07).** El piso objetivo sigue siendo un Android de gama media ~2021,
+  pero como *destino*, no como tribunal previo. Ninguna técnica se descarta por
+  lo que le pasaría en un aparato que **nunca se midió**: se construye lo que da
+  el feeling, se mide en lo que hay, y la adaptación al target se hace cuando el
+  feeling esté logrado — con un perfil (`BOF_PROFILE`), que el juego ya tiene.
+
+  *Por qué cambió:* durante meses las decisiones se tomaron contra propiedades
+  razonadas del hardware objetivo —`discard` apaga el early-Z, un vértice se
+  paga en bandwidth— que son ciertas y **nunca se verificaron en un teléfono**.
+  Eso costó: técnicas rechazadas por estimación que después resultaron
+  convenientes, y una sesión entera diseñando contra un aparato que nadie tiene.
+  Una medición real vale más que todo ese razonamiento; hasta que exista, no
+  manda.
+- **Profiler: después, no antes.** Construir instrumental de rendimiento —o
+  adoptar el de Bevy— se hace cuando el feeling esté logrado. Medir es para
+  decidir entre cosas que ya se ven bien, no para elegir qué se ve bien.
+- **Se mide en una AMD Polaris 11 (RX 460), 2016** — la del dev. Es modo
+  inmediato, así que sus milisegundos no transfieren a un tiler; pero es lo que
+  hay, y un número medido acá vale más que uno supuesto allá.
 - Música ambiental minimalista; SFX estilizados. Hasta tener audio real,
   cada punto sonoro emite un *cue* de debug (`[audio] cue: …`).
 

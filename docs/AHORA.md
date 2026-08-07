@@ -49,13 +49,9 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
 - **F7 en el juego captura lo que el usuario está viendo**, numerada, con la pose
   de cámara impresa ya formateada como `BOF_SHOT_POSE`. Es la única forma de que
   un reporte visual suyo llegue sin pasar por mi interpretación.
-- **Medir en dev, no en release** — con una duda nueva. Las deps ya compilan en
-  `opt-level 3` y la diferencia de perfil medida fue 0,38 ms contra deltas de
-  4-12 ms. Pero el 2026-08-06 apareció evidencia de un **techo de CPU** que dev
-  podría estar inflando, así que la premisa "el cuello es GPU" dejó de ser
-  segura. Release tarda ~9 min y sigue reservado para validar un número absoluto
-  — y ahora también para zanjar eso. Correr la secuencia **dos veces** y
-  quedarse con la limpia.
+- **Medir en dev, no en release**: la diferencia de perfil medida fue 0,38 ms
+  contra deltas de 4-12 ms. Release tarda ~9 min y queda para validar un número
+  absoluto, o para zanjar si hay un techo de CPU que dev esté inflando.
 - El feeling se valida jugando (checkpoint, §10): lanzar **`cargo run` a secas**
   en background para el usuario, redirigiendo a un log; al cerrar la sesión,
   leerlo filtrando `error|panic|took|destroyed` antes de reportar. **No forzar
@@ -77,14 +73,10 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   da una función que "no hace nada". **F7 se gastó el 2026-08-06** en la captura
   in-game; quedan **F9, F11, F12**.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
-- **Compilar cuesta caro y la premisa del `build-dir` compartido no se cumple.**
-  Cargo cachea por *set de features resuelto* y avian3d activa features que los
-  proyectos sin avian no piden: medido el 2026-08-01, **39 variantes de
-  `libbevy_render` y 136 GB** en `deps/`, y agregar un target nuevo recompila el
-  árbol de bevy entero para ese target. El 2026-08-04 el disco se llenó y un
-  `clean` del workspace lo devolvió a 39 GB. **Decisión abierta**: seguir
-  compartiendo o volver a targets locales, que hacen `cargo clean` predecible —
-  y nunca `rm -rf` sobre lo que Cargo administra.
+- **El `build-dir` compartido no cumple su premisa.** Cargo cachea por set de
+  features resuelto y avian3d activa las que otros proyectos no piden: medido el
+  2026-08-01, **39 variantes de `libbevy_render` y 136 GB**. Decisión abierta;
+  nunca `rm -rf` sobre lo que Cargo administra.
 - **Para listar las ambigüedades de scheduling por nombre**, activá un rato la
   feature `debug` de `bevy_ecs`: sin ella Bevy imprime placeholders y después de
   `Schedule::initialize` el grafo ya no resuelve nombres. Revertila después —
@@ -104,11 +96,12 @@ procedencia compatible.
 hermanas (`bof_domain`, `bof_simulation`, y el binario); el smoke headless
 levanta el juego completo sin ventana ni GPU.
 
-**Pradera** (ver `BOTWGrass.md`): grilla rodante de tres anillos centrada en la
-cámara, briznas horneadas en una malla por chunk, cero trabajo por frame. Nació
-reemplazando un intento cuya documentación afirmaba "0.0 ms CPU" y "60 FPS
-estables" el mismo día en que el medidor marcaba 35-46. **Regla que sale de ahí:
-ningún número entra a estos documentos sin salir del medidor.**
+**Pradera** (ver `BOTWGrass.md`): grilla rodante de cuatro niveles centrada en la
+cámara, briznas horneadas en una malla por chunk. *"Cero trabajo por frame"* fue
+una afirmación de este documento hasta que se midió: hornear un chunk cuesta
+**5,5 ms de media y hasta 9,5**. Nació reemplazando un intento cuya documentación
+afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que el medidor marcaba
+35-46. **Regla que sale de ahí: ningún número entra sin salir del medidor.**
 
 Auditorías: arquitectura (2026-07-17, 4/4 corregidos), calidad (2026-07-24) y
 código (`AUDITORIA_CODIGO_2026-07-25.md`); de esta última siguen abiertas **C1**
@@ -237,94 +230,53 @@ cuevas (= mallas colocadas como instancias, no heightfield), **generación**
 procedural del mundo — el pincel de rugosidad es autoría manual, no generación — y
 el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*.
 
-## El pasto (2026-08-06) — el detalle vive en `BOTWGrass.md`
+## El pasto — el detalle vive en `BOTWGrass.md`
 
-**Decisión vigente del usuario:** primero que se vea bien, después se optimiza.
-Target **900p30** (`NORTE.md` todavía dice 1080p60 y hay que actualizarlo).
-
-**Lo que el día enseñó, y es más que lo que arregló:** siete arreglos distintos
-apuntaron al mismo síntoma —*dónde y cuándo se ve la transición*— y ninguno lo
-resolvió. El veredicto que ordena todo lo demás:
+**Norte (2026-08-07):** el feeling de BOTW en low-poly, y **el móvil dejó de ser
+un veto** — ver `NORTE.md`. Primero que se vea bien; el profiler y la adaptación
+al target vienen después. Target de imagen **900p30**.
 
 > *"Cuando el pasto se vea bien por sí solo, todo lo demás va a caber bien, lo
-> cual no es cierto al revés."*
+> cual no es cierto al revés."* — y el contraejemplo que zanja la discusión de
+> presupuesto: **Flower (PS3, 2009)** llena la pantalla con una fracción de este
+> hardware.
 
-Y el contraejemplo que zanja la discusión de presupuesto: **Flower (PS3, 2009)**
-llena la pantalla con una fracción de este hardware.
-
-**Resuelto y confirmado jugando:** el parpadeo (era z-fighting, no MSAA: la
-brizna se hunde 18 cm); la altura; la paleta, derivada del suelo donde se paran
-—*"se ven más uniformes"*—; y el LOD de brizna 3/2/1 triángulos, gratis:
-*"se siente igual que antes"*.
+**Resuelto y jugado:** el parpadeo (era z-fighting, no MSAA); la altura; la
+paleta derivada del suelo; el LOD de brizna; la **brizna de dos triángulos con
+arista horizontal** (misma cobertura, menos geometría, y ahora puede arquearse);
+la **carta opaca** en el nivel lejano (ocho veces menos y pinta más); y el **LOD
+por tamaño en pantalla** en vez de por radio autorado.
 
 **Abierto, en orden de cuánto sabemos:**
 
-1. **El crecimiento se nota al avanzar — causa raíz encontrada, plan escrito,
-   sin implementar.** Ocho intentos fallidos, y el noveno agregó cuadrados
-   visibles. No es afinación: la semilla de un chunk incluye el anillo, así que
-   **hay cuatro praderas independientes apiladas sobre el mismo suelo** y cruzar
-   de una a otra siempre se ve. El plan —praderas anidadas, cada anillo emitiendo
-   un superconjunto del anterior— está en `BOTWGrass.md`.
-   *(La pradera **no** sigue a la cámara: las posiciones están ancladas al
-   mundo. Era un malentendido de los dos.)*
-2. **Al inclinar la cámara el campo se ralea.** Las briznas no desaparecen: se
-   acortan en pantalla. Medido con *detalle de borde*, que es un proxy y el
-   usuario duda con razón; ahora se puede zanjar contando píxeles de silueta con
-   `grass-view=medir`. Sólo lo arregla que la brizna deje de ser un plano
-   vertical.
-3. **El horizonte no se llena.** Sin tocar.
-4. **La tabla de anillos del código está 5× por encima de la derivada**, y el
-   disparador que `BOTWGrass.md` dejó armado —*"si el barrido confirma
-   fill-bound, bajar el anillo 0 es la palanca más barata"*— ya se cumplió sin
-   que nadie actuara.
-4b. **La perilla de alcance medía otra cosa** (2026-08-07). El uniform mandaba
-   los alcances autorados y el vértice los escalados: a 75% el shader no
-   encontraba el anillo de una brizna y anclaba la ley `1/d` en cero. Los pasos
-   `reach 75%` y `reach 50%` de la matriz medían **otra ley de raleo**, así que
-   la conclusión *"el alcance ahorra menos que la densidad"* hay que rehacerla.
-   Arreglado, con un test que compara la tabla del uniform contra lo que las
-   mallas hornean — verificado plantando el bug de vuelta.
-5. **Cuatro anillos plantan sobre el mismo suelo** (visto el 2026-08-07 con
-   `grass-view=medir`): dos tercios del primer plano son briznas de anillos
-   lejanos, las de 1 triángulo. **Se intentó recortarlo y se midió que no se
-   puede solo**: deja un pozo en cada frontera —el anillo de afuera nace donde el
-   de adentro muere y son dos juegos de briznas distintos— y encima no ahorra,
-   porque el recorte vive en el shader y la geometría ya está horneada (ley 4).
-   Y con la derivación corregida por Poisson resulta que **el solapamiento está
-   pagando la cobertura**: el anillo interior solo queda por debajo de lo que su
-   distancia pide. El defecto no es que se pisen, es que el primer plano se pinta
-   con briznas de anillo lejano. Lo destraba la reescritura anidada del punto 1,
-   que pasa de "optimización posponible" a lo único que permite tener densidad y
-   brizna correcta en el mismo lugar. Tablas en `BOTWGrass.md`.
+1. **Los anillos son el problema de fondo**, identificado por el usuario tras
+   tres sesiones y confirmado midiendo. Un nivel decidía cuatro cosas; tres ya se
+   separaron y falta la **semilla**, que sigue incluyendo el nivel — por eso
+   cruzar una frontera reemplaza briznas en vez de agregarlas. La reescritura
+   anidada se implementó, se midió y se revirtió: cuesta 2,9× y deja agujeros,
+   porque el modelo de densidad está mal **en la forma**. Antes de reintentarla
+   hay que medir la curva de cobertura contra densidad a varias distancias.
+2. **El borde de un nivel es un cuadrado** (Chebyshev, cuantizado a chunks). Se
+   hizo visible al derivar las densidades. Misma causa raíz: el LOD horneado.
+3. **La salida de fondo:** que la brizna deje de ser geometría y pase a ser un
+   registro — `MeshTag` + `ShaderStorageBuffer` + instancing, que Bevy soporta de
+   fábrica conservando `ExtendedMaterial`.
+4. **Con el veto levantado**, la carta con **alfa recortado** es el próximo
+   experimento: le daría silueta de briznas en vez del borde superior plano.
+5. **El horizonte no se llena.** Sin tocar.
 
 **Tres lecciones de método que no son sobre pasto:**
-
-- **Un mensaje de éxito que no se distingue de un fracaso no es un mensaje de
-  éxito.** `"packed 4 canonical PNGs"` se imprimía igual con el arte cargado que
-  con el fallback de 1×1, y por eso el terreno mostró el fallback durante meses.
-- **Un número no sirve si el objetivo contra el que mide se eligió a ojo.** Dos
-  veces ese día medí con tres decimales la distancia hasta un blanco supuesto.
-- **Una herramienta que no puede fallar tampoco puede avisar.** La ley que pedía
-  que cada material apareciera nombrado en `collect_scene` dejó de significar
-  nada el día en que el conteo se volvió genérico: pasaba sola. Se reescribió
-  como prohibición (`MaterialPlugin` sólo dentro del registro), que sí se puede
-  violar y por lo tanto sí se puede detectar.
-
 ## La suite de medición (2026-08-06)
 
 **Correr un barrido ya no requiere jugar.** `BOF_BENCH=<suite> cargo run` entra
-a la caja de la suite, se para en su mirador, mide, escribe la tabla y cierra el
-proceso. Tres suites, en `perf/suite.rs` como **dato**: `grass`, `general`,
-`shadows`. Agregar una es una variante y una tabla — el motor (`sequence.rs`) no
-se toca. También hay un botón por suite en el hub F1. Los porqués están en los
-doc-comments de `suite.rs` y `auto.rs`; acá sólo lo que no se deduce del código.
+a la caja de la suite, se para en su mirador, mide, escribe la tabla y cierra.
+Tres suites en `perf/suite.rs` como **dato**: `grass`, `general`, `shadows`;
+agregar una es una variante y una tabla, el motor no se toca. Los porqués están
+en los doc-comments de `suite.rs` y `auto.rs`.
 
-Reglas que los tests cobran sobre toda suite, presente y futura: empieza y
-termina en el baseline (la diferencia es la deriva), cada paso mueve **un** eje,
-y el baseline es la configuración que se envía. El reporte abre declarando
-suite, pregunta, escena, perfil, ventana, perillas y mirador. Hay un paso de
-**0 briznas/m²**, que convierte "cuánto cuesta el pasto" de extrapolación en
-resta.
+Reglas que los tests cobran sobre toda suite: empieza y termina en el baseline
+(la diferencia es la deriva), cada paso mueve **un** eje, y el baseline es la
+configuración que se envía.
 
 **Tres trampas de esta máquina, encontradas corriendo:**
 
@@ -337,10 +289,7 @@ resta.
   `WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= BOF_BENCH=grass cargo run`. **Sólo
   para medir**; el juego se juega en Wayland nativo.
 - **El frame suele quedar clavado por la presentación** mientras la GPU varía.
-  El reporte lo detecta y avisa que hay que leer `d-gpu`. El criterio compara
-  los dos recorridos entre sí y no cada uno contra un umbral — la primera
-  versión usaba umbrales sueltos y dejó pasar una corrida con la GPU al 203% y
-  el frame al 6,3%.
+  El reporte lo detecta y avisa que hay que leer `d-gpu`.
 
 **El reporte declara qué hay en cuadro (2026-08-07).** Cada corrida abre con el
 reparto por sistema —`pradera=15%/92% bosque=15%/0% terreno=1%/5%`, mallas y
@@ -349,12 +298,11 @@ triángulos— y avisa cuando el tema que la suite dice medir cae por debajo del
 ninguna corrida podía desmentirla: el test que había verificaba que la *escena*
 declarara bosque, que es otra cosa y siempre pasaba.
 
-**Y lo primero que dijo cierra un pendiente viejo con un diagnóstico mejor.**
+**Y lo primero que dijo cierra un pendiente viejo con mejor diagnóstico.**
 Ocultar el bosque valía 0,34 ms y se leyó como "el mirador no mira al bosque".
-El número real: desde ahí el bosque es el **0% de los triángulos**, porque la
+El número real: desde ahí el bosque es el **0% de los triángulos** porque la
 pradera se lleva el **92%**. El mirador no está mal apuntado — la suite general
-está midiendo un frame que es casi todo pasto. Reautorear la ruta con F4 sigue
-pendiente; medir el bosque pide su propia caja.
+mide un frame que es casi todo pasto. Medir el bosque pide su propia caja.
 
 **Ruido de Bevy, no nuestro:** cada corrida imprime ~270 líneas
 `bevy_render::slab_allocator: Use-after-free`, al despawnear muchas mallas de
@@ -366,26 +314,24 @@ Las ocho fases están en `git log -- docs/CRATES.md` y las leyes en
 `ARCHITECTURE.md`. Lo que sigue informando decisiones y no se deduce del código:
 
 - **Tres decisiones que se apartaron del plan.** `input` no cruzó a simulación:
-  maneja hardware *y* cursor, y dejándolo afuera simulación **no puede** leer
-  teclado, en vez de acordarse de no hacerlo. `layout`/`spawn` tampoco: son
-  composición. El reloj sí cruzó, la luz no (§20).
-- **Los newtypes de unidades se midieron y se descartaron:** en todo `movement`
-  hay 4 funciones con dos o más `f32` y en dos comparten unidad. El riesgo que
-  justificaba envolver 141 campos no existe.
-- **`bof_presentation` no se creó a propósito:** con las referencias a
-  simulación en cero y la ley congelada en un test, no agregaba nada.
-- **Al leer un log, ojo:** sólo `sandbox.ron` existe en disco, y `spawn_terrain`
-  únicamente loguea cuando encuentra archivo, así que una escena sin heightmap
-  arranca plana **y en silencio** — la ausencia de línea no es ausencia de
-  escena.
+  dejándolo afuera, simulación **no puede** leer teclado en vez de acordarse de
+  no hacerlo. `layout`/`spawn` tampoco: son composición. El reloj sí cruzó, la
+  luz no (§20).
+- **Los newtypes de unidades se midieron y se descartaron**, y
+  **`bof_presentation` no se creó a propósito**: con las referencias en cero y la
+  ley congelada en un test, no agregaba nada.
+- **Al leer un log, ojo:** una escena sin heightmap arranca plana **y en
+  silencio** — la ausencia de línea no es ausencia de escena.
 
 Siguiente en esa línea: instancias discretas, cerrar el ciclo semántico, y jugar
 graybox sobre relieve + tipografía.
 
 ## Rendimiento: lo que sigue informando decisiones
 
-El peor punto del bosque pasó de ~72 ms a nunca bajar de 60 (2026-07-21). El
-detalle está en git; los principios que quedaron:
+**Y desde el 2026-08-07 va después del feeling** (`NORTE.md`): el profiler y la
+adaptación al target se construyen cuando la imagen esté lograda. El peor punto
+del bosque pasó de ~72 ms a nunca bajar de 60 (2026-07-21); el detalle está en
+git y quedaron los principios:
 
 - **El graybox tiene que ser honesto sobre el costo.** Los árboles Quaternius
   fingían ser baratos; se reemplazaron por proxies procedurales instanciados.
@@ -393,24 +339,22 @@ detalle está en git; los principios que quedaron:
   resuelve a dos tiers en `VisualCatalog`; impostores e instancing se enchufan
   ahí sin tocar simulación.
 - **Ceguera medida:** el total `gpu:` suma solo spans registrados y los pases de
-  sombra usan `info_span!`. "El gpu medido no cambió" **no** implica "no es GPU"
-  — e invocar esa ceguera para culpar a las sombras fue el error simétrico. Lo
-  que zanjó la duda fue *quitar la escena*.
+  sombra usan `info_span!`. "El gpu medido no cambió" **no** implica "no es GPU".
+  Lo que zanjó la duda fue *quitar la escena*.
 - **El medidor dice *cuándo* una técnica vale la pena**; aplicarlas todas siempre
   es cargo-culting y frena al dev, no al juego.
 - Último perfil móvil medido: **37,3k tris, 62 draws, 53 mats → "medio", por
   materiales.** De ahí sale la ley 1 de `TEXTURES.md`.
 - **Fill antes que geometría (2026-08-06, medido en las tres suites).** En la
   caja Pasto bajar la resolución a la mitad ahorra más GPU que apagar la pradera
-  entera. El frame se va en píxeles pintados, no en vértices transformados —
-  vale para elegir en qué orden atacar cualquier sistema visual nuevo, con la
-  salvedad de que el target es un tiler, donde el vértice también se paga.
+  entera: el frame se va en píxeles pintados, no en vértices transformados. Vale
+  para elegir en qué orden atacar cualquier sistema visual nuevo.
 
 ### Presupuesto de polígonos como contrato (2026-07-25)
 
 **Conteos sí, milisegundos no.** Los tris/draws/materiales son *dato*:
-deterministas, testeables, pueden romper el build. Los tiempos son *medición*: un
-test de ms falla por ruido, se ignora y muere. Carriles separados.
+deterministas, testeables. Los tiempos son *medición*: un test de ms falla por
+ruido, se ignora y muere. Carriles separados.
 
 - `build.rs` cuenta triángulos por LOD al importar cada GLB; el presupuesto vive
   en `schema.rs::lod0_triangle_budget` y **falla el build nombrando el asset** —
@@ -430,10 +374,11 @@ test de ms falla por ruido, se ignora y muere. Carriles separados.
 - El terreno son **32768 tris fijos** en toda escena — un tercio del presupuesto
   móvil antes de poner nada encima. Subir `CELLS` es una decisión de presupuesto.
 - Un draw call exacto **no** es testeable sin cámara; lo testeable es la cota.
-- **Pero el conteo es guardrail, no objetivo.** El target es un Android
-  tile-based (`NORTE.md`), donde manda fill-rate/overdraw y bandwidth. Los
-  conteos siguen porque son testeables; pasarlos no prueba que corra en el
-  teléfono. El dial de overdraw del hub existe desde siempre y nunca se usó.
+- **El conteo es guardrail, no objetivo**, y desde el 2026-08-07 los
+  presupuestos móviles **no vetan**: el target es destino, no tribunal previo
+  (`NORTE.md`). Los conteos siguen porque son testeables. El inventario cuenta
+  además los **bytes residentes**, que es el costo que ningún conteo de
+  triángulos muestra: la pradera son 26 MB.
 
 ### Cámara y flythrough
 
@@ -449,9 +394,8 @@ Pendiente: **autorear la ruta canónica real** con F4 — hoy los tramos se llam
 que nada verifica, igual que lo era el mirador del bosque antes de que el
 reporte midiera qué hay en cuadro.
 
-Diferido salvo que el profiler lo pida: impostores, streaming por chunks, y
-**occlusion culling** — el de Bevy es experimental vía meshlets, no
-mobile-friendly.
+Diferido: impostores, streaming por chunks y **occlusion culling** — el de Bevy
+es experimental vía meshlets, y la Polaris 11 del dev no los soporta.
 
 ## Pipeline authored de assets
 
@@ -494,32 +438,27 @@ tick.
 
 ## BSN: verificado, y no todavía (§21)
 
-A raíz de "¿no estamos rehaciendo BSN?": **sí, en parte** — `world/layout.rs` es
-un BSN artesanal. Reverificado en `bevy_scene 0.19` el 2026-08-05: `bsn!`,
-`SceneComponent` y el parcheo por campo **sí existen y se usan dentro de Bevy**;
-el formato de archivo `.bsn` **no**, y nada serializa una `Scene`. Por eso BSN
-no puede ser el archivo que escribe la herramienta de mapas, y sí es la forma
-correcta de resolver `kind` → entidades.
-
-El análisis completo y el plan viven en `docs/MAP_EDITOR.md`. La prueba barata
-para decidir cuándo migrar `layout.rs`: reescribir `spawn_stair_segment` como un
-`bsn!` y ver si queda más legible que la función.
+`world/layout.rs` **es** un BSN artesanal. Reverificado en `bevy_scene 0.19` el
+2026-08-05: `bsn!`, `SceneComponent` y el parcheo por campo existen y se usan
+dentro de Bevy; el formato de archivo `.bsn` **no**, y nada serializa una
+`Scene`. Por eso BSN no puede ser el archivo de nivel, y sí la forma correcta de
+resolver `kind` → entidades. Plan en `MAP_EDITOR.md`; la prueba barata para
+decidir cuándo migrar es reescribir `spawn_stair_segment` como `bsn!` y ver si
+queda más legible.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
 - **Paleta/IDs Rust↔WGSL sin unificar, y `terrain_material.rs` sin dividir**
   (§1, §16). Viene de la auditoría del 2026-08-02; no bloquea, pero cada color
   nuevo hay que escribirlo en dos lados que nadie obliga a coincidir.
-- **`InventorySet` y `MountsSet::PostMove` ya comparten crate.** Su orden mutuo
-  seguía sin declarar cuando estaban separados; ahora que ambos viven en
-  `SimulationPlugin`, declararlo es una línea al lado de las otras cuatro.
+- **`InventorySet` y `MountsSet::PostMove` comparten crate** y su orden mutuo
+  sigue sin declarar: es una línea al lado de las otras cuatro.
 - **C1 — allocation en `FixedUpdate`:** `rebuild_terrain_collider` arma un
   `Vec<Vec<f32>>` que Avian vuelve a aplanar, ~130 allocations por tick
   esculpido. La vía barata exige `parry` como dep directa.
-- **C2 — hardware leído fuera de `input`,** en **13 archivos** (eran 15 el
-  2026-08-01: la lista ya sólo encoge). Ya se cobraron `Tab` y el navegador de
-  animación. El test de fase 1 ya impide que la lista crezca; falta el dueño
-  único que traduzca bindings a acciones tipadas.
+- **C2 — hardware leído fuera de `input`,** en **13 archivos** (eran 15). El
+  test impide que la lista crezca; falta el dueño único que traduzca bindings a
+  acciones tipadas.
 - **113 pares de sistemas ambiguos en `FixedUpdate`**, auditados uno por uno y
   congelados en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES`. Asustan menos de lo
   que parecen: 78 son los `propose` compartiendo el `ProposalBuffer` (la

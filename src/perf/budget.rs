@@ -231,41 +231,20 @@ mod tests {
         }
     }
 
-    /// Lo que la pradera puede costar **por vista** — la única unidad con
-    /// sentido para algo que existe alrededor de la cámara y no en un lugar del
-    /// mapa.
+    /// Lo que la pradera puede costar **por vista** — la única unidad con sentido
+    /// para algo que existe alrededor de la cámara y no en un lugar del mapa.
     ///
-    /// **Hoy es veinte veces el presupuesto móvil entero, y está acá para que eso
-    /// no se pueda ignorar.** Es deuda con número, no una tolerancia — y por
-    /// primera vez es deuda *deliberada*: este número es el techo de una rampa
-    /// que se va a bajar, no un límite que se respetó.
-    ///
-    /// **Lo único verificado hasta ahora es que se dibuja fluido** en la máquina
-    /// de desarrollo, incluso con cámara libre, reportado jugando el
-    /// 2026-08-06. Nada dice que se pague en el target.
-    ///
-    /// **El último salto lo pidió el usuario y cambia la estrategia**, así que
-    /// vale escribir el porqué: hasta el 2026-08-06 se venía con poco pasto
-    /// tratando de mejorarlo, y su instrucción fue al revés — *"hacer crecer
-    /// mucho más la distancia de renderizado, y trabajar desde ahí hacia
-    /// abajo"*. El alcance pasó de 32 a **64 m** y esto de 600.000 a 800.000.
-    ///
-    /// Que sean +28% y no ×4 es consecuencia directa de la ley `1/d`: las
-    /// densidades de los anillos externos ya no se eligen por proporción, salen
-    /// de la derivación, así que el área nueva se planta con la fracción que le
-    /// corresponde. Sin ese cambio, este alcance no era pagable.
+    /// **No es el presupuesto móvil, y desde el 2026-08-07 tampoco pretende
+    /// serlo:** el target dejó de ser un veto previo (`NORTE.md`). Es un techo
+    /// de cordura, para que la pradera no crezca sin que nadie lo note, y se
+    /// baja cuando el feeling esté logrado y toque adaptar.
     ///
     /// Es el **peor caso barrido** sobre todas las alineaciones de la cámara
     /// contra la grilla, no una cómoda — una versión anterior declaraba el origen
     /// y lo llamaba el peor caso, y no lo era.
     ///
-    /// **Y el barrido dice que acá esto no es lo que cuesta:** la pradera es
-    /// *fill-bound*. Bajar la resolución a la mitad, con los mismos triángulos,
-    /// ahorra más que sacarle tres cuartos de las briznas. Sigue siendo el
-    /// guardrail correcto para el target —en un tiler un vértice se paga en
-    /// bandwidth aunque no produzca un píxel *(propiedad del hardware, no
-    /// medición nuestra)*— pero el número que manda mientras la fase estética
-    /// siga abierta es el de fill.
+    /// Y el número que de verdad manda hoy no es éste: la pradera es
+    /// *fill-bound*, y lo que se paga son los píxeles. El conteo es guardrail.
     const MEADOW_VIEW_TRIANGLES: usize = 2_000_000;
 
     #[test]
@@ -275,17 +254,6 @@ mod tests {
             meadow <= MEADOW_VIEW_TRIANGLES,
             "the meadow neighbourhood declares {meadow} triangles, over its \
              {MEADOW_VIEW_TRIANGLES} per-view ceiling"
-        );
-        // Y lo que de verdad hay que vigilar mientras la deuda exista: cuánto
-        // se pasa del móvil, para que crecer sea una decisión y no un descuido.
-        // 1.825.120 al 2026-08-06: densidad plena hasta 24 m para que el
-        // crecimiento ocurra donde una brizna mide pocos píxeles.
-        let ground = terrain_cost();
-        let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
-        assert!(
-            over <= 1_900_000,
-            "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
-             past the debt this file declares"
         );
     }
 

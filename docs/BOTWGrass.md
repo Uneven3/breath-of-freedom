@@ -269,6 +269,167 @@ conservando `ExtendedMaterial`. Con eso el LOD se decide por brizna y por frame.
 
 ---
 
+## El plan: pradera abundante sin desperdicio (2026-08-07)
+
+Escrito para implementar la próxima sesión, y **revisado por un agente sin
+contexto** que encontró once problemas — todos válidos, cuatro de ellos
+afirmaciones falsas sobre Bevy que verifiqué contra las fuentes de 0.19. Lo que
+sigue es la versión corregida; los hallazgos están al final de la sección.
+
+**Cada paso se valida con un color**, porque mirar es cómo se juzga y contar
+píxeles es cómo se zanja.
+
+El desperdicio, tal como está medido:
+
+| # | desperdicio | medido |
+|---|---|---:|
+| 1 | La brizna se hornea como geometría | 26 MB residentes, **5,5-9,5 ms** por chunk, LOD congelado al hornear |
+| 2 | Cada chunk es una malla propia, así que **nada batchea** | 32 draws para 32 chunks |
+| 3 | Se planta un cuadrado alrededor de la cámara, **incluso detrás** | los chunks de atrás se hornean y se descartan por frustum |
+| 4 | La carta opaca gasta píxeles en un rectángulo lleno | borde superior plano, se lee como bloque |
+
+**El solapamiento de niveles no está en esta tabla, y es a propósito.** La
+primera versión lo listaba como desperdicio puro citando "~3× en el primer
+plano", contradiciendo lo que este mismo documento mide más arriba: **el
+solapamiento está pagando cobertura**, y quitarlo cuesta 3× de densidad. Cuánto
+de él es desperdicio puro y cuánto es cobertura barata **no está medido**, y
+separarlo es parte del Paso 0.
+
+### Paso 0 — La curva de cobertura *(medir, sin código)*
+
+**Bloquea al Paso 3 y al spike del Paso 2** — no a todo lo demás: los Pasos 1, 5
+y 6 no tocan la fórmula de densidad y pueden ir en paralelo.
+
+El modelo `C/d` está mal **en la forma**: a 90/m² predice 95% de cobertura y la
+imagen da 81%. Ya mató un intento. Hay que barrer la perilla de densidad con
+`grass-view=medir` a varias distancias y sacar la curva real, y de paso medir
+**qué fracción del solapamiento es desperdicio puro**.
+
+- **Color:** `medir`.
+- **Gate:** una tabla que reemplace la fórmula, y el reparto del solapamiento.
+
+### Paso 1 — Carta con alfa recortado *(barato, visible, independiente)*
+
+Lo primero que el veto levantado desbloquea. Reemplaza el rectángulo opaco de
+borde plano por una silueta de briznas. Necesita un segundo material para los
+chunks de carta — gratis en draws, porque hoy cada chunk ya es su propio draw.
+
+- **Color:** `anillo` para ver dónde entra, `medir` para la cobertura.
+- **Gate:** cobertura igual o mejor con los mismos 2 triángulos, y que el bloque
+  deje de leerse como bloque. Ataca el desperdicio **4**.
+
+### Paso 2 — La brizna deja de ser geometría *(el desbloqueo grande)*
+
+Los datos por brizna en un `ShaderBuffer` —**ése es el nombre en 0.19**, no
+`ShaderStorageBuffer`, que es de una versión vieja— leído vía `#[storage]` en
+`AsBindGroup`, que sí combina con los `#[uniform]`/`#[texture]` que
+`GrassExtension` ya tiene.
+
+Cinco piezas de plomería que la primera versión del plan daba por gratis y no lo
+son. Verificadas contra las fuentes de Bevy 0.19:
+
+1. **Una malla índice por nivel, no una sola.** El batching automático exige el
+   **mismo `Handle<Mesh>`**, y una malla por chunk es lo que hoy impide todo
+   batching. La salida es que **todos los chunks de un nivel tienen exactamente
+   el mismo conteo de briznas** —`blades_per_chunk` depende sólo del nivel y de
+   las perillas—, así que una malla índice por nivel los hace compartir handle.
+   Cuatro mallas, y los draws deberían caer de 32 a ~4.
+2. **Y con eso el allocator del buffer es trivial:** stride fijo por nivel,
+   `MeshTag` = el slot del chunk dentro de su nivel. Sin eso haría falta un
+   allocator de rangos variables con fragmentación, que es un subsistema entero.
+3. **`vertex_index` hay que declararlo.** El `Vertex` de
+   `bevy_pbr::forward_io` sólo lo expone bajo `#ifdef MORPH_TARGETS`
+   (`forward_io.wgsl:27-29`). Como el vertex shader es nuestro, se declara un
+   struct de entrada propio con `@builtin(vertex_index)`: es un builtin, no
+   consume location, y el resto del layout no cambia.
+4. **El AABB hay que ponerlo a mano.** Bevy lo calcula de las posiciones de la
+   malla, y la malla índice no las va a tener. Sin un `Aabb` por chunk el
+   culling de Bevy trabaja sobre un volumen falso.
+5. **`grass.rs` ya tiene 1.605 líneas** contra el "~300 es señal de dividir" de
+   §16. Este paso agrega un subsistema entero: la división del módulo entra en su
+   alcance, no se descubre después.
+
+Lo que compra: **memoria 6-8,5×** — contado contra el layout real (28 B/vértice
+más índices `u32`: 136 B por hoja, 96 por púa, contra 16 del registro; el "~5×"
+de la primera versión era de ojo), **horneado casi nulo**, y sobre todo el **LOD
+decidido por brizna y por frame**, que disuelve la frontera cuadrada, el
+reshuffling y el esconder-pero-pagar.
+
+- **Color:** `chunk` (un color por draw) para confirmar que el batching mejora, y
+  una vista nueva **`rango`**, que colorea por el número de la brizna en la
+  secuencia de su baldosa — es la que hace visible el anidado del Paso 3.
+- **Riesgo, y §21:** el plan describe una **combinación** de features que Bevy da
+  por separado. El spike de un solo nivel no es para medir memoria: es para
+  **verificar los cinco puntos de arriba** antes de convertir el resto.
+- **Gate:** mismo aspecto, memoria y horneado abajo, draws abajo, frontera
+  cuadrada desaparecida. Ataca los desperdicios **1** y **2**.
+
+### Paso 3 — Praderas anidadas y exclusivas
+
+Con la brizna como registro, "emitir las primeras N de la secuencia de una
+baldosa" es trivial y rehornear es barato. Cada nivel emite un **superconjunto**
+del siguiente, así que cruzar una frontera cambia la copia, no el campo.
+
+Ya se escribió una vez y se revirtió. **Por dos cosas, no una:** la densidad
+—que el Paso 0 corrige— y un bug real, que la ley `1/d` estaba escrita para un
+hash y recibía un rango, así que todas las briznas de un nivel morían juntas en
+su borde interno. La forma correcta es `d = K/f`. Ese arreglo entra en el gate.
+
+- **Color:** `rango` (las mismas briznas conservan su color al cruzar) y `medir`
+  (un solo nivel por banda).
+- **Gate:** caminar sin ver crecer nada, **y** verificar que el mapeo rango↔ley
+  no volvió a entrar mal.
+
+### Paso 4 — Plantar sólo lo que la cámara mira
+
+Con la existencia de una brizna decidida por frame, la grilla puede sesgarse
+hacia adelante en vez de ser un cuadrado completo. Hay que cuidar el caso de
+girar rápido, y por eso **depende del Paso 2**: hornear tiene que ser barato.
+
+- **Color:** `chunk`, para ver qué se hornea y no se ve.
+- **Gate:** menos primitivas horneadas con la misma imagen y sin agujeros al
+  girar. Ataca el desperdicio **3**.
+
+### Paso 5 — Devolver el viento, y el arqueo que nunca hubo
+
+`wind_strength` está en 0 desde que se apagó para diagnosticar. Con la fila del
+medio de la brizna, el `height_factor²` **por fin hace algo**. Cero geometría, e
+independiente de todo lo demás.
+
+- **Color:** ninguno — es feeling, se juega.
+
+### Paso 6 — Interacción
+
+El mapa de interacción: los actores estampan su huella en una textura centrada en
+el jugador y el vertex shader la lee y aplasta. Independiente.
+
+### Lo que deliberadamente no entra
+
+- **Meshlets / mesh shaders:** la Polaris 11 del dev no los tiene.
+- **Pasto generado por compute cada frame** (el método de GoT): Bevy 0.19 lo
+  permite, pero el Paso 2 ya da decisiones por brizna y por frame con mucho menos
+  riesgo. Horizonte, sólo si una medición lo pide.
+- **Profiler propio:** después del feeling (`NORTE.md`).
+
+### Lo que la revisión cambió
+
+Un agente sin contexto leyó el plan y el código y encontró once problemas. Los
+once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
+
+| corregido | era |
+|---|---|
+| `ShaderBuffer` | `ShaderStorageBuffer`, tipo de una Bevy vieja — escrito de memoria |
+| Una malla índice **por nivel** | "una malla compartida", que no batchea con conteos distintos |
+| Stride fijo + `MeshTag` como slot | un allocator de rangos variables que el plan no nombraba |
+| Struct de vértice propio | `vertex_index` dado por gratis; sólo existe bajo `MORPH_TARGETS` |
+| `Aabb` insertado a mano | culling "sigue funcionando", sobre posiciones que ya no existen |
+| Memoria **6-8,5×** | "~5×", cifra de ojo |
+| Paso 0 bloquea 2 y 3 | "bloquea a todo lo demás" |
+| El gate del Paso 3 incluye el bug rango↔ley | "falló por la densidad, no por el diseño" |
+| El solapamiento sale de la tabla de desperdicio | listado como desperdicio puro, contra lo que el propio doc mide |
+| Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
+| El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
+
 ## Errores que este documento ya cometió — no reintroducir
 
 1. **"El pasto cuesta 0.0 ms de CPU y corre a 60 FPS estables."** Escrito el

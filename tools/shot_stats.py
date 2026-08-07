@@ -112,6 +112,30 @@ def load_legend(png: Path) -> dict | None:
     return json.loads(sidecar.read_text())
 
 
+def describe(width: int, height: int, pixels: bytes, channels: int) -> None:
+    """Luminancia, dispersión y saturación medias de la imagen.
+
+    **Dos capturas del mismo encuadre, o esto no compara nada.** Cambiar de
+    mirador cambia todos estos números por razones que no tienen que ver con lo
+    que se estaba probando.
+    """
+    total = width * height
+    lum_sum = lum_sq = sat_sum = 0.0
+    for i in range(0, total * channels, channels):
+        r, g, b = pixels[i], pixels[i + 1], pixels[i + 2]
+        # Rec. 601, que es la que usa el ojo para "más claro / más oscuro".
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        lum_sum += lum
+        lum_sq += lum * lum
+        top, bottom = max(r, g, b), min(r, g, b)
+        sat_sum += 0.0 if top == 0 else (top - bottom) / top
+    mean = lum_sum / total
+    # Varianza por el momento de segundo orden; con enteros de 8 bits y un
+    # millón de muestras la cancelación catastrófica no llega a importar.
+    sd = max(lum_sq / total - mean * mean, 0.0) ** 0.5
+    print(f"  luminancia media {mean:6.1f}   desviación {sd:5.1f}   saturación {sat_sum / total:5.1%}")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
@@ -127,11 +151,16 @@ def main(argv: list[str]) -> int:
     print(f"{png}  {width}x{height}  {channels} canales")
 
     if legend is None:
+        # Sin leyenda no se puede contar por categoría, pero sí describir la
+        # imagen. Es lo que sirve para comparar dos versiones del **mismo
+        # encuadre**: la desviación por canal separa "cada brizna tiene su tono"
+        # de "el campo es un verde liso", que a ojo se discute y no se zanja.
         print(
-            "sin leyenda al lado (.json): esta captura no se puede contar por color.\n"
-            "Sacala con BOF_KNOBS=grass-view=5 para que la corrida escriba qué es cada color."
+            "sin leyenda al lado (.json): no hay conteo por categoría.\n"
+            "Para eso, sacala con BOF_KNOBS=grass-view=5. Mientras tanto, la imagen:"
         )
-        return 1
+        describe(width, height, pixels, channels)
+        return 0
 
     view = legend.get("vista", "?")
     print(f"vista: {view}")

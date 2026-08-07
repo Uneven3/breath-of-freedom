@@ -483,7 +483,23 @@ fn fragment(
     // de superficie única. Es de las cosas más baratas del sistema y de las que
     // más se notan — un campo de un solo verde se lee como alfombra por densa
     // que sea.
-    let drift = (blade_hash - 0.5) * 2.0 * grass_data.tint_variation;
+    //
+    // **Y hasta el 2026-08-07 no era por brizna.** Se sembraba de `blade_hash`,
+    // que sale de `abs(uv1.x)`: ese canal lleva el hash con el *lado* del quad
+    // en el signo, así que interpolado a lo ancho de la brizna barre de +h a −h
+    // pasando por cero. Lo que producía no era un corrimiento por brizna sino un
+    // degradado simétrico dentro de cada una, **de media cero** — o sea el
+    // efecto que este comentario dice que se nota, sin notarse. Lo encontró la
+    // vista `grass-view=brizna`, que por lo mismo salía como ruido por píxel.
+    //
+    // `fract(uv1.y)` es la altura en metros y viaja idéntica en los cinco
+    // vértices, así que interpolarla la deja igual: es el único identificador de
+    // brizna que el vértice ya carga. El `fract(·137)` la descorrelaciona de la
+    // altura —si no, las briznas altas tendrían todas el mismo tono— con un
+    // multiply y un fract, sin transcendentales, que es lo que un frame
+    // fill-bound tolera.
+    let blade_tint = fract(fract(in.uv_b.y) * 137.0);
+    let drift = (blade_tint - 0.5) * 2.0 * grass_data.tint_variation;
     colour = vec4<f32>(
         colour.r * (1.0 + drift * 0.6),
         colour.g * (1.0 + drift),

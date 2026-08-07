@@ -29,15 +29,50 @@ use crate::world::forest::{hash_u32, hash_unit};
 struct Ring {
     reach_m: f32,
     chunk_m: f32,
-    /// Blades per m², at the shipped density. The knob scales every ring.
-    density: f32,
-    /// How much wider than [`BLADE_WIDTH`] this ring's blades are.
-    ///
-    /// **1.0 everywhere, and that is a finding.** ×2/×4 was rejected on sight as
-    /// a bed of fat spikes: widening only pays once a blade is sub-pixel.
-    width_scale: f32,
-    /// How many triangles this ring's blades are worth spending.
-    shape: BladeShape,
+}
+
+/// Cuánto mundo cubre un píxel **por metro de distancia**.
+///
+/// Es la constante que convierte metros en píxeles: a distancia `d`, un píxel
+/// mide `d · esto` metros. Sale del campo de visión vertical y de la altura del
+/// viewport, así que **el LOD sigue a la pantalla**: bajar a 900p acerca todas
+/// las fronteras un 19% sin tocar una constante.
+fn metres_per_pixel_at_one_metre(fov_y: f32, viewport_height: f32) -> f32 {
+    2.0 * (fov_y * 0.5).tan() / viewport_height.max(1.0)
+}
+
+/// Ancho de una primitiva en píxeles, a esta distancia.
+fn width_in_pixels(width_m: f32, distance_m: f32, scale: f32) -> f32 {
+    width_m / (distance_m.max(0.1) * scale).max(1e-6)
+}
+
+/// Qué primitiva corresponde a esta distancia.
+///
+/// **La decisión es el tamaño en pantalla, no un radio.** Un radio en metros
+/// describe una resolución concreta: los mismos 40 m que a 1080p dejan la brizna
+/// en 1,8 px, a 900p la dejan en 1,5. Con umbrales en píxeles la escalera se
+/// mueve sola con el viewport, que es lo que un LOD tiene que hacer.
+///
+/// Los dos umbrales son de ojo y se pueden discutir; lo que no se discute es la
+/// unidad. Medido el 2026-08-07: el 96,7% del campo se resuelve entero, así que
+/// ninguna de estas fronteras se esconde — cambiar de primitiva **se ve**, y por
+/// eso los umbrales son generosos.
+fn shape_at(distance_m: f32, scale: f32) -> BladeShape {
+    let pixels = width_in_pixels(BLADE_WIDTH, distance_m, scale);
+    if pixels >= LEAF_MIN_PIXELS {
+        BladeShape::Leaf
+    } else if pixels >= SPIKE_MIN_PIXELS {
+        BladeShape::Spike
+    } else {
+        BladeShape::Card
+    }
+}
+
+/// Cuántas primitivas por m² hacen falta a esta distancia para que el suelo no
+/// se vea. Ver [`minimum_density`]: es la misma derivación, con el margen ya
+/// aplicado, y ahora también en producción y no sólo en un test.
+fn density_at(distance_m: f32, shape: BladeShape) -> f32 {
+    minimum_density(distance_m, shape.footprint_m()) * COVERAGE_MARGIN
 }
 
 /// La brizna, en dos niveles de detalle.
@@ -79,7 +114,6 @@ impl BladeShape {
 
     /// Cuánto suelo tapa a lo ancho una primitiva de esta forma. Es lo que hace
     /// comparable la densidad de una carta con la de una brizna.
-    #[cfg(test)]
     const fn footprint_m(self) -> f32 {
         match self {
             Self::Leaf | Self::Spike => BLADE_WIDTH,
@@ -113,36 +147,77 @@ const RINGS: [Ring; 4] = [
     Ring {
         reach_m: 13.0,
         chunk_m: 8.0,
-        density: 40.0,
-        width_scale: 1.0,
-        shape: BladeShape::Leaf,
     },
     Ring {
         reach_m: 24.0,
         chunk_m: 16.0,
-        density: 40.0,
-        width_scale: 1.0,
-        shape: BladeShape::Leaf,
     },
     Ring {
         reach_m: 40.0,
         chunk_m: 32.0,
-        density: 40.0,
-        width_scale: 1.0,
-        shape: BladeShape::Spike,
     },
     Ring {
         reach_m: 64.0,
         chunk_m: 32.0,
-        // Cartas, no briznas: una tapa el suelo de unas cuantas, así que la
-        // densidad cae con el ancho. El anillo más lejano era 688.128 triángulos
-        // para pintar el 2% de la pantalla — medido el 2026-08-07, y es el
-        // motivo de que este escalón exista.
-        density: 1.5,
-        width_scale: 1.0,
-        shape: BladeShape::Card,
     },
 ];
+
+/// Cuántos píxeles de ancho tiene que medir una brizna para merecer cada forma.
+///
+/// En píxeles y no en metros, que es el punto entero de esta escalera. Con el
+/// viewport de escritorio caen en ~24 m y ~47 m; a 900p, en ~20 y ~40. Nadie los
+/// mueve: los mueve la pantalla.
+const LEAF_MIN_PIXELS: f32 = 3.0;
+const SPIKE_MIN_PIXELS: f32 = 1.5;
+
+/// La forma de un anillo sale de la distancia **media** de su banda: es lo que
+/// se ve en la mayor parte de él.
+fn shape_for_ring(index: usize, scale: f32, reach_scale: f32) -> BladeShape {
+    shape_at(band_midpoint(index, reach_scale), scale)
+}
+
+/// La densidad sale de su **borde interno**, que es el punto más exigente: ahí
+/// sus primitivas se ven desde más cerca y cada una tapa menos suelo.
+///
+/// Dos puntos distintos para dos preguntas distintas, y no es una inconsistencia:
+/// una forma equivocada se ve en todo el anillo, una densidad corta se ve sólo
+/// donde falta. Se elige el promedio para la primera y el peor caso para la
+/// segunda.
+fn density_for_ring(index: usize, scale: f32, reach_scale: f32) -> f32 {
+    let shape = shape_for_ring(index, scale, reach_scale);
+    density_at(band_inner(index, reach_scale), shape)
+}
+
+/// El borde interno de la banda de un anillo. El del primero no es cero: nadie
+/// mira el suelo pegado a la lente, y dividir por cero pediría densidad infinita.
+fn band_inner(index: usize, reach_scale: f32) -> f32 {
+    index
+        .checked_sub(1)
+        .map_or(NEAREST_INTEREST_M, |inner| ring_reach(inner, reach_scale))
+}
+
+fn band_midpoint(index: usize, reach_scale: f32) -> f32 {
+    f32::midpoint(
+        band_inner(index, reach_scale),
+        ring_reach(index, reach_scale),
+    )
+}
+
+/// La distancia más corta a la que todavía importa que el suelo esté tapado.
+const NEAREST_INTEREST_M: f32 = 2.0;
+
+/// El viewport contra el que se declara el presupuesto y corren los tests.
+///
+/// Existe porque un presupuesto tiene que ser **determinista**, y desde que el
+/// LOD sigue a la pantalla el costo depende de ella. Declarar la pantalla de
+/// referencia es honesto; que el número del test dependiera del viewport de
+/// quien lo corre, no.
+const REFERENCE_FOV_Y: f32 = std::f32::consts::FRAC_PI_4;
+const REFERENCE_VIEWPORT_HEIGHT: f32 = 1080.0;
+
+fn reference_scale() -> f32 {
+    metres_per_pixel_at_one_metre(REFERENCE_FOV_Y, REFERENCE_VIEWPORT_HEIGHT)
+}
 
 /// Los alcances **con la perilla aplicada**, que es como el shader los necesita:
 /// tiene que encontrar en esta tabla el mismo número que el vértice carga, o
@@ -162,9 +237,13 @@ fn ring_chunks() -> (Vec4, Vec4) {
 }
 
 /// Qué anillos abren su primitiva mirando a la cámara.
-fn ring_cards() -> (Vec4, Vec4) {
+fn ring_cards(scale: f32, reach_scale: f32) -> (Vec4, Vec4) {
     slots(
-        |_, ring| f32::from(u8::from(ring.shape.faces_camera())),
+        |index, _| {
+            f32::from(u8::from(
+                shape_for_ring(index, scale, reach_scale).faces_camera(),
+            ))
+        },
         0.0,
     )
 }
@@ -196,17 +275,15 @@ fn slots(of: impl Fn(usize, &Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
 /// derivation. Not the camera's real height — the rings are baked once and
 /// cannot follow a moving lens — but the height it holds while walking, which
 /// is the case the meadow has to look right in.
-#[cfg(test)]
 const EYE_HEIGHT_M: f32 = 1.6;
 
-/// How far past its derived minimum each ring is planted. Blades land on a
-/// hash, not on a lattice, so some clumping is certain and the bare patches it
-/// would otherwise leave are the artefact this margin buys off.
-#[cfg(test)]
-const COVERAGE_MARGIN: f32 = 1.2;
+/// Cuánto por encima de su mínimo derivado se planta. **Medido, no elegido**:
+/// es la distancia entre la derivación y la realidad, calibrada contando
+/// píxeles. Se vuelve a calibrar midiendo, no discutiendo; el despeje está en
+/// `BOTWGrass.md`.
+const COVERAGE_MARGIN: f32 = 2.4;
 
 /// Qué fracción del suelo tiene que quedar tapada para que no se lea como ralo.
-#[cfg(test)]
 const TARGET_COVERAGE: f32 = 0.95;
 
 /// Blades per m² needed at distance `d` for the ground not to show through.
@@ -218,7 +295,6 @@ const TARGET_COVERAGE: f32 = 0.95;
 /// la que las briznas taparían el suelo **si se ordenaran solas**, y por eso
 /// pedía tres veces menos de lo que hace falta. Ésa es la aritmética detrás de
 /// que el campo se viera ralo cada vez que se lo plantaba "según la derivación".
-#[cfg(test)]
 fn minimum_density(distance_m: f32, width_m: f32) -> f32 {
     let average_height = f32::midpoint(BLADE_HEIGHT_MIN, BLADE_HEIGHT_MAX);
     // Suelo que tapa una brizna: su ancho por lo que se alarga al verla en
@@ -226,12 +302,6 @@ fn minimum_density(distance_m: f32, width_m: f32) -> f32 {
     let hidden_per_blade = width_m * average_height * distance_m.max(0.5) / EYE_HEIGHT_M;
     -(1.0 - TARGET_COVERAGE).ln() / hidden_per_blade
 }
-
-/// The widest a blade may get. Past roughly four times its authored width a
-/// blade stops reading as a blade and starts reading as a card, which is the
-/// billboard this system deliberately does not use.
-#[cfg(test)]
-const MAX_WIDTH_SCALE: f32 = 4.0;
 
 /// The density the rings are written against, so the hub's dial can scale them
 /// as a ratio instead of replacing them. Stepping the knob to 25/m² makes the
@@ -366,10 +436,12 @@ pub(crate) fn meadow_triangles() -> usize {
             let triangles: usize = RINGS
                 .iter()
                 .enumerate()
-                .map(|(index, ring)| {
-                    let per_blade = ring.shape.triangles();
+                .map(|(index, _)| {
+                    let scale = reference_scale();
+                    let per_blade = shape_for_ring(index, scale, REFERENCE_REACH).triangles();
                     ring_cells(index, focus, REFERENCE_REACH).len()
-                        * blades_per_chunk(ring, REFERENCE_DENSITY) as usize
+                        * blades_per_chunk(index, REFERENCE_DENSITY, scale, REFERENCE_REACH)
+                            as usize
                         * per_blade
                 })
                 .sum();
@@ -407,9 +479,10 @@ fn neighbourhood_blades(focus: Vec2) -> usize {
     RINGS
         .iter()
         .enumerate()
-        .map(|(index, ring)| {
+        .map(|(index, _)| {
             ring_cells(index, focus, REFERENCE_REACH).len()
-                * blades_per_chunk(ring, REFERENCE_DENSITY) as usize
+                * blades_per_chunk(index, REFERENCE_DENSITY, reference_scale(), REFERENCE_REACH)
+                    as usize
         })
         .sum()
 }
@@ -421,8 +494,9 @@ fn neighbourhood_blades(focus: Vec2) -> usize {
     clippy::cast_sign_loss,
     reason = "density is clamped non-negative and a blade count is an integer bucket"
 )]
-fn blades_per_chunk(ring: &Ring, dial: f32) -> u32 {
-    let density = ring.density * (dial / REFERENCE_DENSITY);
+fn blades_per_chunk(index: usize, dial: f32, scale: f32, reach_scale: f32) -> u32 {
+    let ring = &RINGS[index];
+    let density = density_for_ring(index, scale, reach_scale) * (dial / REFERENCE_DENSITY);
     (ring.chunk_m * ring.chunk_m * density).round().max(0.0) as u32
 }
 
@@ -553,15 +627,32 @@ pub(super) fn roll_meadow_grid(
     perf: Res<crate::perf::PerfToggles>,
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
-    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     mut dial: Local<Option<(usize, usize)>>,
 ) {
     let Some(camera) = camera else {
         return;
     };
+    let (camera, projection) = *camera;
     let focus = camera.translation().xz();
     let density = perf.grass_density();
     let reach_scale = perf.grass_reach_scale();
+    // **La escalera de LOD sigue a la pantalla.** El campo de visión y la altura
+    // del viewport deciden cuántos píxeles mide una brizna a cada distancia, y de
+    // ahí sale qué primitiva le toca. Si no hay ventana todavía, la referencia:
+    // vale más hornear con la escalera del escritorio que no hornear.
+    let scale = match projection {
+        Projection::Perspective(perspective) => metres_per_pixel_at_one_metre(
+            perspective.fov,
+            window.map_or(REFERENCE_VIEWPORT_HEIGHT, |window| {
+                window.physical_height() as f32
+            }),
+        ),
+        // Sin perspectiva no hay "píxeles por metro a distancia d": una
+        // ortográfica los tiene constantes. La referencia es lo honesto.
+        Projection::Orthographic(_) | Projection::Custom(_) => reference_scale(),
+    };
 
     // Density and reach are both **baked into the mesh** — the blade count in the
     // geometry, the ring's reach in a vertex attribute — so neither can be
@@ -641,9 +732,8 @@ pub(super) fn roll_meadow_grid(
             &ChunkSpec {
                 centre: cell_centre(key.cell, ring.chunk_m),
                 chunk_m: ring.chunk_m,
-                count: blades_per_chunk(ring, density),
-                width_scale: ring.width_scale,
-                shape: ring.shape,
+                count: blades_per_chunk(key.ring, density, scale, reach_scale),
+                shape: shape_for_ring(key.ring, scale, reach_scale),
                 ring_reach_m: ring_reach(key.ring, reach_scale),
                 seed,
             },
@@ -697,10 +787,11 @@ pub(super) fn roll_meadow_grid(
         // anillo conviene reemplazar por otra técnica.
         for (index, ring) in RINGS.iter().enumerate() {
             let live = field.live.keys().filter(|key| key.ring == index).count();
-            let blades = live * blades_per_chunk(ring, density) as usize;
+            let _ = ring;
+            let blades = live * blades_per_chunk(index, density, scale, reach_scale) as usize;
             debug!(
-                "[grass]   anillo {index}: {live} chunks, {blades} briznas, {} tris",
-                blades * ring.shape.triangles(),
+                "[grass]   anillo {index}: {live} chunks, {blades} primitivas, {} tris",
+                blades * shape_for_ring(index, scale, reach_scale).triangles(),
             );
         }
     }
@@ -736,7 +827,10 @@ pub(super) fn track_meadow_focus(
     let (a, b) = ring_chunks();
     data.ring_chunks_a = a;
     data.ring_chunks_b = b;
-    let (a, b) = ring_cards();
+    let (a, b) = ring_cards(
+        metres_per_pixel_at_one_metre(REFERENCE_FOV_Y, REFERENCE_VIEWPORT_HEIGHT),
+        perf.grass_reach_scale(),
+    );
     data.ring_cards_a = a;
     data.ring_cards_b = b;
     data.card_half_width = CARD_WIDTH * 0.5;
@@ -783,6 +877,10 @@ pub(crate) struct RingLegend {
 pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
     let dial = perf.grass_density();
     let reach_scale = perf.grass_reach_scale();
+    // La leyenda declara la escalera de **referencia**, no la del viewport de la
+    // corrida: acompaña a una captura que puede tener cualquier tamaño, y un
+    // número que cambia con la ventana no compara dos capturas.
+    let scale = reference_scale();
     RINGS
         .iter()
         .enumerate()
@@ -793,8 +891,9 @@ pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
             // La densidad que el chunk realmente plantó, dividida por su área:
             // el redondeo a briznas enteras hace que no sea exactamente la de la
             // tabla por la escala.
-            density: blades_per_chunk(ring, dial) as f32 / (ring.chunk_m * ring.chunk_m),
-            triangles_per_blade: ring.shape.triangles(),
+            density: blades_per_chunk(slot, dial, scale, reach_scale) as f32
+                / (ring.chunk_m * ring.chunk_m),
+            triangles_per_blade: shape_for_ring(slot, scale, reach_scale).triangles(),
             color: grass_debug::slot_srgb(slot),
         })
         .collect()
@@ -858,7 +957,6 @@ struct ChunkSpec {
     centre: Vec2,
     chunk_m: f32,
     count: u32,
-    width_scale: f32,
     shape: BladeShape,
     ring_reach_m: f32,
     seed: u32,
@@ -870,7 +968,6 @@ fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
         centre,
         chunk_m,
         count,
-        width_scale,
         shape,
         ring_reach_m,
         seed,
@@ -912,7 +1009,7 @@ fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
         let yaw = u3 * std::f32::consts::TAU;
         // The quad's width runs along `side`; the lean tips it over `side`'s
         // perpendicular so blades do not all fall the same way.
-        let side = Vec2::new(yaw.cos(), yaw.sin()) * (BLADE_WIDTH * width_scale * 0.5);
+        let side = Vec2::new(yaw.cos(), yaw.sin()) * (BLADE_WIDTH * 0.5);
         let lean = Vec2::new(-yaw.sin(), yaw.cos()) * ((u5 - 0.5) * 2.0 * BLADE_LEAN);
 
         let base = Vec3::new(xz.x, ground, xz.y);
@@ -1017,7 +1114,6 @@ mod tests {
             centre: Vec2::ZERO,
             chunk_m: 5.0,
             count,
-            width_scale: 1.0,
             shape,
             ring_reach_m: 8.0,
             seed,
@@ -1030,9 +1126,12 @@ mod tests {
         // a constant but arrives on screen divided by twenty. Stated against the
         // ring rather than a literal, so tuning the density cannot break the
         // test that guards it — the count must always be area × density.
-        for ring in &RINGS {
-            let per_chunk = blades_per_chunk(ring, REFERENCE_DENSITY);
-            let expected = (ring.chunk_m * ring.chunk_m * ring.density).round();
+        let scale = reference_scale();
+        for (index, ring) in RINGS.iter().enumerate() {
+            let per_chunk = blades_per_chunk(index, REFERENCE_DENSITY, scale, REFERENCE_REACH);
+            let expected =
+                (ring.chunk_m * ring.chunk_m * density_for_ring(index, scale, REFERENCE_REACH))
+                    .round();
             assert_eq!(
                 (per_chunk as f32).to_bits(),
                 expected.to_bits(),
@@ -1047,9 +1146,15 @@ mod tests {
     fn the_dial_scales_every_ring_by_the_same_ratio() {
         let sparse = bof_domain::perf::GRASS_DENSITY_STEPS[2];
         let ratio = sparse / REFERENCE_DENSITY;
-        for ring in &RINGS {
-            let full = f64::from(blades_per_chunk(ring, REFERENCE_DENSITY));
-            let thin = f64::from(blades_per_chunk(ring, sparse));
+        let scale = reference_scale();
+        for (index, ring) in RINGS.iter().enumerate() {
+            let full = f64::from(blades_per_chunk(
+                index,
+                REFERENCE_DENSITY,
+                scale,
+                REFERENCE_REACH,
+            ));
+            let thin = f64::from(blades_per_chunk(index, sparse, scale, REFERENCE_REACH));
             assert!(
                 (thin - full * f64::from(ratio)).abs() <= 1.0,
                 "ring at {} m does not follow the dial",
@@ -1099,42 +1204,21 @@ mod tests {
     /// — the failure reads as "the grass is a bit thin over there".
     #[test]
     fn every_ring_meets_the_density_its_distance_demands() {
-        for (index, ring) in RINGS.iter().enumerate() {
-            // The demanding point of a ring is its *inner* edge: that is where
-            // its blades are seen from closest and each one hides the least
-            // ground.
-            let inner = index.checked_sub(1).map_or(2.0, |i| RINGS[i].reach_m);
-            // El ancho es el de la **forma**, no el de una brizna: una carta tapa
-            // el suelo de un matojo, y medirla contra el piso de una brizna
-            // pediría cien veces más cartas de las que hacen falta.
-            let needed = minimum_density(inner, ring.shape.footprint_m() * ring.width_scale);
+        let scale = reference_scale();
+        for index in 0..RINGS.len() {
+            let inner = band_inner(index, REFERENCE_REACH);
             // **Lo que un punto del suelo recibe es la SUMA de los anillos que
-            // lo plantan**, no la densidad de su anillo. Medir por anillo suelto
-            // era medir algo que no existe. Qué implica eso sobre el
-            // solapamiento: `BOTWGrass.md`.
-            let planted: f32 = RINGS
-                .iter()
-                .filter(|other| other.reach_m >= inner)
-                .map(|other| other.density)
+            // lo plantan**, no la densidad de su anillo: se pisan, y esa suma es
+            // lo que hay ahí. Qué implica sobre el solapamiento: `BOTWGrass.md`.
+            let planted: f32 = (0..RINGS.len())
+                .filter(|other| ring_reach(*other, REFERENCE_REACH) >= inner)
+                .map(|other| density_for_ring(other, scale, REFERENCE_REACH))
                 .sum();
+            let needed = density_at(inner, shape_for_ring(index, scale, REFERENCE_REACH));
             assert!(
-                planted >= needed * COVERAGE_MARGIN,
-                "a {inner} m el suelo recibe {planted}/m2 sumando los anillos que llegan \
-                 ahí, y su distancia pide {:.1}/m2",
-                needed * COVERAGE_MARGIN
-            );
-            // Deliberately no upper bound: one turned a density change into a
-            // failing test that said nothing.
-            // Deliberately no upper bound. There used to be one, pinning every
-            // ring to its minimum plus a margin, and it did exactly what it was
-            // told: the field covered the ground and looked like sparse spikes.
-            // Surplus density is paid in overdraw and that is a real cost, but
-            // it is one the measurement decides, not a test — this file's job is
-            // to keep a ring from falling *below* what its distance demands.
-            assert!(
-                ring.width_scale <= MAX_WIDTH_SCALE,
-                "a blade {}x its authored width reads as a card, not a blade",
-                ring.width_scale
+                planted >= needed,
+                "a {inner} m el suelo recibe {planted:.1}/m2 sumando los anillos que llegan \
+                 ahí, y su distancia pide {needed:.1}/m2"
             );
         }
     }
@@ -1484,9 +1568,12 @@ mod tests {
             assert_eq!(triangles(&mesh), shape.triangles(), "{shape:?}");
             assert_eq!(mesh.count_vertices(), shape.vertices(), "{shape:?}");
         }
-        let per_square_metre: Vec<f32> = RINGS
-            .iter()
-            .map(|ring| ring.density * ring.shape.triangles() as f32)
+        let scale = reference_scale();
+        let per_square_metre: Vec<f32> = (0..RINGS.len())
+            .map(|index| {
+                density_for_ring(index, scale, REFERENCE_REACH)
+                    * shape_for_ring(index, scale, REFERENCE_REACH).triangles() as f32
+            })
             .collect();
         assert!(
             per_square_metre.windows(2).all(|pair| pair[0] >= pair[1]),

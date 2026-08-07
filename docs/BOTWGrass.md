@@ -938,6 +938,61 @@ posponer, es lo único que permite tener la densidad **y** la brizna correcta en
 el mismo lugar. Y el test de densidad ahora mide la **suma** sobre un punto del
 suelo, que es lo que ese punto realmente recibe, en vez de un anillo aislado.
 
+### El LOD deja de ser un radio y pasa a ser un tamaño en pantalla (2026-08-07)
+
+Pedido por el usuario —*"el objetivo es lograr un smart LOD"*— después de decir
+tres veces que la técnica del anillo no lo convencía. Tenía razón, y el problema
+tiene nombre: **un anillo decidía cuatro cosas a la vez** — el tamaño de chunk,
+la densidad, la forma de la primitiva y la semilla de las briznas. Por eso cada
+cambio arrastraba a los otros tres: tocar el solapamiento rompía la cobertura,
+cambiar la forma rompió el test de la escalera, y la semilla por anillo es la
+causa raíz del artefacto de los ocho intentos.
+
+Tres de los cuatro ejes ya están separados:
+
+| eje | antes | ahora |
+|---|---|---|
+| tamaño de chunk | campo del anillo | **lo único** que el anillo decide |
+| forma de la primitiva | campo del anillo | `shape_at(distancia, pantalla)` |
+| densidad | campo del anillo | `density_at(distancia, forma)` |
+| semilla de la brizna | incluye el anillo | **sin tocar** — pendiente |
+
+**La forma sale del ancho en píxeles, no de un radio.** Un radio en metros
+describe una resolución concreta: los mismos 40 m que a 1080p dejan la brizna en
+1,8 px, a 900p la dejan en 1,5. Con umbrales en píxeles —3 px para la hoja, 1,5
+para la púa, menos para la carta— la escalera se mueve sola con el viewport. Con
+el viewport de escritorio las fronteras caen en ~24 m y ~47 m, casi donde
+estaban autoradas; a 900p se acercan a ~20 y ~40 sin tocar una constante.
+
+Y cada eje se evalúa en **el punto que le corresponde**, que no es el mismo:
+la forma en la distancia media de la banda —es lo que se ve en la mayor parte de
+ella— y la densidad en el borde interno, que es el punto más exigente. Una forma
+equivocada se ve en todo el anillo; una densidad corta se ve sólo donde falta.
+
+**El margen de cobertura pasa a ser una medición.** Con el valor viejo (1,2) la
+banda de 13-24 m cayó a **88%** de cobertura donde tenía 99,9%: la derivación es
+optimista aun con Poisson, porque la brizna es fina, se inclina, termina en punta
+y tapa suelo que otra ya tapaba. Se despejó del dato: a 18,8/m² el campo daba
+88%, o sea `k = 0,113`; para 97% hace falta 1,65× más, redondeado a **2,4** para
+tener aire cerca.
+
+**Medido, mismo encuadre:**
+
+| | escalera autorada | escalera derivada |
+|---|---:|---:|
+| triángulos | 450.560 | **368.330** (−18%) |
+| memoria residente | 35,8 MB | **26,0 MB** (−27%) |
+| cobertura de pantalla | 56,92% | 56,75% |
+| banda 13-24 m | 99,9% | 98,5% |
+| bandas cercanas | 99,5-99,7% | 99,5-99,8% |
+
+Misma imagen, 18% menos geometría, y la escalera ya no está escrita a mano.
+
+**Lo que falta, y es el eje que queda:** la semilla sigue incluyendo el anillo,
+así que cruzar una frontera todavía **reemplaza** briznas en vez de agregarlas.
+Eso pide la reescritura anidada, y ahora es el único cambio que queda entre esto
+y un LOD que no se note.
+
 ### La brizna de dos triángulos (2026-08-07)
 
 Restaurada del diseño original, después de que el usuario preguntara cómo estaban

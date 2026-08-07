@@ -34,6 +34,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 use super::suite::BenchSuite;
 use crate::scene::AppState;
+use crate::visuals::material_registry::Subject;
 
 const SHOT_ENV: &str = "BOF_SHOT";
 const OUT_ENV: &str = "BOF_SHOT_OUT";
@@ -198,13 +199,39 @@ pub fn capture_on_request(
             f.z,
         );
     }
-    info!(
-        "[shot] escena: {} mallas visibles, {} triángulos, {} draws",
-        inventory.visible_meshes, inventory.triangles, inventory.draws,
-    );
+    log_framing(&inventory);
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
+}
+
+/// Qué hay en cuadro, repartido por sistema.
+///
+/// Una foto sola no dice si lo que cambió es lo que se estaba mirando. Con el
+/// reparto al lado, "se ve distinto" y "hay 40% menos pradera en cuadro" dejan
+/// de ser la misma frase.
+fn log_framing(inventory: &super::budget::SceneInventory) {
+    let mut parts: Vec<String> = Vec::new();
+    for subject in Subject::ALL {
+        let tally = inventory.subject(subject);
+        if tally.meshes == 0 {
+            continue;
+        }
+        parts.push(format!(
+            "{}={} tris/{} draws ({:.0}% del cuadro)",
+            subject.label(),
+            tally.triangles,
+            tally.draws,
+            inventory.triangle_share_of(subject) * 100.0,
+        ));
+    }
+    info!(
+        "[shot] escena: {} mallas visibles, {} triángulos, {} draws · {}",
+        inventory.visible_meshes,
+        inventory.triangles,
+        inventory.draws,
+        parts.join(" · "),
+    );
 }
 
 /// Lleva la foto de punta a punta, con la misma máquina de estados que la
@@ -256,10 +283,7 @@ pub fn drive_auto_shot(
             );
             // Lo que la foto no puede mostrar: si dos encuadres discrepan, hace
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
-            info!(
-                "[shot] escena: {} mallas visibles, {} triángulos, {} draws",
-                inventory.visible_meshes, inventory.triangles, inventory.draws,
-            );
+            log_framing(&inventory);
             commands
                 .spawn(Screenshot::primary_window())
                 .observe(save_to_disk(path));

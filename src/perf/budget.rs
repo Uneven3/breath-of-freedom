@@ -2,6 +2,8 @@
 
 use bevy::prelude::*;
 
+use crate::visuals::material_registry::{BUCKETS, Subject, SubjectTally};
+
 pub(crate) const MOBILE_TRIANGLES: usize = 100_000;
 pub(crate) const MOBILE_DRAWS: usize = 100;
 pub(crate) const MOBILE_MATERIALS: usize = 64;
@@ -14,6 +16,36 @@ pub(crate) struct SceneInventory {
     pub materials: usize,
     pub ranged_culled: u32,
     pub ranged_total: u32,
+    /// De quién es cada cosa. Un total no contesta *"cuánto está poniendo la
+    /// pradera ahora mismo"*, que es la pregunta de cada ajuste del pasto — y
+    /// tampoco contesta si el mirador de una medición ve el sistema que dice
+    /// medir. Ver `visuals::material_registry`.
+    pub subjects: [SubjectTally; BUCKETS],
+}
+
+impl SceneInventory {
+    pub(crate) fn subject(&self, subject: Subject) -> SubjectTally {
+        self.subjects[subject.index()]
+    }
+
+    /// Qué fracción de las mallas visibles pone un sujeto. Es lo que decide si
+    /// un mirador **ve lo que dice medir**: el del bosque no lo veía, y eso se
+    /// dedujo semanas después por una resta rara en vez de leerlo acá.
+    pub(crate) fn share_of(&self, subject: Subject) -> f32 {
+        if self.visible_meshes == 0 {
+            return 0.0;
+        }
+        self.subject(subject).meshes as f32 / self.visible_meshes as f32
+    }
+
+    /// Y la misma pregunta en triángulos, que es la que se compara contra el
+    /// presupuesto.
+    pub(crate) fn triangle_share_of(&self, subject: Subject) -> f32 {
+        if self.triangles == 0 {
+            return 0.0;
+        }
+        self.subject(subject).triangles as f32 / self.triangles as f32
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

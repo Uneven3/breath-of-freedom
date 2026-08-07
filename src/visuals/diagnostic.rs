@@ -1,15 +1,28 @@
 //! Reversible render-only views for inspecting geometry density and overdraw.
+//!
+//! # Una sola copia, genérica
+//!
+//! Este archivo tenía **el mismo bucle escrito tres veces**, una por tipo de
+//! material, con tres componentes gemelos y seis tipos de query. El costo no
+//! era la repetición: era que agregar un material cuarto no rompía nada y la
+//! vista simplemente dejaba de mostrarlo. Pasó — la pradera se mudó a su
+//! `ExtendedMaterial` y desapareció durante una tarde de la única vista que
+//! existe para mirarla.
+//!
+//! Ahora el swap es genérico sobre [`InstrumentedMaterial`] y se instala desde
+//! [`super::material_registry`], junto con el recuento del inventario. Un
+//! material se registra una vez y las dos herramientas lo ven.
 
 use bevy::pbr::wireframe::{WireframeConfig, WireframePlugin};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MeshMaterial3d};
 use bevy::prelude::*;
+use bevy::render::mesh::Mesh3d;
 use bevy::render::render_resource::{AsBindGroup, Face};
 use bevy::shader::ShaderRef;
 
 use crate::perf::PerfToggles;
 use crate::visuals::DiagnosticViewState;
-use crate::visuals::grass_material::GrassMaterial;
-use crate::visuals::terrain_material::TerrainMaterial;
+use crate::visuals::material_registry::InstrumentedMaterial;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 struct OverdrawExtension {
@@ -50,30 +63,29 @@ impl OverdrawMaterials {
     }
 }
 
-/// The authoritative material temporarily removed from the render entity.
+/// El material verdadero, guardado mientras la vista de overdraw ocupa su lugar.
+///
+/// Genérico sobre el tipo de material: es el mismo dato para todos, y tenerlo
+/// tres veces con tres nombres es lo que hacía que olvidarse de uno fuera
+/// invisible.
 #[derive(Component)]
-struct OverdrawOriginalMaterial {
-    original: Handle<StandardMaterial>,
+struct OverdrawOriginal<M: InstrumentedMaterial> {
+    original: Handle<M>,
     diagnostic: Handle<AdditiveOverdrawMaterial>,
 }
 
-/// Terrain uses its own layered material but participates in the same global
-/// overdraw replacement and two-frame restoration protocol.
-#[derive(Component)]
-struct OverdrawOriginalTerrainMaterial {
-    original: Handle<TerrainMaterial>,
-    diagnostic: Handle<AdditiveOverdrawMaterial>,
-}
+/// Si algún material sigue guardado, o sea si la restauración de dos frames
+/// todavía está en curso. Lo escriben todos los tipos y lo lee la publicación.
+#[derive(Resource, Default)]
+struct OverdrawResidue(bool);
 
-/// So does the meadow, and it is the one that matters most: overlapping blades
-/// are the textbook overdraw case, and a diagnostic that silently skipped them
-/// would read "clean" over exactly the geometry it was opened to inspect. It
-/// did, for one afternoon — the meadow moved to its own `ExtendedMaterial` and
-/// dropped out of a view that only knew two material types.
-#[derive(Component)]
-struct OverdrawOriginalGrassMaterial {
-    original: Handle<GrassMaterial>,
-    diagnostic: Handle<AdditiveOverdrawMaterial>,
+/// Las etapas del swap, para que el orden valga entre tipos registrados desde
+/// plugins distintos.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum OverdrawSet {
+    Reset,
+    Swap,
+    Publish,
 }
 
 pub(super) struct DiagnosticViewsPlugin;
@@ -90,14 +102,33 @@ impl Plugin for DiagnosticViewsPlugin {
             ..default()
         })
         .init_resource::<DiagnosticViewState>()
+        .init_resource::<OverdrawResidue>()
         .add_systems(Startup, create_overdraw_material)
         // Scene instances can add mesh entities late in the frame. Last
         // catches those before render extraction and keeps the view global.
+        .configure_sets(
+            Last,
+            (OverdrawSet::Reset, OverdrawSet::Swap, OverdrawSet::Publish).chain(),
+        )
         .add_systems(
             Last,
-            (apply_diagnostic_views, publish_diagnostic_state).chain(),
+            (
+                (reset_overdraw_residue, apply_wireframe).in_set(OverdrawSet::Reset),
+                publish_diagnostic_state.in_set(OverdrawSet::Publish),
+            ),
         );
     }
+}
+
+/// Engancha un tipo de material al swap de overdraw. Lo llama
+/// [`super::material_registry::InstrumentedMaterialAppExt`] — no se llama suelto,
+/// justamente para que registrar el material y registrar sus herramientas sean
+/// el mismo acto.
+pub(crate) fn register_overdraw<M: InstrumentedMaterial>(app: &mut App) {
+    app.add_systems(
+        Last,
+        swap_material_for_overdraw::<M>.in_set(OverdrawSet::Swap),
+    );
 }
 
 fn create_overdraw_material(
@@ -126,221 +157,112 @@ fn create_overdraw_material(
     });
 }
 
-type StandardMeshQuery<'a> = (
-    Entity,
-    &'a MeshMaterial3d<StandardMaterial>,
-    Option<&'a OverdrawOriginalMaterial>,
-    Has<Mesh3d>,
-);
+fn reset_overdraw_residue(mut residue: ResMut<OverdrawResidue>) {
+    residue.0 = false;
+}
 
-type SavedMeshQuery<'a> = (
-    Entity,
-    &'a OverdrawOriginalMaterial,
-    Has<Mesh3d>,
-    Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
-);
+fn apply_wireframe(perf: Res<PerfToggles>, mut wireframe: ResMut<WireframeConfig>) {
+    let wanted = perf.wireframe && !perf.overdraw;
+    if wireframe.global != wanted {
+        wireframe.global = wanted;
+    }
+}
 
-type TerrainMeshQuery<'a> = (
+type LiveMesh<'a, M> = (Entity, &'a MeshMaterial3d<M>);
+type SavedMesh<'a, M> = (
     Entity,
-    &'a MeshMaterial3d<TerrainMaterial>,
-    Option<&'a OverdrawOriginalTerrainMaterial>,
-    Has<Mesh3d>,
-);
-
-type SavedTerrainMeshQuery<'a> = (
-    Entity,
-    &'a OverdrawOriginalTerrainMaterial,
+    &'a OverdrawOriginal<M>,
     Has<Mesh3d>,
     Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
 );
 
-type GrassMeshQuery<'a> = (
-    Entity,
-    &'a MeshMaterial3d<GrassMaterial>,
-    Option<&'a OverdrawOriginalGrassMaterial>,
-    Has<Mesh3d>,
-);
-
-type SavedGrassMeshQuery<'a> = (
-    Entity,
-    &'a OverdrawOriginalGrassMaterial,
-    Has<Mesh3d>,
-    Has<MeshMaterial3d<AdditiveOverdrawMaterial>>,
-);
-
-#[allow(clippy::too_many_arguments)]
-fn apply_diagnostic_views(
+/// Reemplaza —o repone— el material de un tipo, en dos tiempos.
+///
+/// Los dos tiempos no son prolijidad: las fases de render son retenidas, así
+/// que la entidad tiene que pasar **una extracción sin material** entre un
+/// pipeline y el otro. Por eso quitar e insertar nunca ocurren en el mismo
+/// frame, y por eso los dos bucles usan queries distintas: lo insertado por el
+/// primero no lo ve el segundo hasta el frame siguiente.
+fn swap_material_for_overdraw<M: InstrumentedMaterial>(
     mut commands: Commands,
     perf: Res<PerfToggles>,
     overdraw: Res<OverdrawMaterials>,
-    standard_materials: Res<Assets<StandardMaterial>>,
-    terrain_materials: Res<Assets<TerrainMaterial>>,
-    mut wireframe: ResMut<WireframeConfig>,
-    standard_meshes: Query<StandardMeshQuery>,
-    saved_meshes: Query<SavedMeshQuery>,
-    terrain_meshes: Query<TerrainMeshQuery>,
-    saved_terrain_meshes: Query<SavedTerrainMeshQuery>,
-    grass_materials: Res<Assets<GrassMaterial>>,
-    grass_meshes: Query<GrassMeshQuery>,
-    saved_grass_meshes: Query<SavedGrassMeshQuery>,
+    materials: Res<Assets<M>>,
+    live: Query<LiveMesh<M>, With<Mesh3d>>,
+    saved: Query<SavedMesh<M>>,
+    mut residue: ResMut<OverdrawResidue>,
 ) {
-    let wanted_wireframe = perf.wireframe && !perf.overdraw;
-    if wireframe.global != wanted_wireframe {
-        wireframe.global = wanted_wireframe;
-    }
-
     // The shipped path pays no full-scene scan. While active we do scan each
     // frame so newly instantiated scenes join before render extraction; the
     // diagnostic mode already distorts cost by design.
-    if !perf.overdraw
-        && !perf.is_changed()
-        && saved_meshes.is_empty()
-        && saved_terrain_meshes.is_empty()
-        && saved_grass_meshes.is_empty()
-    {
+    if !perf.overdraw && !perf.is_changed() && saved.is_empty() {
         return;
     }
 
     if perf.overdraw {
-        for (entity, material, _saved, has_mesh) in &standard_meshes {
-            if !has_mesh {
-                continue;
-            }
-            let cull_mode = standard_materials
+        for (entity, material) in &live {
+            let cull_mode = materials
                 .get(&material.0)
-                .map(|material| material.cull_mode)
-                .unwrap_or(Some(Face::Back));
+                .map_or(Some(Face::Back), InstrumentedMaterial::diagnostic_cull_mode);
             commands
                 .entity(entity)
-                .try_remove::<MeshMaterial3d<StandardMaterial>>()
-                .try_insert(OverdrawOriginalMaterial {
+                .try_remove::<MeshMaterial3d<M>>()
+                .try_insert(OverdrawOriginal::<M> {
                     original: material.0.clone(),
                     diagnostic: overdraw.matching(cull_mode),
                 });
         }
-        for (entity, saved, has_mesh, has_overdraw) in &saved_meshes {
+        for (entity, saved, has_mesh, has_overdraw) in &saved {
             if !has_mesh {
+                // La malla se fue mientras la vista estaba puesta: no hay nada
+                // que restaurar y el guardado quedaría colgando para siempre.
                 commands
                     .entity(entity)
                     .try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>()
-                    .try_remove::<OverdrawOriginalMaterial>();
+                    .try_remove::<OverdrawOriginal<M>>();
             } else if !has_overdraw {
                 commands
                     .entity(entity)
                     .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
             }
         }
-        for (entity, material, _saved, has_mesh) in &terrain_meshes {
-            if !has_mesh {
-                continue;
-            }
-            let cull_mode = terrain_materials
-                .get(&material.0)
-                .map(|material| material.base.cull_mode)
-                .unwrap_or(Some(Face::Back));
-            commands
-                .entity(entity)
-                .try_remove::<MeshMaterial3d<TerrainMaterial>>()
-                .try_insert(OverdrawOriginalTerrainMaterial {
-                    original: material.0.clone(),
-                    diagnostic: overdraw.matching(cull_mode),
-                });
-        }
-        for (entity, saved, has_mesh, has_overdraw) in &saved_terrain_meshes {
-            if !has_mesh {
-                commands
-                    .entity(entity)
-                    .try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>()
-                    .try_remove::<OverdrawOriginalTerrainMaterial>();
-            } else if !has_overdraw {
-                commands
-                    .entity(entity)
-                    .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
-            }
-        }
-        for (entity, material, _saved, has_mesh) in &grass_meshes {
-            if !has_mesh {
-                continue;
-            }
-            let cull_mode = grass_materials
-                .get(&material.0)
-                .map(|material| material.base.cull_mode)
-                .unwrap_or(None);
-            commands
-                .entity(entity)
-                .try_remove::<MeshMaterial3d<GrassMaterial>>()
-                .try_insert(OverdrawOriginalGrassMaterial {
-                    original: material.0.clone(),
-                    diagnostic: overdraw.matching(cull_mode),
-                });
-        }
-        for (entity, saved, has_mesh, has_overdraw) in &saved_grass_meshes {
-            if !has_mesh {
-                commands
-                    .entity(entity)
-                    .try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>()
-                    .try_remove::<OverdrawOriginalGrassMaterial>();
-            } else if !has_overdraw {
-                commands
-                    .entity(entity)
-                    .try_insert(MeshMaterial3d(saved.diagnostic.clone()));
-            }
-        }
-    } else {
-        for (entity, original, has_mesh, has_overdraw) in &saved_meshes {
-            let mut entity = commands.entity(entity);
-            if has_overdraw {
-                // Give retained render phases one extraction with no material
-                // before the entity returns to the StandardMaterial pipeline.
-                entity.try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>();
-            } else {
-                entity.try_remove::<OverdrawOriginalMaterial>();
-                if has_mesh {
-                    entity.try_insert(MeshMaterial3d(original.original.clone()));
-                }
-            }
-        }
-        for (entity, original, has_mesh, has_overdraw) in &saved_terrain_meshes {
-            let mut entity = commands.entity(entity);
-            if has_overdraw {
-                entity.try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>();
-            } else {
-                entity.try_remove::<OverdrawOriginalTerrainMaterial>();
-                if has_mesh {
-                    entity.try_insert(MeshMaterial3d(original.original.clone()));
-                }
-            }
-        }
-        for (entity, original, has_mesh, has_overdraw) in &saved_grass_meshes {
-            let mut entity = commands.entity(entity);
-            if has_overdraw {
-                entity.try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>();
-            } else {
-                entity.try_remove::<OverdrawOriginalGrassMaterial>();
-                if has_mesh {
-                    entity.try_insert(MeshMaterial3d(original.original.clone()));
-                }
+        return;
+    }
+
+    for (entity, saved, has_mesh, has_overdraw) in &saved {
+        let mut entity = commands.entity(entity);
+        if has_overdraw {
+            // Éste sigue a medio restaurar **después** de este frame: recién el
+            // que viene recupera su material. El residuo se declara acá y no
+            // con `saved.is_empty()` porque esa pregunta se contesta antes de
+            // que los `Commands` se apliquen, y daría "todavía hay" un frame
+            // entero de más — con el inventario congelado sin motivo.
+            residue.0 = true;
+            entity.try_remove::<MeshMaterial3d<AdditiveOverdrawMaterial>>();
+        } else {
+            entity.try_remove::<OverdrawOriginal<M>>();
+            if has_mesh {
+                entity.try_insert(MeshMaterial3d(saved.original.clone()));
             }
         }
     }
 }
 
+/// Mientras el swap esté a medio camino, lo que se dibuja no es el juego: el
+/// inventario tiene que saberlo para no publicar un presupuesto de mentira.
 fn publish_diagnostic_state(
     perf: Res<PerfToggles>,
-    saved_meshes: Query<(), With<OverdrawOriginalMaterial>>,
-    saved_terrain_meshes: Query<(), With<OverdrawOriginalTerrainMaterial>>,
-    saved_grass_meshes: Query<(), With<OverdrawOriginalGrassMaterial>>,
+    residue: Res<OverdrawResidue>,
     mut state: ResMut<DiagnosticViewState>,
 ) {
-    state.overdraw_material_override = perf.overdraw
-        || !saved_meshes.is_empty()
-        || !saved_terrain_meshes.is_empty()
-        || !saved_grass_meshes.is_empty();
+    state.overdraw_material_override = perf.overdraw || residue.0;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visuals::grass_material::GrassMaterial;
+    use crate::visuals::terrain_material::TerrainMaterial;
 
     fn test_app() -> App {
         let mut app = App::new();
@@ -350,11 +272,20 @@ mod tests {
             .init_resource::<Assets<AdditiveOverdrawMaterial>>()
             .init_resource::<PerfToggles>()
             .init_resource::<WireframeConfig>()
+            .init_resource::<OverdrawResidue>()
             .init_resource::<DiagnosticViewState>()
             .add_systems(Startup, create_overdraw_material)
+            .configure_sets(
+                Last,
+                (OverdrawSet::Reset, OverdrawSet::Swap, OverdrawSet::Publish).chain(),
+            )
             .add_systems(
                 Last,
-                (apply_diagnostic_views, publish_diagnostic_state).chain(),
+                (
+                    (reset_overdraw_residue, apply_wireframe).in_set(OverdrawSet::Reset),
+                    swap_material_for_overdraw::<StandardMaterial>.in_set(OverdrawSet::Swap),
+                    publish_diagnostic_state.in_set(OverdrawSet::Publish),
+                ),
             );
         app
     }
@@ -391,7 +322,7 @@ mod tests {
         let entity = app.world().entity(mesh);
         assert!(!entity.contains::<MeshMaterial3d<StandardMaterial>>());
         assert!(!entity.contains::<MeshMaterial3d<AdditiveOverdrawMaterial>>());
-        assert!(entity.contains::<OverdrawOriginalMaterial>());
+        assert!(entity.contains::<OverdrawOriginal<StandardMaterial>>());
         assert!(
             app.world()
                 .resource::<DiagnosticViewState>()
@@ -403,7 +334,7 @@ mod tests {
         let entity = app.world().entity(mesh);
         assert!(!entity.contains::<MeshMaterial3d<StandardMaterial>>());
         assert!(entity.contains::<MeshMaterial3d<AdditiveOverdrawMaterial>>());
-        assert!(entity.contains::<OverdrawOriginalMaterial>());
+        assert!(entity.contains::<OverdrawOriginal<StandardMaterial>>());
 
         let replacement = app
             .world_mut()
@@ -418,7 +349,7 @@ mod tests {
         assert!(!entity.contains::<MeshMaterial3d<StandardMaterial>>());
         assert_eq!(
             &entity
-                .get::<OverdrawOriginalMaterial>()
+                .get::<OverdrawOriginal<StandardMaterial>>()
                 .expect("replacement becomes authoritative")
                 .original,
             &replacement
@@ -433,7 +364,7 @@ mod tests {
         app.world_mut().entity_mut(orphan).remove::<Mesh3d>();
         app.update();
         let orphan = app.world().entity(orphan);
-        assert!(!orphan.contains::<OverdrawOriginalMaterial>());
+        assert!(!orphan.contains::<OverdrawOriginal<StandardMaterial>>());
         assert!(!orphan.contains::<MeshMaterial3d<AdditiveOverdrawMaterial>>());
 
         app.world_mut().resource_mut::<PerfToggles>().overdraw = false;
@@ -442,7 +373,7 @@ mod tests {
         let entity = app.world().entity(mesh);
         assert!(!entity.contains::<MeshMaterial3d<StandardMaterial>>());
         assert!(!entity.contains::<MeshMaterial3d<AdditiveOverdrawMaterial>>());
-        assert!(entity.contains::<OverdrawOriginalMaterial>());
+        assert!(entity.contains::<OverdrawOriginal<StandardMaterial>>());
 
         app.update();
 
@@ -455,7 +386,7 @@ mod tests {
             &replacement
         );
         assert!(!entity.contains::<MeshMaterial3d<AdditiveOverdrawMaterial>>());
-        assert!(!entity.contains::<OverdrawOriginalMaterial>());
+        assert!(!entity.contains::<OverdrawOriginal<StandardMaterial>>());
         assert!(
             !app.world()
                 .resource::<DiagnosticViewState>()
@@ -493,6 +424,33 @@ mod tests {
                 .base
                 .cull_mode,
             None
+        );
+    }
+
+    /// La pradera es doble cara (`cull_mode: None`) y el terreno no. Que el swap
+    /// lea el modo **por el trait** y no por un `match` sobre tipos es lo que
+    /// hace que un material nuevo no pueda entrar mal: el compilador le exige la
+    /// respuesta.
+    #[test]
+    fn every_instrumented_material_answers_for_its_own_culling() {
+        let grass = crate::visuals::grass_material::GrassMaterial {
+            base: StandardMaterial {
+                cull_mode: None,
+                ..default()
+            },
+            extension: crate::visuals::grass_material::GrassExtension {
+                grass_data: default(),
+                interaction_map: None,
+            },
+        };
+        assert_eq!(grass.diagnostic_cull_mode(), None);
+        assert_eq!(
+            StandardMaterial {
+                cull_mode: Some(Face::Back),
+                ..default()
+            }
+            .diagnostic_cull_mode(),
+            Some(Face::Back)
         );
     }
 }

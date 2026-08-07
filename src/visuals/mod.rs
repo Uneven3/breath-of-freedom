@@ -13,6 +13,8 @@
 
 use bevy::prelude::*;
 
+use material_registry::InstrumentedMaterialAppExt;
+
 mod arrows;
 pub mod budget;
 pub mod catalog;
@@ -24,6 +26,7 @@ pub(crate) mod grass;
 mod grass_cover;
 pub mod grass_material;
 pub mod horse;
+pub(crate) mod material_registry;
 pub mod player;
 pub mod probe;
 mod terrain;
@@ -58,7 +61,12 @@ pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(material_registry::MaterialRegistryPlugin);
         app.add_plugins(diagnostic::DiagnosticViewsPlugin);
+        // `StandardMaterial` ya viene con `DefaultPlugins`, pero sus
+        // herramientas no: registrarlo acá es lo que pone al bosque, a las
+        // cápsulas y a todo lo demás en el inventario y en la vista de overdraw.
+        app.add_instrumented_material::<StandardMaterial>();
         app.init_resource::<VisualCatalog>();
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content

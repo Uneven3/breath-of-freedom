@@ -34,6 +34,7 @@
 use bevy::prelude::*;
 
 use crate::scene::SceneId;
+use crate::visuals::material_registry::Subject;
 
 /// Una configuración bajo prueba. Sólo se listan los campos que un paso varía;
 /// todo lo demás se queda en el baseline de esa corrida.
@@ -149,6 +150,25 @@ impl BenchSuite {
         match self {
             BenchSuite::General | BenchSuite::Shadows => SceneId::World,
             BenchSuite::Grass => SceneId::Grass,
+        }
+    }
+
+    /// **A qué le apunta el mirador.** No es decoración: es la afirmación que la
+    /// corrida tiene que poder desmentir.
+    ///
+    /// El mirador "del bosque" existe desde que existe la suite general y
+    /// resultó que **casi no ve bosque** — ocultarlo entero desde ahí vale
+    /// 0,34 ms. Eso se dedujo semanas después, de una resta que no cerraba, y
+    /// sólo porque alguien se puso a mirar. El test que había verificaba que la
+    /// *escena* declarara bosque, que es una cosa distinta y siempre pasaba.
+    ///
+    /// Declarándolo, el reporte puede medir cuánto del cuadro es realmente el
+    /// tema y avisar en la primera línea cuando un mirador no ve lo que dice
+    /// medir. Una herramienta que no puede fallar tampoco puede avisar.
+    pub const fn vantage_subject(self) -> Subject {
+        match self {
+            BenchSuite::General | BenchSuite::Shadows => Subject::Forest,
+            BenchSuite::Grass => Subject::Meadow,
         }
     }
 
@@ -467,9 +487,17 @@ mod tests {
     }
 
     /// Una suite que mide en una caja que no contiene su sistema mediría el
-    /// vacío. El pasto es el caso vivo: su escena tiene que tener pradera.
+    /// vacío. Escrito contra [`BenchSuite::vantage_subject`] y no contra tres
+    /// asserts sueltos, así que una suite nueva entra sola.
+    ///
+    /// **Y esto es la mitad débil de la pregunta, a propósito.** Que la escena
+    /// *declare* bosque no dice que el mirador lo vea, y la versión anterior de
+    /// este test —que sólo verificaba eso— pasaba mientras el mirador canónico
+    /// apuntaba a un bosque que casi no está en cuadro. La mitad fuerte no se
+    /// puede testear sin cámara: la mide `sequence::report_framing` en cada
+    /// corrida y avisa cuando el tema baja del piso.
     #[test]
-    fn every_suite_measures_in_a_scene_that_has_what_it_measures() {
+    fn every_suite_names_a_subject_its_scene_actually_contains() {
         let contents = |id: SceneId| {
             crate::scene::SCENES
                 .iter()
@@ -477,8 +505,20 @@ mod tests {
                 .expect("every suite names a scene in the table")
                 .contents
         };
-        assert!(contents(BenchSuite::Grass.scene()).meadow);
-        assert!(contents(BenchSuite::Shadows.scene()).forest);
-        assert!(contents(BenchSuite::General.scene()).forest);
+        for suite in BenchSuite::ALL {
+            let scene = contents(suite.scene());
+            let present = match suite.vantage_subject() {
+                Subject::Meadow => scene.meadow,
+                Subject::Forest => scene.forest,
+                // El terreno está en toda escena; es el suelo, no una pieza.
+                Subject::Terrain => true,
+            };
+            assert!(
+                present,
+                "{} apunta a '{}' en una escena que no lo tiene",
+                suite.label(),
+                suite.vantage_subject().label(),
+            );
+        }
     }
 }

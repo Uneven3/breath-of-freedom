@@ -165,27 +165,34 @@ fn installs_an_inner_simulation_plugin(contents: &str) -> bool {
         })
 }
 
-/// Materiales que se dibujan pero no llegan al presupuesto de escena.
+/// Materiales que entran al render por la puerta de atrás.
 ///
 /// Regla pura sobre texto para que el canario pueda plantarle una infracción: un
 /// test que afirma *ausencia* da verde igual si la ley se cumple que si el
 /// detector está ciego.
-fn materials_missing_from_budget(files: &[(String, String)], inventory: &str) -> Vec<String> {
+fn materials_registered_outside_the_registry(files: &[(String, String)]) -> Vec<String> {
+    // El material del propio diagnóstico de overdraw: instrumentarlo sería
+    // pedirle que se reemplace a sí mismo, y el inventario se apaga entero
+    // mientras esa vista corre porque su escena no es una muestra válida.
     const EXEMPT: &[&str] = &["AdditiveOverdrawMaterial"];
-    let mut missing = Vec::new();
+    const REGISTRY: &str = "src/visuals/material_registry.rs";
+    let mut escapes = Vec::new();
     for (path, contents) in files {
+        if path == REGISTRY {
+            continue; // Es el único lugar donde `MaterialPlugin` se instala.
+        }
         for tail in contents.split("MaterialPlugin::<").skip(1) {
             let Some((material, _)) = tail.split_once('>') else {
                 continue;
             };
             let material = material.trim();
-            if EXEMPT.contains(&material) || inventory.contains(material) {
+            if EXEMPT.contains(&material) {
                 continue;
             }
-            missing.push(format!("{material} (registrado en {path})"));
+            escapes.push(format!("{material} (registrado en {path})"));
         }
     }
-    missing
+    escapes
 }
 
 fn names_the_simulation_crate(contents: &str) -> bool {
@@ -373,21 +380,26 @@ mod canaries {
     use super::*;
 
     /// La ley del presupuesto nació de una omisión que duró meses; el canario
-    /// existe para que no vuelva a nacer ciega.
+    /// existe para que no vuelva a nacer ciega — y una vez ya nació ciega,
+    /// cuando el conteo se volvió genérico y la ley se quedó sin nada que
+    /// buscar.
     #[test]
-    fn the_budget_rule_sees_a_material_nobody_counts() {
+    fn the_registry_rule_sees_a_material_that_skips_it() {
         let planted = vec![(
             "src/visuals/water.rs".to_string(),
             "app.add_plugins(MaterialPlugin::<WaterMaterial>::default());".to_string(),
         )];
         assert_eq!(
-            materials_missing_from_budget(&planted, "Query<TypedSceneMesh<StandardMaterial>>"),
+            materials_registered_outside_the_registry(&planted),
             vec!["WaterMaterial (registrado en src/visuals/water.rs)".to_string()],
         );
+        let through_the_registry = vec![(
+            "src/visuals/water.rs".to_string(),
+            "app.add_instrumented_material::<WaterMaterial>();".to_string(),
+        )];
         assert!(
-            materials_missing_from_budget(&planted, "Query<TypedSceneMesh<WaterMaterial>>")
-                .is_empty(),
-            "un material que sí se cuenta no puede reportarse como faltante"
+            materials_registered_outside_the_registry(&through_the_registry).is_empty(),
+            "un material que sí pasa por el registro no puede reportarse como fuga"
         );
     }
 
@@ -526,7 +538,7 @@ fn no_file_is_mostly_commentary() {
     );
 }
 
-/// Todo material que se registra tiene que contarse en el presupuesto.
+/// Un material se registra por el registro, o no se registra.
 ///
 /// La ausencia de esta ley costó meses: `GrassMaterial` existía desde que existe
 /// la pradera y `collect_scene` sólo consultaba `StandardMaterial` y
@@ -534,27 +546,19 @@ fn no_file_is_mostly_commentary() {
 /// hay en ella — medido el 2026-08-06 en la caja Pasto: 33.792 triángulos
 /// declarados con cien mil briznas en pantalla.
 ///
-/// Los triángulos ya no pueden perderse (`collect_scene` los cuenta por
-/// `Mesh3d`, sin mirar material), pero `draws` agrupa por `(malla, material)` y
-/// eso sí necesita el tipo. O sea que sigue habiendo una lista, y esto es lo que
-/// impide que se olvide de nuevo.
-///
-/// `AdditiveOverdrawMaterial` está exento y nombrado: es el material del
-/// diagnóstico de overdraw, y `collect_scene` se apaga entero mientras ese
-/// diagnóstico corre, justamente porque su escena no es una muestra válida.
+/// **La versión anterior de esta ley pedía que el material apareciera nombrado
+/// en `collect_scene`**, y eso dejó de significar nada el día en que el conteo
+/// se volvió genérico: sin tipos escritos ahí, la ley pasaba sola. Una ley que
+/// no puede fallar es una ley apagada. La forma que sí se sostiene es prohibir
+/// la puerta de atrás: `MaterialPlugin::<M>` sólo se instala dentro del
+/// registro, y el resto del código pide `add_instrumented_material::<M>()` —
+/// que engancha el inventario y el overdraw en el mismo acto.
 #[test]
-fn every_registered_material_reaches_the_scene_budget() {
-    let files = source_files();
-    let inventory = files
-        .iter()
-        .find(|(path, _)| path == "src/debug/collect.rs")
-        .map(|(_, contents)| contents.clone())
-        .expect("collect.rs debe existir");
-
-    let missing = materials_missing_from_budget(&files, &inventory);
+fn no_material_is_registered_outside_the_registry() {
+    let escapes = materials_registered_outside_the_registry(&source_files());
     assert!(
-        missing.is_empty(),
-        "estos materiales se dibujan pero no entran al presupuesto de escena; \
-         agregarlos a `collect_scene` o eximirlos con su razón: {missing:#?}"
+        escapes.is_empty(),
+        "estos materiales entran al render sin sus herramientas; usar \
+         `add_instrumented_material::<M>()` o eximirlos con su razón: {escapes:#?}"
     );
 }

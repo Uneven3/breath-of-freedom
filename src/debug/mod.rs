@@ -34,14 +34,13 @@ mod trace;
 
 pub use material_report::MaterialReportNotice;
 
-use std::time::Duration;
-
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
-use bevy::time::common_conditions::on_timer;
 
 use bof_domain::movement::MovementSet;
 use bof_domain::movement::proposal::ProposalBuffer;
+
+use crate::visuals::material_registry::{CensusSet, census_is_open};
 
 /// Which debug channels are active. Mirrored into `CastTrace.enabled` and
 /// avian's `PhysicsGizmos` by `handle_toggles`.
@@ -100,9 +99,14 @@ impl Plugin for DebugPlugin {
                     collect::collect_combat,
                     collect::collect_mount,
                     // A full-scene scan is heavier than the single-actor
-                    // collectors; throttling to 4 Hz keeps the measurement tool
-                    // from showing up in the frame time it exists to measure.
-                    collect::collect_scene.run_if(on_timer(Duration::from_millis(250))),
+                    // collectors, así que corre a 4 Hz — pero la cadencia no es
+                    // suya: la fija la ventana del censo
+                    // (`visuals::material_registry`), porque contar y publicar
+                    // tienen que ser **el mismo frame**. Dos `on_timer` del
+                    // mismo período no disparan juntos: cada uno lleva su reloj.
+                    collect::collect_scene
+                        .in_set(CensusSet::Read)
+                        .run_if(census_is_open),
                     collect::collect_perf,
                     collect::collect_toggles,
                 ),

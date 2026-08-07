@@ -17,8 +17,10 @@
 
 use bevy::prelude::*;
 
+use super::budget::SceneInventory;
 use super::data::PerfToggles;
 use super::suite::{BenchSuite, BenchmarkStep};
+use crate::visuals::material_registry::Subject;
 
 /// Discarded after each switch: shaders recompile, caches refill, and the
 /// smoothed diagnostics still carry the previous configuration.
@@ -70,6 +72,13 @@ struct RunContext {
     shadow_map: String,
     shadow_range: String,
     leaf_shadows: String,
+    /// Lo que el mirador **ve** durante el baseline, repartido por sistema.
+    ///
+    /// Es lo que convierte al mirador en algo verificable: una suite declara a
+    /// qué apunta ([`BenchSuite::vantage_subject`]) y esto dice cuánto de eso
+    /// hay realmente en cuadro. Se toma en el baseline y no al arrancar, porque
+    /// antes de que la cámara se estacione el encuadre todavía es otro.
+    framing: Option<SceneInventory>,
 }
 
 impl RunContext {
@@ -96,9 +105,16 @@ impl RunContext {
             shadow_map: baseline.knob_value(PerfKnob::ShadowMap),
             shadow_range: baseline.knob_value(PerfKnob::ShadowRange),
             leaf_shadows: baseline.knob_value(PerfKnob::LeafShadows),
+            framing: None,
         }
     }
 }
+
+/// Por debajo de esta fracción de las mallas visibles, un tema no está medido:
+/// está de fondo. El caso que lo fija es el bosque desde el mirador canónico —
+/// ocultarlo entero valía 0,34 ms, o sea nada, y nadie lo leyó como "el mirador
+/// está mal apuntado" hasta semanas después.
+const SUBJECT_FLOOR: f32 = 0.10;
 
 fn scene_label(state: &crate::scene::AppState) -> String {
     match state {
@@ -364,6 +380,7 @@ pub(super) fn advance_benchmark(
     time: Res<Time<Real>>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    inventory: Res<SceneInventory>,
     mut benchmark: ResMut<Benchmark>,
     mut toggles: ResMut<PerfToggles>,
 ) {
@@ -431,6 +448,13 @@ pub(super) fn advance_benchmark(
     }
 
     if run.elapsed >= SETTLE_SECS {
+        // El encuadre se muestrea en el baseline, con la cámara ya estacionada
+        // y antes de que ningún paso apague nada: es el único momento en que lo
+        // que hay en cuadro **es** la escena que se dice medir. Gana la última
+        // lectura del paso, que es la más asentada.
+        if run.index == 0 {
+            run.context.framing = Some(*inventory);
+        }
         let frame_ms = diagnostics
             .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
             .and_then(|d| d.value());
@@ -504,6 +528,53 @@ fn summarise(name: &'static str, samples: &StepSamples) -> StepResult {
 /// viene: el 2026-08-06 hubo que deducir del delta del bosque en qué escena
 /// había corrido una tabla, porque no lo decía. Perfil, escena, resolución y las
 /// perillas del baseline son lo que hace que dos corridas hablen de lo mismo.
+/// Qué hay realmente en cuadro, y si el tema declarado es uno de ellos.
+///
+/// **Esta es la línea que la suite no tenía.** Un mirador es una afirmación —
+/// "desde acá se ve el bosque"— y hasta ahora ninguna corrida podía
+/// desmentirla: los deltas de un sistema que casi no está en cuadro salen del
+/// tamaño del ruido, que es indistinguible de "no cuesta nada".
+fn report_framing(context: &RunContext) {
+    let Some(framing) = context.framing else {
+        warn!(
+            "[bench] sin muestra de encuadre — no se puede afirmar que el mirador vea \
+             '{}'",
+            context.suite.vantage_subject().label()
+        );
+        return;
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for subject in Subject::ALL {
+        let tally = framing.subject(subject);
+        if tally.meshes == 0 {
+            continue;
+        }
+        parts.push(format!(
+            "{}={:.0}%/{:.0}% ({} draws)",
+            subject.label(),
+            framing.share_of(subject) * 100.0,
+            framing.triangle_share_of(subject) * 100.0,
+            tally.draws,
+        ));
+    }
+    info!(
+        "[bench] en cuadro (mallas%/triángulos%): {} · total {} mallas, {} draws",
+        parts.join(" "),
+        framing.visible_meshes,
+        framing.draws,
+    );
+    let subject = context.suite.vantage_subject();
+    let share = framing.share_of(subject);
+    if share < SUBJECT_FLOOR {
+        warn!(
+            "[bench] EL MIRADOR NO VE SU TEMA: '{}' es {:.0}% de las mallas en cuadro. \
+             Los deltas de este tema van a ser ruido; el mirador hay que reautorearlo (F4).",
+            subject.label(),
+            share * 100.0,
+        );
+    }
+}
+
 fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>, context: &RunContext) {
     let Some(first) = results.first() else {
         return;
@@ -541,6 +612,7 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>, context: &RunCo
             position.x, position.y, position.z, facing.x, facing.y, facing.z
         );
     }
+    report_framing(context);
     info!("[bench] ---- resultados (ms, menos es mejor) ----");
     info!(
         "[bench] {:<20} {:>9} {:>9} {:>9} {:>8} {:>9} {:>8} {:>6}",
@@ -788,6 +860,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(Time::<Real>::default())
             .init_resource::<bevy::diagnostic::DiagnosticsStore>()
+            .init_resource::<SceneInventory>()
             .insert_resource(Benchmark {
                 run: Some(RunState {
                     restore,

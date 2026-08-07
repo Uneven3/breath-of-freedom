@@ -7,12 +7,13 @@
 
 use bevy::asset::{AssetEvent, RenderAssetUsages};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 
 use crate::asset_pipeline::terrain_textures::{TERRAIN_TEXTURE_EDGE, TERRAIN_TEXTURES};
+use crate::visuals::material_registry::InstrumentedMaterialAppExt;
 use crate::world::TerrainKind;
 
 #[repr(u8)]
@@ -183,7 +184,7 @@ pub(super) struct TerrainMaterialPlugin;
 
 impl Plugin for TerrainMaterialPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
+        app.add_instrumented_material::<TerrainMaterial>()
             .init_resource::<TerrainDebugState>()
             .add_message::<TerrainDebugViewRequest>()
             .add_systems(Startup, setup_terrain_material)

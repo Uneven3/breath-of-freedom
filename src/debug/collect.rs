@@ -2,11 +2,8 @@
 //! only place that turns values into strings; the HUD and the console sinks
 //! only arrange what they find here.
 
-use bevy::asset::{AssetId, UntypedAssetId};
 use bevy::camera::visibility::{ViewVisibility, VisibilityRange};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
-use bevy::pbr::{Material, MeshMaterial3d};
-use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh3d;
 use bevy::window::PrimaryWindow;
@@ -17,8 +14,7 @@ use crate::inventory::{Inventory, ItemKind, WeaponDurability};
 use crate::perf::budget::{SceneInventory, scene_budget_grade};
 use crate::perf::{PerfKnob, PerfToggles, gpu_pass_costs};
 use crate::visuals::DiagnosticViewState;
-use crate::visuals::grass_material::GrassMaterial;
-use crate::visuals::terrain_material::TerrainMaterial;
+use crate::visuals::material_registry::{SceneCensus, Subject, mesh_triangles};
 use crate::world::day_night::TimeOfDay;
 use bof_domain::combat::state::CombatState;
 use bof_domain::combat::state::DrawStrength;
@@ -236,49 +232,24 @@ pub(super) fn collect_mount(
 /// lo único que no puede quedarse corto.
 type AnySceneMesh<'a> = (&'a ViewVisibility, &'a Mesh3d);
 
-/// Una malla con su material, para lo único que sí necesita el tipo: agrupar por
-/// `(malla, material)`, que es como Bevy batchea.
-type TypedSceneMesh<'a, M> = (&'a ViewVisibility, &'a Mesh3d, &'a MeshMaterial3d<M>);
-
-/// Cuenta lotes y materiales de un tipo, en conjuntos *untyped* compartidos.
-///
-/// Untyped para que los tres tipos sumen en el mismo par de conjuntos: así
-/// `draws` es un número y no una suma que hay que acordarse de extender.
-/// Devuelve cuántas mallas visibles vio, que es con lo que
-/// [`collect_scene`] detecta un material sin contabilizar.
-fn tally<M: Material>(
-    query: &Query<TypedSceneMesh<M>>,
-    batches: &mut HashSet<(AssetId<Mesh>, UntypedAssetId)>,
-    materials: &mut HashSet<UntypedAssetId>,
-) -> u32 {
-    let mut seen = 0;
-    for (visibility, mesh3d, material) in query {
-        if !visibility.get() {
-            continue; // Frustum-, hierarchy- or range-culled: never submitted.
-        }
-        seen += 1;
-        batches.insert((mesh3d.0.id(), material.0.id().untyped()));
-        materials.insert(material.0.id().untyped());
-    }
-    seen
-}
-
 /// Static scene inventory — the numbers a mobile budget is actually spent on,
 /// distinct from the frame cost in `perf`. `draws` counts distinct
 /// `(mesh, material)` pairs among visible entities: Bevy batches by exactly
 /// that, so it approximates the draw-call count without a private wgpu hook and
-/// drops the moment shared handles let the batcher instance. Covers the shipped
-/// `StandardMaterial` path plus the production layered terrain material. All
-/// fields are volatile — they drift as the camera moves, so change-triggered
-/// console output ignores them.
+/// drops the moment shared handles let the batcher instance. All fields are
+/// volatile — they drift as the camera moves, so change-triggered console output
+/// ignores them.
+///
+/// **Lo que este sistema ya no hace es enumerar tipos de material.** Eso vive en
+/// `visuals::material_registry`, donde cada tipo se engancha al registrarse;
+/// acá sólo se lee el resultado. La versión anterior tenía la lista escrita a
+/// mano y por eso la pradera estuvo fuera del presupuesto desde que existe.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn collect_scene(
     all_meshes: Query<AnySceneMesh>,
-    standard: Query<TypedSceneMesh<StandardMaterial>>,
-    terrain: Query<TypedSceneMesh<TerrainMaterial>>,
-    meadow: Query<TypedSceneMesh<GrassMaterial>>,
     ranged: Query<&ViewVisibility, With<VisibilityRange>>,
     mesh_assets: Res<Assets<Mesh>>,
+    census: Res<SceneCensus>,
     perf: Res<PerfToggles>,
     diagnostic: Res<DiagnosticViewState>,
     mut inventory: ResMut<SceneInventory>,
@@ -290,6 +261,10 @@ pub(super) fn collect_scene(
     if perf.overdraw || diagnostic.overdraw_material_override {
         return;
     }
+    // **Triángulos y mallas visibles se cuentan acá y sólo acá**: un `Mesh3d` lo
+    // tiene todo lo que se dibuja, sin mirar el material, así que es la única
+    // cuenta que no puede quedarse corta. Justamente por eso sirve de patrón
+    // contra el censo, que sí necesita el tipo.
     let mut visible_meshes = 0u32;
     let mut triangles = 0usize;
     for (visibility, mesh3d) in &all_meshes {
@@ -297,30 +272,16 @@ pub(super) fn collect_scene(
             continue;
         }
         visible_meshes += 1;
-        if let Some(mesh) = mesh_assets.get(&mesh3d.0) {
-            triangles += match mesh.indices() {
-                Some(indices) => indices.len() / 3,
-                // Non-indexed meshes list every vertex per triangle.
-                None => mesh.count_vertices() / 3,
-            };
-        }
+        triangles += mesh_assets.get(&mesh3d.0).map_or(0, mesh_triangles);
     }
 
-    let mut batches: HashSet<(AssetId<Mesh>, UntypedAssetId)> = HashSet::default();
-    let mut materials: HashSet<UntypedAssetId> = HashSet::default();
-    let accounted = tally(&standard, &mut batches, &mut materials)
-        + tally(&terrain, &mut batches, &mut materials)
-        + tally(&meadow, &mut batches, &mut materials);
-
-    // El guardia que faltaba. `draws` y `materials` siguen necesitando el tipo,
-    // o sea que siguen siendo una lista que alguien tiene que extender — pero
-    // ahora olvidarse hace ruido en vez de mentir en silencio durante meses.
+    let accounted = census.accounted_meshes();
     if accounted < visible_meshes && !*warned {
         *warned = true;
         warn!(
-            "[budget] {} mallas visibles y sólo {accounted} con material contabilizado: \
-             hay un tipo de material fuera de `collect_scene`, y sus draws no se cuentan",
-            visible_meshes,
+            "[budget] {visible_meshes} mallas visibles y sólo {accounted} contabilizadas: \
+             hay un material sin `add_instrumented_material`, y ni sus draws ni su \
+             atribución se cuentan"
         );
     }
 
@@ -338,29 +299,41 @@ pub(super) fn collect_scene(
     let scene = SceneInventory {
         visible_meshes,
         triangles,
-        draws: batches.len(),
-        materials: materials.len(),
+        draws: census.draws(),
+        materials: census.materials(),
         ranged_culled,
         ranged_total,
+        subjects: census.tallies(),
     };
     if *inventory != scene {
         *inventory = scene;
     }
 
-    snapshot.set(
-        SectionId::Scene,
-        vec![
-            Field::volatile("meshes", scene.visible_meshes.to_string()),
-            Field::volatile("tris", kilo(scene.triangles)),
-            Field::volatile("draws", scene.draws.to_string()),
-            Field::volatile("mats", scene.materials.to_string()),
-            Field::volatile("budget", scene_budget_grade(&scene).label()),
-            Field::volatile(
-                "lod_cull",
-                format!("{}/{}", scene.ranged_culled, scene.ranged_total),
-            ),
-        ],
-    );
+    let mut fields = vec![
+        Field::volatile("meshes", scene.visible_meshes.to_string()),
+        Field::volatile("tris", kilo(scene.triangles)),
+        Field::volatile("draws", scene.draws.to_string()),
+        Field::volatile("mats", scene.materials.to_string()),
+        Field::volatile("budget", scene_budget_grade(&scene).label()),
+        Field::volatile(
+            "lod_cull",
+            format!("{}/{}", scene.ranged_culled, scene.ranged_total),
+        ),
+    ];
+    // El reparto, y sólo de quien esté en cuadro: una fila en cero por cada
+    // sistema que la escena no tiene es ruido, y el overlay se lee de un
+    // vistazo o no se lee.
+    for subject in Subject::ALL {
+        let tally = scene.subject(subject);
+        if tally.meshes == 0 {
+            continue;
+        }
+        fields.push(Field::volatile(
+            subject.label(),
+            format!("{} tris {} draws", kilo(tally.triangles), tally.draws),
+        ));
+    }
+    snapshot.set(SectionId::Scene, fields);
 }
 
 /// Raw triangle digits are unreadable at scene scale; abbreviate over 10k so

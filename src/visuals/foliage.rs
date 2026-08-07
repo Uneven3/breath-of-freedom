@@ -83,7 +83,16 @@ pub(super) fn apply_foliage_material_policy(
         if !descends_from_tree(entity, &parents, &trees) {
             continue;
         }
-        commands.entity(entity).try_insert(FoliageMesh);
+        // El sujeto viaja con la marca de follaje porque es el mismo hecho —
+        // "esta malla es de un árbol"— y averiguarlo cuesta subir la jerarquía.
+        // Contarlo una vez acá es lo que permite que el inventario diga cuánto
+        // pone el bosque sin recorrer ancestros cada frame.
+        commands.entity(entity).try_insert((
+            FoliageMesh,
+            crate::visuals::material_registry::VisualSubject(
+                crate::visuals::material_registry::Subject::Forest,
+            ),
+        ));
 
         if !material_name.0.contains(TRUNK_MATERIAL) {
             leaves += 1;

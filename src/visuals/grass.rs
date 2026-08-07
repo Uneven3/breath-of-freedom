@@ -599,6 +599,11 @@ pub(super) fn roll_meadow_grid(
                     key.ring, key.cell.x, key.cell.y
                 )),
                 GrassChunk,
+                // Para que el inventario pueda decir cuánto pone la pradera, en
+                // vez de sólo cuánto pone la escena. Ver `material_registry`.
+                crate::visuals::material_registry::VisualSubject(
+                    crate::visuals::material_registry::Subject::Meadow,
+                ),
                 // Su cuenta de triángulos es una decisión, no un descuido: el
                 // watchdog de mallas pesadas es para assets, y el presupuesto de
                 // la pradera se cobra en `perf::budget`.

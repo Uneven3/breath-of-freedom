@@ -3,10 +3,12 @@
 //! Provides the uniform data structure (`GrassUniform`) and registers
 //! `ExtendedMaterial<StandardMaterial, GrassExtension>` with Bevy's PBR pipeline.
 
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
+
+use crate::visuals::material_registry::InstrumentedMaterialAppExt;
 
 #[derive(Clone, Copy, ShaderType, Debug, Reflect)]
 pub struct GrassUniform {
@@ -64,11 +66,9 @@ impl Default for GrassUniform {
             growth_spread: 0.0,
             growth_sink: 0.0,
             wind_dir: Vec2::new(0.80, 0.60),
-            // **Apagado el 2026-08-06 por decisión del usuario**: confunde más
-            // de lo que aporta mientras se diagnostica, y además es el piso de
-            // ruido del 5% que impedía comparar dos capturas del mismo encuadre.
-            // El shader queda: con amplitud cero no cuesta, y 0,22 —un quinto de
-            // la altura a ráfaga plena— era el valor jugado y aceptado.
+            // **Apagado el 2026-08-06 por decisión del usuario** mientras se
+            // diagnostica: era el piso de ruido del 5% entre dos capturas del
+            // mismo encuadre. El valor jugado y aceptado era 0,22.
             wind_strength: 0.0,
             wind_speed: 1.7,
             tint_variation: 0.16,
@@ -105,6 +105,7 @@ pub struct GrassMaterialPlugin;
 
 impl Plugin for GrassMaterialPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<GrassMaterial>::default());
+        // No `MaterialPlugin` a secas: ver `visuals::material_registry`.
+        app.add_instrumented_material::<GrassMaterial>();
     }
 }

@@ -203,7 +203,7 @@ mod tests {
     /// sentido para algo que existe alrededor de la cámara y no en un lugar del
     /// mapa.
     ///
-    /// **Hoy es doce veces el presupuesto móvil entero, y está acá para que eso
+    /// **Hoy es veinte veces el presupuesto móvil entero, y está acá para que eso
     /// no se pueda ignorar.** Es deuda con número, no una tolerancia — y por
     /// primera vez es deuda *deliberada*: este número es el techo de una rampa
     /// que se va a bajar, no un límite que se respetó.
@@ -234,7 +234,7 @@ mod tests {
     /// bandwidth aunque no produzca un píxel *(propiedad del hardware, no
     /// medición nuestra)*— pero el número que manda mientras la fase estética
     /// siga abierta es el de fill.
-    const MEADOW_VIEW_TRIANGLES: usize = 1_300_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 2_000_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -246,11 +246,12 @@ mod tests {
         );
         // Y lo que de verdad hay que vigilar mientras la deuda exista: cuánto
         // se pasa del móvil, para que crecer sea una decisión y no un descuido.
-        // 1.158.240 al 2026-08-06, con el alcance de 64 m en cuatro anillos.
+        // 1.825.120 al 2026-08-06: densidad plena hasta 24 m para que el
+        // crecimiento ocurra donde una brizna mide pocos píxeles.
         let ground = terrain_cost();
         let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            over <= 1_200_000,
+            over <= 1_900_000,
             "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
              past the debt this file declares"
         );

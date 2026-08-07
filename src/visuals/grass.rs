@@ -96,13 +96,11 @@ impl BladeShape {
 /// *el* problema de la sesión.
 const RINGS: [Ring; 4] = [
     Ring {
-        // Llega hasta 13 y no hasta 8: la ley empieza a ralear en
-        // [`GROWTH_START_M`] y hasta ahí planta 40, así que partirlo en dos
-        // anillos con la misma densidad sólo agregaba chunks.
         reach_m: 13.0,
         chunk_m: 8.0,
-        // La única densidad que sigue eligiendo el ojo; las otras tres son
-        // `C / borde interno`, con `C = 40 · 8`.
+        // Densidad plena hasta [`GROWTH_START_M`]: adentro de ese radio no ralea
+        // nada, así que los tres primeros anillos plantan lo mismo y sólo
+        // cambian de forma de brizna y de tamaño de chunk.
         density: 40.0,
         width_scale: 1.0,
         shape: BladeShape::Notched,
@@ -110,24 +108,22 @@ const RINGS: [Ring; 4] = [
     Ring {
         reach_m: 24.0,
         chunk_m: 16.0,
-        density: 25.0,
-        width_scale: 1.0,
-        // Sus chunks alcanzan hacia adentro hasta ~5 m, donde una brizna todavía
-        // se resuelve: con la punta recta, la mitad de las cercanas leería
-        // distinto de la otra mitad.
-        shape: BladeShape::Notched,
-    },
-    Ring {
-        reach_m: 40.0,
-        chunk_m: 32.0,
-        density: 13.0,
+        density: 40.0,
         width_scale: 1.0,
         shape: BladeShape::Quad,
     },
     Ring {
+        reach_m: 40.0,
+        chunk_m: 32.0,
+        density: 40.0,
+        width_scale: 1.0,
+        shape: BladeShape::Spike,
+    },
+    Ring {
+        // El único con ancla propia: `C / 40`, con `C = 40 · 24`.
         reach_m: 64.0,
         chunk_m: 32.0,
-        density: 8.0,
+        density: 24.0,
         width_scale: 1.0,
         shape: BladeShape::Spike,
     },
@@ -185,9 +181,18 @@ const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 #[cfg(test)]
 const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 
-/// How many metres **one** blade takes to grow from nothing to its full height.
-/// Short — see [`GROWTH_SPREAD_M`] for why the two are different knobs.
-const GROWTH_RAMP_M: f32 = 1.0;
+/// Cuántos metros tarda **una** brizna en pasar de nada a entera.
+///
+/// **La constante que gobierna el artefacto, y la que nunca se tocó.** Una
+/// brizna cambia `1/rampa` de su altura por metro caminado; con 1 m era el 100%,
+/// y a la distancia donde ocurría medía 117 px de alto — o sea 147 px de cambio
+/// por metro, en algo que el ojo está mirando. Todo el trabajo previo atacaba el
+/// perfil *espacial* de densidad, que no es lo que se percibe caminando.
+///
+/// Larga sólo sirve junto con [`GROWTH_START_M`] lejos: la rampa se resta del
+/// umbral, así que con umbrales cerca deja briznas a media altura a los pies del
+/// jugador. Las dos se mueven juntas o ninguna.
+const GROWTH_RAMP_M: f32 = 6.0;
 
 /// Over how many metres, inward from a ring's edge, the thresholds are spread.
 ///
@@ -210,7 +215,7 @@ const GROWTH_SPREAD_M: f32 = 6.0;
 ///
 /// **No ahorra un triángulo:** la geometría sigue horneada y esto sólo la encoge
 /// en el vertex shader. Arregla la imagen, no el costo.
-const GROWTH_START_M: f32 = 8.0;
+const GROWTH_START_M: f32 = 24.0;
 
 /// How far **below** the ground a blade collapses to, in metres.
 ///

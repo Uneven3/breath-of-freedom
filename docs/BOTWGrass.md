@@ -990,8 +990,44 @@ Misma imagen, 18% menos geometría, y la escalera ya no está escrita a mano.
 
 **Lo que falta, y es el eje que queda:** la semilla sigue incluyendo el anillo,
 así que cruzar una frontera todavía **reemplaza** briznas en vez de agregarlas.
-Eso pide la reescritura anidada, y ahora es el único cambio que queda entre esto
-y un LOD que no se note.
+
+#### El cuarto eje: implementado, medido y revertido (2026-08-07)
+
+Se escribió entero: semilla anclada a **baldosas del mundo** de 1 m, cada nivel
+emitiendo las primeras N de la secuencia de cada baldosa, el rango de la brizna
+viajando en el vértice en vez de un hash, la ley `1/d` reescrita como `d = K/f`
+—que es su forma correcta para un rango— y cada nivel dibujando sólo dentro de
+su banda. Anidado y exclusivo, como corresponde.
+
+**Funcionó y no alcanzó.** Lo que se midió:
+
+| | con solapamiento | anidado exclusivo |
+|---|---:|---:|
+| triángulos | 368.330 | **1.074.208** (2,9×) |
+| memoria residente | 26,0 MB | **75,8 MB** (2,9×) |
+| bandas cercanas | 99,5-99,8% | 97,6-99,3% |
+| banda 8-13 m | 99,6% | **81,1%** |
+| banda 13-24 m | 98,5% | **62,1%** |
+
+Tres hallazgos, y el tercero es el que importa:
+
+1. **La exclusividad cuesta ~3× la densidad**, y es aritmética de Poisson: pasar
+   de 78% a 99% de cobertura pide triplicar. El solapamiento estaba aportando
+   esa densidad — lo dijimos antes y ahora está el número.
+2. **El rango no es un hash.** Con `anchor/(1-hash)` y rangos chicos, todas las
+   briznas de un nivel morían juntas en su borde interno y los niveles lejanos
+   desaparecían enteros. La ley para un rango es `d = K/f`.
+3. **El modelo de densidad está mal en la forma, no en la escala.** Aun con el
+   margen recalibrado a 7,0, las bandas de media distancia quedaron en 81% y
+   62%: `C/d` afloja más rápido de lo que la imagen tolera. Tres rondas de
+   calibrar una constante no lo arreglan porque no es una constante lo que
+   falta.
+
+**Lo que hay que medir antes de volver a intentarlo:** la curva de cobertura
+contra densidad **a varias distancias**, con `grass-view=medir`. Con esa curva la
+densidad se ajusta a lo que la imagen pide en vez de a lo que un modelo optimista
+predice, y recién ahí la exclusividad es pagable. Es una tarde de mediciones, y
+las herramientas para hacerlas ya están.
 
 ### La brizna de dos triángulos (2026-08-07)
 

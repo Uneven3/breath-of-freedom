@@ -242,6 +242,12 @@ pub struct BrokenAssets {
     first: Option<String>,
 }
 
+impl BrokenAssets {
+    pub fn count(&self) -> usize {
+        self.count
+    }
+}
+
 pub fn note_failed_assets(
     mut failures: MessageReader<bevy::asset::UntypedAssetLoadFailedEvent>,
     mut broken: ResMut<BrokenAssets>,

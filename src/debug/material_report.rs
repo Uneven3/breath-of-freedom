@@ -95,6 +95,7 @@ pub(super) fn log_material_breakdown(
     terrain_materials: Res<Assets<TerrainMaterial>>,
     perf: Res<PerfToggles>,
     diagnostic: Res<DiagnosticViewState>,
+    inventory: Res<crate::perf::budget::SceneInventory>,
     time: Res<Time<Real>>,
     mut notice: ResMut<MaterialReportNotice>,
 ) {
@@ -160,7 +161,23 @@ pub(super) fn log_material_breakdown(
         return;
     }
 
+    // **La misma omisión, por tercera vez.** Este desglose enumera tipos de
+    // material a mano igual que lo hacían el inventario y la vista de overdraw,
+    // y le falta `GrassMaterial` desde que existe. Agrupar por *look* sí es
+    // específico de `StandardMaterial` —los otros no tienen color base ni
+    // rugosidad comparables—, así que la lista no se puede borrar del todo; lo
+    // que sí se puede es que no mienta. El inventario cuenta todos los tipos
+    // (`visuals::material_registry`), y la diferencia se declara.
     let total_handles = handles.len() + terrain_handles.len();
+    let uncharacterised = inventory.materials.saturating_sub(total_handles);
+    if uncharacterised > 0 {
+        warn!(
+            "[materials] {uncharacterised} de {} materiales visibles no entran en este \
+             desglose: son de un tipo que agrupa por otra cosa que un look de \
+             `StandardMaterial`. El total de la escena está en la sección `mats`.",
+            inventory.materials,
+        );
+    }
     let distinct_looks = looks.len() + terrain_handles.len();
     let reducible = total_handles.saturating_sub(distinct_looks);
     let percent = 100.0 * reducible as f64 / total_handles as f64;

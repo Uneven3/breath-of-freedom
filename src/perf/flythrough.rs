@@ -29,8 +29,14 @@ pub struct Waypoint {
 /// The reproducible route. **Placeholder** — re-author by flying the freecam
 /// (F3) and pressing **F4** at each point of interest, then pasting the logged
 /// `Waypoint { .. }` lines here. Kept as code (not RON) so the canonical route
-/// is versioned and identical across sessions and machines, mirroring
-/// `sequence::VANTAGE_POSITION`.
+/// is versioned and identical across sessions and machines, mirroring los
+/// miradores de `suite::VANTAGES`.
+///
+/// **Y los nombres de los tramos son afirmaciones sin verificar**, igual que lo
+/// era el mirador "del bosque" antes de que el reporte midiera qué había en
+/// cuadro: nada comprueba que `clearing→forest-edge` cruce un bosque. Mientras
+/// la ruta siga siendo este placeholder, el nombre de un tramo no es evidencia
+/// de por dónde pasó.
 pub const ROUTE: &[Waypoint] = &[
     Waypoint {
         leg: "spawn→clearing",

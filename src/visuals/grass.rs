@@ -1143,17 +1143,30 @@ mod tests {
         );
     }
 
+    /// Same chunk, same blades: a field that reshuffles when it is rebuilt makes
+    /// every visual comparison worthless — y desde el 2026-08-07, también toda
+    /// medición de píxeles, que compara dos capturas del mismo encuadre.
+    ///
+    /// **Este test comparaba longitudes.** O sea que pasaba igual si cada brizna
+    /// del chunk se plantaba en otro lado, que es exactamente el fallo que su
+    /// nombre promete atrapar. Ahora compara las posiciones.
     #[test]
     fn blades_are_deterministic_per_chunk() {
-        // Same chunk, same blades: a field that reshuffles when it is rebuilt
-        // makes every visual comparison worthless.
-        let a = build_chunk_mesh(&spec(64, BladeShape::Quad, 11), None);
-        let b = build_chunk_mesh(&spec(64, BladeShape::Quad, 11), None);
-        assert_eq!(
-            a.attribute(Mesh::ATTRIBUTE_POSITION)
-                .map(|values| values.len()),
-            b.attribute(Mesh::ATTRIBUTE_POSITION)
-                .map(|values| values.len())
+        let positions = |mesh: &Mesh| match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) => values.clone(),
+            _ => panic!("a chunk must carry Float32x3 positions"),
+        };
+        let a = positions(&build_chunk_mesh(&spec(64, BladeShape::Quad, 11), None));
+        let b = positions(&build_chunk_mesh(&spec(64, BladeShape::Quad, 11), None));
+        assert!(!a.is_empty(), "an empty chunk would make this vacuous");
+        assert_eq!(a, b, "the same chunk grew a different field");
+
+        // Y la otra mitad, que sin ella el test lo pasaría un generador que
+        // devuelve siempre lo mismo: dos chunks distintos son campos distintos.
+        let other = positions(&build_chunk_mesh(&spec(64, BladeShape::Quad, 12), None));
+        assert_ne!(
+            a, other,
+            "two chunks with different seeds grew the same field"
         );
     }
 

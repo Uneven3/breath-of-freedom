@@ -79,6 +79,8 @@ struct RunContext {
     /// hay realmente en cuadro. Se toma en el baseline y no al arrancar, porque
     /// antes de que la cámara se estacione el encuadre todavía es otro.
     framing: Option<SceneInventory>,
+    /// Cuántos assets fallaron al cargar durante la corrida.
+    broken_assets: usize,
 }
 
 impl RunContext {
@@ -106,6 +108,7 @@ impl RunContext {
             shadow_range: baseline.knob_value(PerfKnob::ShadowRange),
             leaf_shadows: baseline.knob_value(PerfKnob::LeafShadows),
             framing: None,
+            broken_assets: 0,
         }
     }
 }
@@ -381,6 +384,7 @@ pub(super) fn advance_benchmark(
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
     inventory: Res<SceneInventory>,
+    broken: Res<super::shot::BrokenAssets>,
     mut benchmark: ResMut<Benchmark>,
     mut toggles: ResMut<PerfToggles>,
 ) {
@@ -455,6 +459,7 @@ pub(super) fn advance_benchmark(
         if run.index == 0 {
             run.context.framing = Some(*inventory);
         }
+        run.context.broken_assets = broken.count();
         let frame_ms = diagnostics
             .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
             .and_then(|d| d.value());
@@ -564,13 +569,22 @@ fn report_framing(context: &RunContext) {
         framing.draws,
     );
     let subject = context.suite.vantage_subject();
-    let share = framing.share_of(subject);
-    if share < SUBJECT_FLOOR {
+    let meshes = framing.share_of(subject);
+    let triangles = framing.triangle_share_of(subject);
+    // **Las dos fracciones, y basta con que una caiga.** La primera versión
+    // miraba sólo las mallas y no disparó en el caso que la motivó: desde el
+    // mirador canónico el bosque es el 15% de las mallas y el **0%** de los
+    // triángulos, porque la pradera se lleva el 92%. Un tema que no pone costo
+    // no se puede medir aunque esté en cuadro.
+    if meshes.min(triangles) < SUBJECT_FLOOR {
         warn!(
-            "[bench] EL MIRADOR NO VE SU TEMA: '{}' es {:.0}% de las mallas en cuadro. \
-             Los deltas de este tema van a ser ruido; el mirador hay que reautorearlo (F4).",
+            "[bench] ESTA CORRIDA NO PUEDE MEDIR SU TEMA: '{}' es {:.0}% de las mallas \
+             y {:.0}% de los triángulos en cuadro. Sus deltas van a salir del tamaño \
+             del ruido, que es indistinguible de 'no cuesta nada' — hay que reautorear \
+             el mirador (F4) o medir este tema en su propia caja.",
             subject.label(),
-            share * 100.0,
+            meshes * 100.0,
+            triangles * 100.0,
         );
     }
 }
@@ -613,6 +627,16 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>, context: &RunCo
         );
     }
     report_framing(context);
+    // Un asset que no carga **abarata** la corrida: lo que no se dibuja no se
+    // paga. Una tabla de milisegundos así no es optimista, es de otra escena — y
+    // es peor que una foto rota, porque una foto rota se ve.
+    if context.broken_assets > 0 {
+        warn!(
+            "[bench] ESTOS NÚMEROS NO SIRVEN: {} assets no cargaron. Lo que no se \
+             dibuja no cuesta, así que esta tabla mide una escena incompleta.",
+            context.broken_assets
+        );
+    }
     info!("[bench] ---- resultados (ms, menos es mejor) ----");
     info!(
         "[bench] {:<20} {:>9} {:>9} {:>9} {:>8} {:>9} {:>8} {:>6}",
@@ -861,6 +885,7 @@ mod tests {
         app.insert_resource(Time::<Real>::default())
             .init_resource::<bevy::diagnostic::DiagnosticsStore>()
             .init_resource::<SceneInventory>()
+            .init_resource::<crate::perf::shot::BrokenAssets>()
             .insert_resource(Benchmark {
                 run: Some(RunState {
                     restore,

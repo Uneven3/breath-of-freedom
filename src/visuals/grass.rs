@@ -130,22 +130,37 @@ const RINGS: [Ring; 4] = [
     },
 ];
 
-/// Los alcances, como el shader los necesita para deducir el borde interno.
-fn ring_reaches() -> (Vec4, Vec4) {
-    slots(|ring| ring.reach_m, 0.0)
+/// Los alcances **con la perilla aplicada**, que es como el shader los necesita:
+/// tiene que encontrar en esta tabla el mismo número que el vértice carga, o
+/// `ring_inner` devuelve cero y la ley `1/d` se ancla donde no debe. Un test lo
+/// cobra; el bug que hubo está en `BOTWGrass.md`.
+fn ring_reaches(reach_scale: f32) -> (Vec4, Vec4) {
+    slots(|index, _| ring_reach(index, reach_scale), 0.0)
 }
 
 /// Los tamaños de chunk, en el mismo orden. Con ellos el fragment deduce de qué
 /// celda —o sea de qué draw call— salió una brizna, sin un byte más por vértice.
+///
+/// No los escala la perilla: el alcance decide cuántos chunks hay, no de qué
+/// tamaño son.
 fn ring_chunks() -> (Vec4, Vec4) {
-    slots(|ring| ring.chunk_m, 1.0)
+    slots(|_, ring| ring.chunk_m, 1.0)
 }
 
 /// Un dato por anillo repartido en los ocho casilleros que el uniform tiene.
-fn slots(of: impl Fn(&Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
+///
+/// El tope se cobra en compilación: un anillo de más desbordaría el uniform y se
+/// quedaría sin color propio, y las dos cosas son silenciosas en tiempo de
+/// ejecución — la brizna saldría gris y el shader no encontraría su anillo.
+const _: () = assert!(
+    RINGS.len() <= grass_debug::PALETTE_SLOTS,
+    "hay más anillos que casilleros en el uniform y en la paleta"
+);
+
+fn slots(of: impl Fn(usize, &Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
     let mut slots = [empty; 8];
-    for (slot, ring) in slots.iter_mut().zip(RINGS.iter()) {
-        *slot = of(ring);
+    for (index, ring) in RINGS.iter().enumerate() {
+        slots[index] = of(index, ring);
     }
     (Vec4::from_slice(&slots[..4]), Vec4::from_slice(&slots[4..]))
 }
@@ -663,7 +678,7 @@ pub(super) fn track_meadow_focus(
     data.growth_ramp = GROWTH_RAMP_M;
     data.growth_spread = GROWTH_SPREAD_M;
     data.growth_start = GROWTH_START_M;
-    let (a, b) = ring_reaches();
+    let (a, b) = ring_reaches(perf.grass_reach_scale());
     data.ring_reaches_a = a;
     data.ring_reaches_b = b;
     let (a, b) = ring_chunks();
@@ -671,6 +686,10 @@ pub(super) fn track_meadow_focus(
     data.ring_chunks_b = b;
     data.debug_view =
         grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).shader_index();
+    // Desde la constante, no repetido en el default del uniform: la vista
+    // `subpixel` divide por esto para decir cuántos píxeles mide una brizna, y
+    // un ancho desactualizado daría un veredicto con la precisión intacta.
+    data.blade_width = BLADE_WIDTH;
     for (slot, colour) in data.ring_colors.iter_mut().enumerate() {
         *colour = Vec4::from(grass_debug::slot_color(slot).to_f32_array());
     }
@@ -701,15 +720,24 @@ pub(crate) struct RingLegend {
     pub color: [u8; 3],
 }
 
-pub(crate) fn ring_legend() -> Vec<RingLegend> {
+/// **Toma las perillas, no la tabla autorada.** Una leyenda que informa el
+/// alcance y la densidad de diseño mientras la corrida está en 75% describe un
+/// campo que no está en la foto — y es el archivo del que el analizador saca los
+/// números. La misma clase de error que tenía el uniform.
+pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
+    let dial = perf.grass_density();
+    let reach_scale = perf.grass_reach_scale();
     RINGS
         .iter()
         .enumerate()
         .map(|(slot, ring)| RingLegend {
             slot,
-            reach_m: ring.reach_m,
+            reach_m: ring_reach(slot, reach_scale),
             chunk_m: ring.chunk_m,
-            density: ring.density,
+            // La densidad que el chunk realmente plantó, dividida por su área:
+            // el redondeo a briznas enteras hace que no sea exactamente la de la
+            // tabla por la escala.
+            density: blades_per_chunk(ring, dial) as f32 / (ring.chunk_m * ring.chunk_m),
             triangles_per_blade: ring.shape.triangles(),
             color: grass_debug::slot_srgb(slot),
         })
@@ -734,7 +762,7 @@ pub(super) fn announce_grass_debug_view(
         return;
     }
     info!("[grass] vista '{}':", perf.grass_debug_label());
-    for ring in ring_legend() {
+    for ring in ring_legend(&perf) {
         let [r, g, b] = ring.color;
         info!(
             "[grass]   anillo {} #{r:02X}{g:02X}{b:02X} — hasta {:.0} m, chunks de {:.0} m, \
@@ -1036,27 +1064,10 @@ mod tests {
     /// el test cae.
     const RINGS_OVER_THE_SAME_GROUND: usize = 4;
 
-    /// **El defecto que las vistas de color destaparon el 2026-08-07.**
-    ///
-    /// El test de cobertura de más arriba verifica que no queden huecos y pasa
-    /// desde siempre; nadie había verificado lo contrario, que es igual de
-    /// caro. Un chunk se descarta sólo si cae **entero** dentro del traspaso del
-    /// anillo interno (`farthest <= handover`), y un chunk de 32 m que contiene
-    /// a la cámara nunca cae entero dentro de 18 m: se conserva, y planta sus
-    /// 40 briznas/m² sobre los pies del jugador.
-    ///
-    /// Medido en la caja Pasto con `grass-view=medir` y `tools/shot_stats.py`:
-    /// en la banda más cercana a la cámara, el anillo 2 —hecho de briznas de
-    /// **un** triángulo, pensadas para 24-40 m— pinta el 28,4% de los píxeles, y
-    /// el anillo 0 sólo el 32,9%. Dos tercios del primer plano son briznas de
-    /// anillos lejanos.
-    ///
-    /// **Por qué no se arregla de una y queda anotado:** ese solapamiento es lo
-    /// que hoy tapa la costura entre anillos. Sacarlo sin la reescritura de
-    /// *praderas anidadas* que `BOTWGrass.md` ya tiene planificada vuelve a
-    /// destapar el artefacto que ocho intentos persiguieron — el sobrecosto está
-    /// comprando algo. Lo que cambia es que ahora se sabe **cuánto** cuesta y
-    /// que la reescritura tiene un número a favor en vez de una intuición.
+    /// **El defecto que las vistas de color destaparon el 2026-08-07.** El test
+    /// de cobertura de arriba verifica que no queden huecos; nadie había
+    /// verificado lo contrario, que es igual de caro. Medido, la tabla y por qué
+    /// queda como deuda en vez de arreglarse: `BOTWGrass.md`.
     #[test]
     fn no_patch_of_ground_is_planted_by_more_than_two_rings() {
         let mut worst = (0usize, Vec2::ZERO, Vec2::ZERO, Vec::new());
@@ -1268,6 +1279,55 @@ mod tests {
                     "ring {index} at {scale}x reaches {reach} m, which does not pack"
                 );
             }
+        }
+    }
+
+    /// **Lo que el uniform dice tiene que existir en la malla.**
+    ///
+    /// El shader deduce el anillo de una brizna comparando el alcance que ella
+    /// carga contra la tabla del uniform. Si las dos no salen del mismo cálculo,
+    /// la comparación no falla: *no encuentra nada*, y `ring_inner` devuelve
+    /// cero en silencio — o sea que la ley `1/d` se ancla donde no debe y nadie
+    /// ve nada raro. Pasó con la perilla de alcance, que escala y redondea el
+    /// número del vértice mientras el uniform mandaba el autorado.
+    ///
+    /// Es el mismo test para todas las perillas presentes y futuras: para cada
+    /// paso, cada alcance horneado tiene que estar en la tabla que se envía.
+    #[test]
+    fn the_uniform_reaches_are_the_ones_baked_into_the_blades() {
+        for scale in bof_domain::perf::GRASS_REACH_STEPS {
+            let (a, b) = ring_reaches(scale);
+            let sent: Vec<f32> = a.to_array().into_iter().chain(b.to_array()).collect();
+            for index in 0..RINGS.len() {
+                let baked = ring_reach(index, scale);
+                assert!(
+                    sent.iter().any(|value| (value - baked).abs() < 0.5),
+                    "a {scale}x el anillo {index} hornea {baked} m y el uniform manda \
+                     {sent:?}: el shader no va a encontrar su anillo y va a anclar la ley \
+                     1/d en cero"
+                );
+            }
+        }
+    }
+
+    /// Y la leyenda que acompaña a una captura describe **esa** captura.
+    ///
+    /// Es el archivo del que el analizador saca los alcances, así que informar
+    /// los de diseño mientras la corrida está en 75% es contar píxeles de un
+    /// campo y atribuirlos a otro.
+    #[test]
+    fn the_legend_reports_the_field_that_is_actually_planted() {
+        let mut perf = crate::perf::PerfToggles::default();
+        perf.set_knob_step(bof_domain::perf::PerfKnob::GrassReach, 2);
+        let scale = perf.grass_reach_scale();
+        assert!(scale < 1.0, "este test necesita un paso que sí achique");
+        for ring in ring_legend(&perf) {
+            assert_eq!(
+                ring.reach_m,
+                ring_reach(ring.slot, scale),
+                "la leyenda del anillo {} no informa el alcance vigente",
+                ring.slot
+            );
         }
     }
 

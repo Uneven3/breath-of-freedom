@@ -190,28 +190,29 @@ pub fn capture_on_request(
     // El mirador va al log porque una queja sobre la cámara sin la pose de la
     // cámara no se puede reproducir — que es exactamente el caso que esta tecla
     // existe para cubrir.
-    if let Some(camera) = camera {
-        let (p, f) = (camera.translation(), camera.forward().as_vec3());
-        info!(
-            "[shot] F7 → {} — pos=({:.1},{:.1},{:.1}) facing=({:.2},{:.2},{:.2}) · BOF_SHOT_POSE=\"{:.1},{:.1},{:.1}:{:.2},{:.2},{:.2}\"",
-            path.display(),
-            p.x,
-            p.y,
-            p.z,
-            f.x,
-            f.y,
-            f.z,
-            p.x,
-            p.y,
-            p.z,
-            f.x,
-            f.y,
-            f.z,
-        );
-    }
+    let camera_pose = camera.map_or((Vec3::ZERO, Vec3::Z), |camera| {
+        (camera.translation(), camera.forward().as_vec3())
+    });
+    let (p, f) = camera_pose;
+    info!(
+        "[shot] F7 → {} — pos=({:.1},{:.1},{:.1}) facing=({:.2},{:.2},{:.2}) · BOF_SHOT_POSE=\"{:.1},{:.1},{:.1}:{:.2},{:.2},{:.2}\"",
+        path.display(),
+        p.x,
+        p.y,
+        p.z,
+        f.x,
+        f.y,
+        f.z,
+        p.x,
+        p.y,
+        p.z,
+        f.x,
+        f.y,
+        f.z,
+    );
     warn_on_broken_assets(&broken);
     log_framing(&inventory);
-    write_legend(&path, &perf, &inventory);
+    write_legend(&path, &perf, &inventory, camera_pose);
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
@@ -289,6 +290,7 @@ fn write_legend(
     path: &std::path::Path,
     perf: &crate::perf::PerfToggles,
     inventory: &SceneInventory,
+    pose: (Vec3, Vec3),
 ) {
     use crate::visuals::material_registry::Subject;
 
@@ -296,7 +298,7 @@ fn write_legend(
     if view == "off" {
         return;
     }
-    let rings: Vec<serde_json::Value> = crate::visuals::grass::ring_legend()
+    let rings: Vec<serde_json::Value> = crate::visuals::grass::ring_legend(perf)
         .into_iter()
         .map(|ring| {
             serde_json::json!({
@@ -312,6 +314,15 @@ fn write_legend(
     let meadow = inventory.subject(Subject::Meadow);
     let legend = serde_json::json!({
         "vista": view,
+        // La pose, porque el analizador la necesita para saber si sus propias
+        // cuentas valen: el perfil por bandas trata la fila de pantalla como
+        // distancia, y eso sólo es cierto con la cámara casi horizontal. Sin
+        // este dato el script tendría que suponerlo, que es la clase de error
+        // que este trabajo vino a cerrar.
+        "camara": {
+            "pos": [pose.0.x, pose.0.y, pose.0.z],
+            "facing": [pose.1.x, pose.1.y, pose.1.z],
+        },
         "anillos": rings,
         "encuadre": {
             "mallas_visibles": inventory.visible_meshes,
@@ -439,7 +450,7 @@ pub fn drive_auto_shot(
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
             warn_on_broken_assets(&broken);
             log_framing(&inventory);
-            write_legend(&path, &perf, &inventory);
+            write_legend(&path, &perf, &inventory, (position, facing));
             commands
                 .spawn(Screenshot::primary_window())
                 .observe(save_to_disk(path));

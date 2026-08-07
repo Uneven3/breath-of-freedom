@@ -37,23 +37,22 @@ pub struct GrassUniform {
     /// How much a blade's colour may drift from the shared gradient. Without it
     /// a field of one green reads as carpet, however dense it is.
     pub tint_variation: f32,
-    /// How far the root's colour holds before the tip's takes over. **0 is a
-    /// linear ramp and 1 is its square.** Linear is why the field read as a pale
-    /// haze: a canopy is mostly tips, so the meadow landed on the midpoint of
-    /// its two colours. Two curves and not `pow`, que son dos transcendentales
-    /// por fragmento en un frame fill-bound.
+    /// How far the root's colour holds before the tip's takes over: **0 es una
+    /// rampa lineal y 1 su cuadrado**. Lineal el campo caía en el punto medio de
+    /// sus dos colores; el porqué está en `BOTWGrass.md`.
     pub gradient_bias: f32,
     /// Desde qué distancia ralea la pradera. Ver `GROWTH_START_M`.
     pub growth_start: f32,
     /// Índice de la vista de diagnóstico. Ver `visuals::grass_debug`.
     pub debug_view: u32,
+    /// Ancho de brizna en metros; la vista `subpixel` divide por él.
+    pub blade_width: f32,
     /// Los alcances de los anillos, para que el shader deduzca el borde interno
     /// del anillo de cada brizna y ancle ahí su ley `1/d`. Ver `ring_inner`.
     pub ring_reaches_a: Vec4,
     pub ring_reaches_b: Vec4,
-    /// El tamaño de chunk de cada anillo, en el mismo orden que los alcances.
-    /// Con él, el fragment deduce de qué celda salió una brizna sin que haga
-    /// falta un byte más por vértice — y una celda es una malla y un draw.
+    /// El tamaño de chunk de cada anillo, en el orden de los alcances: con él el
+    /// fragment deduce de qué celda —o sea de qué draw— salió una brizna.
     pub ring_chunks_a: Vec4,
     pub ring_chunks_b: Vec4,
     /// La paleta de diagnóstico, un color por anillo.
@@ -84,6 +83,8 @@ impl Default for GrassUniform {
             gradient_bias: 1.0,
             growth_start: 1.0e9,
             debug_view: 0,
+            // La pradera lo escribe desde `BLADE_WIDTH`, su única fuente.
+            blade_width: 0.0,
             ring_reaches_a: Vec4::ZERO,
             ring_reaches_b: Vec4::ZERO,
             ring_chunks_a: Vec4::ONE,

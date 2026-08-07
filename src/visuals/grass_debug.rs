@@ -55,17 +55,23 @@ pub(crate) enum GrassDebugView {
     Blade,
     /// Cuánto de su altura tiene cada brizna: la banda que crece, visible.
     Growth,
+    /// Cuántos píxeles de ancho mide una brizna en pantalla. Rojo la que ya no
+    /// se resuelve: el rasterizador trabaja en cuartetos de 2×2, así que una
+    /// brizna sub-píxel paga cuatro fragmentos por el uno que aporta. Es la ley
+    /// 2 de `BOTWGrass.md`, que hasta ahora no se podía mirar.
+    Subpixel,
     /// Plano y exacto, un color por anillo. Para contar píxeles.
     Measure,
 }
 
 impl GrassDebugView {
-    pub(crate) const ALL: [GrassDebugView; 6] = [
+    pub(crate) const ALL: [GrassDebugView; 7] = [
         GrassDebugView::Off,
         GrassDebugView::Ring,
         GrassDebugView::Chunk,
         GrassDebugView::Blade,
         GrassDebugView::Growth,
+        GrassDebugView::Subpixel,
         GrassDebugView::Measure,
     ];
 
@@ -81,7 +87,8 @@ impl GrassDebugView {
             GrassDebugView::Chunk => 2,
             GrassDebugView::Blade => 3,
             GrassDebugView::Growth => 4,
-            GrassDebugView::Measure => 5,
+            GrassDebugView::Subpixel => 5,
+            GrassDebugView::Measure => 6,
         }
     }
 

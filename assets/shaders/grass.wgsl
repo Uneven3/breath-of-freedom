@@ -59,6 +59,7 @@ struct GrassUniform {
     gradient_bias: f32,
     growth_start: f32,
     debug_view: u32,
+    blade_width: f32,
     ring_reaches_a: vec4<f32>,
     ring_reaches_b: vec4<f32>,
     ring_chunks_a: vec4<f32>,
@@ -216,7 +217,19 @@ const DEBUG_RING: u32 = 1u;
 const DEBUG_CHUNK: u32 = 2u;
 const DEBUG_BLADE: u32 = 3u;
 const DEBUG_GROWTH: u32 = 4u;
-const DEBUG_MEASURE: u32 = 5u;
+const DEBUG_SUBPIXEL: u32 = 5u;
+const DEBUG_MEASURE: u32 = 6u;
+
+/// Cuántos píxeles de ancho tiene que medir una brizna para que valga lo que
+/// cuesta.
+///
+/// El rasterizador trabaja en cuartetos de 2×2: un triángulo que no llena un
+/// píxel dispara los cuatro fragmentos igual. Por debajo de un píxel de ancho la
+/// brizna paga cuatro y aporta uno — la ley 2 de `BOTWGrass.md`, que hasta ahora
+/// se podía citar pero no mirar. Dos píxeles es donde deja de haber desperdicio
+/// de cuarteto en el eje angosto.
+const SUBPIXEL_RED: f32 = 1.0;
+const SUBPIXEL_GREEN: f32 = 2.0;
 
 /// Cuánto tapa el pastel al color real en las vistas de *ver*.
 ///
@@ -284,6 +297,7 @@ fn debug_colour(
     ring_reach: f32,
     blade_hash: f32,
     blade_height: f32,
+    metres_per_pixel: f32,
 ) -> vec3<f32> {
     let view = grass_data.debug_view;
     if view == DEBUG_OFF || view == DEBUG_MEASURE {
@@ -314,6 +328,24 @@ fn debug_colour(
         // cuadro, y el promedio de pasteles claros es un beige liso.
         let per_blade = fract(blade_height);
         tint = pastel(vec2<f32>(per_blade * 813.0, per_blade * 271.0), 0.0);
+    } else if view == DEBUG_SUBPIXEL {
+        // Los píxeles de ancho salen de las derivadas de pantalla, que se
+        // calculan **antes** de entrar acá: una derivada dentro de un branch es
+        // territorio indefinido, y aunque este branch sea uniforme para todo el
+        // draw, pedirlo afuera no cuesta nada y no depende de esa sutileza.
+        let pixels_wide = grass_data.blade_width / max(metres_per_pixel, 1e-6);
+        // Rojo → ámbar → verde. Los dos colores salen de la paleta, que es el
+        // único lugar donde viven los colores de diagnóstico.
+        let health = clamp(
+            (pixels_wide - SUBPIXEL_RED) / (SUBPIXEL_GREEN - SUBPIXEL_RED),
+            0.0,
+            1.0,
+        );
+        tint = mix(
+            grass_data.ring_colors[0].rgb,
+            grass_data.ring_colors[3].rgb,
+            health,
+        );
     } else if view == DEBUG_GROWTH {
         // Dos entradas de la paleta y no dos colores nuevos: el shader no
         // inventa colores, los recibe.
@@ -456,6 +488,9 @@ fn fragment(
 
     let factor = blade_height_factor(in.uv);
     let blade_hash = abs(in.uv_b.x);
+    // Cuánto mundo cubre un píxel acá. Fuera de todo branch, porque una derivada
+    // en control de flujo no uniforme no está definida.
+    let metres_per_pixel = length(fwidth(in.world_position.xz));
     // El degradado va sesgado hacia la raíz, no lineal: el campo se ve desde
     // arriba, así que lo que llena la pantalla son puntas, y un degradado
     // lineal deja al campo entero en el promedio de sus dos colores. Sesgado, la
@@ -518,6 +553,7 @@ fn fragment(
             floor(in.uv_b.y),
             blade_hash,
             in.uv_b.y,
+            metres_per_pixel,
         ),
         colour.a,
     );

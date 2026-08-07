@@ -133,12 +133,19 @@ pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 /// `visuals::grass_debug`, que es presentación (§7). Que sean **seis** no es
 /// casual: la escalera de perillas se cierra en 60 pasos y un largo que no
 /// divida a 60 rompe esa vuelta.
-pub const GRASS_DEBUG_STEPS: [&str; 6] = [
+/// `subpixel` es la que sale de la ley 2 de `BOTWGrass.md` y del estado del arte:
+/// el rasterizador trabaja en cuartetos de 2×2, así que un triángulo más chico
+/// que un píxel dispara cuatro fragmentos igual. Es el modo de muerte clásico
+/// del pasto en móvil y **no aparece en ningún conteo de triángulos**; los
+/// motores grandes lo exponen como *quad overdraw* justamente por eso. Acá se
+/// pinta por brizna: rojo la que ya no se resuelve, verde la que sí.
+pub const GRASS_DEBUG_STEPS: [&str; 7] = [
     "off",
     "anillo",
     "chunk",
     "brizna",
     "crecimiento",
+    "subpixel",
     "medir",
 ];
 
@@ -603,9 +610,11 @@ mod tests {
             assert_ne!(toggles.knob_text(*knob), baseline, "{}", knob.label());
 
             // ...and the cycle must close, so an A/B can be repeated exactly.
-            // 60 = lcm(2 bool, 4 cull, 4 shadow-range, 5 shadow-dist, 3
-            // shadow-map, 6 grass-view).
-            for _ in 1..60 {
+            // 420 = lcm(2 bool, 4 cull, 4 shadow-range, 5 shadow-dist, 3
+            // shadow-map, 5 grass-density, 7 grass-view). Se ajusta cuando una
+            // escalera cambia de largo: el número está para que la vuelta
+            // cierre, no para limitar cuántos pasos puede tener una perilla.
+            for _ in 1..420 {
                 toggles.step_selected();
             }
             assert_eq!(toggles.knob_text(*knob), baseline, "{}", knob.label());

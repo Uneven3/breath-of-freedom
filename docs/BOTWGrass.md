@@ -803,7 +803,24 @@ dos familias:
 | `chunk` | un pastel por celda | el mapa de **draw calls**: un chunk es una malla y un draw |
 | `brizna` | un pastel por hash | si al acercarse las briznas **se suman** o **se reemplazan** |
 | `crecimiento` | rampa de dos colores | dónde está la banda que crece |
+| `subpixel` | rojo bajo 1 px de ancho, verde sobre 2 | **la ley 2, por fin mirable** |
 | `medir` | plano, exacto, sin luz ni niebla ni tonemapping | contar píxeles |
+
+La de `subpixel` sale del estado del arte y de la ley 2 de este documento: el
+rasterizador trabaja en cuartetos de 2×2, así que una brizna más angosta que un
+píxel dispara cuatro fragmentos por el uno que aporta. Los motores grandes lo
+exponen como *quad overdraw* —Unreal lo tiene como view mode y Unigine lo
+documenta con la misma justificación— y es el único costo del pasto que **no
+aparece en ningún conteo de triángulos**. Acá sale de las derivadas de pantalla
+(`fwidth` de la posición de mundo = metros por píxel) contra `BLADE_WIDTH`, que
+viaja en el uniform desde su única fuente.
+
+**Primera lectura, 2026-08-07, desde el mirador canónico:** el rojo está
+confinado a una franja fina en el horizonte y el resto del campo es verde. O sea
+que el desperdicio de cuarteto **no** es el costo dominante en esta vista — lo
+que domina es el solapamiento de anillos en el primer plano, que es geometría de
+sobra a tamaño resoluble. Es un descarte útil: cierra una hipótesis que el
+documento tenía abierta desde que se escribió.
 
 **Ninguna cuesta un byte por vértice ni rehornea la pradera.** El anillo sale de
 `floor(uv1.y)`, la brizna de `uv1.x` y el chunk de `floor(xz / chunk_m)` con los
@@ -853,6 +870,24 @@ reescritura tiene una medición a favor en vez de una intuición.
 
 *Y explica el fill-bound sin misterio:* el primer plano —donde cada brizna cubre
 más píxeles— se está dibujando tres veces.
+
+#### Y la perilla de alcance medía otra cosa
+
+Encontrado el 2026-08-07 auditando qué números del uniform describen algo real.
+El vértice lleva `ring_reach(index, escala)` —escalado por la perilla y
+redondeado— y el uniform mandaba `RINGS[i].reach_m` **a secas**. A 100% coinciden
+y no se nota nada; a 75% una brizna dice "10 m" contra una tabla que dice 13,
+`ring_inner` no encuentra ningún alcance menor que el suyo y devuelve **0**, así
+que el ancla de la ley `1/d` pasa a ser `growth_start` para todos los anillos.
+
+**Los pasos `reach 75%` y `reach 50%` de la matriz no medían un alcance más
+corto: medían otra ley de raleo.** La conclusión *"el alcance ahorra menos que la
+densidad"*, de la corrida del 2026-08-06, sale de esas dos filas y hay que
+rehacerla.
+
+Arreglado, y con un test que compara la tabla del uniform contra los alcances que
+las mallas realmente hornean, para cada paso de la perilla. Verificado plantando
+el bug de vuelta: el test cae nombrando el anillo y los dos números.
 
 ### Los anillos
 

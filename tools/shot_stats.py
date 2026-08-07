@@ -41,6 +41,12 @@ import zlib
 from pathlib import Path
 
 
+#: Cuánto puede inclinarse la cámara antes de que "fila de pantalla" deje de
+#: significar "distancia". 0,25 son unos 15°, que es donde el orden todavía se
+#: conserva en el rango que el pasto ocupa.
+HORIZON_TOLERANCE = 0.25
+
+
 def read_png(path: Path) -> tuple[int, int, bytes, int]:
     """Devuelve (ancho, alto, píxeles, canales) de un PNG de 8 bits sin entrelazar."""
     raw = path.read_bytes()
@@ -207,6 +213,25 @@ def main(argv: list[str]) -> int:
     # mirando al horizonte, la fila de pantalla crece monótonamente con la
     # distancia al suelo, así que esto **es** el perfil de cobertura contra
     # distancia — sin detectar un solo borde.
+    #
+    # **Y "con la cámara mirando al horizonte" es una condición, no una frase.**
+    # Inclinada hacia abajo la fila deja de ordenar por distancia y el perfil
+    # pasa a describir algo que no existe. La corrida escribe su pose al lado de
+    # la foto justamente para que esto se pueda verificar en vez de suponer.
+    facing = (legend.get("camara") or {}).get("facing")
+    if facing is None:
+        print(
+            "\nAVISO: la leyenda no trae la pose de la cámara, así que no se puede\n"
+            "verificar que la fila de pantalla ordene por distancia. Perfil omitido."
+        )
+        return 0
+    if abs(facing[1]) > HORIZON_TOLERANCE:
+        print(
+            f"\nAVISO: la cámara mira con dy={facing[1]:+.2f}, demasiado inclinada.\n"
+            "La fila de pantalla ya no crece con la distancia, así que un perfil por\n"
+            "bandas describiría algo que no existe. Perfil omitido a propósito."
+        )
+        return 0
     print(f"\nperfil por bandas (arriba = lejos), {bands} bandas:")
     header = "  banda " + " ".join(f"{r['anillo']:>7}" for r in legend["anillos"]) + "    total"
     print(header)

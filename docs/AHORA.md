@@ -41,7 +41,11 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
 - **Contar píxeles: `python3 tools/shot_stats.py <captura.png>`**, con la vista
   `grass-view=medir` puesta. Cuenta colores planos exactos que la corrida escribió
   en un `.json` al lado del PNG; el script no conoce ningún color. Reemplaza los
-  perfiles por detección de bordes, que saturan con densidad alta.
+  perfiles por detección de bordes, que saturan con densidad alta. Sin leyenda
+  describe la imagen (luminancia, desviación, saturación), y **se niega a hacer
+  el perfil por bandas si la cámara está inclinada**: ahí la fila de pantalla ya
+  no ordena por distancia, así que el perfil describiría algo que no existe. Lo
+  verifica contra la pose que la corrida escribió, no lo supone.
 - **F7 en el juego captura lo que el usuario está viendo**, numerada, con la pose
   de cámara impresa ya formateada como `BOF_SHOT_POSE`. Es la única forma de que
   un reporte visual suyo llegue sin pasar por mi interpretación.
@@ -273,6 +277,13 @@ brizna se hunde 18 cm); la altura; la paleta, derivada del suelo donde se paran
    disparador que `BOTWGrass.md` dejó armado —*"si el barrido confirma
    fill-bound, bajar el anillo 0 es la palanca más barata"*— ya se cumplió sin
    que nadie actuara.
+4b. **La perilla de alcance medía otra cosa** (2026-08-07). El uniform mandaba
+   los alcances autorados y el vértice los escalados: a 75% el shader no
+   encontraba el anillo de una brizna y anclaba la ley `1/d` en cero. Los pasos
+   `reach 75%` y `reach 50%` de la matriz medían **otra ley de raleo**, así que
+   la conclusión *"el alcance ahorra menos que la densidad"* hay que rehacerla.
+   Arreglado, con un test que compara la tabla del uniform contra lo que las
+   mallas hornean — verificado plantando el bug de vuelta.
 5. **Cuatro anillos plantan sobre el mismo suelo** (visto el 2026-08-07 con
    `grass-view=medir`): dos tercios del primer plano son briznas de anillos
    lejanos, las de 1 triángulo. Explica el fill-bound sin misterio — lo que más

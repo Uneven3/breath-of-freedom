@@ -40,22 +40,16 @@ struct Ring {
     shape: BladeShape,
 }
 
-/// The blade, at three levels of detail.
-///
-/// **The LOD the system did not have.** Until 2026-08-06 only density fell with
-/// distance — the blade kept its shape all the way out, and thinning the field
-/// is what opens the emptiness the meadow is judged on. Law 1's two-triangle
-/// blade is now a statement about the *near* ring; past it a blade may be less.
+/// La brizna, en dos niveles de detalle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BladeShape {
-    /// Five vertices, three triangles: the top edge dips, so the blade ends in
-    /// two points. The one shape cue that says "leaf" at arm's length.
-    Notched,
-    /// Four vertices, two triangles: the plain tapered quad.
-    Quad,
+    /// Cuatro vértices, dos triángulos unidos por una arista **horizontal** a la
+    /// altura de la cintura: uno apunta abajo y otro arriba. Termina en punta por
+    /// los dos lados, y esa fila del medio es la que le permite arquearse. El
+    /// diseño original y por qué el quad diagonal no servía: `BOTWGrass.md`.
+    Leaf,
     /// Three vertices, one triangle: two base corners and a single tip. The
-    /// floor — the taper already converges, so the fourth vertex is a corner
-    /// nobody resolves out here.
+    /// floor — a blade that no longer resolves does not need a waist.
     Spike,
 }
 
@@ -64,16 +58,14 @@ impl BladeShape {
     /// budget quietly stops matching the mesh.
     const fn vertices(self) -> usize {
         match self {
-            Self::Notched => 5,
-            Self::Quad => 4,
+            Self::Leaf => 4,
             Self::Spike => 3,
         }
     }
 
     const fn triangles(self) -> usize {
         match self {
-            Self::Notched => 3,
-            Self::Quad => 2,
+            Self::Leaf => 2,
             Self::Spike => 1,
         }
     }
@@ -99,19 +91,16 @@ const RINGS: [Ring; 4] = [
     Ring {
         reach_m: 13.0,
         chunk_m: 8.0,
-        // Densidad plena hasta [`GROWTH_START_M`]: adentro de ese radio no ralea
-        // nada, así que los tres primeros anillos plantan lo mismo y sólo
-        // cambian de forma de brizna y de tamaño de chunk.
         density: 40.0,
         width_scale: 1.0,
-        shape: BladeShape::Notched,
+        shape: BladeShape::Leaf,
     },
     Ring {
         reach_m: 24.0,
         chunk_m: 16.0,
         density: 40.0,
         width_scale: 1.0,
-        shape: BladeShape::Quad,
+        shape: BladeShape::Leaf,
     },
     Ring {
         reach_m: 40.0,
@@ -121,7 +110,6 @@ const RINGS: [Ring; 4] = [
         shape: BladeShape::Spike,
     },
     Ring {
-        // El único con ancla propia: `C / 40`, con `C = 40 · 24`.
         reach_m: 64.0,
         chunk_m: 32.0,
         density: 24.0,
@@ -183,12 +171,26 @@ const EYE_HEIGHT_M: f32 = 1.6;
 #[cfg(test)]
 const COVERAGE_MARGIN: f32 = 1.2;
 
+/// Qué fracción del suelo tiene que quedar tapada para que no se lea como ralo.
+#[cfg(test)]
+const TARGET_COVERAGE: f32 = 0.95;
+
 /// Blades per m² needed at distance `d` for the ground not to show through.
 /// A floor, not a recipe — see the module header.
+///
+/// **Las briznas caen sobre un hash, no sobre una grilla**, así que se pisan
+/// entre ellas: la cobertura de un reparto de Poisson es `1 − e^(−λ·a)`, no
+/// `λ·a`. La versión anterior usaba lo segundo, o sea que pedía la densidad con
+/// la que las briznas taparían el suelo **si se ordenaran solas**, y por eso
+/// pedía tres veces menos de lo que hace falta. Ésa es la aritmética detrás de
+/// que el campo se viera ralo cada vez que se lo plantaba "según la derivación".
 #[cfg(test)]
 fn minimum_density(distance_m: f32, width_m: f32) -> f32 {
     let average_height = f32::midpoint(BLADE_HEIGHT_MIN, BLADE_HEIGHT_MAX);
-    EYE_HEIGHT_M / (width_m * average_height * distance_m.max(0.5))
+    // Suelo que tapa una brizna: su ancho por lo que se alarga al verla en
+    // ángulo rasante desde la altura del ojo.
+    let hidden_per_blade = width_m * average_height * distance_m.max(0.5) / EYE_HEIGHT_M;
+    -(1.0 - TARGET_COVERAGE).ln() / hidden_per_blade
 }
 
 /// The widest a blade may get. Past roughly four times its authored width a
@@ -267,15 +269,13 @@ const FILL_IN_ONE_FRAME: bool = true;
 /// Blade shape. Wide enough at the base to cover ground, tapered at the tip so
 /// it reads as a leaf rather than a strip of paper.
 const BLADE_WIDTH: f32 = 0.055;
-/// Fraction of the base width kept at the tip.
-///
-/// Was 0,35 until 2026-08-06 and the tip read as **cut square** rather than
-/// pointed — reported playing. 0,18 leaves a point without the two halves of the
-/// notch degenerating into slivers.
-const BLADE_TIP_TAPER: f32 = 0.18;
-/// How far down from the tip the notch sits, as a fraction of the height. Deep
-/// enough to read as two points, shallow enough not to be a fork.
-const TIP_NOTCH_DEPTH: f32 = 0.72;
+/// A qué fracción de la altura está la parte más ancha. Baja y no en el medio:
+/// una hoja ensancha rápido y afina largo, y el rombo simétrico lee como
+/// diamante.
+const BLADE_WAIST: f32 = 0.30;
+/// Cuánto se hunde la punta de abajo, en metros: en el suelo mismo la brizna
+/// sería infinitamente angosta y dejaría ver tierra donde nace.
+const BLADE_ROOT_SINK: f32 = 0.06;
 /// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
 /// **The ceiling is one metre and it is hard**: the height travels in the
@@ -835,72 +835,67 @@ fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
 
         let base = Vec3::new(xz.x, ground, xz.y);
         let tip = base + Vec3::new(lean.x, height, lean.y);
-        let taper = BLADE_TIP_TAPER;
         let Ok(first) = u32::try_from(positions.len()) else {
             error!("grass chunk exceeded the u32 mesh-index limit");
             break;
         };
 
-        positions.push([base.x - side.x, base.y, base.z - side.y]);
-        positions.push([base.x + side.x, base.y, base.z + side.y]);
-        if shape == BladeShape::Spike {
-            // One tip vertex on the blade's centre line instead of two corners.
-            // The taper already pulls the top nearly to a point, so this removes
-            // a corner rather than a feature — and it is the difference between
-            // two triangles and one.
-            positions.push([tip.x, tip.y, tip.z]);
-        } else {
-            positions.push([tip.x + side.x * taper, tip.y, tip.z + side.y * taper]);
-            positions.push([tip.x - side.x * taper, tip.y, tip.z - side.y * taper]);
-        }
-
         // `uv` is not a texture coordinate — nothing samples one. `y` is the
         // vertex's height along the blade (0 root, 1 tip); `x` is the ground
         // height under it, which is what lets the shader collapse a blade toward
         // its own root without a per-vertex blade height.
-        uvs.push([base.y, 0.0]);
-        uvs.push([base.y, 0.0]);
-        uvs.push([base.y, 1.0]);
-        if shape != BladeShape::Spike {
-            uvs.push([base.y, 1.0]);
-        }
-
-        // `x` carries the blade's hash with the quad's *side* in its sign;
-        // `y` packs the ring's reach (whole part) and the blade's height
-        // (fraction), which `floor`/`fract` separate exactly.
+        //
+        // `uv1.x` carries the blade's hash with the *side* of the blade in its
+        // sign; `uv1.y` packs the ring's reach in whole metres and the blade's
+        // height in the fraction, which `floor`/`fract` separate exactly. El
+        // signo va por mitades —el borde izquierdo negativo, el derecho
+        // positivo— y **la magnitud es la misma en todos los vértices**: el
+        // vertex shader saca de ahí el umbral de crecimiento, y un vértice con
+        // otro hash deformaría la brizna en vez de encogerla entera.
         let tint = hash_unit(hash ^ 0x2545_f491);
-        // `y` packs two numbers into one channel: the ring's reach in whole
-        // metres and the blade's height in the fraction. A blade is never a
-        // metre tall and a reach is always a whole number, so `floor` and
-        // `fract` separate them exactly — which is cheaper than an attribute
-        // nobody would otherwise need.
         let packed = ring_reach_m + height;
-        blade_data.push([-tint, packed]);
-        blade_data.push([tint, packed]);
-        blade_data.push([tint, packed]);
-        if shape != BladeShape::Spike {
-            blade_data.push([-tint, packed]);
-        }
+        let mut vertex = |point: Vec3, along: f32, side_sign: f32| {
+            positions.push([point.x, point.y, point.z]);
+            uvs.push([base.y, along]);
+            blade_data.push([side_sign * tint, packed]);
+        };
 
-        if shape == BladeShape::Notched {
-            // The notched tip: a fifth vertex dipping between the two corners,
-            // so the blade ends in two points instead of a flat cut. Up close a
-            // straight-topped quad reads as a strip of paper — this is the one
-            // shape cue that says "leaf" at arm's length, and it costs one
-            // triangle on the only ring where anyone can see it.
-            let notch = base.lerp(tip, TIP_NOTCH_DEPTH);
-            positions.push([notch.x, notch.y, notch.z]);
-            uvs.push([base.y, TIP_NOTCH_DEPTH]);
-            blade_data.push([tint, packed]);
-            let notch_index = first + 4;
-            indices.extend_from_slice(&[first, first + 1, first + 2]);
-            indices.extend_from_slice(&[first, first + 2, notch_index]);
-            indices.extend_from_slice(&[first, notch_index, first + 3]);
-        } else if shape == BladeShape::Quad {
-            indices.extend_from_slice(&[first, first + 1, first + 2]);
-            indices.extend_from_slice(&[first, first + 2, first + 3]);
-        } else {
-            indices.extend_from_slice(&[first, first + 1, first + 2]);
+        match shape {
+            BladeShape::Leaf => {
+                // La brizna de dos triángulos unidos por una arista
+                // **horizontal**: uno apunta abajo y otro arriba.
+                let waist = base.lerp(tip, BLADE_WAIST);
+                vertex(base - Vec3::Y * BLADE_ROOT_SINK, 0.0, -1.0);
+                vertex(
+                    Vec3::new(waist.x - side.x, waist.y, waist.z - side.y),
+                    BLADE_WAIST,
+                    -1.0,
+                );
+                vertex(
+                    Vec3::new(waist.x + side.x, waist.y, waist.z + side.y),
+                    BLADE_WAIST,
+                    1.0,
+                );
+                vertex(tip, 1.0, 1.0);
+                indices.extend_from_slice(&[first, first + 1, first + 2]);
+                indices.extend_from_slice(&[first + 1, first + 3, first + 2]);
+            }
+            BladeShape::Spike => {
+                // Un triángulo: dos esquinas en la base y una punta. El piso de
+                // la escalera, donde una brizna ya no se resuelve.
+                vertex(
+                    Vec3::new(base.x - side.x, base.y, base.z - side.y),
+                    0.0,
+                    -1.0,
+                );
+                vertex(
+                    Vec3::new(base.x + side.x, base.y, base.z + side.y),
+                    0.0,
+                    1.0,
+                );
+                vertex(tip, 1.0, 1.0);
+                indices.extend_from_slice(&[first, first + 1, first + 2]);
+            }
         }
     }
 
@@ -1014,11 +1009,19 @@ mod tests {
             // ground.
             let inner = index.checked_sub(1).map_or(2.0, |i| RINGS[i].reach_m);
             let needed = minimum_density(inner, BLADE_WIDTH * ring.width_scale);
+            // **Lo que un punto del suelo recibe es la SUMA de los anillos que
+            // lo plantan**, no la densidad de su anillo. Medir por anillo suelto
+            // era medir algo que no existe. Qué implica eso sobre el
+            // solapamiento: `BOTWGrass.md`.
+            let planted: f32 = RINGS
+                .iter()
+                .filter(|other| other.reach_m >= inner)
+                .map(|other| other.density)
+                .sum();
             assert!(
-                ring.density >= needed * COVERAGE_MARGIN,
-                "ring reaching {} m plants {}/m2 where {:.1}/m2 is the minimum at {inner} m",
-                ring.reach_m,
-                ring.density,
+                planted >= needed * COVERAGE_MARGIN,
+                "a {inner} m el suelo recibe {planted}/m2 sumando los anillos que llegan \
+                 ahí, y su distancia pide {:.1}/m2",
                 needed * COVERAGE_MARGIN
             );
             // Deliberately no upper bound: one turned a density change into a
@@ -1167,14 +1170,14 @@ mod tests {
             Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) => values.clone(),
             _ => panic!("a chunk must carry Float32x3 positions"),
         };
-        let a = positions(&build_chunk_mesh(&spec(64, BladeShape::Quad, 11), None));
-        let b = positions(&build_chunk_mesh(&spec(64, BladeShape::Quad, 11), None));
+        let a = positions(&build_chunk_mesh(&spec(64, BladeShape::Leaf, 11), None));
+        let b = positions(&build_chunk_mesh(&spec(64, BladeShape::Leaf, 11), None));
         assert!(!a.is_empty(), "an empty chunk would make this vacuous");
         assert_eq!(a, b, "the same chunk grew a different field");
 
         // Y la otra mitad, que sin ella el test lo pasaría un generador que
         // devuelve siempre lo mismo: dos chunks distintos son campos distintos.
-        let other = positions(&build_chunk_mesh(&spec(64, BladeShape::Quad, 12), None));
+        let other = positions(&build_chunk_mesh(&spec(64, BladeShape::Leaf, 12), None));
         assert_ne!(
             a, other,
             "two chunks with different seeds grew the same field"
@@ -1187,7 +1190,7 @@ mod tests {
     /// nothing on screen would show it.
     #[test]
     fn the_vertex_carries_only_position_and_the_two_derived_values() {
-        let mesh = build_chunk_mesh(&spec(8, BladeShape::Quad, 5), None);
+        let mesh = build_chunk_mesh(&spec(8, BladeShape::Leaf, 5), None);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
         assert!(
@@ -1200,21 +1203,31 @@ mod tests {
         );
     }
 
-    /// The shader reads `uv.y` as the height along the blade and `uv.x` as the
-    /// ground under it, so the four vertices have to keep meaning root, root,
-    /// tip, tip in that order.
+    /// El shader lee `uv.y` como altura a lo largo de la brizna, así que el orden
+    /// de los cuatro vértices **es** el contrato: punta abajo, cintura, cintura,
+    /// punta arriba.
+    ///
+    /// Y la fila del medio es lo que este test existe para congelar: sin ella los
+    /// bordes van rectos de la raíz a la punta y la brizna no puede arquearse,
+    /// que es lo que pasaba con el quad partido en diagonal.
     #[test]
     fn a_blades_four_vertices_keep_their_authored_order() {
-        let mesh = build_chunk_mesh(&spec(1, BladeShape::Quad, 5), None);
+        let mesh = build_chunk_mesh(&spec(1, BladeShape::Leaf, 5), None);
         let bevy::mesh::VertexAttributeValues::Float32x2(uvs) =
             mesh.attribute(Mesh::ATTRIBUTE_UV_0).expect("uvs")
         else {
             panic!("uvs must be Float32x2");
         };
-        assert_eq!(uvs[0][1], 0.0, "base-left sits at the root");
-        assert_eq!(uvs[1][1], 0.0, "base-right sits at the root");
-        assert_eq!(uvs[2][1], 1.0, "tip-right sits at the tip");
-        assert_eq!(uvs[3][1], 1.0, "tip-left sits at the tip");
+        assert_eq!(uvs[0][1], 0.0, "la punta de abajo es la raíz");
+        assert_eq!(uvs[1][1], BLADE_WAIST, "cintura izquierda");
+        assert_eq!(uvs[2][1], BLADE_WAIST, "cintura derecha");
+        assert_eq!(uvs[3][1], 1.0, "la punta de arriba");
+        // Propiedad de las constantes, así que se pierde compilando y no
+        // corriendo: sin una fila estrictamente entre raíz y punta, los bordes
+        // van rectos y la brizna no puede arquearse.
+        const {
+            assert!(BLADE_WAIST > 0.0 && BLADE_WAIST < 1.0);
+        }
         for uv in uvs {
             assert_eq!(uv[0], 0.0, "flat test ground is at y = 0 for every vertex");
         }
@@ -1226,17 +1239,25 @@ mod tests {
     /// nothing at all, and would be found by nobody.
     #[test]
     fn the_two_edges_of_a_blade_carry_the_same_hash_with_opposite_signs() {
-        let mesh = build_chunk_mesh(&spec(1, BladeShape::Quad, 9), None);
+        let mesh = build_chunk_mesh(&spec(1, BladeShape::Leaf, 9), None);
         let bevy::mesh::VertexAttributeValues::Float32x2(data) =
             mesh.attribute(Mesh::ATTRIBUTE_UV_1).expect("blade data")
         else {
             panic!("blade data must be Float32x2");
         };
-        assert!(data[0][0] < 0.0 && data[1][0] > 0.0, "the edges disagree");
         assert!(
-            (data[0][0].abs() - data[1][0].abs()).abs() < f32::EPSILON,
-            "both edges belong to the same blade and share its hash"
+            data[1][0] < 0.0 && data[2][0] > 0.0,
+            "las dos esquinas de la cintura son los dos bordes y tienen que discrepar"
         );
+        let magnitude = data[0][0].abs();
+        for vertex in data {
+            assert!(
+                (vertex[0].abs() - magnitude).abs() < f32::EPSILON,
+                "todos los vértices son de la misma brizna y comparten su hash: el \
+                 vertex shader saca de ahí el umbral de crecimiento, y uno distinto \
+                 deformaría la brizna en vez de encogerla entera"
+            );
+        }
         for vertex in data {
             // `y` packs the ring's reach in the whole part and the blade's
             // height in the fraction — the shader splits them with floor/fract.
@@ -1358,7 +1379,7 @@ mod tests {
     #[test]
     fn each_rung_of_the_ladder_costs_what_it_claims() {
         let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
-        for shape in [BladeShape::Notched, BladeShape::Quad, BladeShape::Spike] {
+        for shape in [BladeShape::Leaf, BladeShape::Spike] {
             let mesh = build_chunk_mesh(&spec(1, shape, 9), None);
             assert_eq!(triangles(&mesh), shape.triangles(), "{shape:?}");
             assert_eq!(mesh.count_vertices(), shape.vertices(), "{shape:?}");
@@ -1378,22 +1399,23 @@ mod tests {
 
     #[test]
     fn a_blade_stands_on_the_ground_and_reaches_its_height() {
-        let mesh = build_chunk_mesh(&spec(1, BladeShape::Quad, 3), None);
+        let mesh = build_chunk_mesh(&spec(1, BladeShape::Leaf, 3), None);
         let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("positions")
         else {
             panic!("positions must be Float32x3");
         };
-        let base = positions[0][1];
-        let tip = positions[2][1];
+        let root = positions[0][1];
+        let tip = positions[3][1];
+        // La punta de abajo se hunde: en el suelo mismo la brizna sería
+        // infinitamente angosta y dejaría ver tierra donde nace.
         assert!(
-            base.abs() < 0.001,
-            "the root sits on flat ground, got {base}"
+            (root + BLADE_ROOT_SINK).abs() < 0.001,
+            "la punta de abajo tiene que quedar hundida, quedó en {root}"
         );
         assert!(
-            (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&(tip - base)),
-            "blade height {} outside its authored range",
-            tip - base
+            (BLADE_HEIGHT_MIN..=BLADE_HEIGHT_MAX).contains(&tip),
+            "blade height {tip} outside its authored range"
         );
     }
 }

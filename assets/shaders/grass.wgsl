@@ -155,11 +155,19 @@ fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
     // justo las que el borde mata primero, y el reparto se vuelve un escalón
     // otra vez.
     let edge_hash = fract(blade_hash * 7.1234 + 0.371);
-    let anchor = max(ring_inner(ring_reach), grass_data.growth_start);
+    let inner = ring_inner(ring_reach);
+    let anchor = max(inner, grass_data.growth_start);
     let by_law = anchor / max(1.0 - blade_hash, 1e-4);
     let by_edge = ring_reach - grass_data.growth_spread * edge_hash;
     let ends = min(by_law, by_edge);
     let starts = ends - grass_data.growth_ramp;
+    // **Y acá NO va un borde interno**, aunque los anillos se pisen. Probado y
+    // medido el 2026-08-07: recortar cada anillo por adentro deja un pozo en
+    // cada frontera, porque el anillo de afuera nace donde el de adentro muere y
+    // son **dos juegos de briznas distintos** — no hay forma de que una releve a
+    // la otra. La banda de solapamiento es lo que hoy tapa esa costura. Lo que
+    // la reemplaza es la reescritura de praderas anidadas de `BOTWGrass.md`, no
+    // un recorte. El `inner` se sigue usando arriba, para anclar la ley.
     return 1.0 - smoothstep(starts, ends, distance);
 }
 

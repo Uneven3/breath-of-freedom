@@ -286,10 +286,16 @@ brizna se hunde 18 cm); la altura; la paleta, derivada del suelo donde se paran
    mallas hornean — verificado plantando el bug de vuelta.
 5. **Cuatro anillos plantan sobre el mismo suelo** (visto el 2026-08-07 con
    `grass-view=medir`): dos tercios del primer plano son briznas de anillos
-   lejanos, las de 1 triángulo. Explica el fill-bound sin misterio — lo que más
-   píxeles cubre se dibuja tres veces. **Deuda deliberada**: ese solapamiento es
-   lo que hoy tapa la costura, así que lo destraba la reescritura anidada del
-   punto 1, no un ajuste. Con número en un test y la tabla en `BOTWGrass.md`.
+   lejanos, las de 1 triángulo. **Se intentó recortarlo y se midió que no se
+   puede solo**: deja un pozo en cada frontera —el anillo de afuera nace donde el
+   de adentro muere y son dos juegos de briznas distintos— y encima no ahorra,
+   porque el recorte vive en el shader y la geometría ya está horneada (ley 4).
+   Y con la derivación corregida por Poisson resulta que **el solapamiento está
+   pagando la cobertura**: el anillo interior solo queda por debajo de lo que su
+   distancia pide. El defecto no es que se pisen, es que el primer plano se pinta
+   con briznas de anillo lejano. Lo destraba la reescritura anidada del punto 1,
+   que pasa de "optimización posponible" a lo único que permite tener densidad y
+   brizna correcta en el mismo lugar. Tablas en `BOTWGrass.md`.
 
 **Tres lecciones de método que no son sobre pasto:**
 

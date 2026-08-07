@@ -868,6 +868,87 @@ comprando algo. Lo que cambia es que ahora se sabe cuánto: queda como deuda con
 número en `no_patch_of_ground_is_planted_by_more_than_two_rings`, y la
 reescritura tiene una medición a favor en vez de una intuición.
 
+#### Y probarlo cambió el diagnóstico (2026-08-07)
+
+Se implementó el recorte interno —cada anillo muerto también por adentro— y se
+midió. Tres corridas con distintas densidades de compensación:
+
+| configuración | triángulos | banda cercana | banda 13-24 m |
+|---|---:|---:|---:|
+| hoy (con solapamiento) | 665.600 | 96,9% | 99,9% |
+| recorte, densidades sin tocar | 847.000 | 62,7% | — |
+| recorte + anillo 0 a 140/m² | 793.600 | 95,8% | **75,5%** |
+| recorte + externos a lo derivado | 365.568 | 95,8% | **64,2%** |
+
+**Dos cosas que ninguna intuición había dado:**
+
+1. **El recorte deja un pozo en cada frontera.** El anillo de afuera nace donde
+   el de adentro muere y son **dos juegos de briznas distintos**: no hay forma de
+   que una releve a la otra, así que en la banda de traspaso están las dos a
+   media población. Se ve en la columna de 13-24 m, que cae del 99,9% al 75,5%
+   por más densidad que se le ponga al anillo interior.
+2. **El recorte no ahorra**, porque vive en el shader: esconde la brizna pero la
+   geometría ya está horneada. Es la ley 4 en acción — *la brizna que no se ve
+   igual se paga*. Ahorrar de verdad pide no plantarla, y eso lo decide el
+   *baker*, que no puede porque el chunk está anclado al mundo y la cámara se
+   mueve.
+
+**Y la corrección de la derivación que salió de ahí.** `minimum_density` pedía
+`λ·a = 1`, o sea la densidad con la que las briznas taparían el suelo **si se
+ordenaran solas**. Caen sobre un hash: la cobertura de un reparto de Poisson es
+`1 − e^(−λ·a)`, así que para el 95% hace falta **tres veces** esa densidad. Con
+la fórmula corregida, el anillo interior queda *por debajo* de lo que su
+distancia pide — y lo que lo salva es justamente la suma de los anillos que se
+pisan.
+
+> El solapamiento no es sólo costo: **está pagando la cobertura**. El defecto no
+> es que los anillos se pisen, es que el primer plano se está pintando con
+> briznas de anillos lejanos, que son las de un triángulo y sin cintura.
+
+Eso reordena el plan: la reescritura anidada no es una optimización que se pueda
+posponer, es lo único que permite tener la densidad **y** la brizna correcta en
+el mismo lugar. Y el test de densidad ahora mide la **suma** sobre un punto del
+suelo, que es lo que ese punto realmente recibe, en vez de un anillo aislado.
+
+### La brizna de dos triángulos (2026-08-07)
+
+Restaurada del diseño original, después de que el usuario preguntara cómo estaban
+construidos los triángulos: **dos triángulos unidos por una arista horizontal**,
+uno apuntando abajo y otro arriba.
+
+```
+        ∧              4 vértices, 2 triángulos
+       ╱ ╲
+      ╱   ╲            arriba: cintura-izq, cintura-der, punta
+     ╱     ╲
+    ●───────●          ← la arista compartida, a 0,30 de la altura
+     ╲     ╱
+      ╲   ╱            abajo: punta hundida, cintura-izq, cintura-der
+       ╲ ╱
+        ∨
+```
+
+Lo que había era un quad partido por la **diagonal**, y las dos diferencias
+importan:
+
+- **Termina en punta por los dos lados**, que es la forma de una hoja de pasto.
+  El quad era ancho abajo y cortado arriba, y por eso hubo que inventarle una
+  muesca de un triángulo extra para que no leyera como tira de papel.
+- **Tiene una fila de vértices en el medio.** Sin ella los bordes van rectos de
+  la raíz a la punta y **la brizna no puede arquearse**: el `height_factor²` del
+  viento daba 0 abajo y 1 arriba igual que lineal, o sea que era un no-op. El
+  comentario del shader decía *"se arquea en vez de inclinarse rígida, que es la
+  diferencia entre una hoja y un palo"* sobre una geometría que sólo podía
+  inclinarse rígida.
+
+La punta de abajo se hunde 6 cm: en el suelo mismo la brizna sería infinitamente
+angosta y dejaría ver tierra donde nace.
+
+**Medido, mismo encuadre:** cobertura 56,60% contra 56,67% —idéntica— con
+**665.600 triángulos contra 691.200**. Cubre lo mismo con menos geometría,
+porque el anillo interior baja de 3 a 2 triángulos por brizna al no necesitar la
+muesca.
+
 *Y explica el fill-bound sin misterio:* el primer plano —donde cada brizna cubre
 más píxeles— se está dibujando tres veces.
 

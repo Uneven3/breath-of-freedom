@@ -676,6 +676,44 @@ es el look registrado como jugado y rechazado. Doce es *peor* que no hacer nada.
 **No ahorra un triángulo.** La geometría sigue horneada; esto sólo la encoge en
 el vertex shader. Arregla la imagen, no el costo.
 
+### El anillo deja de ser un escalón (2026-08-06)
+
+Diagnóstico del usuario, después de mirar mucho: *"el problema siguen siendo los
+anillos […] el cambio entre LOD es visible al caminar, y ese ha sido el problema
+durante toda la sesión"*. Es correcto, y explica por qué afinar números nunca
+alcanzó: **un anillo tenía densidad constante**, así que siempre había un
+escalón.
+
+La ley `1/d` estaba en el shader pero **anclada en un punto global**, y eso hace
+que cada anillo entregue menos de lo que le toca en su mitad interna. La
+corrección tiene dos mitades:
+
+1. Cada anillo se planta a la densidad que la derivación pide en su **borde
+   interno** (`C / r_interno`), no en su medio.
+2. El shader ancla la ley **en ese mismo borde** — `ring_inner` en `grass.wgsl`
+   lo deduce comparando el alcance de la brizna contra los de todos los anillos,
+   que viajan en el uniform.
+
+Así la densidad viva es `C/d` exacta en todo el campo, y el anillo pasa a decidir
+**sólo el tamaño de chunk**. Sobreplanta a lo sumo 1,6× en su borde externo, que
+es justo lo que la ley se come.
+
+Medido desde el cenit, sobre la desviación de la pendiente entre anillos de 2 m
+—menos es más rampa y menos escalera:
+
+| | pendiente media | desviación |
+|---|---:|---:|
+| anillos planos, alcance 32 m | −7,2%/2m | 7,9 |
+| cuatro anillos planos, 64 m | −6,6% | 7,8 |
+| **anclado al borde interno** | −5,2% | **5,6** |
+
+Y el campo queda **más denso** a media distancia, no menos: 21 contra 19,6 y 12 a
+los 14-20 m.
+
+**Lección que generaliza:** el LOD por bandas de densidad constante siempre deja
+un escalón; lo que lo borra es que la densidad sea una función continua de la
+distancia y que la banda sólo decida el *tamaño del lote*.
+
 ### Los anillos
 
 **La tabla derivada**, con un factor de seguridad ×2,5 sobre el mínimo:

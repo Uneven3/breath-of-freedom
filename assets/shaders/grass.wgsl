@@ -58,6 +58,8 @@ struct GrassUniform {
     tint_variation: f32,
     gradient_bias: f32,
     growth_start: f32,
+    ring_reaches_a: vec4<f32>,
+    ring_reaches_b: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -104,6 +106,30 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// Con la rampa corta metida dentro de una dispersión larga, en ningún momento
 /// hay una franja donde todo esté creciendo a la vez — que era exactamente el
 /// artefacto reportado jugando.
+/// El borde **interno** del anillo al que pertenece esta brizna: el alcance más
+/// grande que sea menor que el suyo.
+///
+/// Es lo que hace que la ley 1/d sea continua entre anillos. Anclada en un punto
+/// global, cada anillo entrega menos de lo que le toca en su mitad interna y
+/// deja un escalón — el artefacto que sobrevivió a toda la sesión del
+/// 2026-08-06. Anclada acá, la densidad superviviente es `C/d` en todas partes y
+/// el anillo pasa a decidir sólo el tamaño de chunk.
+fn ring_inner(reach: f32) -> f32 {
+    var reaches = array<f32, 8>(
+        grass_data.ring_reaches_a.x, grass_data.ring_reaches_a.y,
+        grass_data.ring_reaches_a.z, grass_data.ring_reaches_a.w,
+        grass_data.ring_reaches_b.x, grass_data.ring_reaches_b.y,
+        grass_data.ring_reaches_b.z, grass_data.ring_reaches_b.w,
+    );
+    var inner = 0.0;
+    for (var i = 0; i < 8; i = i + 1) {
+        if reaches[i] < reach && reaches[i] > inner {
+            inner = reaches[i];
+        }
+    }
+    return inner;
+}
+
 fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
     // Dos umbrales, y la brizna muere en el primero que llegue.
@@ -120,7 +146,8 @@ fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
     // justo las que el borde mata primero, y el reparto se vuelve un escalón
     // otra vez.
     let edge_hash = fract(blade_hash * 7.1234 + 0.371);
-    let by_law = grass_data.growth_start / max(1.0 - blade_hash, 1e-4);
+    let anchor = max(ring_inner(ring_reach), grass_data.growth_start);
+    let by_law = anchor / max(1.0 - blade_hash, 1e-4);
     let by_edge = ring_reach - grass_data.growth_spread * edge_hash;
     let ends = min(by_law, by_edge);
     let starts = ends - grass_data.growth_ramp;

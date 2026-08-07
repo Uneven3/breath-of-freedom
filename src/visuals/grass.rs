@@ -84,39 +84,63 @@ impl BladeShape {
 ///
 /// Derivation and cost in `docs/BOTWGrass.md`. The fact that governs decisions
 /// here: the meadow is **fill-bound**, so the triangle count is a guardrail.
+/// Seis anillos hasta 64 m. **Un anillo ya no es un escalón de densidad: es un
+/// tamaño de chunk.**
+///
+/// Cada uno se planta a la densidad que la derivación pide en su **borde
+/// interno**, y el shader ancla ahí su ley `1/d` (ver `ring_inner` en
+/// `grass.wgsl`), así que dentro del anillo la densidad viva es `C/d` exacta.
+/// Sobreplantan a lo sumo 1,6× en su borde externo, que es lo que la ley se
+/// come. Antes se plantaba plano por anillo y el escalón era inevitable por más
+/// que se afinaran los números — el artefacto que el usuario identificó como
+/// *el* problema de la sesión.
 const RINGS: [Ring; 4] = [
     Ring {
-        reach_m: 8.0,
+        // Llega hasta 13 y no hasta 8: la ley empieza a ralear en
+        // [`GROWTH_START_M`] y hasta ahí planta 40, así que partirlo en dos
+        // anillos con la misma densidad sólo agregaba chunks.
+        reach_m: 13.0,
         chunk_m: 8.0,
-        // La única densidad que sigue eligiendo el ojo. Las otras tres salen de
-        // `1/d` evaluada en el medio de su franja.
+        // La única densidad que sigue eligiendo el ojo; las otras tres son
+        // `C / borde interno`, con `C = 40 · 8`.
         density: 40.0,
         width_scale: 1.0,
         shape: BladeShape::Notched,
     },
     Ring {
-        reach_m: 20.0,
+        reach_m: 24.0,
         chunk_m: 16.0,
-        density: 23.0,
+        density: 25.0,
         width_scale: 1.0,
+        // Sus chunks alcanzan hacia adentro hasta ~5 m, donde una brizna todavía
+        // se resuelve: con la punta recta, la mitad de las cercanas leería
+        // distinto de la otra mitad.
         shape: BladeShape::Notched,
     },
     Ring {
         reach_m: 40.0,
         chunk_m: 32.0,
-        density: 11.0,
+        density: 13.0,
         width_scale: 1.0,
         shape: BladeShape::Quad,
     },
     Ring {
-        // **El anillo que el usuario pidió: trabajar desde lejos hacia adentro.**
         reach_m: 64.0,
         chunk_m: 32.0,
-        density: 6.0,
+        density: 8.0,
         width_scale: 1.0,
         shape: BladeShape::Spike,
     },
 ];
+
+/// Los alcances, como el shader los necesita para deducir el borde interno.
+fn ring_reaches() -> (Vec4, Vec4) {
+    let mut slots = [0.0_f32; 8];
+    for (slot, ring) in slots.iter_mut().zip(RINGS.iter()) {
+        *slot = ring.reach_m;
+    }
+    (Vec4::from_slice(&slots[..4]), Vec4::from_slice(&slots[4..]))
+}
 
 // Los tamaños de chunk se dividen entre sí (8 | 16 | 32) a propósito: el barrido
 // del peor caso recorre un período igual al chunk más grande, y con tamaños
@@ -616,6 +640,9 @@ pub(super) fn track_meadow_focus(
     data.growth_ramp = GROWTH_RAMP_M;
     data.growth_spread = GROWTH_SPREAD_M;
     data.growth_start = GROWTH_START_M;
+    let (a, b) = ring_reaches();
+    data.ring_reaches_a = a;
+    data.ring_reaches_b = b;
     data.growth_sink = GROWTH_SINK_M;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs

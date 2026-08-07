@@ -37,17 +37,18 @@ pub struct GrassUniform {
     /// How much a blade's colour may drift from the shared gradient. Without it
     /// a field of one green reads as carpet, however dense it is.
     pub tint_variation: f32,
-    /// How far the root's colour holds up the blade before the tip's takes
-    /// over. **0 is a linear ramp and 1 is its square**, so this also undoes the
-    /// experiment.
-    ///
-    /// Linear is why the field read as a pale haze: a canopy is mostly tips, so
-    /// the meadow landed on the midpoint of its two colours. Two cheap curves
-    /// and not `pow`, whose variable exponent is two transcendentals per
-    /// fragment in a fill-bound frame — the saving is **unmeasured**.
+    /// How far the root's colour holds before the tip's takes over. **0 is a
+    /// linear ramp and 1 is its square.** Linear is why the field read as a pale
+    /// haze: a canopy is mostly tips, so the meadow landed on the midpoint of
+    /// its two colours. Two curves and not `pow`, que son dos transcendentales
+    /// por fragmento en un frame fill-bound.
     pub gradient_bias: f32,
     /// Desde qué distancia ralea la pradera. Ver `GROWTH_START_M`.
     pub growth_start: f32,
+    /// Los alcances de los anillos, para que el shader deduzca el borde interno
+    /// del anillo de cada brizna y ancle ahí su ley `1/d`. Ver `ring_inner`.
+    pub ring_reaches_a: Vec4,
+    pub ring_reaches_b: Vec4,
 }
 
 impl Default for GrassUniform {
@@ -71,6 +72,8 @@ impl Default for GrassUniform {
             tint_variation: 0.16,
             gradient_bias: 1.0,
             growth_start: 1.0e9,
+            ring_reaches_a: Vec4::ZERO,
+            ring_reaches_b: Vec4::ZERO,
         }
     }
 }

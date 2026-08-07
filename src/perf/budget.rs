@@ -203,10 +203,14 @@ mod tests {
     /// sentido para algo que existe alrededor de la cámara y no en un lugar del
     /// mapa.
     ///
-    /// **Hoy es diez veces el presupuesto móvil entero, y está acá para que eso
+    /// **Hoy es doce veces el presupuesto móvil entero, y está acá para que eso
     /// no se pueda ignorar.** Es deuda con número, no una tolerancia — y por
     /// primera vez es deuda *deliberada*: este número es el techo de una rampa
     /// que se va a bajar, no un límite que se respetó.
+    ///
+    /// **Lo único verificado hasta ahora es que se dibuja fluido** en la máquina
+    /// de desarrollo, incluso con cámara libre, reportado jugando el
+    /// 2026-08-06. Nada dice que se pague en el target.
     ///
     /// **El último salto lo pidió el usuario y cambia la estrategia**, así que
     /// vale escribir el porqué: hasta el 2026-08-06 se venía con poco pasto
@@ -230,7 +234,7 @@ mod tests {
     /// bandwidth aunque no produzca un píxel *(propiedad del hardware, no
     /// medición nuestra)*— pero el número que manda mientras la fase estética
     /// siga abierta es el de fill.
-    const MEADOW_VIEW_TRIANGLES: usize = 1_000_000;
+    const MEADOW_VIEW_TRIANGLES: usize = 1_300_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {
@@ -242,11 +246,11 @@ mod tests {
         );
         // Y lo que de verdad hay que vigilar mientras la deuda exista: cuánto
         // se pasa del móvil, para que crecer sea una decisión y no un descuido.
-        // 895.128 al 2026-08-06, con el alcance de 64 m en cuatro anillos.
+        // 1.158.240 al 2026-08-06, con el alcance de 64 m en cuatro anillos.
         let ground = terrain_cost();
         let over = (meadow + ground).saturating_sub(MOBILE_TRIANGLES);
         assert!(
-            over <= 900_000,
+            over <= 1_200_000,
             "meadow {meadow} + terrain {ground} is {over} triangles over the mobile budget, \
              past the debt this file declares"
         );

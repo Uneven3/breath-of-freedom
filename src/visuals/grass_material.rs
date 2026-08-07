@@ -28,11 +28,9 @@ pub struct GrassUniform {
     /// How far **below** the ground a blade collapses to. Not zero: coplanar
     /// with the terrain it z-fights, which on screen is a flicker.
     pub growth_sink: f32,
-    /// Wind direction in world XZ, normalised, and how far a tip travels at
-    /// full gust as a fraction of the blade's height.
+    /// Dirección del viento en XZ y cuánto viaja la punta a ráfaga plena.
     pub wind_dir: Vec2,
     pub wind_strength: f32,
-    /// Metres per second the gust front travels across the field.
     pub wind_speed: f32,
     /// How much a blade's colour may drift from the shared gradient. Without it
     /// a field of one green reads as carpet, however dense it is.
@@ -66,8 +64,12 @@ impl Default for GrassUniform {
             growth_spread: 0.0,
             growth_sink: 0.0,
             wind_dir: Vec2::new(0.80, 0.60),
-            // A fifth of its height at full gust; further reads as wheat.
-            wind_strength: 0.22,
+            // **Apagado el 2026-08-06 por decisión del usuario**: confunde más
+            // de lo que aporta mientras se diagnostica, y además es el piso de
+            // ruido del 5% que impedía comparar dos capturas del mismo encuadre.
+            // El shader queda: con amplitud cero no cuesta, y 0,22 —un quinto de
+            // la altura a ráfaga plena— era el valor jugado y aceptado.
+            wind_strength: 0.0,
             wind_speed: 1.7,
             tint_variation: 0.16,
             gradient_bias: 1.0,

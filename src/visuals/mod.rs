@@ -24,6 +24,7 @@ pub mod foliage;
 pub mod forest;
 pub(crate) mod grass;
 mod grass_cover;
+pub(crate) mod grass_debug;
 pub mod grass_material;
 pub mod horse;
 pub(crate) mod material_registry;
@@ -119,7 +120,11 @@ impl Plugin for VisualsPlugin {
                 // The meadow's only per-frame work: roll the grid with the
                 // camera, and tell the shader where that camera is. Nothing
                 // walks a blade — the chunks are baked meshes.
-                (grass::roll_meadow_grid, grass::track_meadow_focus)
+                (
+                    grass::roll_meadow_grid,
+                    grass::track_meadow_focus,
+                    grass::announce_grass_debug_view,
+                )
                     .chain()
                     .run_if(crate::scene::scene_has(|c| c.meadow)),
                 terrain::sync_terrain_visual,

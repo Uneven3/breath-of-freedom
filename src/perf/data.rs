@@ -3,9 +3,10 @@ use bevy::prelude::Msaa;
 pub use bof_domain::perf::*;
 
 const PROFILE_ENV: &str = "BOF_PROFILE";
+const KNOBS_ENV: &str = "BOF_KNOBS";
 
 pub fn configured_toggles() -> PerfToggles {
-    match std::env::var(PROFILE_ENV) {
+    let mut toggles = match std::env::var(PROFILE_ENV) {
         Ok(raw) => match parse_profile(&raw) {
             Ok(profile) => PerfToggles::for_profile(profile),
             Err(expected) => {
@@ -20,6 +21,51 @@ pub fn configured_toggles() -> PerfToggles {
             );
             PerfToggles::default()
         }
+    };
+    if let Ok(raw) = std::env::var(KNOBS_ENV) {
+        apply_configured_knobs(&mut toggles, &raw);
+    }
+    toggles
+}
+
+/// `BOF_KNOBS="grass-view=5,msaa=1"` — las perillas del hub, desde el arranque.
+///
+/// Genérico sobre [`PerfKnob::label`] y no una variable por perilla: la que
+/// hacía falta hoy era la vista de pasto, y la que va a hacer falta mañana es
+/// otra. Con esto, `BOF_SHOT` puede fotografiar cualquier configuración sin
+/// pedirle al usuario que la ponga con el mouse — que era el único camino y
+/// costaba una sesión suya por experimento.
+///
+/// Un nombre que no existe **avisa y sigue**: es una herramienta de diagnóstico
+/// y abortar el arranque por un typo no protege nada. Lo que no puede pasar es
+/// que se aplique en silencio algo distinto de lo que se pidió.
+fn apply_configured_knobs(toggles: &mut PerfToggles, raw: &str) {
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let Some((name, value)) = entry.split_once('=') else {
+            bevy::log::warn!("[perf] {KNOBS_ENV}: '{entry}' no tiene forma nombre=paso");
+            continue;
+        };
+        let name = name.trim();
+        let Some(knob) = PerfKnob::ALL.into_iter().find(|knob| knob.label() == name) else {
+            bevy::log::warn!(
+                "[perf] {KNOBS_ENV}: no existe la perilla '{name}'; hay: {}",
+                PerfKnob::ALL
+                    .iter()
+                    .map(|knob| knob.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            continue;
+        };
+        let Ok(step) = value.trim().parse::<usize>() else {
+            bevy::log::warn!("[perf] {KNOBS_ENV}: '{value}' no es un número de paso");
+            continue;
+        };
+        toggles.set_knob_step(knob, step);
+        bevy::log::info!(
+            "[perf] {KNOBS_ENV}: {}",
+            toggles.knob_text(knob).trim_start()
+        );
     }
 }
 

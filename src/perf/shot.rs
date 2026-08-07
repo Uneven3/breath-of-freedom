@@ -32,6 +32,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
+use super::budget::SceneInventory;
 use super::suite::BenchSuite;
 use crate::scene::AppState;
 use crate::visuals::material_registry::Subject;
@@ -84,6 +85,13 @@ const SETTLE_SECS: f32 = 4.0;
 /// y recién ahí el observador escribe el archivo. Salir en cuanto se pide deja
 /// un PNG de cero bytes.
 const FRAMES_AFTER_SHUTTER: u32 = 12;
+
+/// Cuánto puede alejarse la cámara del mirador antes de que la foto deje de ser
+/// de donde el reporte dice. Medio metro es lo que ya se midió que vale ~1 ms en
+/// el bosque; para una imagen es todavía menos tolerable.
+const POSE_TOLERANCE_M: f32 = 0.5;
+/// Y cuánto puede desviarse la mirada: 0,999 son unos 2,5°.
+const POSE_TOLERANCE_DOT: f32 = 0.999;
 
 #[derive(Default, PartialEq, Eq, Debug, Clone, Copy)]
 enum Stage {
@@ -163,8 +171,10 @@ pub fn shot_pose(shot: &AutoShot) -> Option<(Vec3, Vec3)> {
 pub fn capture_on_request(
     mut commands: Commands,
     mut requests: MessageReader<crate::input::ScreenshotRequest>,
-    inventory: Res<super::budget::SceneInventory>,
+    inventory: Res<SceneInventory>,
+    perf: Res<crate::perf::PerfToggles>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    broken: Res<BrokenAssets>,
     mut taken: Local<u32>,
 ) {
     if requests.read().count() == 0 {
@@ -199,10 +209,121 @@ pub fn capture_on_request(
             f.z,
         );
     }
+    warn_on_broken_assets(&broken);
     log_framing(&inventory);
+    write_legend(&path, &perf, &inventory);
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
+}
+
+/// Avisa si la foto se sacó con assets rotos.
+///
+/// **Encontrado el 2026-08-07, corriendo estas mismas herramientas.** El binario
+/// se lanzó desde una ruta donde `assets/` no existe; Bevy no encontró ni un
+/// shader, el pasto y el terreno no se dibujaron, y la captura salió siendo
+/// cielo liso. Todo lo demás siguió funcionando y reportando: el inventario
+/// contó 691.200 triángulos de pradera y el log declaró "95% del cuadro", porque
+/// la malla existe, es visible y tiene triángulos — sólo que su material nunca
+/// llegó. Noventa segundos de corrida, un reporte entero, y ninguna línea
+/// distinguible de una corrida buena.
+///
+/// Es literalmente la lección que `AHORA.md` ya tenía escrita —*"un mensaje de
+/// éxito que no se distingue de un fracaso no es un mensaje de éxito"*— y esta
+/// herramienta la incumplía. Un shader que no carga invalida la foto entera, así
+/// que la foto tiene que decirlo.
+/// Sin tipo a propósito: `UntypedAssetLoadFailedEvent` cubre **todo** lo que el
+/// asset server carga, así que este guardia no puede quedarse corto por un tipo
+/// nuevo — que es exactamente la falla que el registro de materiales acaba de
+/// cerrar del otro lado.
+#[derive(Resource, Default)]
+pub struct BrokenAssets {
+    count: usize,
+    first: Option<String>,
+}
+
+pub fn note_failed_assets(
+    mut failures: MessageReader<bevy::asset::UntypedAssetLoadFailedEvent>,
+    mut broken: ResMut<BrokenAssets>,
+) {
+    for failure in failures.read() {
+        broken.count += 1;
+        if broken.first.is_none() {
+            broken.first = Some(failure.path.to_string());
+        }
+    }
+}
+
+fn warn_on_broken_assets(broken: &BrokenAssets) {
+    if broken.count == 0 {
+        return;
+    }
+    warn!(
+        "[shot] ESTA FOTO NO ES EVIDENCIA: {} assets no cargaron (el primero: {}). \
+         Lo que no cargó no se dibuja, pero sí se cuenta — su malla existe, es \
+         visible y tiene triángulos, así que el inventario de esta corrida \
+         describe una escena que la imagen no contiene.",
+        broken.count,
+        broken.first.as_deref().unwrap_or("?"),
+    );
+}
+
+/// Escribe, al lado del PNG, qué significa cada color de la foto.
+///
+/// **El analizador no conoce ningún color.** Los lee de acá, y por eso no puede
+/// quedar desincronizado de la corrida que sacó la foto: la paleta y la leyenda
+/// salen de `visuals::grass_debug` y de la tabla de anillos, no de una constante
+/// repetida en un script. Un color escrito a mano en la herramienta de análisis
+/// sería exactamente el bug que este trabajo vino a cerrar, con otro disfraz.
+///
+/// Se escribe siempre que haya una vista puesta, incluso en las de *ver*: saber
+/// qué configuración produjo una imagen es la mitad de poder compararla con
+/// otra.
+fn write_legend(
+    path: &std::path::Path,
+    perf: &crate::perf::PerfToggles,
+    inventory: &SceneInventory,
+) {
+    use crate::visuals::material_registry::Subject;
+
+    let view = perf.grass_debug_label();
+    if view == "off" {
+        return;
+    }
+    let rings: Vec<serde_json::Value> = crate::visuals::grass::ring_legend()
+        .into_iter()
+        .map(|ring| {
+            serde_json::json!({
+                "anillo": ring.slot,
+                "color": ring.color,
+                "alcance_m": ring.reach_m,
+                "chunk_m": ring.chunk_m,
+                "densidad_por_m2": ring.density,
+                "tris_por_brizna": ring.triangles_per_blade,
+            })
+        })
+        .collect();
+    let meadow = inventory.subject(Subject::Meadow);
+    let legend = serde_json::json!({
+        "vista": view,
+        "anillos": rings,
+        "encuadre": {
+            "mallas_visibles": inventory.visible_meshes,
+            "triangulos": inventory.triangles,
+            "draws": inventory.draws,
+            "pradera_triangulos": meadow.triangles,
+            "pradera_draws": meadow.draws,
+        },
+    });
+    let path = path.with_extension("json");
+    match serde_json::to_string_pretty(&legend) {
+        Ok(text) => {
+            if let Err(error) = std::fs::write(&path, text) {
+                error!("[shot] no se pudo escribir {}: {error}", path.display());
+            }
+        }
+        Err(error) => error!("[shot] no se pudo serializar la leyenda: {error}"),
+    }
 }
 
 /// Qué hay en cuadro, repartido por sistema.
@@ -210,7 +331,7 @@ pub fn capture_on_request(
 /// Una foto sola no dice si lo que cambió es lo que se estaba mirando. Con el
 /// reparto al lado, "se ve distinto" y "hay 40% menos pradera en cuadro" dejan
 /// de ser la misma frase.
-fn log_framing(inventory: &super::budget::SceneInventory) {
+fn log_framing(inventory: &SceneInventory) {
     let mut parts: Vec<String> = Vec::new();
     for subject in Subject::ALL {
         let tally = inventory.subject(subject);
@@ -236,6 +357,11 @@ fn log_framing(inventory: &super::budget::SceneInventory) {
 
 /// Lleva la foto de punta a punta, con la misma máquina de estados que la
 /// medición y por la misma razón: el orden de las etapas *es* la lógica.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "una foto declara de dónde es y con qué se sacó: escena, mirador, \
+              inventario, perillas y si algún asset falló"
+)]
 pub fn drive_auto_shot(
     mut commands: Commands,
     mut shot: ResMut<AutoShot>,
@@ -243,7 +369,10 @@ pub fn drive_auto_shot(
     scene: Res<State<AppState>>,
     mut exit: MessageWriter<AppExit>,
     time: Res<Time<Real>>,
-    inventory: Res<super::budget::SceneInventory>,
+    inventory: Res<SceneInventory>,
+    perf: Res<crate::perf::PerfToggles>,
+    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    broken: Res<BrokenAssets>,
 ) {
     match shot.stage {
         Stage::EnteringScene => {
@@ -281,9 +410,30 @@ pub fn drive_auto_shot(
                 facing.z,
                 path.display(),
             );
+            // **Dónde está la cámara, no dónde se le pidió que esté.** La línea
+            // de arriba es una intención, y hasta ahora era lo único que el log
+            // decía: una foto de un lugar equivocado se reportaba con la pose
+            // correcta al lado. Si las dos no coinciden, la foto no es de donde
+            // dice ser y todo lo que se concluya de ella es de otra escena.
+            if let Some(camera) = &camera {
+                let (at, aim) = (camera.translation(), camera.forward().as_vec3());
+                if at.distance(position) > POSE_TOLERANCE_M || aim.dot(facing) < POSE_TOLERANCE_DOT
+                {
+                    warn!(
+                        "[shot] LA CÁMARA NO ESTÁ EN EL MIRADOR: está en \
+                         ({:.1},{:.1},{:.1}) mirando ({:.2},{:.2},{:.2}). La foto no es del \
+                         lugar que este reporte declara.",
+                        at.x, at.y, at.z, aim.x, aim.y, aim.z,
+                    );
+                }
+            } else {
+                warn!("[shot] sin cámara: no se puede verificar de dónde es la foto");
+            }
             // Lo que la foto no puede mostrar: si dos encuadres discrepan, hace
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
+            warn_on_broken_assets(&broken);
             log_framing(&inventory);
+            write_legend(&path, &perf, &inventory);
             commands
                 .spawn(Screenshot::primary_window())
                 .observe(save_to_disk(path));

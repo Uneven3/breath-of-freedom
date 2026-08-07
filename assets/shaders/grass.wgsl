@@ -58,8 +58,12 @@ struct GrassUniform {
     tint_variation: f32,
     gradient_bias: f32,
     growth_start: f32,
+    debug_view: u32,
     ring_reaches_a: vec4<f32>,
     ring_reaches_b: vec4<f32>,
+    ring_chunks_a: vec4<f32>,
+    ring_chunks_b: vec4<f32>,
+    ring_colors: array<vec4<f32>, 8>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -114,13 +118,17 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// deja un escalón — el artefacto que sobrevivió a toda la sesión del
 /// 2026-08-06. Anclada acá, la densidad superviviente es `C/d` en todas partes y
 /// el anillo pasa a decidir sólo el tamaño de chunk.
-fn ring_inner(reach: f32) -> f32 {
-    var reaches = array<f32, 8>(
+fn ring_reaches() -> array<f32, 8> {
+    return array<f32, 8>(
         grass_data.ring_reaches_a.x, grass_data.ring_reaches_a.y,
         grass_data.ring_reaches_a.z, grass_data.ring_reaches_a.w,
         grass_data.ring_reaches_b.x, grass_data.ring_reaches_b.y,
         grass_data.ring_reaches_b.z, grass_data.ring_reaches_b.w,
     );
+}
+
+fn ring_inner(reach: f32) -> f32 {
+    var reaches = ring_reaches();
     var inner = 0.0;
     for (var i = 0; i < 8; i = i + 1) {
         if reaches[i] < reach && reaches[i] > inner {
@@ -199,6 +207,96 @@ fn wind_offset(world_xz: vec2<f32>, height_factor: f32, blade_height: f32, phase
     // Cuadrático en la altura: la brizna se arquea en vez de inclinarse rígida
     // desde la base, que es la diferencia entre una hoja y un palo.
     return dir * sway * height_factor * height_factor * blade_height;
+}
+
+// Las vistas de diagnóstico. El orden es el de `GRASS_DEBUG_STEPS` en
+// `bof_domain::perf`, y hay un test en `visuals::grass_debug` que lo cobra.
+const DEBUG_OFF: u32 = 0u;
+const DEBUG_RING: u32 = 1u;
+const DEBUG_CHUNK: u32 = 2u;
+const DEBUG_BLADE: u32 = 3u;
+const DEBUG_GROWTH: u32 = 4u;
+const DEBUG_MEASURE: u32 = 5u;
+
+/// Cuánto tapa el pastel al color real en las vistas de *ver*.
+///
+/// No 1,0 a propósito: con el color entero reemplazado se pierde el degradado y
+/// la luz, y una vista que destruye la imagen contesta preguntas sobre otra
+/// imagen. Acá la categoría se lee de un vistazo y el campo sigue siendo un
+/// campo.
+const DEBUG_TINT: f32 = 0.72;
+
+/// El anillo de esta brizna, como índice de la paleta.
+///
+/// Sale del alcance que ya viaja empaquetado en `uv1.y`, así que **ninguna de
+/// estas vistas cuesta un byte por vértice ni obliga a rehornear la pradera**.
+/// Ése es el motivo por el que se pueden encender jugando: lo que cambia es lo
+/// que el shader pinta, no lo que se dibuja.
+fn ring_slot(reach: f32) -> u32 {
+    var reaches = ring_reaches();
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        if abs(reaches[i] - reach) < 0.5 {
+            return i;
+        }
+    }
+    return 7u; // El casillero de "ninguno", que en la paleta es el gris.
+}
+
+fn ring_chunk_m(slot: u32) -> f32 {
+    var chunks = array<f32, 8>(
+        grass_data.ring_chunks_a.x, grass_data.ring_chunks_a.y,
+        grass_data.ring_chunks_a.z, grass_data.ring_chunks_a.w,
+        grass_data.ring_chunks_b.x, grass_data.ring_chunks_b.y,
+        grass_data.ring_chunks_b.z, grass_data.ring_chunks_b.w,
+    );
+    return max(chunks[slot], 0.001);
+}
+
+/// Un pastel determinista a partir de una semilla: tres canales de ruido
+/// arrastrados hacia el blanco. Desaturado a propósito — el campo tiene que
+/// seguir viéndose mientras se lo diagnostica.
+fn pastel(seed: vec2<f32>) -> vec3<f32> {
+    let raw = vec3<f32>(
+        value_noise(seed),
+        value_noise(seed + vec2<f32>(37.0, 17.0)),
+        value_noise(seed + vec2<f32>(11.0, 91.0)),
+    );
+    return mix(raw, vec3<f32>(1.0), 0.45);
+}
+
+/// El color de la vista puesta, ya mezclado con el color real.
+///
+/// `world_xz` es el del **vértice**, no el de la raíz, así que una brizna
+/// inclinada a menos de 27 cm del borde de su chunk puede tener la punta del
+/// color del chunk vecino. Es la inclinación horneada haciéndose visible; en
+/// chunks de 8 a 32 m afecta un fleco y ninguna vista de medición lo usa.
+fn debug_colour(base: vec3<f32>, world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> vec3<f32> {
+    let view = grass_data.debug_view;
+    if view == DEBUG_OFF || view == DEBUG_MEASURE {
+        return base;
+    }
+    let slot = ring_slot(ring_reach);
+    var tint = vec3<f32>(1.0);
+    if view == DEBUG_RING {
+        tint = grass_data.ring_colors[slot].rgb;
+    } else if view == DEBUG_CHUNK {
+        // Una celda es una malla y un draw call: esta vista es también el mapa
+        // de draws de la pradera.
+        let cell = floor(world_xz / ring_chunk_m(slot));
+        tint = pastel(cell * 13.0 + f32(slot) * 101.0);
+    } else if view == DEBUG_BLADE {
+        tint = pastel(vec2<f32>(blade_hash * 127.0, blade_hash * 331.0));
+    } else if view == DEBUG_GROWTH {
+        // Dos entradas de la paleta y no dos colores nuevos: el shader no
+        // inventa colores, los recibe.
+        let grown = blade_growth(world_xz, ring_reach, blade_hash);
+        tint = mix(
+            grass_data.ring_colors[0].rgb,
+            grass_data.ring_colors[3].rgb,
+            grown,
+        );
+    }
+    return mix(base, tint, DEBUG_TINT);
 }
 
 /// La normal de la brizna: **+Y**, abierta un poco hacia afuera a lo ancho.
@@ -290,6 +388,25 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var in = vertex_output;
+
+#ifndef PREPASS_PIPELINE
+    // **Medir**: el color exacto del anillo, y se termina acá.
+    //
+    // Sin luz, sin niebla y sin el post-procesado: lo que llega al PNG es el
+    // valor que está en la paleta, y contar píxeles de un color conocido es
+    // aritmética en vez de detección de bordes. Sale antes del PBR a propósito
+    // — cualquier cosa que multiplique este color lo vuelve inservible para lo
+    // único que esta vista hace.
+    if grass_data.debug_view == DEBUG_MEASURE {
+        var measured: FragmentOutput;
+        measured.color = vec4<f32>(
+            grass_data.ring_colors[ring_slot(floor(in.uv_b.y))].rgb,
+            1.0,
+        );
+        return measured;
+    }
+#endif
+
     // El PBR entero primero: sin esto el pasto sale plano, sin luz, sin sombras
     // y sin niebla, que es exactamente lo que `ExtendedMaterial` existe para
     // conservar.
@@ -343,6 +460,15 @@ fn fragment(
         colour.r * (1.0 + drift * 0.6),
         colour.g * (1.0 + drift),
         colour.b * (1.0 + drift * 0.4),
+        colour.a,
+    );
+
+    // Y recién acá la vista de diagnóstico, sobre el color ya armado: tiñe el
+    // albedo y deja que la luz, la sombra y la niebla sigan actuando. Con la
+    // vista apagada esto devuelve `colour` sin tocar — un branch por uniforme,
+    // igual para todo el draw, no por fragmento divergente.
+    colour = vec4<f32>(
+        debug_colour(colour.rgb, in.world_position.xz, floor(in.uv_b.y), blade_hash),
         colour.a,
     );
 

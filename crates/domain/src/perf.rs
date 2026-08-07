@@ -109,6 +109,39 @@ pub const GRASS_REACH_STEPS: [f32; 3] = [1.0, 0.75, 0.5];
 /// con su ventana de asentamiento.
 pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 
+/// Las vistas de diagnóstico de la pradera, por nombre.
+///
+/// **Existen porque el pasto se discute a ciegas.** Todo lo que decide su forma
+/// —a qué anillo pertenece una brizna, de qué chunk (y por lo tanto de qué draw
+/// call) salió, cuánto de su altura tiene ahora mismo— es invisible en la
+/// imagen final: se ve verde. Ocho intentos contra el mismo artefacto se
+/// discutieron sin poder mirar ninguna de esas cosas.
+///
+/// Se parten en dos familias, y la diferencia es qué se hace con ellas:
+///
+/// - **Ver** (`anillo`, `chunk`, `brizna`, `crecimiento`): un pastel por
+///   categoría, mezclado con el color real y con la luz puesta. El campo sigue
+///   leyéndose como campo, que es la condición para juzgar si algo *se ve* mal.
+/// - **Medir** (`medir`): un color plano y exacto por anillo, sin luz, sin
+///   niebla y sin tonemapping. Ahí la captura deja de ser una foto y pasa a ser
+///   un histograma: contar píxeles de un color conocido es aritmética, y no la
+///   detección de bordes que venía usándose y que satura con densidad alta.
+///   Da la cobertura del campo entero —sumando los cuatro— y la de cada anillo
+///   por separado, que es la pregunta que ningún medidor anterior contestaba.
+///
+/// El índice viaja al shader; el significado de cada uno vive en
+/// `visuals::grass_debug`, que es presentación (§7). Que sean **seis** no es
+/// casual: la escalera de perillas se cierra en 60 pasos y un largo que no
+/// divida a 60 rompe esa vuelta.
+pub const GRASS_DEBUG_STEPS: [&str; 6] = [
+    "off",
+    "anillo",
+    "chunk",
+    "brizna",
+    "crecimiento",
+    "medir",
+];
+
 /// Fraction of the window the camera actually renders, for the resolution
 /// sweep. The other half of the pair above: if GPU time tracks *this* and not
 /// density, the frame is fill-bound on something that is not the grass.
@@ -135,12 +168,13 @@ pub enum PerfKnob {
     TreeDetail,
     GrassDensity,
     GrassReach,
+    GrassDebug,
     RenderScale,
     Msaa,
 }
 
 impl PerfKnob {
-    pub const ALL: [PerfKnob; 16] = [
+    pub const ALL: [PerfKnob; 17] = [
         PerfKnob::Vsync,
         PerfKnob::Forest,
         PerfKnob::Wireframe,
@@ -155,6 +189,7 @@ impl PerfKnob {
         PerfKnob::TreeDetail,
         PerfKnob::GrassDensity,
         PerfKnob::GrassReach,
+        PerfKnob::GrassDebug,
         PerfKnob::RenderScale,
         PerfKnob::Msaa,
     ];
@@ -175,6 +210,7 @@ impl PerfKnob {
             PerfKnob::TreeDetail => "tree-detail",
             PerfKnob::GrassDensity => "grass-density",
             PerfKnob::GrassReach => "grass-reach",
+            PerfKnob::GrassDebug => "grass-view",
             PerfKnob::RenderScale => "render-scale",
             PerfKnob::Msaa => "msaa",
         }
@@ -232,6 +268,10 @@ pub struct PerfToggles {
     /// Indexes [`GRASS_REACH_STEPS`]. Like the density step, changing it
     /// re-bakes every chunk, so the A/B settle window matters.
     pub grass_reach_step: usize,
+    /// Indexes [`GRASS_DEBUG_STEPS`]. Cambia lo que el shader pinta, no lo que
+    /// dibuja: ni un triángulo de diferencia, para que mirar y medir sean el
+    /// mismo campo.
+    pub grass_debug_step: usize,
     /// Indexes [`RENDER_SCALE_STEPS`].
     pub render_scale_step: usize,
     /// Indexes [`MSAA_STEPS`]. Set from the profile at launch rather than
@@ -259,6 +299,7 @@ impl Default for PerfToggles {
             tree_detail: false,
             grass_density_step: 0,
             grass_reach_step: 0,
+            grass_debug_step: 0,
             render_scale_step: 0,
             msaa_step: 0,
         }
@@ -325,6 +366,16 @@ impl PerfToggles {
             .unwrap_or(GRASS_REACH_STEPS[0])
     }
 
+    /// Qué vista de diagnóstico tiene puesta la pradera, como índice de
+    /// [`GRASS_DEBUG_STEPS`]. Cero es el juego.
+    pub fn grass_debug_step(&self) -> usize {
+        self.grass_debug_step.min(GRASS_DEBUG_STEPS.len() - 1)
+    }
+
+    pub fn grass_debug_label(&self) -> &'static str {
+        GRASS_DEBUG_STEPS[self.grass_debug_step()]
+    }
+
     pub fn msaa_samples(&self) -> u32 {
         MSAA_STEPS
             .get(self.msaa_step)
@@ -374,10 +425,56 @@ impl PerfToggles {
             PerfKnob::GrassReach => {
                 self.grass_reach_step = (self.grass_reach_step + 1) % GRASS_REACH_STEPS.len()
             }
+            PerfKnob::GrassDebug => {
+                self.grass_debug_step = (self.grass_debug_step + 1) % GRASS_DEBUG_STEPS.len()
+            }
             PerfKnob::RenderScale => {
                 self.render_scale_step = (self.render_scale_step + 1) % RENDER_SCALE_STEPS.len()
             }
             PerfKnob::Msaa => self.msaa_step = (self.msaa_step + 1) % MSAA_STEPS.len(),
+        }
+    }
+
+    /// Pone una perilla en un paso concreto.
+    ///
+    /// Existe para que una corrida sin jugador pueda elegir su configuración:
+    /// hasta ahora la única forma de mover una perilla era hacer click, así que
+    /// `BOF_SHOT` sólo podía fotografiar lo que el juego envía. Sacar la foto de
+    /// una vista de diagnóstico obligaba a pedirle al usuario que la pusiera —
+    /// o sea a gastarle una sesión para ver algo que se descarta en diez
+    /// segundos.
+    ///
+    /// Las booleanas leen cero como apagado y cualquier otra cosa como
+    /// encendido; las escalonadas toman el índice módulo su tabla, así que un
+    /// número de más elige una entrada real en vez de fallar.
+    pub fn set_knob_step(&mut self, knob: PerfKnob, step: usize) {
+        let flag = step != 0;
+        match knob {
+            PerfKnob::Vsync => self.vsync = flag,
+            PerfKnob::Forest => self.forest_visible = flag,
+            PerfKnob::Wireframe => {
+                self.wireframe = flag;
+                self.overdraw &= !flag;
+            }
+            PerfKnob::Overdraw => {
+                self.overdraw = flag;
+                self.wireframe &= !flag;
+            }
+            PerfKnob::SunShadows => self.sun_shadows = flag,
+            PerfKnob::MoonShadows => self.moon_shadows = flag,
+            PerfKnob::LeafShadows => self.leaf_shadows = flag,
+            PerfKnob::TreeDetail => self.tree_detail = flag,
+            PerfKnob::Cull => self.cull_step = step % CULL_STEPS.len(),
+            PerfKnob::ShadowRange => self.shadow_range_step = step % SHADOW_CASTER_STEPS.len(),
+            PerfKnob::ShadowDistance => {
+                self.shadow_distance_step = step % SHADOW_DISTANCE_STEPS.len()
+            }
+            PerfKnob::ShadowMap => self.shadow_map_step = step % SHADOW_MAP_STEPS.len(),
+            PerfKnob::GrassDensity => self.grass_density_step = step % GRASS_DENSITY_STEPS.len(),
+            PerfKnob::GrassReach => self.grass_reach_step = step % GRASS_REACH_STEPS.len(),
+            PerfKnob::GrassDebug => self.grass_debug_step = step % GRASS_DEBUG_STEPS.len(),
+            PerfKnob::RenderScale => self.render_scale_step = step % RENDER_SCALE_STEPS.len(),
+            PerfKnob::Msaa => self.msaa_step = step % MSAA_STEPS.len(),
         }
     }
 
@@ -416,6 +513,7 @@ impl PerfToggles {
             PerfKnob::TreeDetail => on_off(self.tree_detail),
             PerfKnob::GrassDensity => format!("{:.0}/m2", self.grass_density()),
             PerfKnob::GrassReach => format!("{:.0}%", self.grass_reach_scale() * 100.0),
+            PerfKnob::GrassDebug => self.grass_debug_label().to_string(),
             PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),
             PerfKnob::Msaa => match self.msaa_samples() {
                 1 => "off".to_string(),
@@ -505,7 +603,8 @@ mod tests {
             assert_ne!(toggles.knob_text(*knob), baseline, "{}", knob.label());
 
             // ...and the cycle must close, so an A/B can be repeated exactly.
-            // 60 = lcm(2 bool, 4 cull, 4 shadow-range, 5 shadow-dist, 3 shadow-map).
+            // 60 = lcm(2 bool, 4 cull, 4 shadow-range, 5 shadow-dist, 3
+            // shadow-map, 6 grass-view).
             for _ in 1..60 {
                 toggles.step_selected();
             }

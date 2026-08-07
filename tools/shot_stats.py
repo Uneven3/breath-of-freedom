@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Cuenta lo que hay en una captura del juego, sin adivinar nada.
+
+Uso:
+    python3 tools/shot_stats.py target/shots/grass.png [--bands 8]
+
+# Qué reemplaza, y por qué el reemplazo no es opcional
+
+El 2026-08-06 las decisiones sobre el pasto se tomaron con perfiles radiales por
+**detección de bordes** sobre la imagen bonita. Ese método tiene dos defectos que
+no se ven en su salida: satura con densidad alta —a partir de cierto punto todo
+es borde y el número deja de moverse— y no distingue una brizna baja de la
+ausencia de brizna. Por eso no vio el galón de briznas a media altura, que era
+justamente el artefacto que se estaba buscando.
+
+Acá no hay detección de nada. El juego pinta cada anillo de un color plano y
+exacto (`grass-view=medir`), escribe al lado del PNG qué color es cada cosa, y
+esto **cuenta píxeles iguales a esos colores**. Es aritmética: no hay umbral que
+elegir, no satura, y una brizna a media altura son menos píxeles de su color,
+no un borde menos.
+
+# El analizador no conoce ningún color
+
+Los lee del `.json` que la corrida escribió al lado de la foto. Un color
+hardcodeado acá sería la misma clase de bug que este trabajo vino a cerrar: dos
+copias del mismo dato, y sólo una se actualiza.
+
+# Sólo la biblioteca estándar
+
+Ni numpy ni Pillow. Una herramienta que no corre en otra máquina es una
+herramienta que no sirve, y este repo ya decodifica PNG a mano en
+`generate_terrain_textures.py`.
+"""
+
+from __future__ import annotations
+
+import json
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+
+def read_png(path: Path) -> tuple[int, int, bytes, int]:
+    """Devuelve (ancho, alto, píxeles, canales) de un PNG de 8 bits sin entrelazar."""
+    raw = path.read_bytes()
+    if raw[:8] != b"\x89PNG\r\n\x1a\n":
+        raise SystemExit(f"{path} no es un PNG")
+
+    width = height = 0
+    channels = 0
+    idat = bytearray()
+    offset = 8
+    while offset < len(raw):
+        (length,) = struct.unpack(">I", raw[offset : offset + 4])
+        kind = raw[offset + 4 : offset + 8]
+        body = raw[offset + 8 : offset + 8 + length]
+        offset += 12 + length  # longitud + tipo + datos + CRC
+        if kind == b"IHDR":
+            width, height, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if depth != 8:
+                raise SystemExit(f"{path}: sólo 8 bits por canal, no {depth}")
+            if interlace:
+                raise SystemExit(f"{path}: entrelazado no soportado")
+            channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(colour, 0)
+            if channels == 0:
+                raise SystemExit(f"{path}: tipo de color {colour} no soportado")
+        elif kind == b"IDAT":
+            idat += body
+        elif kind == b"IEND":
+            break
+
+    data = zlib.decompress(bytes(idat))
+    stride = width * channels
+    out = bytearray(height * stride)
+    previous = bytearray(stride)
+    pos = 0
+    for row in range(height):
+        filter_kind = data[pos]
+        pos += 1
+        line = bytearray(data[pos : pos + stride])
+        pos += stride
+        # Los cinco filtros del formato. Están acá enteros a propósito: un
+        # decodificador que sólo entiende el filtro 0 funciona hasta el día en
+        # que el codificador cambia de humor, y falla en silencio con basura.
+        for i in range(stride):
+            left = line[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if filter_kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif filter_kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif filter_kind == 3:
+                line[i] = (line[i] + ((left + up) >> 1)) & 0xFF
+            elif filter_kind == 4:
+                p = left + up - up_left
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - up_left)
+                nearest = left if (pa <= pb and pa <= pc) else (up if pb <= pc else up_left)
+                line[i] = (line[i] + nearest) & 0xFF
+            elif filter_kind != 0:
+                raise SystemExit(f"{path}: filtro {filter_kind} desconocido")
+        out[row * stride : (row + 1) * stride] = line
+        previous = line
+    return width, height, bytes(out), channels
+
+
+def load_legend(png: Path) -> dict | None:
+    sidecar = png.with_suffix(".json")
+    if not sidecar.exists():
+        return None
+    return json.loads(sidecar.read_text())
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print(__doc__)
+        return 2
+    png = Path(argv[1])
+    bands = 8
+    if "--bands" in argv:
+        bands = int(argv[argv.index("--bands") + 1])
+
+    width, height, pixels, channels = read_png(png)
+    legend = load_legend(png)
+
+    print(f"{png}  {width}x{height}  {channels} canales")
+
+    if legend is None:
+        print(
+            "sin leyenda al lado (.json): esta captura no se puede contar por color.\n"
+            "Sacala con BOF_KNOBS=grass-view=5 para que la corrida escriba qué es cada color."
+        )
+        return 1
+
+    view = legend.get("vista", "?")
+    print(f"vista: {view}")
+    if view != "medir":
+        print(
+            "AVISO: sólo la vista 'medir' pinta colores planos y exactos. En cualquier\n"
+            "otra, la luz y la niebla mueven cada píxel y este conteo no significa nada."
+        )
+
+    wanted = {tuple(ring["color"]): ring for ring in legend["anillos"]}
+    total = width * height
+    counts = {tuple(ring["color"]): 0 for ring in legend["anillos"]}
+    band_counts = [dict.fromkeys(counts, 0) for _ in range(bands)]
+
+    # Las filas por banda se cuentan, no se estiman: dividir por `alto/bandas`
+    # cuando las bandas no son todas del mismo tamaño da porcentajes por encima
+    # del 100%, que es imposible para una cobertura exclusiva. Salió así en la
+    # primera corrida — 100,7% — y un medidor que puede pasarse del 100% no se
+    # puede usar para nada.
+    band_rows = [0] * bands
+    for y in range(height):
+        band = min(y * bands // height, bands - 1)
+        band_rows[band] += 1
+        row = y * width * channels
+        for x in range(width):
+            i = row + x * channels
+            key = (pixels[i], pixels[i + 1], pixels[i + 2])
+            if key in counts:
+                counts[key] += 1
+                band_counts[band][key] += 1
+
+    grass = sum(counts.values())
+    print(f"\ncobertura de pradera: {grass / total:6.2%} de la pantalla ({grass} px)")
+    print(f"{'anillo':>6} {'alcance':>8} {'color':>9} {'px':>10} {'pantalla':>9} {'del pasto':>10}")
+    for colour, ring in wanted.items():
+        n = counts[colour]
+        share_of_grass = n / grass if grass else 0.0
+        print(
+            f"{ring['anillo']:>6} {ring['alcance_m']:>7.0f}m "
+            f"{'#%02X%02X%02X' % colour:>9} {n:>10} {n / total:>8.2%} {share_of_grass:>9.1%}"
+        )
+
+    # El perfil por bandas horizontales reemplaza al perfil radial: con la cámara
+    # mirando al horizonte, la fila de pantalla crece monótonamente con la
+    # distancia al suelo, así que esto **es** el perfil de cobertura contra
+    # distancia — sin detectar un solo borde.
+    print(f"\nperfil por bandas (arriba = lejos), {bands} bandas:")
+    header = "  banda " + " ".join(f"{r['anillo']:>7}" for r in legend["anillos"]) + "    total"
+    print(header)
+    for index, band in enumerate(band_counts):
+        pixels_in_band = band_rows[index] * width
+        if pixels_in_band == 0:
+            continue
+        band_total = sum(band.values())
+        cells = " ".join(f"{band[c] / pixels_in_band:>6.1%}" for c in counts)
+        print(f"  {index:>5} {cells} {band_total / pixels_in_band:>8.1%}")
+
+    framing = legend.get("encuadre", {})
+    if framing:
+        print(
+            f"\nen cuadro: {framing.get('mallas_visibles')} mallas, "
+            f"{framing.get('triangulos')} triángulos, {framing.get('draws')} draws · "
+            f"pradera {framing.get('pradera_triangulos')} tris en "
+            f"{framing.get('pradera_draws')} draws"
+        )
+        meadow_tris = framing.get("pradera_triangulos") or 0
+        if grass and meadow_tris:
+            print(f"triángulos de pradera por píxel cubierto: {meadow_tris / grass:.2f}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

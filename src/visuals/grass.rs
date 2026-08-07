@@ -15,6 +15,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use crate::visuals::grass_cover;
+use crate::visuals::grass_debug;
 use crate::visuals::grass_material::{GrassExtension, GrassMaterial, GrassUniform};
 use crate::world::TerrainAccess;
 use crate::world::forest::{hash_u32, hash_unit};
@@ -131,9 +132,20 @@ const RINGS: [Ring; 4] = [
 
 /// Los alcances, como el shader los necesita para deducir el borde interno.
 fn ring_reaches() -> (Vec4, Vec4) {
-    let mut slots = [0.0_f32; 8];
+    slots(|ring| ring.reach_m, 0.0)
+}
+
+/// Los tamaños de chunk, en el mismo orden. Con ellos el fragment deduce de qué
+/// celda —o sea de qué draw call— salió una brizna, sin un byte más por vértice.
+fn ring_chunks() -> (Vec4, Vec4) {
+    slots(|ring| ring.chunk_m, 1.0)
+}
+
+/// Un dato por anillo repartido en los ocho casilleros que el uniform tiene.
+fn slots(of: impl Fn(&Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
+    let mut slots = [empty; 8];
     for (slot, ring) in slots.iter_mut().zip(RINGS.iter()) {
-        *slot = ring.reach_m;
+        *slot = of(ring);
     }
     (Vec4::from_slice(&slots[..4]), Vec4::from_slice(&slots[4..]))
 }
@@ -637,6 +649,7 @@ pub(super) fn track_meadow_focus(
     mut materials: ResMut<Assets<GrassMaterial>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
     sun: Option<Single<&GlobalTransform, With<DirectionalLight>>>,
+    perf: Res<crate::perf::PerfToggles>,
     time: Res<Time>,
 ) {
     let Some(camera) = camera else {
@@ -653,6 +666,14 @@ pub(super) fn track_meadow_focus(
     let (a, b) = ring_reaches();
     data.ring_reaches_a = a;
     data.ring_reaches_b = b;
+    let (a, b) = ring_chunks();
+    data.ring_chunks_a = a;
+    data.ring_chunks_b = b;
+    data.debug_view =
+        grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).shader_index();
+    for (slot, colour) in data.ring_colors.iter_mut().enumerate() {
+        *colour = Vec4::from(grass_debug::slot_color(slot).to_f32_array());
+    }
     data.growth_sink = GROWTH_SINK_M;
     // The wind is a function of world position and time — there is no per-blade
     // state anywhere, which is why a field of a hundred thousand blades costs
@@ -662,6 +683,64 @@ pub(super) fn track_meadow_focus(
     // own transform rather than a copy keeps day/night driving it for free.
     if let Some(sun) = sun {
         data.sun_direction = sun.back().as_vec3();
+    }
+}
+
+/// Qué significa cada color de la vista de diagnóstico.
+///
+/// Sale de [`RINGS`] y de la paleta, nunca escrita a mano: una leyenda que hay
+/// que mantener sincronizada a mano es una leyenda que va a mentir. La consumen
+/// el log —cuando la vista cambia— y el archivo que acompaña a cada captura,
+/// que es de donde el analizador lee los colores en vez de conocerlos.
+pub(crate) struct RingLegend {
+    pub slot: usize,
+    pub reach_m: f32,
+    pub chunk_m: f32,
+    pub density: f32,
+    pub triangles_per_blade: usize,
+    pub color: [u8; 3],
+}
+
+pub(crate) fn ring_legend() -> Vec<RingLegend> {
+    RINGS
+        .iter()
+        .enumerate()
+        .map(|(slot, ring)| RingLegend {
+            slot,
+            reach_m: ring.reach_m,
+            chunk_m: ring.chunk_m,
+            density: ring.density,
+            triangles_per_blade: ring.shape.triangles(),
+            color: grass_debug::slot_srgb(slot),
+        })
+        .collect()
+}
+
+/// Anuncia la vista puesta y qué es cada color.
+///
+/// Un color sin leyenda no es un diagnóstico: es una imagen bonita. Se imprime
+/// al cambiar de vista y no cada frame, que es cuando la información hace falta.
+pub(super) fn announce_grass_debug_view(
+    perf: Res<crate::perf::PerfToggles>,
+    mut announced: Local<Option<usize>>,
+) {
+    let step = perf.grass_debug_step();
+    if announced.replace(step) == Some(step) {
+        return;
+    }
+    let view = grass_debug::GrassDebugView::from_step(step);
+    if view == grass_debug::GrassDebugView::Off {
+        info!("[grass] vista de diagnóstico apagada");
+        return;
+    }
+    info!("[grass] vista '{}':", perf.grass_debug_label());
+    for ring in ring_legend() {
+        let [r, g, b] = ring.color;
+        info!(
+            "[grass]   anillo {} #{r:02X}{g:02X}{b:02X} — hasta {:.0} m, chunks de {:.0} m, \
+             {:.0} briznas/m2, {} tris por brizna",
+            ring.slot, ring.reach_m, ring.chunk_m, ring.density, ring.triangles_per_blade,
+        );
     }
 }
 
@@ -928,6 +1007,85 @@ mod tests {
                 ring.width_scale
             );
         }
+    }
+
+    /// Cuántos anillos plantan sobre el mismo pedazo de suelo.
+    ///
+    /// Un punto lo cubre **un** anillo, o dos dentro de la banda de traspaso.
+    /// Tres es densidad multiplicada que nadie pidió, pagada entera en overdraw
+    /// — y encima con las briznas equivocadas, porque los anillos lejanos son
+    /// los de menos triángulos.
+    fn rings_covering(point: Vec2, focus: Vec2) -> Vec<usize> {
+        (0..RINGS.len())
+            .filter(|index| {
+                let half = RINGS[*index].chunk_m * 0.5;
+                ring_cells(*index, focus, REFERENCE_REACH)
+                    .into_iter()
+                    .any(|cell| {
+                        let offset = (point - cell_centre(cell, RINGS[*index].chunk_m)).abs();
+                        offset.x <= half && offset.y <= half
+                    })
+            })
+            .collect()
+    }
+
+    /// Cuántos anillos se permiten hoy sobre el mismo suelo.
+    ///
+    /// **Debería ser 2 y es 4.** Es deuda con número, igual que
+    /// `MEADOW_VIEW_TRIANGLES` en `perf::budget` — no una tolerancia: si sube,
+    /// el test cae.
+    const RINGS_OVER_THE_SAME_GROUND: usize = 4;
+
+    /// **El defecto que las vistas de color destaparon el 2026-08-07.**
+    ///
+    /// El test de cobertura de más arriba verifica que no queden huecos y pasa
+    /// desde siempre; nadie había verificado lo contrario, que es igual de
+    /// caro. Un chunk se descarta sólo si cae **entero** dentro del traspaso del
+    /// anillo interno (`farthest <= handover`), y un chunk de 32 m que contiene
+    /// a la cámara nunca cae entero dentro de 18 m: se conserva, y planta sus
+    /// 40 briznas/m² sobre los pies del jugador.
+    ///
+    /// Medido en la caja Pasto con `grass-view=medir` y `tools/shot_stats.py`:
+    /// en la banda más cercana a la cámara, el anillo 2 —hecho de briznas de
+    /// **un** triángulo, pensadas para 24-40 m— pinta el 28,4% de los píxeles, y
+    /// el anillo 0 sólo el 32,9%. Dos tercios del primer plano son briznas de
+    /// anillos lejanos.
+    ///
+    /// **Por qué no se arregla de una y queda anotado:** ese solapamiento es lo
+    /// que hoy tapa la costura entre anillos. Sacarlo sin la reescritura de
+    /// *praderas anidadas* que `BOTWGrass.md` ya tiene planificada vuelve a
+    /// destapar el artefacto que ocho intentos persiguieron — el sobrecosto está
+    /// comprando algo. Lo que cambia es que ahora se sabe **cuánto** cuesta y
+    /// que la reescritura tiene un número a favor en vez de una intuición.
+    #[test]
+    fn no_patch_of_ground_is_planted_by_more_than_two_rings() {
+        let mut worst = (0usize, Vec2::ZERO, Vec2::ZERO, Vec::new());
+        for focus in [Vec2::ZERO, Vec2::new(3.7, -11.2), Vec2::new(137.0, -488.0)] {
+            let mut along = -40.0;
+            while along <= 40.0 {
+                let mut across = -40.0;
+                while across <= 40.0 {
+                    let point = focus + Vec2::new(along, across);
+                    let rings = rings_covering(point, focus);
+                    if rings.len() > worst.0 {
+                        worst = (rings.len(), focus, point, rings);
+                    }
+                    across += 3.1;
+                }
+                along += 3.1;
+            }
+        }
+        assert!(
+            worst.0 <= RINGS_OVER_THE_SAME_GROUND,
+            "con la cámara en {:?}, el punto {:?} lo plantan {} anillos ({:?}), \
+             por encima de los {RINGS_OVER_THE_SAME_GROUND} que este archivo declara \
+             como deuda: esa densidad multiplicada se paga entera en overdraw y pone \
+             briznas de anillo lejano en primer plano",
+            worst.1,
+            worst.2,
+            worst.0,
+            worst.3,
+        );
     }
 
     /// The whole point of the rolling grid: cost does not grow with the map.

@@ -45,10 +45,19 @@ pub struct GrassUniform {
     pub gradient_bias: f32,
     /// Desde qué distancia ralea la pradera. Ver `GROWTH_START_M`.
     pub growth_start: f32,
+    /// Índice de la vista de diagnóstico. Ver `visuals::grass_debug`.
+    pub debug_view: u32,
     /// Los alcances de los anillos, para que el shader deduzca el borde interno
     /// del anillo de cada brizna y ancle ahí su ley `1/d`. Ver `ring_inner`.
     pub ring_reaches_a: Vec4,
     pub ring_reaches_b: Vec4,
+    /// El tamaño de chunk de cada anillo, en el mismo orden que los alcances.
+    /// Con él, el fragment deduce de qué celda salió una brizna sin que haga
+    /// falta un byte más por vértice — y una celda es una malla y un draw.
+    pub ring_chunks_a: Vec4,
+    pub ring_chunks_b: Vec4,
+    /// La paleta de diagnóstico, un color por anillo.
+    pub ring_colors: [Vec4; crate::visuals::grass_debug::PALETTE_SLOTS],
 }
 
 impl Default for GrassUniform {
@@ -74,8 +83,12 @@ impl Default for GrassUniform {
             tint_variation: 0.16,
             gradient_bias: 1.0,
             growth_start: 1.0e9,
+            debug_view: 0,
             ring_reaches_a: Vec4::ZERO,
             ring_reaches_b: Vec4::ZERO,
+            ring_chunks_a: Vec4::ONE,
+            ring_chunks_b: Vec4::ONE,
+            ring_colors: [Vec4::ONE; crate::visuals::grass_debug::PALETTE_SLOTS],
         }
     }
 }

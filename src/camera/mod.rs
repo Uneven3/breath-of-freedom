@@ -4,6 +4,7 @@
 //! orientation published by Input, with a landing dip and collision spring arm.
 
 use avian3d::prelude::*;
+use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 
 use crate::input::frame::ControlOrientation;
@@ -81,6 +82,7 @@ impl Plugin for CameraPlugin {
                 crosshair::toggle,
                 apply_render_scale,
                 apply_msaa,
+                apply_flat_measure_view,
             )
                 .chain(),
         );
@@ -158,6 +160,48 @@ fn apply_msaa(perf: Res<crate::perf::PerfToggles>, mut camera: Single<&mut Msaa,
     let wanted = crate::perf::data::msaa_for_samples(perf.msaa_samples());
     if **camera != wanted {
         **camera = wanted;
+    }
+}
+
+/// Deja pasar los colores exactos cuando la pradera está en modo de medición
+/// (§7, igual que las dos perillas de arriba: el dueño de la cámara aplica).
+///
+/// **Sin esto la vista de medición mide otra cosa.** El shader escribe el color
+/// de la paleta y después el frame pasa por dos etapas que lo cambian antes de
+/// llegar al PNG: el tonemapping, que comprime el rango, y el dithering, que le
+/// suma ruido de ±1/255 justamente para que las rampas no se vean en bandas. Las
+/// dos son correctas para una imagen y fatales para un histograma — contar
+/// píxeles de un color conocido deja de ser exacto si el color ya no es el que
+/// se escribió. Es la misma clase de error que este trabajo vino a cerrar:
+/// precisión real sobre un blanco equivocado.
+///
+/// Las vistas de *ver* no lo tocan: ahí el objetivo es que el campo siga
+/// pareciéndose al juego.
+fn apply_flat_measure_view(
+    perf: Res<crate::perf::PerfToggles>,
+    mut camera: Single<(&mut Tonemapping, &mut DebandDither), With<CameraRig>>,
+) {
+    if !perf.is_changed() {
+        return;
+    }
+    let flat =
+        crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).is_flat();
+    let (tonemapping, dither) = &mut *camera;
+    let wanted_tonemapping = if flat {
+        Tonemapping::None
+    } else {
+        Tonemapping::default()
+    };
+    if **tonemapping != wanted_tonemapping {
+        **tonemapping = wanted_tonemapping;
+    }
+    let wanted_dither = if flat {
+        DebandDither::Disabled
+    } else {
+        DebandDither::Enabled
+    };
+    if **dither != wanted_dither {
+        **dither = wanted_dither;
     }
 }
 

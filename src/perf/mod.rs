@@ -48,6 +48,7 @@ impl Plugin for PerfPlugin {
         app.init_resource::<Flythrough>();
         app.init_resource::<ScriptedCameraPose>();
         app.init_resource::<budget::SceneInventory>();
+        app.init_resource::<shot::BrokenAssets>();
         app.init_resource::<budget::SceneBudgetWarningState>();
         app.add_message::<BenchmarkRequest>();
         app.add_message::<FlythroughRequest>();
@@ -67,6 +68,9 @@ impl Plugin for PerfPlugin {
                 apply_present_mode,
                 budget::warn_scene_budget,
                 auto::drive_auto_bench.run_if(resource_exists::<auto::AutoBench>),
+                // Antes de cualquier captura: una foto sacada con assets rotos
+                // no es evidencia de nada, y hasta el 2026-08-07 nada lo decía.
+                shot::note_failed_assets,
                 shot::drive_auto_shot.run_if(resource_exists::<shot::AutoShot>),
                 shot::capture_on_request,
             )

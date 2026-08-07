@@ -360,24 +360,6 @@ fn debug_colour(
         // cuadro, y el promedio de pasteles claros es un beige liso.
         let per_blade = fract(blade_height);
         tint = pastel(vec2<f32>(per_blade * 813.0, per_blade * 271.0), 0.0);
-    } else if view == DEBUG_SUBPIXEL {
-        // Los píxeles de ancho salen de las derivadas de pantalla, que se
-        // calculan **antes** de entrar acá: una derivada dentro de un branch es
-        // territorio indefinido, y aunque este branch sea uniforme para todo el
-        // draw, pedirlo afuera no cuesta nada y no depende de esa sutileza.
-        let pixels_wide = grass_data.blade_width / max(metres_per_pixel, 1e-6);
-        // Rojo → ámbar → verde. Los dos colores salen de la paleta, que es el
-        // único lugar donde viven los colores de diagnóstico.
-        let health = clamp(
-            (pixels_wide - SUBPIXEL_RED) / (SUBPIXEL_GREEN - SUBPIXEL_RED),
-            0.0,
-            1.0,
-        );
-        tint = mix(
-            grass_data.ring_colors[0].rgb,
-            grass_data.ring_colors[3].rgb,
-            health,
-        );
     } else if view == DEBUG_GROWTH {
         // Dos entradas de la paleta y no dos colores nuevos: el shader no
         // inventa colores, los recibe.
@@ -499,8 +481,39 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var in = vertex_output;
+    // Cuánto mundo cubre un píxel acá. Fuera de todo branch, porque una derivada
+    // en control de flujo no uniforme no está definida.
+    let metres_per_pixel = length(fwidth(in.world_position.xz));
 
 #ifndef PREPASS_PIPELINE
+    // **Sub-píxel**: en bandas planas y exactas, no en una rampa.
+    //
+    // Una rampa continua se mira; una banda se **cuenta**. La pregunta que esta
+    // vista existe para contestar —a qué distancia una brizna deja de resolverse—
+    // se contestaba comparando colores a ojo, que es justo lo que esta sesión
+    // vino a sacar del medio. Con tres bandas exactas, `shot_stats.py` dice qué
+    // fracción del pasto está por debajo de un píxel.
+    if grass_data.debug_view == DEBUG_SUBPIXEL {
+        // El ancho es el de **esta** primitiva, no el de una brizna. Una carta
+        // mide 0,5 m contra los 5,5 cm de una brizna: medirlas con la misma vara
+        // las reportaba nueve veces más finas de lo que son, que es exactamente
+        // la clase de error que esta vista existe para cazar.
+        var width = grass_data.blade_width;
+        if ring_is_card(floor(in.uv_b.y)) {
+            width = grass_data.card_half_width * 2.0;
+        }
+        let pixels_wide = width / max(metres_per_pixel, 1e-6);
+        var band = 0u;
+        if pixels_wide >= SUBPIXEL_GREEN {
+            band = 3u; // se resuelve entera: no hay desperdicio de cuarteto
+        } else if pixels_wide >= SUBPIXEL_RED {
+            band = 5u; // entre uno y dos píxeles: el cuarteto ya desperdicia
+        }
+        var banded: FragmentOutput;
+        banded.color = vec4<f32>(grass_data.ring_colors[band].rgb, 1.0);
+        return banded;
+    }
+
     // **Medir**: el color exacto del anillo, y se termina acá.
     //
     // Sin luz, sin niebla y sin el post-procesado: lo que llega al PNG es el
@@ -539,9 +552,6 @@ fn fragment(
 
     let factor = blade_height_factor(in.uv);
     let blade_hash = abs(in.uv_b.x);
-    // Cuánto mundo cubre un píxel acá. Fuera de todo branch, porque una derivada
-    // en control de flujo no uniforme no está definida.
-    let metres_per_pixel = length(fwidth(in.world_position.xz));
     // El degradado va sesgado hacia la raíz, no lineal: el campo se ve desde
     // arriba, así que lo que llena la pantalla son puntas, y un degradado
     // lineal deja al campo entero en el promedio de sus dos colores. Sesgado, la

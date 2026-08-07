@@ -298,22 +298,39 @@ fn write_legend(
     if view == "off" {
         return;
     }
-    let rings: Vec<serde_json::Value> = crate::visuals::grass::ring_legend(perf)
-        .into_iter()
-        .map(|ring| {
-            serde_json::json!({
-                "anillo": ring.slot,
-                "color": ring.color,
-                "alcance_m": ring.reach_m,
-                "chunk_m": ring.chunk_m,
-                "densidad_por_m2": ring.density,
-                "tris_por_brizna": ring.triangles_per_blade,
+    // **Categorías, no anillos.** El analizador cuenta lo que la corrida declare
+    // y no sabe qué es un anillo: la vista `subpixel` reparte por ancho en
+    // píxeles, y la que venga después repartirá por otra cosa. Atar el script a
+    // la técnica de LOD del momento sería obligarlo a cambiar cada vez que la
+    // técnica cambie — y la técnica está justamente en discusión.
+    let categories: Vec<serde_json::Value> = if view == "subpixel" {
+        crate::visuals::grass::subpixel_legend()
+            .into_iter()
+            .map(|band| serde_json::json!({ "nombre": band.name, "color": band.color }))
+            .collect()
+    } else {
+        crate::visuals::grass::ring_legend(perf)
+            .into_iter()
+            .map(|ring| {
+                serde_json::json!({
+                    "nombre": format!("anillo {}", ring.slot),
+                    "color": ring.color,
+                    "alcance_m": ring.reach_m,
+                    "chunk_m": ring.chunk_m,
+                    "densidad_por_m2": ring.density,
+                    "tris_por_primitiva": ring.triangles_per_blade,
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
     let meadow = inventory.subject(Subject::Meadow);
+    let flat =
+        crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).is_flat();
     let legend = serde_json::json!({
         "vista": view,
+        // Que la vista pinte plano y exacto lo declara la corrida, no una lista
+        // en el analizador: quien sabe cuáles lo hacen es el shader.
+        "plana": flat,
         // La pose, porque el analizador la necesita para saber si sus propias
         // cuentas valen: el perfil por bandas trata la fila de pantalla como
         // distancia, y eso sólo es cierto con la cámara casi horizontal. Sin
@@ -323,7 +340,7 @@ fn write_legend(
             "pos": [pose.0.x, pose.0.y, pose.0.z],
             "facing": [pose.1.x, pose.1.y, pose.1.z],
         },
-        "anillos": rings,
+        "categorias": categories,
         "encuadre": {
             "mallas_visibles": inventory.visible_meshes,
             "triangulos": inventory.triangles,

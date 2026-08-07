@@ -800,6 +800,32 @@ pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
         .collect()
 }
 
+/// Una banda de la vista `subpixel`, con el color exacto que la identifica.
+pub(crate) struct SubpixelBand {
+    pub name: String,
+    pub color: [u8; 3],
+}
+
+/// Las tres bandas de ancho en pantalla, y a qué distancia cae cada frontera.
+///
+/// La distancia sale del ancho de la brizna, de la resolución y del campo de
+/// visión — **no del sistema de anillos**. Ese número sobrevive a cualquier
+/// técnica de LOD que lo reemplace, que es justo lo que hace que valga la pena
+/// medirlo antes de decidir la técnica.
+pub(crate) fn subpixel_legend() -> Vec<SubpixelBand> {
+    [
+        ("menos de 1 px — no se resuelve", 0usize),
+        ("entre 1 y 2 px — el cuarteto desperdicia", 5),
+        ("2 px o mas — se resuelve entera", 3),
+    ]
+    .into_iter()
+    .map(|(name, slot)| SubpixelBand {
+        name: name.to_string(),
+        color: grass_debug::slot_srgb(slot),
+    })
+    .collect()
+}
+
 /// Anuncia la vista puesta y qué es cada color.
 ///
 /// Un color sin leyenda no es un diagnóstico: es una imagen bonita. Se imprime

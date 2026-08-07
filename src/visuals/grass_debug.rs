@@ -96,7 +96,7 @@ impl GrassDebugView {
     /// consume `camera::apply_flat_measure_view`, que con esto puesto apaga el
     /// tonemapping y el dithering.
     pub(crate) fn is_flat(self) -> bool {
-        matches!(self, GrassDebugView::Measure)
+        matches!(self, GrassDebugView::Measure | GrassDebugView::Subpixel)
     }
 }
 

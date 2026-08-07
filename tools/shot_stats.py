@@ -170,15 +170,17 @@ def main(argv: list[str]) -> int:
 
     view = legend.get("vista", "?")
     print(f"vista: {view}")
-    if view != "medir":
+    # Qué vistas pintan plano y exacto. Sale de la leyenda —la corrida sabe cuáles
+    # son— y no de una lista acá, que se desactualizaría en cuanto haya otra.
+    if not legend.get("plana", False):
         print(
-            "AVISO: sólo la vista 'medir' pinta colores planos y exactos. En cualquier\n"
-            "otra, la luz y la niebla mueven cada píxel y este conteo no significa nada."
+            "AVISO: esta vista no pinta colores planos y exactos. La luz y la niebla\n"
+            "mueven cada píxel, así que este conteo no significa nada."
         )
 
-    wanted = {tuple(ring["color"]): ring for ring in legend["anillos"]}
+    wanted = {tuple(item["color"]): item for item in legend["categorias"]}
     total = width * height
-    counts = {tuple(ring["color"]): 0 for ring in legend["anillos"]}
+    counts = {tuple(item["color"]): 0 for item in legend["categorias"]}
     band_counts = [dict.fromkeys(counts, 0) for _ in range(bands)]
 
     # Las filas por banda se cuentan, no se estiman: dividir por `alto/bandas`
@@ -200,13 +202,13 @@ def main(argv: list[str]) -> int:
 
     grass = sum(counts.values())
     print(f"\ncobertura de pradera: {grass / total:6.2%} de la pantalla ({grass} px)")
-    print(f"{'anillo':>6} {'alcance':>8} {'color':>9} {'px':>10} {'pantalla':>9} {'del pasto':>10}")
-    for colour, ring in wanted.items():
+    print(f"{'categoría':<34} {'color':>9} {'px':>10} {'pantalla':>9} {'del pasto':>10}")
+    for colour, item in wanted.items():
         n = counts[colour]
         share_of_grass = n / grass if grass else 0.0
         print(
-            f"{ring['anillo']:>6} {ring['alcance_m']:>7.0f}m "
-            f"{'#%02X%02X%02X' % colour:>9} {n:>10} {n / total:>8.2%} {share_of_grass:>9.1%}"
+            f"{item['nombre']:<34} {'#%02X%02X%02X' % colour:>9} "
+            f"{n:>10} {n / total:>8.2%} {share_of_grass:>9.1%}"
         )
 
     # El perfil por bandas horizontales reemplaza al perfil radial: con la cámara
@@ -232,8 +234,12 @@ def main(argv: list[str]) -> int:
             "bandas describiría algo que no existe. Perfil omitido a propósito."
         )
         return 0
-    print(f"\nperfil por bandas (arriba = lejos), {bands} bandas:")
-    header = "  banda " + " ".join(f"{r['anillo']:>7}" for r in legend["anillos"]) + "    total"
+    print(f"\nperfil por bandas (arriba = lejos), {bands} bandas; columnas en el orden de arriba:")
+    header = (
+        "  banda "
+        + " ".join(f"{index:>7}" for index in range(len(counts)))
+        + "    total"
+    )
     print(header)
     for index, band in enumerate(band_counts):
         pixels_in_band = band_rows[index] * width

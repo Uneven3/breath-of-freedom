@@ -815,12 +815,40 @@ aparece en ningún conteo de triángulos**. Acá sale de las derivadas de pantal
 (`fwidth` de la posición de mundo = metros por píxel) contra `BLADE_WIDTH`, que
 viaja en el uniform desde su única fuente.
 
-**Primera lectura, 2026-08-07, desde el mirador canónico:** el rojo está
-confinado a una franja fina en el horizonte y el resto del campo es verde. O sea
-que el desperdicio de cuarteto **no** es el costo dominante en esta vista — lo
-que domina es el solapamiento de anillos en el primer plano, que es geometría de
-sobra a tamaño resoluble. Es un descarte útil: cierra una hipótesis que el
-documento tenía abierta desde que se escribió.
+**Contado, no mirado (2026-08-07).** La primera versión de esta vista era una
+rampa continua y se leía a ojo; ahora pinta **tres bandas planas y exactas** y
+`shot_stats.py` las cuenta. Desde el mirador canónico:
+
+| | del pasto |
+|---|---:|
+| se resuelve entera (≥2 px) | **96,7%** |
+| entre 1 y 2 px | 2,5% |
+| no se resuelve (<1 px) | 0,8% |
+
+**El desperdicio de cuarteto es el 3,3% de la pradera.** La ley 2 describe un
+modo de falla real de los tilers, pero **este campo no está en él**: las briznas
+son gordas para la resolución que usamos. Derivable, además, y coincide —
+`ancho_px = ancho / (d · 2·tan(fov/2)/alto) = 71,2/d`, así que una brizna cruza
+los 2 px recién a los 35,6 m y el píxel a los 71,2, más allá del alcance.
+
+Tres consecuencias, y la primera es una autocorrección:
+
+1. **Las cartas del anillo lejano no ganaron por sub-píxel.** Ganaron por
+   triángulos, memoria y horneado. El argumento del cuarteto llegaba a la
+   conclusión correcta por el camino equivocado.
+2. **No existe una distancia natural donde poner el escalón de LOD.** La brizna
+   se resuelve casi hasta el horizonte, así que cambiarla por otra primitiva
+   siempre se va a *ver*. El escalón es una decisión de cuánta silueta se cambia
+   por cuántos triángulos, no un umbral que la imagen entregue.
+3. Y esto **escala con la pantalla**: a 900p el píxel es mayor y las fronteras se
+   acercan un 19%. Un radio autorado en metros describe una resolución, no un
+   campo.
+
+**Y un error de la propia vista, encontrado midiendo:** usaba `blade_width` para
+todas las primitivas, así que reportaba las cartas —de 0,5 m— como si midieran
+5,5 cm, nueve veces más finas. Corregido a usar el ancho de la primitiva; la
+banda de 1-2 px bajó de 4,7% a 2,5%. Un medidor con una vara sola mide una cosa
+sola.
 
 **Ninguna cuesta un byte por vértice ni rehornea la pradera.** El anillo sale de
 `floor(uv1.y)`, la brizna de `uv1.x` y el chunk de `floor(xz / chunk_m)` con los

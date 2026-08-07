@@ -621,13 +621,36 @@ pub(crate) struct MeadowRecordMemory {
 
 /// La caja de un chunk, en mundo. El `Transform` es identidad, así que su
 /// espacio local es el del mundo y este AABB vale tal cual.
-fn chunk_bounds(centre: Vec2, chunk_m: f32) -> Aabb {
-    let at = Vec3::new(centre.x, 0.0, centre.y);
+/// **La altura sale del terreno que se muestreó, no de cero.** La primera versión
+/// daba la caja entre `y = −1` y `y = 1,9` absolutos: correcto sólo sobre suelo
+/// plano, y en cuanto hay relieve las briznas quedan fuera de su propia caja y el
+/// chunk se descarta con el jugador mirándolo.
+///
+/// A lo ancho es la celda entera, que es donde caen las bases. El margen cubre lo
+/// que el vertex shader agrega después: el hundido de la raíz, la inclinación de
+/// la punta y la carta abriéndose contra la cámara.
+fn chunk_bounds(centre: Vec2, chunk_m: f32, ground: std::ops::RangeInclusive<f32>) -> Aabb {
+    let half = chunk_m * 0.5 + CHUNK_BOUNDS_MARGIN_M;
     Aabb::from_min_max(
-        at + Vec3::new(-chunk_m * 0.5, -1.0, -chunk_m * 0.5),
-        at + Vec3::new(chunk_m * 0.5, BLADE_HEIGHT_MAX + 1.0, chunk_m * 0.5),
+        Vec3::new(
+            centre.x - half,
+            ground.start() - GROWTH_SINK_M - BLADE_ROOT_SINK - CHUNK_BOUNDS_MARGIN_M,
+            centre.y - half,
+        ),
+        Vec3::new(
+            centre.x + half,
+            ground.end() + BLADE_HEIGHT_MAX + BLADE_LEAN + CHUNK_BOUNDS_MARGIN_M,
+            centre.y + half,
+        ),
     )
 }
+
+/// Cuánto se agranda la caja de un chunk sobre lo que su contenido pide.
+///
+/// Media carta, que es lo que más se aparta de su base al abrirse contra la
+/// cámara — y de paso deja **holgura**, que una caja de culling ajustada al
+/// último bit descarta geometría por un error de redondeo.
+const CHUNK_BOUNDS_MARGIN_M: f32 = CARD_WIDTH * 0.5;
 
 /// Si esta corrida planta este anillo. Con uno aislado la foto mide cuánta
 /// cobertura **aporta** ese nivel solo — lo que `medir` sobre el campo entero no
@@ -817,7 +840,7 @@ pub(super) fn roll_meadow_grid(
                 ^ ring_salt.wrapping_mul(0xc2b2_ae35),
         );
         let centre = cell_centre(key.cell, ring.chunk_m);
-        let records = build_chunk_records(
+        let planting = build_chunk_records(
             &ChunkSpec {
                 centre,
                 chunk_m: ring.chunk_m,
@@ -828,7 +851,7 @@ pub(super) fn roll_meadow_grid(
             Some(&terrain),
         );
         let slot = field.records[key.ring].slot_for(key.cell);
-        field.records[key.ring].write(slot, &records);
+        field.records[key.ring].write(slot, &planting.records);
         let entity = commands
             .spawn((
                 DespawnOnExit(*scene.get()),
@@ -855,7 +878,7 @@ pub(super) fn roll_meadow_grid(
                 // alcanza con insertarlo: `calculate_bounds` lo *sobrescribe*
                 // cuando `Mesh3d` cambia, cosa que pasa en todo chunk recién
                 // nacido, así que hace falta además marcarlo.
-                chunk_bounds(centre, ring.chunk_m),
+                chunk_bounds(centre, ring.chunk_m, planting.ground.clone()),
                 NoAutoAabb,
                 // Blades cast no shadows: thousands of alpha-free slivers in the
                 // cascades buy noise, not depth.
@@ -1040,7 +1063,7 @@ struct ChunkSpec {
 /// casillero es un rango de stride fijo, así que saltear una correría de lugar a
 /// todas las siguientes; con altura cero el shader las colapsa y no cuestan un
 /// fragmento.
-fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Vec<[f32; 4]> {
+fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> ChunkPlanting {
     let ChunkSpec {
         centre,
         chunk_m,
@@ -1050,6 +1073,8 @@ fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Vec
         ..
     } = *spec;
     let mut records = Vec::with_capacity(count as usize);
+    let mut lowest = f32::MAX;
+    let mut highest = f32::MIN;
     for blade in 0..count {
         let hash = hash_u32(seed ^ blade.wrapping_mul(0x0019_6f3d));
         let u1 = hash_unit(hash);
@@ -1065,8 +1090,26 @@ fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Vec
         let cover = grass_cover::coverage(kind, slope);
         let height = (BLADE_HEIGHT_MIN + u4 * (BLADE_HEIGHT_MAX - BLADE_HEIGHT_MIN)) * cover;
         records.push(blade_record(xz, ground, ring_reach_m + height));
+        lowest = lowest.min(ground);
+        highest = highest.max(ground);
     }
-    records
+    // Un chunk sin briznas —todo roca, o densidad cero— no tiene rango que
+    // informar; su caja vale lo que valga, porque no va a dibujar nada.
+    if records.is_empty() {
+        lowest = 0.0;
+        highest = 0.0;
+    }
+    ChunkPlanting {
+        records,
+        ground: lowest..=highest,
+    }
+}
+
+/// Lo que sale de sortear un chunk: sus registros y **hasta dónde llega el suelo
+/// bajo ellos**, que es lo que su caja de culling necesita saber.
+struct ChunkPlanting {
+    records: Vec<[f32; 4]>,
+    ground: std::ops::RangeInclusive<f32>,
 }
 
 #[cfg(test)]
@@ -1095,12 +1138,12 @@ mod tests {
     /// fallo que este nombre promete atrapar.
     #[test]
     fn blades_are_deterministic_per_chunk() {
-        let a = build_chunk_records(&spec(64, 11), None);
-        let b = build_chunk_records(&spec(64, 11), None);
+        let a = build_chunk_records(&spec(64, 11), None).records;
+        let b = build_chunk_records(&spec(64, 11), None).records;
         assert!(!a.is_empty(), "un chunk vacío volvería esto vacuo");
         assert_eq!(a, b, "el mismo chunk sorteó otro campo");
         // Y la otra mitad, que sin ella lo pasaría un generador constante.
-        let other = build_chunk_records(&spec(64, 12), None);
+        let other = build_chunk_records(&spec(64, 12), None).records;
         assert_ne!(a, other, "dos chunks con semillas distintas dieron lo mismo");
     }
 
@@ -1111,7 +1154,7 @@ mod tests {
     #[test]
     fn a_record_is_four_numbers_and_lands_inside_its_chunk() {
         let spec = spec(64, 5);
-        for record in build_chunk_records(&spec, None) {
+        for record in build_chunk_records(&spec, None).records {
             assert_eq!(record.len() * 4, RECORD_BYTES);
             let half = spec.chunk_m * 0.5;
             assert!(
@@ -1130,7 +1173,7 @@ mod tests {
     #[test]
     fn the_packed_reach_and_height_survive_floor_and_fract() {
         let spec = spec(256, 3);
-        for record in build_chunk_records(&spec, None) {
+        for record in build_chunk_records(&spec, None).records {
             let packed = record[3];
             assert_eq!(packed.floor(), spec.ring_reach_m, "el alcance no vuelve entero");
             let height = packed.fract();
@@ -1141,6 +1184,43 @@ mod tests {
         }
         const {
             assert!(BLADE_HEIGHT_MAX < 1.0);
+        }
+    }
+
+    /// **La caja de un chunk tiene que contener lo que ese chunk planta.**
+    ///
+    /// Es la única cosa que sostiene el culling desde que la malla índice no
+    /// tiene posiciones de las que Bevy pueda derivarla. Y falla en silencio de
+    /// la peor manera: el chunk desaparece con el jugador mirándolo, que es lo
+    /// que se reportó jugando el 2026-08-07. La primera versión daba la caja
+    /// entre `y = −1` y `y = 1,9` **absolutos**, o sea correcta sólo sobre suelo
+    /// plano — y la caja Pasto es plana, así que ninguna captura lo mostró.
+    #[test]
+    fn a_chunks_bounds_contain_every_blade_it_plants() {
+        for ground in [0.0_f32, 7.5, -12.25] {
+            let spec = spec(256, 4);
+            let planting = build_chunk_records(&spec, None);
+            // Sin terreno el sorteo planta todo a cero; correrlo entero es lo
+            // que simula un chunk sobre una ladera.
+            let raised: Vec<[f32; 4]> = planting
+                .records
+                .iter()
+                .map(|r| [r[0], r[1], r[2] + ground, r[3]])
+                .collect();
+            let bounds = chunk_bounds(spec.centre, spec.chunk_m, ground..=ground);
+            let (min, max) = (bounds.min(), bounds.max());
+            for record in raised {
+                let (x, z, base) = (record[0], record[1], record[2]);
+                let tip = base + record[3].fract();
+                assert!(
+                    x >= min.x && x <= max.x && z >= min.z && z <= max.z,
+                    "una brizna nace fuera de la caja de su chunk: {record:?}",
+                );
+                assert!(
+                    base - GROWTH_SINK_M - BLADE_ROOT_SINK >= min.y && tip <= max.y,
+                    "la caja no cubre la altura de la brizna: base {base}, punta {tip}",
+                );
+            }
         }
     }
 

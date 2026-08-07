@@ -70,9 +70,11 @@ mandar cuando se adapte al target — no antes.
 
 ## Estado actual (2026-08-07)
 
-`src/visuals/grass.rs` + `assets/shaders/grass.wgsl`, 23 tests. Grilla rodante de
-cuatro niveles centrada en la **cámara** (nunca en el player: el LOD responde a
-lo que la pantalla muestra), briznas horneadas en una malla por chunk.
+`src/visuals/grass.rs` + `grass_records.rs` + `assets/shaders/grass.wgsl`, 127
+tests. Grilla rodante de cuatro niveles centrada en la **cámara** (nunca en el
+player: el LOD responde a lo que la pantalla muestra). Desde el Paso 2 **ninguna
+brizna es geometría**: cada una es un registro de 16 bytes y el vertex shader la
+construye.
 
 **La escalera la decide el tamaño en pantalla, no un radio.** Umbrales en
 píxeles: 3 px para la hoja, 1,5 para la púa, menos para la carta. Con el viewport
@@ -86,15 +88,45 @@ constante. Un radio en metros describe una resolución, no un campo.
 | 2 | 24-40 m | púa de 1 triángulo | 40 |
 | 3 | 40-64 m | carta de 2 triángulos, silueta recortada | 5 |
 
-**El nivel 3 ya no hornea**: sus briznas son registros en un `ShaderBuffer` y sus
-chunks comparten una malla índice (Paso 2, spike).
+> ## El veredicto del 2026-08-07, jugando
+>
+> **"No se siente bien el pasto. Siento que retrocedimos más que avanzamos, y
+> siento que es por muchas razones pequeñas."** — el usuario, después de jugar la
+> versión con los Pasos 0, 1 y 2 aplicados.
+>
+> Sus tres quejas, y qué dice la medición de cada una:
+>
+> 1. **"Los billboards están muy cerca y se notan mucho; la idea era que fueran
+>    la capa más lejana."** Confirmado y es un bug, no una impresión: aislando el
+>    anillo 3 desde su propia pose, **planta cartas a un metro de la cámara**.
+> 2. **"El pasto desaparece por cuadrados enteros."** Confirmado por sus propias
+>    capturas: caminando tres metros, la pradera pasa de 509.510 a 357.870
+>    triángulos y de 35 a 25 mallas visibles. **Un tercio del campo entra y sale
+>    de golpe.**
+> 3. **"Sigo pensando que el sistema de anillos no está bien."** Es el problema
+>    de fondo que este documento arrastra desde tres sesiones, y esta sesión lo
+>    **empeoró**: el Paso 2 hizo su trabajo en draws y memoria, pero el campo se
+>    ve peor.
+>
+> **La lección, que este documento ya tenía escrita y no se respetó:** *primero
+> se ve bien, después se optimiza*. Los Pasos 1 y 2 optimizaron sobre una imagen
+> que nunca se aceptó jugando — sólo por capturas desde un mirador fijo, que es
+> justamente donde estos tres síntomas no aparecen.
 
-**Medido desde el mirador canónico, caja Pasto** *(a, 2026-08-07, con la huella
-corregida, la carta recortada y el nivel 3 grabado)*: **449.250 triángulos** de
-pradera en **23 draws** —eran 32—, 29,6 MB de mallas más 0,75 MB de buffer, y
-**ninguna banda de distancia por debajo del 94,7%**. Los 368.330 triángulos, 32
-draws y 26,0 MB de la mañana son los de la derivación vieja: más barata, con un
-hueco a 22-32 m y con el horizonte leyéndose como una hilera de bloques.
+**Medido desde el mirador canónico, caja Pasto** *(a, 2026-08-07, al cerrar la
+sesión)*: 556.032 triángulos de pradera en **4 draws** —eran 32—, 4,5 MB de
+mallas más 10,0 MB de buffers de registros, contra 31,6 MB de mallas antes.
+
+**Y esos números son exactamente el problema.** Son mejores que los de la mañana
+en todo lo que se puede contar, y el campo se ve peor jugando. Ver el veredicto
+de arriba: draws y megabytes no eran el objetivo.
+
+| banda | horneado (mañana) | ahora |
+|---|---:|---:|
+| 3-4 m | 99,8% | **87,7%** |
+| 8-11 m | 99,5% | 96,2% |
+| 22-32 m | 94,7% | **84,0%** |
+| 45-64 m | 97,4% | 98,9% |
 
 ### La brizna: dos triángulos unidos por una arista horizontal
 
@@ -304,6 +336,43 @@ medirse** — que es lo que el Paso 3 necesita para no volver a fallar por
 densidad.
 
 ---
+
+## Las tres quejas son un solo bug: **el chunk decide, no la brizna**
+
+Diagnosticado el 2026-08-07 con las capturas del usuario y `grass-rings`.
+
+`ring_cells_with_slack` decide qué chunks existen mirando el chunk **entero**: si
+cualquier parte de él cae más allá de la frontera de traspaso, se planta
+**completo**. Los chunks del anillo 3 miden **32 metros**, así que uno que asoma
+la punta más allá de los 34 m de frontera trae consigo un cuadrado de 32 m que
+**contiene a la cámara** — y sus cartas cercanas se dibujan a tamaño completo,
+porque la ley `1/d` sólo ralea lo lejano, nunca lo cercano.
+
+De ahí salen las tres quejas a la vez:
+
+- **Los billboards cerca**: son las cartas de ese chunk, plantadas a un metro.
+- **Los cuadrados que desaparecen**: la unidad de aparición es ese chunk de 32 m,
+  no la brizna. Cuando entra o sale, se lleva un tercio del campo.
+- **Los anillos no están bien**: porque el nivel sigue decidiendo por chunk lo
+  que tendría que decidirse por brizna.
+
+**Y no es del Paso 2: es viejo.** En el Paso 0 se midió `a3 = 0,0%` en las bandas
+cercanas — las cartas ya estaban ahí, pero el anillo 0 las tapaba enteras. Al
+perder densidad el primer plano (99,8% → 87,7%), **asomó la basura que siempre
+estuvo debajo**. Las dos cosas que se venían arrastrando eran la misma.
+
+### El arreglo, y su advertencia
+
+Que la brizna se descarte **por su propia distancia**, no por la de su chunk:
+colapsarla si está más cerca que el borde interno de su anillo. En el shader es
+una línea —`ring_inner(reach)` ya existe— y es literalmente *el LOD por brizna*
+que el Paso 2 vino a habilitar; hasta ahora la decisión seguía siendo por chunk.
+
+**La advertencia está medida:** el Paso 0 encontró que el solapamiento **de 8 a
+22 m paga cobertura** (quitarlo cuesta hasta 22 puntos) y que **de 3 a 8 m es
+desperdicio puro** (0,3 puntos). Así que el corte no puede ser "matar todo lo
+interno" o se cambia un artefacto por un campo ralo. La curva del Paso 0 ya da
+con qué calibrarlo.
 
 ## El problema abierto: los anillos
 
@@ -627,6 +696,30 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 | Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
 | El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
 
+## Por dónde retomar (escrito el 2026-08-07, al cerrar la sesión)
+
+En orden, y el orden importa: **nada de lo de abajo se toca hasta que el campo
+se sienta bien jugando.** No hay más optimización pendiente que valga la pena
+antes de eso.
+
+1. **La brizna decide, no el chunk.** El arreglo de arriba. Es la causa común de
+   las tres quejas y la única que hace falta para que el campo deje de romperse
+   al caminar. Se valida **jugando**, no con capturas: los tres síntomas no
+   aparecen desde el mirador fijo.
+2. **Recuperar la cobertura del primer plano.** 87,7% contra 99,8% del estado
+   horneado, sin diagnosticar. Descartados por medición: el raleo `1/d`
+   (apagarlo mueve 4 puntos) y el hash del seno (cambiarlo por enteros no movió
+   nada). La sospecha viva es que el yaw y la inclinación salen ahora de la
+   posición en vez de venir horneados, y que el hash tiene correlación local.
+3. **Recién ahí, el Paso 3** (praderas anidadas), que ya puede calcular su costo
+   con la aritmética del Paso 0.
+
+**Y una decisión que no es mía:** si el campo no se recupera con (1) y (2), lo
+honesto es **revertir el Paso 2** y quedarse con la pradera horneada, que se veía
+mejor. El Paso 2 cumplió sus números —32 → 4 draws, 31,6 → 14 MB— pero esos
+números no eran el objetivo: el objetivo es el *feeling* de BOTW, y el usuario
+jugó y dijo que empeoró. `git log` tiene el estado horneado intacto.
+
 ## Errores que este documento ya cometió — no reintroducir
 
 1. **"El pasto cuesta 0.0 ms de CPU y corre a 60 FPS estables."** Escrito el
@@ -673,6 +766,18 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
     "insertarlo" y era la mitad: `calculate_bounds` lo sobrescribe en cuanto
     `Mesh3d` cambia. Verificar una API leyendo su firma no es lo mismo que leer
     su cuerpo.
+14. **Una captura desde un mirador fijo no reemplaza jugar.** Las tres quejas del
+    2026-08-07 —billboards encima, cuadrados que desaparecen, el campo que no se
+    siente— **no aparecen en ninguna captura** desde el mirador canónico: dos de
+    las tres necesitan movimiento y la tercera necesita una altura de cámara que
+    el mirador no tiene. Se optimizó dos pasos seguidos contra una imagen que
+    parecía correcta y no lo era. El medidor de píxeles zanja *cuánta cobertura
+    hay*; no contesta *cómo se siente el campo*, y esa era la pregunta.
+15. **Optimizar antes de que la imagen esté aceptada es construir sobre arena.**
+    Está escrito en este documento como ley —*primero se ve bien, después se
+    optimiza*— y se incumplió igual, porque los números del Paso 2 eran buenos y
+    los buenos números se sienten como progreso.
+
 
 
 

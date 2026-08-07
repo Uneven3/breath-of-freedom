@@ -152,6 +152,71 @@ fn ring_is_card(reach: f32) -> bool {
     return false;
 }
 
+/// Hasta qué altura la carta es opaca en toda su anchura. Por debajo es masa
+/// llena; por encima se abre en puntas.
+const CARD_BASE_FILL: f32 = 0.28;
+/// La punta más baja que puede tener un diente, como fracción de la altura de la
+/// carta. Muy bajo el borde lee como sierra; muy alto, como el bloque de antes.
+///
+/// **0,75 salió midiendo, no de ojo.** Con 0,55 la banda de 45-64 m caía a 95,9%
+/// aunque la densidad ya compensara el área recortada, y la razón es que a esa
+/// distancia el suelo se ve casi de canto: lo que lo tapa es la **altura** de la
+/// masa, no su ancho, y recortar puntas la baja. Subir el piso de los dientes
+/// devuelve altura sin devolver el borde plano: 97,4% *(a, 2026-08-07)*.
+const CARD_TIP_MIN: f32 = 0.75;
+
+/// La silueta de la carta: qué altura tiene la masa de pasto en esta columna.
+///
+/// Devuelve la altura normalizada (0 en la base, 1 en el tope de la carta) hasta
+/// la que hay pasto en la coordenada horizontal `u` ∈ [-1, 1]. Fuera de eso, la
+/// carta no dibuja: es lo que la convierte de un rectángulo con el borde plano
+/// —que a media distancia se lee como una hilera de bloques— en un grupo de
+/// puntas.
+///
+/// **Dos capas de dientes triangulares, no una.** Una sola deja huecos hasta la
+/// base entre diente y diente, que a esta distancia lee como un peine. Dos capas
+/// de períodos distintos, desfasadas, y el máximo de las dos: las bases se
+/// solapan y lo que queda irregular es sólo el borde de arriba, que es donde una
+/// masa de pasto de verdad es irregular.
+///
+/// Sin textura y sin `pow`: el frame es fill-bound *(a, 2026-08-06)* y esto se
+/// paga por fragmento. Son dos `fract`, dos `abs` y un `max`.
+///
+/// **Si cambiás estos números, actualizá `CARD_SILHOUETTE_AREA` en `grass.rs`.**
+/// Es la integral de esta función, y de ella sale cuántas cartas se plantan: con
+/// la fracción vieja el campo lejano queda ralo y sólo se nota midiendo.
+fn card_silhouette(u: f32, phase: f32) -> f32 {
+    // **La fase es por carta, y no es un adorno.** Todas las cartas se abren
+    // mirando a la cámara, así que quedan paralelas entre sí: con una silueta
+    // idéntica, los huecos de una caen exactamente sobre los de la que tiene
+    // detrás y el suelo se ve por el mismo lugar en todas. Medido *(a)*: sin
+    // fase, la banda de 45-64 m se quedaba en 95,4% donde el área de la silueta
+    // predecía 99%, y ese hueco es justamente la correlación que Poisson supone
+    // que no existe.
+    //
+    // El período de cada capa, en briznas por carta. Una carta mide 0,5 m y una
+    // brizna 5,5 cm, así que nueve entran justas; siete y cinco dejan que las dos
+    // capas se crucen sin repetir el mismo diente.
+    let a = card_teeth(u, 7.0, phase);
+    let b = card_teeth(u, 5.0, 0.37 + phase * 1.7);
+    // El piso: abajo la masa está llena. Sin esto la carta se abre hasta la
+    // tierra y deja pasar el suelo entre las puntas.
+    return max(max(a, b), CARD_BASE_FILL);
+}
+
+/// Una capa de dientes: `count` puntas a lo ancho, desplazadas por `offset`, cada
+/// una con su altura propia.
+fn card_teeth(u: f32, count: f32, offset: f32) -> f32 {
+    let s = (u * 0.5 + 0.5) * count + offset;
+    let column = floor(s);
+    let across = fract(s);
+    // La altura de esta punta. `fract(·)` de un múltiplo grande descorrelaciona
+    // columnas vecinas sin una tabla ni un seno.
+    let height = CARD_TIP_MIN + fract(column * 0.618034) * (1.0 - CARD_TIP_MIN);
+    // Triángulo: sube hasta el centro de la columna y baja.
+    return height * (1.0 - abs(across * 2.0 - 1.0));
+}
+
 fn ring_inner(reach: f32) -> f32 {
     var reaches = ring_reaches();
     var inner = 0.0;
@@ -467,6 +532,18 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.world_normal = blade_normal(side, world_position.xz);
     out.uv = vertex.uv;
     out.uv_b = vertex.uv_b;
+    // **La carta cambia lo que lleva en `uv_b.x`**: en vez del hash con el lado
+    // en el signo, el lado a secas. Interpolado a lo ancho da −1 en un borde y
+    // +1 en el otro, que es la coordenada que la silueta necesita y que de otro
+    // modo no existiría — el hash es un número distinto por primitiva, así que
+    // no se puede normalizar en el fragment sin mandarlo aparte.
+    //
+    // El hash ya hizo su trabajo acá arriba (el umbral de crecimiento lo lee del
+    // atributo), así que no se pierde nada más que la vista `brizna` sobre las
+    // cartas, que pasa a ser un degradado a lo ancho.
+    if ring_is_card(ring_reach) {
+        out.uv_b = vec2<f32>(side, vertex.uv_b.y);
+    }
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = vertex.instance_index;
 #endif
@@ -484,6 +561,21 @@ fn fragment(
     // Cuánto mundo cubre un píxel acá. Fuera de todo branch, porque una derivada
     // en control de flujo no uniforme no está definida.
     let metres_per_pixel = length(fwidth(in.world_position.xz));
+
+    // **El recorte de la carta, antes que nada.** Va arriba de todo y no junto al
+    // `alpha_discard` del final por una razón concreta: las vistas de diagnóstico
+    // salen antes del PBR, así que un descarte puesto abajo dejaría a `medir`
+    // contando la carta entera —el rectángulo que ya no se dibuja— y el medidor
+    // informaría una cobertura que la imagen no tiene. El instrumento tiene que
+    // ver lo mismo que la pantalla.
+    // La fase sale de `fract(uv1.y)` —la altura de la carta, idéntica en sus
+    // cuatro vértices— por el mismo camino que el tinte por brizna: es el único
+    // identificador que el vértice ya carga.
+    if ring_is_card(floor(in.uv_b.y))
+        && blade_height_factor(in.uv)
+            > card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0)) {
+        discard;
+    }
 
 #ifndef PREPASS_PIPELINE
     // **Sub-píxel**: en bandas planas y exactas, no en una rampa.

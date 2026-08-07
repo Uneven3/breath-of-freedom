@@ -168,12 +168,19 @@ pub fn shot_pose(shot: &AutoShot) -> Option<(Vec3, Vec3)> {
 /// captura reemplaza su archivo porque compara dos versiones del mismo
 /// encuadre, y esto documenta una sesión donde cada disparo es un momento
 /// distinto.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "una captura declara de dónde es y con qué se sacó: escena, cámara, \
+              ventana, terreno, inventario, perillas y si algún asset falló"
+)]
 pub fn capture_on_request(
     mut commands: Commands,
     mut requests: MessageReader<crate::input::ScreenshotRequest>,
     inventory: Res<SceneInventory>,
     perf: Res<crate::perf::PerfToggles>,
-    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    terrain: crate::world::TerrainAccess,
     broken: Res<BrokenAssets>,
     mut taken: Local<u32>,
 ) {
@@ -190,8 +197,9 @@ pub fn capture_on_request(
     // El mirador va al log porque una queja sobre la cámara sin la pose de la
     // cámara no se puede reproducir — que es exactamente el caso que esta tecla
     // existe para cubrir.
-    let camera_pose = camera.map_or((Vec3::ZERO, Vec3::Z), |camera| {
-        (camera.translation(), camera.forward().as_vec3())
+    let projection = camera.as_ref().map(|camera| camera.1);
+    let camera_pose = camera.as_ref().map_or((Vec3::ZERO, Vec3::Z), |camera| {
+        (camera.0.translation(), camera.0.forward().as_vec3())
     });
     let (p, f) = camera_pose;
     info!(
@@ -212,7 +220,13 @@ pub fn capture_on_request(
     );
     warn_on_broken_assets(&broken);
     log_framing(&inventory);
-    write_legend(&path, &perf, &inventory, camera_pose);
+    let geometry = shot_geometry(
+        camera_pose,
+        projection,
+        window.as_deref().map(|w| &**w),
+        &terrain,
+    );
+    write_legend(&path, &perf, &inventory, camera_pose, &geometry);
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
@@ -286,11 +300,72 @@ fn warn_on_broken_assets(broken: &BrokenAssets) {
 /// Se escribe siempre que haya una vista puesta, incluso en las de *ver*: saber
 /// qué configuración produjo una imagen es la mitad de poder compararla con
 /// otra.
+/// Lo que hace falta para convertir una fila de pantalla en una distancia.
+///
+/// **Existe para el Paso 0 de `BOTWGrass.md`**, que necesita la curva de
+/// cobertura contra densidad *a varias distancias*. El perfil por bandas del
+/// analizador siempre supo que la fila de arriba está más lejos; lo que no podía
+/// decir es *cuánto*, y una curva sin eje x no es una curva. Con el campo de
+/// visión, el alto del viewport y la altura del ojo sobre el suelo, la fila `y`
+/// sale por trigonometría — y la aritmética es exacta **sólo si el suelo es
+/// plano**, así que la corrida no lo supone: muestrea el terreno a lo largo de
+/// la línea de vista y deja el perfil escrito para que el analizador lo
+/// verifique en vez de creerle.
+struct ShotGeometry {
+    fov_y: f32,
+    viewport: (u32, u32),
+    eye_above_ground_m: Option<f32>,
+    ground_profile: Vec<(f32, f32)>,
+}
+
+/// Hasta dónde se muestrea el suelo, y cada cuánto. Cubre el anillo más lejano
+/// (64 m) con holgura.
+const GROUND_PROFILE_M: f32 = 80.0;
+const GROUND_PROFILE_STEP_M: f32 = 4.0;
+
+fn shot_geometry(
+    pose: (Vec3, Vec3),
+    projection: Option<&Projection>,
+    window: Option<&Window>,
+    terrain: &crate::world::TerrainAccess,
+) -> ShotGeometry {
+    let (position, facing) = pose;
+    // La proyección de la corrida, no una constante: el `fov` de esta cámara se
+    // mueve al apuntar y al tensar el arco (`camera::rig`), así que escribir 45°
+    // sería declarar una geometría que la foto puede no tener.
+    let fov_y = match projection {
+        Some(Projection::Perspective(perspective)) => perspective.fov,
+        _ => f32::NAN,
+    };
+    let viewport = window.map_or((0, 0), |window| {
+        (window.physical_width(), window.physical_height())
+    });
+    let ground_here = terrain.height_at(position.xz());
+    let along = facing.xz().normalize_or_zero();
+    let mut ground_profile = Vec::new();
+    if along != Vec2::ZERO {
+        let mut distance = 0.0;
+        while distance <= GROUND_PROFILE_M {
+            if let Some(height) = terrain.height_at(position.xz() + along * distance) {
+                ground_profile.push((distance, height));
+            }
+            distance += GROUND_PROFILE_STEP_M;
+        }
+    }
+    ShotGeometry {
+        fov_y,
+        viewport,
+        eye_above_ground_m: ground_here.map(|ground| position.y - ground),
+        ground_profile,
+    }
+}
+
 fn write_legend(
     path: &std::path::Path,
     perf: &crate::perf::PerfToggles,
     inventory: &SceneInventory,
     pose: (Vec3, Vec3),
+    geometry: &ShotGeometry,
 ) {
     use crate::visuals::material_registry::Subject;
 
@@ -304,12 +379,12 @@ fn write_legend(
     // la técnica de LOD del momento sería obligarlo a cambiar cada vez que la
     // técnica cambie — y la técnica está justamente en discusión.
     let categories: Vec<serde_json::Value> = if view == "subpixel" {
-        crate::visuals::grass::subpixel_legend()
+        crate::visuals::grass_debug::subpixel_legend()
             .into_iter()
             .map(|band| serde_json::json!({ "nombre": band.name, "color": band.color }))
             .collect()
     } else {
-        crate::visuals::grass::ring_legend(perf)
+        crate::visuals::grass_debug::ring_legend(perf)
             .into_iter()
             .map(|ring| {
                 serde_json::json!({
@@ -319,6 +394,10 @@ fn write_legend(
                     "chunk_m": ring.chunk_m,
                     "densidad_por_m2": ring.density,
                     "tris_por_primitiva": ring.triangles_per_blade,
+                    // Un anillo apagado cuenta cero píxeles, que es un número
+                    // perfectamente creíble para uno que sí se plantó y no se
+                    // ve. La corrida declara cuál es cuál.
+                    "plantado": ring.planted,
                 })
             })
             .collect()
@@ -339,6 +418,24 @@ fn write_legend(
         "camara": {
             "pos": [pose.0.x, pose.0.y, pose.0.z],
             "facing": [pose.1.x, pose.1.y, pose.1.z],
+            // Con estos tres la fila de pantalla se convierte en metros; sin
+            // ellos el perfil por bandas ordena por distancia pero no la mide.
+            "fov_y": geometry.fov_y,
+            "viewport_px": [geometry.viewport.0, geometry.viewport.1],
+            "ojo_sobre_suelo_m": geometry.eye_above_ground_m,
+        },
+        // La altura del terreno bajo la línea de vista, cada pocos metros. La
+        // conversión fila→distancia supone suelo plano; esto es lo que permite
+        // **verificar** la suposición en vez de arrastrarla.
+        "perfil_suelo": geometry
+            .ground_profile
+            .iter()
+            .map(|(distance, height)| serde_json::json!([distance, height]))
+            .collect::<Vec<_>>(),
+        "perillas": {
+            "densidad_por_m2": perf.grass_density(),
+            "alcance": perf.grass_reach_scale(),
+            "anillos": perf.grass_rings_label(),
         },
         "categorias": categories,
         "encuadre": {
@@ -406,7 +503,9 @@ pub fn drive_auto_shot(
     time: Res<Time<Real>>,
     inventory: Res<SceneInventory>,
     perf: Res<crate::perf::PerfToggles>,
-    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    terrain: crate::world::TerrainAccess,
     broken: Res<BrokenAssets>,
 ) {
     match shot.stage {
@@ -451,7 +550,7 @@ pub fn drive_auto_shot(
             // correcta al lado. Si las dos no coinciden, la foto no es de donde
             // dice ser y todo lo que se concluya de ella es de otra escena.
             if let Some(camera) = &camera {
-                let (at, aim) = (camera.translation(), camera.forward().as_vec3());
+                let (at, aim) = (camera.0.translation(), camera.0.forward().as_vec3());
                 if at.distance(position) > POSE_TOLERANCE_M || aim.dot(facing) < POSE_TOLERANCE_DOT
                 {
                     warn!(
@@ -468,7 +567,19 @@ pub fn drive_auto_shot(
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
             warn_on_broken_assets(&broken);
             log_framing(&inventory);
-            write_legend(&path, &perf, &inventory, (position, facing));
+            // La geometría sale de la cámara **real**, no del mirador pedido:
+            // si las dos discrepan el aviso de arriba ya sonó, y una conversión
+            // a metros hecha sobre una pose que la foto no tiene sería un
+            // número exacto de otra escena.
+            let geometry = shot_geometry(
+                camera.as_ref().map_or((position, facing), |camera| {
+                    (camera.0.translation(), camera.0.forward().as_vec3())
+                }),
+                camera.as_ref().map(|camera| camera.1),
+                window.as_deref().map(|w| &**w),
+                &terrain,
+            );
+            write_legend(&path, &perf, &inventory, (position, facing), &geometry);
             commands
                 .spawn(Screenshot::primary_window())
                 .observe(save_to_disk(path));

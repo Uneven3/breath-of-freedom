@@ -39,6 +39,92 @@ pub(crate) fn slot_srgb(slot: usize) -> [u8; 3] {
     PALETTE[slot.min(PALETTE_SLOTS - 1)]
 }
 
+/// Qué significa cada color de la vista de diagnóstico.
+///
+/// Sale de los anillos y de la paleta, nunca escrita a mano: una leyenda que hay
+/// que mantener sincronizada a mano es una leyenda que va a mentir. La consumen
+/// el log —cuando la vista cambia— y el archivo que acompaña a cada captura, que
+/// es de donde el analizador lee los colores en vez de conocerlos.
+pub(crate) struct RingLegend {
+    pub slot: usize,
+    pub reach_m: f32,
+    pub chunk_m: f32,
+    pub density: f32,
+    pub triangles_per_blade: usize,
+    pub color: [u8; 3],
+    /// Si esta corrida lo plantó: sin esto, cero píxeles no distingue un anillo
+    /// apagado de uno que se plantó y no se ve.
+    pub planted: bool,
+}
+
+/// La leyenda del campo que esta corrida tiene puesto.
+///
+/// Los hechos los da la pradera —que es la única que sabe qué plantó— y el color
+/// lo pone la paleta de acá.
+pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
+    super::grass::ring_facts(perf)
+        .into_iter()
+        .enumerate()
+        .map(|(slot, facts)| RingLegend {
+            slot,
+            reach_m: facts.reach_m,
+            chunk_m: facts.chunk_m,
+            density: facts.density,
+            triangles_per_blade: facts.triangles_per_blade,
+            color: slot_srgb(slot),
+            planted: facts.planted,
+        })
+        .collect()
+}
+
+/// Una banda de la vista `subpixel`, con el color exacto que la identifica.
+pub(crate) struct SubpixelBand {
+    pub name: String,
+    pub color: [u8; 3],
+}
+
+/// Las tres bandas de ancho en pantalla. La frontera sale del ancho de la
+/// brizna, la resolución y el campo de visión — **no del sistema de anillos**,
+/// así que el número sobrevive a cualquier técnica de LOD que lo reemplace.
+pub(crate) fn subpixel_legend() -> Vec<SubpixelBand> {
+    [
+        ("menos de 1 px — no se resuelve", 0usize),
+        ("entre 1 y 2 px — el cuarteto desperdicia", 5),
+        ("2 px o mas — se resuelve entera", 3),
+    ]
+    .into_iter()
+    .map(|(name, slot)| SubpixelBand {
+        name: name.to_string(),
+        color: slot_srgb(slot),
+    })
+    .collect()
+}
+
+/// Anuncia la vista puesta y qué es cada color. Un color sin leyenda no es un
+/// diagnóstico: es una imagen bonita.
+pub(crate) fn announce_grass_debug_view(
+    perf: Res<crate::perf::PerfToggles>,
+    mut announced: Local<Option<usize>>,
+) {
+    let step = perf.grass_debug_step();
+    if announced.replace(step) == Some(step) {
+        return;
+    }
+    if GrassDebugView::from_step(step) == GrassDebugView::Off {
+        info!("[grass] vista de diagnóstico apagada");
+        return;
+    }
+    info!("[grass] vista '{}':", perf.grass_debug_label());
+    for ring in ring_legend(&perf) {
+        let [r, g, b] = ring.color;
+        info!(
+            "[grass]   anillo {} #{r:02X}{g:02X}{b:02X} — hasta {:.0} m, chunks de {:.0} m, \
+             {:.0} briznas/m2, {} tris por brizna",
+            ring.slot, ring.reach_m, ring.chunk_m, ring.density, ring.triangles_per_blade,
+        );
+    }
+}
+
 /// Qué está mirando la vista puesta. El orden es el de
 /// `bof_domain::perf::GRASS_DEBUG_STEPS` y un test lo cobra.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -84,11 +84,14 @@ constante. Un radio en metros describe una resolución, no un campo.
 | 0 | 0-13 m | hoja de 2 triángulos | 80 |
 | 1 | 13-24 m | hoja de 2 triángulos | 80 |
 | 2 | 24-40 m | púa de 1 triángulo | 40 |
-| 3 | 40-64 m | carta opaca de 2 triángulos | 3 |
+| 3 | 40-64 m | carta de 2 triángulos, silueta recortada | 5 |
 
-**Medido desde el mirador canónico, caja Pasto** *(a, 2026-08-07)*: 368.330
-triángulos de pradera en 32 draws, 26,0 MB residentes, 56,75% de cobertura de
-pantalla, bandas cercanas al 99,5-99,8%.
+**Medido desde el mirador canónico, caja Pasto** *(a, 2026-08-07, con la huella
+corregida y la carta recortada)*: **449.250 triángulos** de pradera en 32 draws,
+31,6 MB residentes, y **ninguna banda de distancia por debajo del 94,7%** —
+contra 92,1% de la mañana. Los 368.330 triángulos y 26,0 MB anteriores son los de
+la derivación vieja: 22% más barata, con un hueco a 22-32 m y con el horizonte
+leyéndose como una hilera de bloques.
 
 ### La brizna: dos triángulos unidos por una arista horizontal
 
@@ -116,25 +119,22 @@ La punta de abajo se hunde 6 cm: en el suelo mismo sería infinitamente angosta 
 dejaría ver tierra donde nace. Medido: **cobertura idéntica con 25.600
 triángulos menos**, porque el anillo interior baja de 3 a 2 triángulos.
 
-### La carta opaca
+### La carta, ahora recortada
 
 A 40-64 m, una carta del tamaño de un matojo (0,5 m) que el vertex shader abre
 mirando a la cámara — sus cuatro vértices se hornean en el centro de la base.
 Gira, y acá corresponde: una carta de canto dejaría un hueco de ese tamaño y a
 esa distancia el pivoteo es invisible.
 
-**Opaca, no con alfa**, cuando se escribió — porque el móvil vetaba el `discard`.
-La escala salió de una captura de BOTW que trajo el usuario: los trazos agrupados
-miden lo mismo que las flores que tienen al lado, no una pared. La primera
-versión usaba 1,6 m y era tres veces más grande que la referencia.
+Nació **opaca** porque el móvil vetaba el `discard`; desde el 2026-08-07 recorta
+su silueta (Paso 1). La escala salió de una captura de BOTW que trajo el usuario:
+los trazos agrupados miden lo mismo que las flores que tienen al lado, no una
+pared. La primera versión usaba 1,6 m y era tres veces más grande que la
+referencia.
 
 Medido, sólo ese nivel convertido: **688.128 → 86.016 triángulos**, la pradera de
 665.600 a 450.560, la memoria de 56,3 a 35,8 MB, el horneado inicial de 420 a
 281 ms — y la cobertura **sube**. Cuesta ocho veces menos y pinta más.
-
-**Con el veto levantado, la carta con alfa recortado es el próximo experimento
-obvio**: le daría silueta de briznas de verdad en vez del borde superior plano
-que hoy se lee como bloque.
 
 ---
 
@@ -157,6 +157,12 @@ chunk de `floor(xz / chunk_m)`. Lo que cambia es lo que el shader **pinta**.
 | `subpixel` | tres bandas exactas por ancho en píxeles |
 | `medir` | plano y exacto, un color por nivel, para contar |
 
+Y dos perillas más, del 2026-08-07: **`grass-density` tiene diez pasos** (de
+0,15× a 2×, con los cuatro históricos conservados) porque cuatro puntos no
+distinguen una curva de otra, y **`grass-rings`** planta un anillo solo, que es
+la única forma de medir cuánta cobertura *aporta* un nivel en vez de cuántos
+píxeles *gana*.
+
 Las de *ver* tiñen el color real y dejan la luz puesta — el campo sigue
 leyéndose como campo, que es la condición para juzgar si algo *se ve* mal. Las de
 *medir* pintan plano y exacto: la cámara apaga tonemapping y dithering, el juego
@@ -166,6 +172,21 @@ píxeles de colores **que no conoce de antemano**.
 Eso reemplaza los perfiles por detección de bordes que decidieron todo el
 2026-08-06: saturan con densidad alta y no distinguen una brizna baja de una
 ausente — por eso no vieron el galón de briznas a media altura.
+
+### El eje x: la fila de pantalla, en metros
+
+`shot_stats.py` repartía la imagen en bandas de filas iguales, que **ordenan por
+distancia sin medirla** — y una curva sin eje x no es una curva. Ahora la corrida
+escribe su campo de visión, su viewport y la altura del ojo sobre el suelo, y el
+analizador convierte cada fila a la distancia donde su rayo toca el suelo. Con
+eso el conteo se reparte en anillos de metros (`--metros`).
+
+**La conversión supone suelo plano, así que la corrida no lo supone:** muestrea
+el terreno a lo largo de la línea de vista y escribe el perfil al lado del PNG.
+Si ondula más de 20 cm, el analizador **omite** la tabla en vez de imprimir
+metros creíbles y equivocados. Y de paso el reparto por filas quedó desmentido:
+desde el mirador canónico, el **40% superior del cuadro es cielo** y las pocas
+filas pegadas al horizonte se llevan de veinte metros al infinito.
 
 ### Lo que las vistas destaparon el primer día
 
@@ -196,21 +217,88 @@ Todo *(a)*, escritorio, caja Pasto salvo donde diga.
 | Desperdicio de cuartetos | **96,7%** del campo se resuelve entero (≥2 px) | **La ley 2 no aplica acá**: las cartas no ganaron por sub-píxel sino por triángulos y memoria |
 | Memoria residente | **56,3 MB** antes de las cartas, 26,0 después | Instancing / vertex pulling vuelven a estar sobre la mesa |
 | Horneado por chunk | **5,53 ms de media, hasta 9,5** | El módulo decía "cero trabajo por frame": vale para las briznas, no para la grilla |
-| Cobertura vs densidad | a 90/m² el modelo predice 95% y la imagen da **81%** | El modelo `C/d` está mal **en la forma**, no en la escala |
+| Huella real de una brizna | **0,0082 m² por metro** de distancia, contra 0,0232 supuestos | Se borró el `COVERAGE_MARGIN` de ojo: la derivación ahora pide lo que la imagen entrega |
+| Solapamiento de 3 a 8 m | quitarlo cuesta **0,3 puntos** de cobertura | Es desperdicio puro **en el primer plano**, donde los píxeles son caros |
+| Solapamiento de 8 a 22 m | quitarlo cuesta hasta **22 puntos** | Ahí paga: el Paso 3 tiene que reponerlo, no sólo quitarlo |
 
-### La derivación de densidad, y su corrección
+### La derivación de densidad, medida entera (2026-08-07)
 
 La densidad mínima a distancia `d` sale de cuánto suelo tapa una primitiva vista
-en ángulo rasante. Dos correcciones, las dos por medición:
+en ángulo rasante. Tres correcciones; la tercera cerró el Paso 0 y borró las
+constantes de ojo.
 
 1. **Poisson, no área.** Las briznas caen sobre un hash, no sobre una grilla, así
    que la cobertura es `1 − e^(−λ·a)` y no `λ·a`. Para el 95% hacen falta **tres
    veces** lo que pedía la fórmula vieja. Ésa es la aritmética detrás de que el
    campo se viera ralo cada vez que se plantaba "según la derivación".
-2. **Y aun así es optimista.** El margen sobre el mínimo derivado se calibró
-   contando píxeles: con 1,2 la banda de 13-24 m caía a 88% donde tenía 99,9%.
-   Quedó en **2,4**, despejado del dato. La brizna es fina, se inclina, termina
-   en punta y tapa suelo que otra ya tapaba, y nada de eso está en la fórmula.
+2. **El margen de 2,4**, calibrado a ojo contra la banda de 13-24 m. Tapaba un
+   error sin nombrarlo; ver el punto siguiente.
+3. **La huella estaba 2,83× sobreestimada.** *(a)* La fórmula usaba `ancho ·
+   altura_media · d / altura_del_ojo`, que es el área de un **rectángulo
+   vertical**. La brizna termina en punta, se inclina y se arquea, así que tapa
+   mucho menos: **0,0082 m² por metro de distancia** para 5,5 cm de ancho, o sea
+   `0,149 · ancho · d`. Con eso el margen desaparece: la derivación pide
+   directamente lo que la imagen entrega.
+
+**Cómo se despejó.** Diez densidades (de 0,15× a 2×) × nueve anillos de
+distancia, contando píxeles por anillo con `grass-view=medir`. Dos anillos con
+densidades distintas —23,8 y 12,9/m²— y **formas distintas** —hoja de dos
+triángulos y púa de uno— dan el mismo coeficiente en diez bandas, entre 0,0077 y
+0,0088. La huella depende del ancho y la distancia, no de la forma.
+
+| anillo | banda | densidad | cobertura | huella / distancia |
+|---|---|---:|---:|---:|
+| 1 (hoja) | 4-6 m | 23,8/m² | 61,8% | 0,00826 |
+| 1 (hoja) | 11-16 m | 23,8/m² | 93,2% | 0,00851 |
+| 2 (púa) | 4-6 m | 12,9/m² | 42,5% | 0,00877 |
+| 2 (púa) | 16-22 m | 12,9/m² | 85,5% | 0,00797 |
+| — | la fórmula vieja suponía | | | **0,02320** |
+
+**Y la forma exponencial quedó verificada, no supuesta.** Si la cobertura sigue
+a Poisson, `−ln(1−C)/densidad` tiene que ser constante al barrer la densidad. Lo
+es: dentro del 1,0-1,3% en cada banda, sobre nueve densidades. **Así que el
+modelo no estaba mal "en la forma"** —como este documento afirmaba— sino en la
+escala de un solo término.
+
+Dos caminos independientes dan el mismo número. Por un lado, 2,83/2,4 = 1,18×
+faltante. Por el otro, la banda de 22-32 m —el borde interno del anillo 2, donde
+ningún vecino ayuda— medía 92,1% y pedía **exactamente 1,18×** para llegar al
+95%. Aplicada la corrección, esa banda mide **94,7%** *(a, medido, no predicho)*
+y ninguna baja de ahí. Cuesta 18% más triángulos: 368.330 → 434.510, y 26,0 →
+30,7 MB.
+
+### El solapamiento, repartido (2026-08-07)
+
+La otra mitad del gate. Con cada anillo plantado solo (`grass-rings`), se mide
+**cuánta cobertura aporta**, que no es lo que la vista `medir` cuenta sobre el
+campo entero: ahí cada píxel lo gana un anillo y el que quedó detrás tapaba
+igual. Cuánto cae la cobertura al quitar cada uno:
+
+| banda | todos | sin a0 | sin a1 | sin a2 | sin a3 |
+|---|---:|---:|---:|---:|---:|
+| 3-4 m | 99,6% | −39,2 | **−0,3** | **−0,2** | 0 |
+| 4-6 m | 99,8% | −21,8 | **−0,3** | **−0,1** | 0 |
+| 6-8 m | 99,9% | −11,7 | **−0,3** | **−0,1** | 0 |
+| 8-11 m | 98,4% | −4,9 | −8,1 | −2,5 | 0 |
+| 11-16 m | 98,4% | −0,1 | −21,8 | −4,7 | 0 |
+| 16-22 m | 97,9% | 0 | −12,4 | −12,4 | 0 |
+| 22-32 m | 92,2% | 0 | −2,2 | −70,1 | 0 |
+| 32-45 m | 92,3% | 0 | 0 | −11,0 | −33,6 |
+| 45-64 m | 99,6% | 0 | 0 | 0 | −91,8 |
+
+**El veredicto se parte en dos, y el documento tenía razón las dos veces.** De 3
+a 8 m el solapamiento es **desperdicio casi puro**: quitar los anillos 1 y 2 de
+ahí cuesta tres décimas de punto, y son justo los píxeles del primer plano, los
+más caros en un frame fill-bound. De 8 a 22 m **paga**: sin el anillo 1 la
+cobertura cae hasta 22 puntos. La primera versión del plan llamaba desperdicio a
+todo; la corrección lo sacó entero de la tabla. Lo medido está en el medio.
+
+**Y los niveles se pisan como sucesos independientes.** `1 − Π(1−C_k)` predice la
+cobertura del campo entero con un error ≤0,5 puntos en ocho de nueve bandas (la
+excepción es 32-45 m, +3,2, donde entran las cartas orientadas a cámara). Con eso
+**el costo de quitar cualquier subconjunto de niveles se calcula en vez de
+medirse** — que es lo que el Paso 3 necesita para no volver a fallar por
+densidad.
 
 ---
 
@@ -283,40 +371,72 @@ El desperdicio, tal como está medido:
 
 | # | desperdicio | medido |
 |---|---|---:|
-| 1 | La brizna se hornea como geometría | 26 MB residentes, **5,5-9,5 ms** por chunk, LOD congelado al hornear |
+| 1 | La brizna se hornea como geometría | 30,7 MB residentes, **5,5-9,5 ms** por chunk, LOD congelado al hornear |
 | 2 | Cada chunk es una malla propia, así que **nada batchea** | 32 draws para 32 chunks |
 | 3 | Se planta un cuadrado alrededor de la cámara, **incluso detrás** | los chunks de atrás se hornean y se descartan por frustum |
-| 4 | La carta opaca gasta píxeles en un rectángulo lleno | borde superior plano, se lee como bloque |
+| 4 | ~~La carta opaca gasta píxeles en un rectángulo lleno~~ | **cerrado por el Paso 1** |
 
-**El solapamiento de niveles no está en esta tabla, y es a propósito.** La
-primera versión lo listaba como desperdicio puro citando "~3× en el primer
-plano", contradiciendo lo que este mismo documento mide más arriba: **el
-solapamiento está pagando cobertura**, y quitarlo cuesta 3× de densidad. Cuánto
-de él es desperdicio puro y cuánto es cobertura barata **no está medido**, y
-separarlo es parte del Paso 0.
+**El solapamiento de niveles no está en esta tabla, y ahora se sabe por qué.**
+La primera versión del plan lo listaba como desperdicio puro; la revisión lo
+sacó entero porque el documento medía que pagaba cobertura. El Paso 0 lo repartió
+*(a, 2026-08-07)*: **es desperdicio de 3 a 8 m** —quitarlo cuesta tres décimas de
+punto, sobre los píxeles más caros del cuadro— y **paga de 8 a 22 m**, donde
+cuesta hasta 22 puntos. Un quinto renglón de desperdicio, entonces, pero acotado
+a la franja donde está medido:
 
-### Paso 0 — La curva de cobertura *(medir, sin código)*
+| # | desperdicio | medido |
+|---|---|---:|
+| 5 | Tres niveles plantan sobre el primer plano | quitar los dos de afuera de 3 a 8 m cuesta **0,3 puntos** de cobertura |
 
-**Bloquea al Paso 3 y al spike del Paso 2** — no a todo lo demás: los Pasos 1, 5
-y 6 no tocan la fórmula de densidad y pueden ir en paralelo.
+### Paso 0 — La curva de cobertura — **HECHO (2026-08-07)**
 
-El modelo `C/d` está mal **en la forma**: a 90/m² predice 95% de cobertura y la
-imagen da 81%. Ya mató un intento. Hay que barrer la perilla de densidad con
-`grass-view=medir` a varias distancias y sacar la curva real, y de paso medir
-**qué fracción del solapamiento es desperdicio puro**.
+Bloqueaba al Paso 3 y al spike del Paso 2. Las dos mitades del gate están
+arriba: *La derivación de densidad, medida entera* y *El solapamiento,
+repartido*. En resumen:
 
-- **Color:** `medir`.
-- **Gate:** una tabla que reemplace la fórmula, y el reparto del solapamiento.
+- La forma de Poisson **es correcta**; lo que estaba mal era la huella de la
+  brizna, sobreestimada 2,83×. Corregida, el `COVERAGE_MARGIN` de ojo
+  desapareció y ninguna banda baja de 94,7%.
+- El solapamiento **no es una sola cosa**: desperdicio puro de 3 a 8 m (−0,3
+  puntos al quitarlo), cobertura pagada de 8 a 22 m (−22 puntos).
+- Los niveles se pisan **como sucesos independientes**, así que el Paso 3 puede
+  calcular lo que le va a costar la exclusividad antes de escribirla.
 
-### Paso 1 — Carta con alfa recortado *(barato, visible, independiente)*
+Costó tres piezas de instrumental, todas reusables: diez pasos de densidad en
+vez de cuatro, la perilla `grass-rings` para aislar un nivel, y el **perfil por
+distancia** del analizador — la fila de pantalla convertida a metros, que es lo
+que le faltaba al medidor para tener eje x.
 
-Lo primero que el veto levantado desbloquea. Reemplaza el rectángulo opaco de
-borde plano por una silueta de briznas. Necesita un segundo material para los
-chunks de carta — gratis en draws, porque hoy cada chunk ya es su propio draw.
+### Paso 1 — Carta con alfa recortado — **HECHO (2026-08-07)**
 
-- **Color:** `anillo` para ver dónde entra, `medir` para la cobertura.
-- **Gate:** cobertura igual o mejor con los mismos 2 triángulos, y que el bloque
-  deje de leerse como bloque. Ataca el desperdicio **4**.
+El rectángulo opaco de borde plano ya no existe. En su lugar, una silueta
+**procedural** —sin textura y sin `pow`, dos `fract`, dos `abs` y un `max`— que
+recorta la carta en puntas: dos capas de dientes triangulares de períodos 7 y 5,
+con un piso opaco abajo porque una sola capa deja huecos hasta la tierra y lee
+como peine.
+
+Segundo material sólo para los chunks de carta, con `AlphaMode::Mask`: el
+`discard` cuesta el early-Z **del draw que lo usa**, y con un material único lo
+pagaría también el primer plano, que es donde más fragmentos hay. Cero draws de
+más, porque cada chunk ya es el suyo.
+
+**Dos cosas que sólo aparecieron midiendo**, y ninguna estaba en el plan:
+
+1. **La silueta recorta área, y el área es densidad.** La carta pasó a conservar
+   el 58% de su rectángulo, así que su huella dejó de ser su ancho. Sin corregir
+   `footprint_m`, la banda de 45-64 m se desplomó de 99,8% a **86,8%**.
+2. **A esa distancia lo que tapa el suelo es la altura, no el ancho.** Corregida
+   la densidad, la banda seguía en 95,9%: el suelo lejano se ve casi de canto, y
+   recortar puntas baja la masa. Se arregló subiendo el piso de los dientes
+   —silueta igual de irregular, más alta— hasta **97,4%**.
+
+También se probó y **casi no sirvió**: darle a cada carta una fase propia de
+silueta, porque todas miran a la cámara y quedan paralelas. Valía 0,5 puntos. La
+correlación entre cartas alineadas era una hipótesis razonable y era falsa.
+
+- **Gate:** el bloque dejó de leerse como bloque *(visto)*. La cobertura **no**
+  quedó igual o mejor: 99,8% → 97,4% en la banda más lejana, sobre un objetivo
+  de 95%. Cuesta 434.510 → 449.250 triángulos (+3,4%). Ataca el desperdicio **4**.
 
 ### Paso 2 — La brizna deja de ser geometría *(el desbloqueo grande)*
 
@@ -374,6 +494,14 @@ Ya se escribió una vez y se revirtió. **Por dos cosas, no una:** la densidad
 —que el Paso 0 corrige— y un bug real, que la ley `1/d` estaba escrita para un
 hash y recibía un rango, así que todas las briznas de un nivel morían juntas en
 su borde interno. La forma correcta es `d = K/f`. Ese arreglo entra en el gate.
+
+**Y ahora el costo se calcula antes de escribirlo.** El Paso 0 verificó que los
+niveles se pisan como sucesos independientes, así que la cobertura de un campo
+exclusivo sale de la aritmética: con la huella medida, el nivel que quede solo en
+cada banda tiene que llegar por sí mismo a la cobertura que hoy dan tres. En las
+bandas de 8 a 22 m eso es reponer entre 8 y 22 puntos, que en densidad es
+`−ln(1−C)` y no una regla de tres — el error que hizo fallar el primer intento.
+De 3 a 8 m, en cambio, no hay nada que reponer: el anillo 0 ya llega solo al 99%.
 
 - **Color:** `rango` (las mismas briznas conservan su color al cruzar) y `medir`
   (un solo nivel por banda).
@@ -452,6 +580,23 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
    **opaca** nunca se había considerado, y ganó en los cuatro ejes.
 7. **Un número no sirve si el objetivo contra el que mide se eligió a ojo.**
 8. **Una herramienta que no puede fallar tampoco puede avisar.**
+9. **"El modelo `C/d` está mal en la forma, no en la escala."** Al revés: la
+   forma exponencial de Poisson quedó verificada sobre nueve densidades, y lo
+   que estaba mal era la escala de un término —la huella de la brizna, 2,83×
+   sobreestimada—. El síntoma que motivó la frase (81% donde se predecía 95%)
+   era real; el diagnóstico, no. Un modelo que falla por un factor constante se
+   parece mucho a uno con la forma equivocada hasta que se lo barre.
+10. **Un margen calibrado a ojo esconde el error que lo hizo necesario.** El 2,4
+    no era el precio de que "la fórmula no captura todo": era el 2,83 de un
+    término mal calculado, redondeado hacia abajo. Cada constante de ajuste es
+    una medición que no se hizo.
+11. **Recortar una silueta no es un cambio de aspecto: es un cambio de
+    densidad.** La carta con alfa se escribió como "el rectángulo se lee como
+    bloque, dale forma", y al recortar el 42% de su área se llevó puesta la
+    cobertura de la banda más lejana — 99,8% → 86,8%, sin que nada en el código
+    lo dijera. Toda primitiva que descarta fragmentos tiene una huella menor que
+    su geometría, y la derivación de densidad lee la geometría.
+
 
 ---
 

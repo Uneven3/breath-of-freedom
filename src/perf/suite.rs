@@ -86,10 +86,14 @@ mod step {
     /// `GRASS_DENSITY_STEPS`: 64, 30, 12 y 0 briznas/m². El 30 se conserva
     /// aunque la escalera se haya reescalado, porque es el paso que el usuario
     /// juzgó por ojo ("sigue siendo poco") y con el que va a comparar.
-    pub const GRASS_DENSE: usize = 1;
-    pub const GRASS_SPARSE: usize = 2;
-    pub const GRASS_SPARSEST: usize = 3;
-    pub const GRASS_OFF: usize = 4;
+    /// Corridos el 2026-08-07 cuando la escalera pasó de cinco pasos a diez para
+    /// el barrido del Paso 0 (`BOTWGrass.md`). Los cuatro valores son los
+    /// mismos; lo que cambió es dónde caen, que es exactamente lo que el test de
+    /// abajo existe para no dejar pasar en silencio.
+    pub const GRASS_DENSE: usize = 2;
+    pub const GRASS_SPARSE: usize = 5;
+    pub const GRASS_SPARSEST: usize = 7;
+    pub const GRASS_OFF: usize = 9;
     /// `GRASS_REACH_STEPS`: 75% y 50% del alcance de los anillos.
     pub const REACH_75: usize = 1;
     pub const REACH_50: usize = 2;

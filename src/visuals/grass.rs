@@ -69,10 +69,13 @@ fn shape_at(distance_m: f32, scale: f32) -> BladeShape {
 }
 
 /// Cuántas primitivas por m² hacen falta a esta distancia para que el suelo no
-/// se vea. Ver [`minimum_density`]: es la misma derivación, con el margen ya
-/// aplicado, y ahora también en producción y no sólo en un test.
+/// se vea.
+///
+/// **Sin margen desde el 2026-08-07**: era 2,4, y era el parche de un error de
+/// 2,83× en la huella de la brizna. Con la huella medida, la derivación pide
+/// directamente lo que la imagen entrega — ver [`minimum_density`].
 fn density_at(distance_m: f32, shape: BladeShape) -> f32 {
-    minimum_density(distance_m, shape.footprint_m()) * COVERAGE_MARGIN
+    minimum_density(distance_m, shape.footprint_m())
 }
 
 /// La brizna, en dos niveles de detalle.
@@ -114,10 +117,14 @@ impl BladeShape {
 
     /// Cuánto suelo tapa a lo ancho una primitiva de esta forma. Es lo que hace
     /// comparable la densidad de una carta con la de una brizna.
+    ///
+    /// La carta declara **su ancho por lo que su silueta conserva**, no su ancho
+    /// a secas: desde que recorta puntas ya no es un rectángulo lleno, y una
+    /// huella que ignore eso planta la mitad de lo que hace falta.
     const fn footprint_m(self) -> f32 {
         match self {
             Self::Leaf | Self::Spike => BLADE_WIDTH,
-            Self::Card => CARD_WIDTH,
+            Self::Card => CARD_WIDTH * CARD_SILHOUETTE_AREA,
         }
     }
 
@@ -127,22 +134,14 @@ impl BladeShape {
     }
 }
 
-/// The three rings, from the camera outward. Each row is **floored** by
-/// [`minimum_density`] — a test enforces it — and chosen above it by eye, because
-/// covering the ground and looking like a meadow are different bars.
-///
-/// Derivation and cost in `docs/BOTWGrass.md`. The fact that governs decisions
-/// here: the meadow is **fill-bound**, so the triangle count is a guardrail.
-/// Seis anillos hasta 64 m. **Un anillo ya no es un escalón de densidad: es un
-/// tamaño de chunk.**
+/// Los cuatro anillos, de la cámara hacia afuera. **Un anillo no es un escalón
+/// de densidad: es un tamaño de chunk** — la forma sale de [`shape_at`] y la
+/// densidad de [`density_at`], las dos a partir de la distancia.
 ///
 /// Cada uno se planta a la densidad que la derivación pide en su **borde
-/// interno**, y el shader ancla ahí su ley `1/d` (ver `ring_inner` en
-/// `grass.wgsl`), así que dentro del anillo la densidad viva es `C/d` exacta.
-/// Sobreplantan a lo sumo 1,6× en su borde externo, que es lo que la ley se
-/// come. Antes se plantaba plano por anillo y el escalón era inevitable por más
-/// que se afinaran los números — el artefacto que el usuario identificó como
-/// *el* problema de la sesión.
+/// interno**, y el shader ancla ahí su ley `1/d` (`ring_inner` en `grass.wgsl`),
+/// así que dentro del anillo la densidad viva es `C/d` exacta. Derivación,
+/// costo y por qué el escalón plano por anillo no servía: `docs/BOTWGrass.md`.
 const RINGS: [Ring; 4] = [
     Ring {
         reach_m: 13.0,
@@ -271,17 +270,12 @@ fn slots(of: impl Fn(usize, &Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
 // primos entre sí ese período no cubre todas las alineaciones — el test del peor
 // caso pasaba a ciegas.
 
-/// Assumed camera height above the ground, in metres, for the coverage
-/// derivation. Not the camera's real height — the rings are baked once and
-/// cannot follow a moving lens — but the height it holds while walking, which
-/// is the case the meadow has to look right in.
-const EYE_HEIGHT_M: f32 = 1.6;
-
-/// Cuánto por encima de su mínimo derivado se planta. **Medido, no elegido**:
-/// es la distancia entre la derivación y la realidad, calibrada contando
-/// píxeles. Se vuelve a calibrar midiendo, no discutiendo; el despeje está en
-/// `BOTWGrass.md`.
-const COVERAGE_MARGIN: f32 = 2.4;
+/// Cuánto suelo tapa una primitiva, **por metro de ancho y metro de distancia**.
+///
+/// *(a)* Medido el 2026-08-07, y **es** el `COVERAGE_MARGIN = 2,4` que había:
+/// la fórmula anterior era el área de un rectángulo vertical y pedía 2,83× de
+/// más. Barrido y despeje en `BOTWGrass.md` → Paso 0.
+const HIDDEN_PER_WIDTH_PER_METRE: f32 = 0.149;
 
 /// Qué fracción del suelo tiene que quedar tapada para que no se lea como ralo.
 const TARGET_COVERAGE: f32 = 0.95;
@@ -289,17 +283,11 @@ const TARGET_COVERAGE: f32 = 0.95;
 /// Blades per m² needed at distance `d` for the ground not to show through.
 /// A floor, not a recipe — see the module header.
 ///
-/// **Las briznas caen sobre un hash, no sobre una grilla**, así que se pisan
-/// entre ellas: la cobertura de un reparto de Poisson es `1 − e^(−λ·a)`, no
-/// `λ·a`. La versión anterior usaba lo segundo, o sea que pedía la densidad con
-/// la que las briznas taparían el suelo **si se ordenaran solas**, y por eso
-/// pedía tres veces menos de lo que hace falta. Ésa es la aritmética detrás de
-/// que el campo se viera ralo cada vez que se lo plantaba "según la derivación".
+/// **Las briznas caen sobre un hash, no sobre una grilla**, así que la cobertura
+/// es `1 − e^(−λ·a)` y no `λ·a`. Esa forma quedó verificada midiendo (Paso 0);
+/// lo que estaba mal era `a`.
 fn minimum_density(distance_m: f32, width_m: f32) -> f32 {
-    let average_height = f32::midpoint(BLADE_HEIGHT_MIN, BLADE_HEIGHT_MAX);
-    // Suelo que tapa una brizna: su ancho por lo que se alarga al verla en
-    // ángulo rasante desde la altura del ojo.
-    let hidden_per_blade = width_m * average_height * distance_m.max(0.5) / EYE_HEIGHT_M;
+    let hidden_per_blade = width_m * distance_m.max(0.5) * HIDDEN_PER_WIDTH_PER_METRE;
     -(1.0 - TARGET_COVERAGE).ln() / hidden_per_blade
 }
 
@@ -371,6 +359,15 @@ const BLADE_ROOT_SINK: f32 = 0.06;
 /// flores que tienen al lado, no de un arbusto. La primera versión de esto usaba
 /// 1,6 m y era tres veces más grande de lo que la referencia muestra.
 const CARD_WIDTH: f32 = 0.5;
+
+/// Qué fracción de su rectángulo conserva la carta al recortar su silueta:
+/// la integral de `card_silhouette` en `grass.wgsl`.
+///
+/// **Vive en dos lados, y es deuda declarada**: cambiar los dientes allá sin
+/// tocar esto deja las cartas ralas. La red es medir — con la fracción mal, la
+/// banda de 45-64 m no llega al 99% en `grass-view=medir`, que es como se
+/// encontró que hacía falta.
+const CARD_SILHOUETTE_AREA: f32 = 0.583;
 /// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
 /// **The ceiling is one metre and it is hard**: the height travels in the
@@ -406,13 +403,16 @@ struct ChunkKey {
     cell: IVec2,
 }
 
-/// The live grid: which chunks exist right now, and the one material they share.
+/// The live grid: which chunks exist right now, and the materials they share.
 ///
-/// One material for the whole meadow, cloned per chunk — the blades batch, and a
-/// second material would double the draws for nothing.
+/// **Dos, no uno.** La carta recorta su silueta y necesita `AlphaMode::Mask`,
+/// que cuesta el early-Z del draw que lo use; con un material único lo pagaría
+/// también el primer plano, que es donde más fragmentos hay. No cuesta un draw
+/// de más: cada chunk ya es el suyo.
 #[derive(Resource)]
 pub(super) struct GrassField {
     material: Handle<GrassMaterial>,
+    card_material: Handle<GrassMaterial>,
     live: HashMap<ChunkKey, Entity>,
 }
 
@@ -575,8 +575,13 @@ pub(super) fn init_meadow_material(
     mut commands: Commands,
     mut materials: ResMut<Assets<GrassMaterial>>,
 ) {
+    let mut card = grass_material();
+    // El umbral no importa —el shader ya descartó con `discard` y lo que queda
+    // sale opaco—; lo que compra es que Bevy no trate el draw como opaco.
+    card.base.alpha_mode = AlphaMode::Mask(0.5);
     commands.insert_resource(GrassField {
         material: materials.add(grass_material()),
+        card_material: materials.add(card),
         live: HashMap::default(),
     });
 }
@@ -629,7 +634,7 @@ pub(super) fn roll_meadow_grid(
     terrain: TerrainAccess,
     camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
-    mut dial: Local<Option<(usize, usize)>>,
+    mut dial: Local<Option<(usize, usize, usize)>>,
 ) {
     let Some(camera) = camera else {
         return;
@@ -659,7 +664,13 @@ pub(super) fn roll_meadow_grid(
     // rolled into. They are the one event that clears the grid instead of
     // rolling it, and they are checked together because a run that changed both
     // and rebuilt for one would leave half the field describing the old dial.
-    let dials = (perf.grass_density_step, perf.grass_reach_step);
+    // La de anillos va con ellas: apagar uno es dejar de hornearlo, no de
+    // pintarlo.
+    let dials = (
+        perf.grass_density_step,
+        perf.grass_reach_step,
+        perf.grass_rings_step,
+    );
     if dial.replace(dials) != Some(dials) {
         for entity in field.live.values() {
             commands.entity(*entity).despawn();
@@ -667,9 +678,15 @@ pub(super) fn roll_meadow_grid(
         field.live.clear();
     }
 
+    // Con un anillo aislado la foto mide cuánta cobertura aporta ese nivel solo
+    // — lo que `medir` sobre el campo entero no puede decir, porque ahí cada
+    // píxel lo gana uno y el de atrás tapaba igual. Ver `GRASS_RINGS_STEPS`.
+    let planted = |ring: usize| perf.grass_only_ring().is_none_or(|only| only == ring);
+
     let wanted: HashSet<ChunkKey> = RINGS
         .iter()
         .enumerate()
+        .filter(|(ring, _)| planted(*ring))
         .flat_map(|(ring, _)| {
             ring_cells(ring, focus, reach_scale)
                 .into_iter()
@@ -682,6 +699,7 @@ pub(super) fn roll_meadow_grid(
     let keep_set: HashSet<ChunkKey> = RINGS
         .iter()
         .enumerate()
+        .filter(|(ring, _)| planted(*ring))
         .flat_map(|(ring, _)| {
             ring_cells_with_slack(ring, focus, KEEP_SLACK_M, reach_scale)
                 .into_iter()
@@ -719,6 +737,7 @@ pub(super) fn roll_meadow_grid(
     let bake_started = std::time::Instant::now();
     for key in &missing {
         let ring = &RINGS[key.ring];
+        let shape = shape_for_ring(key.ring, scale, reach_scale);
         // Seeded by ring and cell, not by spawn order: the same ground grows the
         // same blades every session, and walking away and back does not reshuffle
         // the field.
@@ -733,7 +752,7 @@ pub(super) fn roll_meadow_grid(
                 centre: cell_centre(key.cell, ring.chunk_m),
                 chunk_m: ring.chunk_m,
                 count: blades_per_chunk(key.ring, density, scale, reach_scale),
-                shape: shape_for_ring(key.ring, scale, reach_scale),
+                shape,
                 ring_reach_m: ring_reach(key.ring, reach_scale),
                 seed,
             },
@@ -757,7 +776,11 @@ pub(super) fn roll_meadow_grid(
                 // la pradera se cobra en `perf::budget`.
                 crate::visuals::budget::BakedByDesign,
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(field.material.clone()),
+                MeshMaterial3d(if shape.faces_camera() {
+                    field.card_material.clone()
+                } else {
+                    field.material.clone()
+                }),
                 // Blades cast no shadows: thousands of alpha-free slivers in the
                 // cascades buy noise, not depth.
                 bevy::light::NotShadowCaster,
@@ -800,8 +823,9 @@ pub(super) fn roll_meadow_grid(
 /// Tell the shader where the camera is, so the outermost blades can shrink
 /// before their chunk disappears.
 ///
-/// One material for the whole meadow means one uniform write per frame, not one
-/// per chunk.
+/// Dos materiales para toda la pradera significa **dos** escrituras de uniform
+/// por frame, no una por chunk — y las dos con el mismo valor, porque lo único
+/// que los separa es el modo de alfa.
 pub(super) fn track_meadow_focus(
     field: Res<GrassField>,
     mut materials: ResMut<Assets<GrassMaterial>>,
@@ -813,10 +837,24 @@ pub(super) fn track_meadow_focus(
     let Some(camera) = camera else {
         return;
     };
-    let Some(mut material) = materials.get_mut(&field.material) else {
-        return;
-    };
-    let data = &mut material.extension.grass_data;
+    let data = meadow_uniform(&camera, sun.as_deref().map(|sun| &**sun), &perf, &time);
+    for handle in [&field.material, &field.card_material] {
+        if let Some(mut material) = materials.get_mut(handle) {
+            material.extension.grass_data = data;
+        }
+    }
+}
+
+/// El uniform de la pradera, armado una vez para los dos materiales: separado
+/// del sistema para que no haya forma de escribir uno y olvidar el otro.
+fn meadow_uniform(
+    camera: &GlobalTransform,
+    sun: Option<&GlobalTransform>,
+    perf: &crate::perf::PerfToggles,
+    time: &Time,
+) -> GrassUniform {
+    let mut uniform = grass_material().extension.grass_data;
+    let data = &mut uniform;
     data.focus_xz = camera.translation().xz();
     data.growth_ramp = GROWTH_RAMP_M;
     data.growth_spread = GROWTH_SPREAD_M;
@@ -853,104 +891,44 @@ pub(super) fn track_meadow_focus(
     if let Some(sun) = sun {
         data.sun_direction = sun.back().as_vec3();
     }
+    uniform
 }
 
-/// Qué significa cada color de la vista de diagnóstico.
+/// Lo que la pradera **plantó**, por anillo. Sin colores ni formato: el color lo
+/// pone `grass_debug`, que es de quien es la paleta.
 ///
-/// Sale de [`RINGS`] y de la paleta, nunca escrita a mano: una leyenda que hay
-/// que mantener sincronizada a mano es una leyenda que va a mentir. La consumen
-/// el log —cuando la vista cambia— y el archivo que acompaña a cada captura,
-/// que es de donde el analizador lee los colores en vez de conocerlos.
-pub(crate) struct RingLegend {
-    pub slot: usize,
+/// **Toma las perillas, no la tabla autorada.** Informar el alcance y la densidad
+/// de diseño mientras la corrida está en otra cosa describe un campo que no está
+/// en la foto — y de acá salen los números que el analizador lee.
+pub(super) struct RingFacts {
     pub reach_m: f32,
     pub chunk_m: f32,
     pub density: f32,
     pub triangles_per_blade: usize,
-    pub color: [u8; 3],
+    pub planted: bool,
 }
 
-/// **Toma las perillas, no la tabla autorada.** Una leyenda que informa el
-/// alcance y la densidad de diseño mientras la corrida está en 75% describe un
-/// campo que no está en la foto — y es el archivo del que el analizador saca los
-/// números. La misma clase de error que tenía el uniform.
-pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
+pub(super) fn ring_facts(perf: &crate::perf::PerfToggles) -> Vec<RingFacts> {
     let dial = perf.grass_density();
     let reach_scale = perf.grass_reach_scale();
-    // La leyenda declara la escalera de **referencia**, no la del viewport de la
-    // corrida: acompaña a una captura que puede tener cualquier tamaño, y un
-    // número que cambia con la ventana no compara dos capturas.
+    // La escalera de **referencia**, no la del viewport de la corrida: acompaña a
+    // una captura de cualquier tamaño, y un número que cambia con la ventana no
+    // compara dos capturas.
     let scale = reference_scale();
     RINGS
         .iter()
         .enumerate()
-        .map(|(slot, ring)| RingLegend {
-            slot,
+        .map(|(slot, ring)| RingFacts {
             reach_m: ring_reach(slot, reach_scale),
             chunk_m: ring.chunk_m,
-            // La densidad que el chunk realmente plantó, dividida por su área:
-            // el redondeo a briznas enteras hace que no sea exactamente la de la
-            // tabla por la escala.
+            // Lo que el chunk plantó dividido por su área: el redondeo a briznas
+            // enteras la aparta un poco de la tabla.
             density: blades_per_chunk(slot, dial, scale, reach_scale) as f32
                 / (ring.chunk_m * ring.chunk_m),
             triangles_per_blade: shape_for_ring(slot, scale, reach_scale).triangles(),
-            color: grass_debug::slot_srgb(slot),
+            planted: perf.grass_only_ring().is_none_or(|only| only == slot),
         })
         .collect()
-}
-
-/// Una banda de la vista `subpixel`, con el color exacto que la identifica.
-pub(crate) struct SubpixelBand {
-    pub name: String,
-    pub color: [u8; 3],
-}
-
-/// Las tres bandas de ancho en pantalla, y a qué distancia cae cada frontera.
-///
-/// La distancia sale del ancho de la brizna, de la resolución y del campo de
-/// visión — **no del sistema de anillos**. Ese número sobrevive a cualquier
-/// técnica de LOD que lo reemplace, que es justo lo que hace que valga la pena
-/// medirlo antes de decidir la técnica.
-pub(crate) fn subpixel_legend() -> Vec<SubpixelBand> {
-    [
-        ("menos de 1 px — no se resuelve", 0usize),
-        ("entre 1 y 2 px — el cuarteto desperdicia", 5),
-        ("2 px o mas — se resuelve entera", 3),
-    ]
-    .into_iter()
-    .map(|(name, slot)| SubpixelBand {
-        name: name.to_string(),
-        color: grass_debug::slot_srgb(slot),
-    })
-    .collect()
-}
-
-/// Anuncia la vista puesta y qué es cada color.
-///
-/// Un color sin leyenda no es un diagnóstico: es una imagen bonita. Se imprime
-/// al cambiar de vista y no cada frame, que es cuando la información hace falta.
-pub(super) fn announce_grass_debug_view(
-    perf: Res<crate::perf::PerfToggles>,
-    mut announced: Local<Option<usize>>,
-) {
-    let step = perf.grass_debug_step();
-    if announced.replace(step) == Some(step) {
-        return;
-    }
-    let view = grass_debug::GrassDebugView::from_step(step);
-    if view == grass_debug::GrassDebugView::Off {
-        info!("[grass] vista de diagnóstico apagada");
-        return;
-    }
-    info!("[grass] vista '{}':", perf.grass_debug_label());
-    for ring in ring_legend(&perf) {
-        let [r, g, b] = ring.color;
-        info!(
-            "[grass]   anillo {} #{r:02X}{g:02X}{b:02X} — hasta {:.0} m, chunks de {:.0} m, \
-             {:.0} briznas/m2, {} tris por brizna",
-            ring.slot, ring.reach_m, ring.chunk_m, ring.density, ring.triangles_per_blade,
-        );
-    }
 }
 
 struct ChunkSpec {
@@ -1486,17 +1464,11 @@ mod tests {
         }
     }
 
-    /// **Lo que el uniform dice tiene que existir en la malla.**
-    ///
-    /// El shader deduce el anillo de una brizna comparando el alcance que ella
-    /// carga contra la tabla del uniform. Si las dos no salen del mismo cálculo,
-    /// la comparación no falla: *no encuentra nada*, y `ring_inner` devuelve
-    /// cero en silencio — o sea que la ley `1/d` se ancla donde no debe y nadie
-    /// ve nada raro. Pasó con la perilla de alcance, que escala y redondea el
-    /// número del vértice mientras el uniform mandaba el autorado.
-    ///
-    /// Es el mismo test para todas las perillas presentes y futuras: para cada
-    /// paso, cada alcance horneado tiene que estar en la tabla que se envía.
+    /// **Lo que el uniform dice tiene que existir en la malla.** El shader busca
+    /// el alcance de la brizna en la tabla del uniform; si no coincide no falla,
+    /// *no encuentra nada*, y `ring_inner` ancla la ley `1/d` en cero sin que se
+    /// vea. Pasó con la perilla de alcance (`BOTWGrass.md`), y este test vale
+    /// para toda perilla presente y futura.
     #[test]
     fn the_uniform_reaches_are_the_ones_baked_into_the_blades() {
         for scale in bof_domain::perf::GRASS_REACH_STEPS {
@@ -1525,12 +1497,11 @@ mod tests {
         perf.set_knob_step(bof_domain::perf::PerfKnob::GrassReach, 2);
         let scale = perf.grass_reach_scale();
         assert!(scale < 1.0, "este test necesita un paso que sí achique");
-        for ring in ring_legend(&perf) {
+        for (slot, ring) in ring_facts(&perf).into_iter().enumerate() {
             assert_eq!(
                 ring.reach_m,
-                ring_reach(ring.slot, scale),
-                "la leyenda del anillo {} no informa el alcance vigente",
-                ring.slot
+                ring_reach(slot, scale),
+                "la leyenda del anillo {slot} no informa el alcance vigente",
             );
         }
     }

@@ -123,7 +123,7 @@ impl Plugin for VisualsPlugin {
                 (
                     grass::roll_meadow_grid,
                     grass::track_meadow_focus,
-                    grass::announce_grass_debug_view,
+                    grass_debug::announce_grass_debug_view,
                 )
                     .chain()
                     .run_if(crate::scene::scene_has(|c| c.meadow)),

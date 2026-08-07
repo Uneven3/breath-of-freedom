@@ -2,7 +2,7 @@
 """Cuenta lo que hay en una captura del juego, sin adivinar nada.
 
 Uso:
-    python3 tools/shot_stats.py target/shots/grass.png [--bands 8]
+    python3 tools/shot_stats.py target/shots/grass.png [--bands 8] [--metros 2,4,8,16,32,64]
 
 # Qué reemplaza, y por qué el reemplazo no es opcional
 
@@ -35,6 +35,7 @@ herramienta que no sirve, y este repo ya decodifica PNG a mano en
 from __future__ import annotations
 
 import json
+import math
 import struct
 import sys
 import zlib
@@ -45,6 +46,61 @@ from pathlib import Path
 #: significar "distancia". 0,25 son unos 15°, que es donde el orden todavía se
 #: conserva en el rango que el pasto ocupa.
 HORIZON_TOLERANCE = 0.25
+
+#: Cuánto puede ondular el suelo bajo la línea de vista antes de que convertir
+#: filas en metros deje de valer. La conversión supone un plano; con 20 cm de
+#: relieve el error en la distancia ya es del orden del ancho de una banda.
+FLAT_GROUND_TOLERANCE_M = 0.2
+
+
+#: Los anillos de distancia por defecto, en metros. Geométricos y no uniformes a
+#: propósito: la cobertura cae como `1/d`, así que lo que importa es el orden de
+#: magnitud de la distancia y no su valor. Cubren los cuatro anillos (64 m).
+DEFAULT_RANGES = [2, 3, 4, 6, 8, 11, 16, 22, 32, 45, 64]
+
+
+def row_distances(legend: dict, height: int) -> list[float] | None:
+    """A qué distancia del suelo mira cada fila de la imagen, o `None` si no se sabe.
+
+    Con el ojo a `h` sobre un suelo plano y la mirada con un ángulo de depresión
+    `p`, el rayo que sale por la fila `y` baja `p + a(y)`, donde `a(y)` es el
+    ángulo de esa fila respecto del centro. Toca el suelo a `h / tan(p + a)`, y
+    donde ese ángulo no es positivo la fila mira al cielo — infinito, no un
+    número grande.
+
+    **Sólo vale sobre suelo plano**, así que no se supone: la corrida escribe el
+    perfil del terreno bajo su línea de vista y acá se verifica. Un terreno con
+    relieve devuelve `None` en vez de metros creíbles y equivocados. Es la misma
+    regla que el aviso de la cámara inclinada: una herramienta que no puede
+    fallar tampoco puede avisar.
+    """
+    camera = legend.get("camara") or {}
+    fov_y, facing = camera.get("fov_y"), camera.get("facing")
+    eye = camera.get("ojo_sobre_suelo_m")
+    viewport = camera.get("viewport_px")
+    if not fov_y or facing is None or not eye or not viewport:
+        return None
+    if viewport[1] != height:
+        # El PNG es de la ventana entera; con `render-scale` la imagen renderizada
+        # ocupa una esquina y las filas ya no son las del viewport.
+        return None
+
+    profile = [h for _, h in (legend.get("perfil_suelo") or [])]
+    if profile and max(profile) - min(profile) > FLAT_GROUND_TOLERANCE_M:
+        return None
+
+    norm = math.sqrt(sum(c * c for c in facing))
+    pitch = math.asin(-facing[1] / norm)
+    half = math.tan(fov_y / 2.0)
+
+    out = []
+    for y in range(height):
+        # El centro de la fila, llevado a la tangente del ángulo respecto del
+        # centro de la imagen. `y=0` es arriba, o sea por encima del centro.
+        offset = half * (1.0 - 2.0 * (y + 0.5) / height)
+        angle = pitch - math.atan(offset)
+        out.append(math.inf if angle <= 1e-4 else eye / math.tan(angle))
+    return out
 
 
 def read_png(path: Path) -> tuple[int, int, bytes, int]:
@@ -142,6 +198,65 @@ def describe(width: int, height: int, pixels: bytes, channels: int) -> None:
     print(f"  luminancia media {mean:6.1f}   desviación {sd:5.1f}   saturación {sat_sum / total:5.1%}")
 
 
+def print_distance_profile(
+    legend: dict,
+    width: int,
+    height: int,
+    pixels: bytes,
+    channels: int,
+    counts: dict,
+    wanted: dict,
+    ranges: list[float],
+) -> None:
+    """Cobertura por anillo de distancia: el eje x de la curva del Paso 0.
+
+    Cada fila de la imagen mira a una distancia conocida, así que un anillo de
+    metros es un conjunto de filas. El denominador son los píxeles de esas filas
+    y no un área de mundo: lo que se mide es *qué fracción de lo que se ve a esa
+    distancia es pasto*, que es la pregunta que la derivación de densidad
+    contesta y contra la que se la puede refutar.
+    """
+    distances = row_distances(legend, height)
+    if distances is None:
+        print(
+            "\nAVISO: sin geometría suficiente (fov, viewport, altura del ojo) o con\n"
+            "relieve bajo la línea de vista, no se puede convertir fila en metros.\n"
+            "Perfil por distancia omitido a propósito."
+        )
+        return
+
+    bins = list(zip(ranges, ranges[1:]))
+    bin_counts = [dict.fromkeys(counts, 0) for _ in bins]
+    bin_pixels = [0] * len(bins)
+    for y in range(height):
+        distance = distances[y]
+        index = next((i for i, (near, far) in enumerate(bins) if near <= distance < far), None)
+        if index is None:
+            continue
+        bin_pixels[index] += width
+        row = y * width * channels
+        tally = bin_counts[index]
+        for x in range(width):
+            i = row + x * channels
+            key = (pixels[i], pixels[i + 1], pixels[i + 2])
+            if key in tally:
+                tally[key] += 1
+
+    print("\nperfil por distancia (suelo plano, geometría declarada por la corrida):")
+    print(
+        "  distancia      filas "
+        + " ".join(f"{item['nombre'].replace('anillo ', 'a'):>7}" for item in wanted.values())
+        + "    total"
+    )
+    for index, (near, far) in enumerate(bins):
+        if bin_pixels[index] == 0:
+            continue
+        rows = bin_pixels[index] // width
+        cells = " ".join(f"{bin_counts[index][c] / bin_pixels[index]:>6.1%}" for c in counts)
+        total = sum(bin_counts[index].values()) / bin_pixels[index]
+        print(f"  {near:>4.0f}-{far:<4.0f} m {rows:>7} {cells} {total:>8.1%}")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
@@ -150,6 +265,9 @@ def main(argv: list[str]) -> int:
     bands = 8
     if "--bands" in argv:
         bands = int(argv[argv.index("--bands") + 1])
+    ranges = DEFAULT_RANGES
+    if "--metros" in argv:
+        ranges = [float(n) for n in argv[argv.index("--metros") + 1].split(",")]
 
     width, height, pixels, channels = read_png(png)
     legend = load_legend(png)
@@ -210,6 +328,11 @@ def main(argv: list[str]) -> int:
             f"{item['nombre']:<34} {'#%02X%02X%02X' % colour:>9} "
             f"{n:>10} {n / total:>8.2%} {share_of_grass:>9.1%}"
         )
+
+    # El perfil por distancia va **antes** que el de bandas y no depende de él:
+    # la conversión fila→metros es trigonometría exacta y vale con la cámara
+    # inclinada, que es justo el caso que hace inservible al de bandas.
+    print_distance_profile(legend, width, height, pixels, channels, counts, wanted, ranges)
 
     # El perfil por bandas horizontales reemplaza al perfil radial: con la cámara
     # mirando al horizonte, la fila de pantalla crece monótonamente con la

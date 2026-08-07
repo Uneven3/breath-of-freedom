@@ -676,6 +676,77 @@ es el look registrado como jugado y rechazado. Doce es *peor* que no hacer nada.
 **No ahorra un triángulo.** La geometría sigue horneada; esto sólo la encoge en
 el vertex shader. Arregla la imagen, no el costo.
 
+### La causa raíz del artefacto más viejo, y el plan (2026-08-06)
+
+**Ocho intentos fallaron contra el mismo artefacto** — "veo crecer el pasto al
+caminar" — y el noveno reporte agregó cuadrados visibles en ciertos ángulos.
+Ocho intentos que le cambian la forma y no lo borran no son ocho errores de
+afinación: es la arquitectura.
+
+| intento | resultado |
+|---|---|
+| acortar la banda de transición | peor |
+| anillo interior 10 → 16 m | +73% de triángulos, sigue |
+| textura de suelo | *"no maquilla el problema"* |
+| capas de vegetación | rechazado antes de implementar |
+| separar `GROWTH_RAMP_M` de `GROWTH_SPREAD_M` | sigue |
+| ley `1/d` continua | sigue |
+| anclar la ley al borde interno de cada anillo | sigue |
+| rampa larga + raleo empujado a 24 m | sigue, y aparecen los cuadrados |
+
+**La causa, verificada en el código.** La semilla de un chunk es
+`hash(celda.x, celda.y, anillo)` y su centro es `(celda + 0,5) × chunk_m`. Las
+posiciones **sí están ancladas al mundo** —eso desmiente que la pradera "siga a
+la cámara", que era el modelo que teníamos— pero **el anillo entra en la
+semilla**, y los anillos ni siquiera comparten el tamaño de celda. Entonces:
+
+> No hay una pradera. Hay cuatro praderas independientes apiladas sobre el mismo
+> suelo, y se cruza de una a otra según la distancia.
+
+Un pedazo de suelo a 20 m tiene un juego de briznas; el mismo a 10 m tiene
+**otro juego distinto**, no las mismas más juntas. Acercarse no es acercarse al
+pasto: es cambiarlo por otro pasto. Cualquier cruce entre dos campos distintos es
+visible — o se suman (doble densidad), o uno se apaga (el galón de briznas a
+media altura), o salta (pop). Los ocho intentos discutían *cómo* cruzar; ninguno
+tocaba que hubiera algo que cruzar.
+
+**El plan: praderas anidadas en vez de independientes.**
+
+- La posición de una brizna sale de una **grilla fija del mundo** (baldosas de
+  ~1 m), no del chunk. Cada baldosa tiene una secuencia determinista de briznas,
+  siempre la misma, independiente del anillo.
+- Cada anillo emite **las primeras N** de esa secuencia, con N según su densidad.
+
+El anillo denso emite entonces un **superconjunto** del ralo. Cruzar un borde
+deja de reemplazar nada: sólo agrega briznas donde antes había suelo, y las que
+ya estaban no se mueven.
+
+- **Arregla** el galón y el barajado: no hay dos campos que promediar, así que
+  sobran el solapamiento y la banda de encogimiento.
+- **No arregla** que aparezcan briznas nuevas al acercarse — eso es irreducible.
+  Pero pasa a ser sólo eso, y para eso la rampa de crecimiento sí sirve.
+- Cuesta más CPU al hornear y **cero por frame**. No toca el shader ni el
+  presupuesto ni el look ya aceptado.
+
+**Después de eso, por orden, lo que sigue pendiente:**
+
+1. **Bajar el presupuesto desde 2.000.000** con el look ya aceptado, midiendo.
+   Es la segunda mitad de la estrategia "empezar arriba y trabajar hacia abajo".
+2. **La brizna sigue siendo un plano vertical.** Es la causa común del ángulo
+   muerto, del cenital ralo y del Paso 8. Tres ataques posibles y sólo uno
+   gratis: subir `BLADE_LEAN`, la brizna curva, o girarla hacia la cámara.
+3. **Que el terreno responda al ángulo de visión** (hexaquo 6 y 7), con
+   `T_GroundGrass_Normal.png` que sigue en el repo sin usar.
+4. **El horizonte**, que nunca se atacó de frente.
+5. **Contar píxeles de silueta**, no gradiente, para zanjar si el raleo cenital
+   es proyección. El usuario dudó con razón de esa conclusión.
+
+**Y una advertencia sobre el medidor:** el perfil radial por detección de bordes
+que se usó todo el día **satura con densidad alta** y no distingue altura de
+cantidad. El galón no lo veía justamente por eso — era un anillo de briznas a
+media altura, no de menos briznas. Cualquier medición futura de este tipo tiene
+que separar las dos cosas.
+
 ### El anillo deja de ser un escalón (2026-08-06)
 
 Diagnóstico del usuario, después de mirar mucho: *"el problema siguen siendo los

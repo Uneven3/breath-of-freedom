@@ -245,15 +245,15 @@ de 3/2/1 triángulos por anillo, que salió gratis: *"se siente igual que antes"
 
 **Abierto, en orden de cuánto sabemos:**
 
-1. **El crecimiento se nota al avanzar.** Medido por primera vez el 2026-08-06
-   desde una vista cenital: la densidad es plana hasta 10 m, cae **28% entre 10
-   y 16 m**, y vuelve a aplanarse. Esa banda viaja con la cámara, así que el
-   suelo que estaba ralo a 16 m se ve engordar al llegar a 10. Con la cámara 4 m
-   detrás, son 5-6 m delante del player. Los dos parámetros que tocamos —alcance
-   y dispersión— **mueven la banda pero no la borran**, y eso explica los cuatro
-   intentos fallidos. La salida sin probar es la derivación del propio
-   documento: sembrar con la caída `1/d` incorporada en vez de plantar plano y
-   recortar al borde.
+1. **El crecimiento se nota al avanzar — causa raíz encontrada, plan escrito,
+   sin implementar.** Ocho intentos fallidos, y el noveno reporte agregó
+   cuadrados visibles. No es afinación: la semilla de un chunk incluye el
+   anillo, así que **hay cuatro praderas independientes apiladas sobre el mismo
+   suelo** y cruzar de una a otra siempre se ve. El plan —praderas anidadas, con
+   la posición de la brizna saliendo de una grilla del mundo y cada anillo
+   emitiendo un superconjunto del anterior— está en `BOTWGrass.md`.
+   *(De paso: la pradera **no** sigue a la cámara, las posiciones están ancladas
+   al mundo. Era un malentendido de los dos.)*
 2. **Al inclinar la cámara el campo se ralea.** Las briznas no desaparecen: se
    acortan en pantalla. El detalle cae al 78% donde el ángulo predice 76% — pero
    *detalle de borde es un proxy*, y el usuario duda con razón. Zanjarlo pide

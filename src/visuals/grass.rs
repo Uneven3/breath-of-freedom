@@ -595,6 +595,12 @@ pub(super) fn roll_meadow_grid(
         .take(budget)
         .copied()
         .collect();
+    // El único trabajo por frame que este sistema tiene, y hasta el 2026-08-07
+    // el único sin medir: está limitado a un chunk por frame *porque se supone
+    // caro*. Cronometrarlo es lo que convierte "conviene instancing" de opinión
+    // en decisión — con instancing serían unos bytes por brizna en vez de cuatro
+    // vértices y seis índices.
+    let bake_started = std::time::Instant::now();
     for key in &missing {
         let ring = &RINGS[key.ring];
         // Seeded by ring and cell, not by spawn order: the same ground grows the
@@ -651,6 +657,16 @@ pub(super) fn roll_meadow_grid(
             ))
             .id();
         field.live.insert(*key, entity);
+    }
+    if !missing.is_empty() {
+        let millis = bake_started.elapsed().as_secs_f64() * 1000.0;
+        // Al canal de perf y no a `info!`: el log arranca callado a propósito y
+        // esto es una medición que se pide, no una que se sufre.
+        debug!(
+            "[grass] horneados {} chunks en {millis:.2} ms ({:.2} ms cada uno)",
+            missing.len(),
+            millis / missing.len() as f64,
+        );
     }
 }
 

@@ -356,10 +356,11 @@ fn log_framing(inventory: &SceneInventory) {
             continue;
         }
         parts.push(format!(
-            "{}={} tris/{} draws ({:.0}% del cuadro)",
+            "{}={} tris/{} draws/{:.1} MB ({:.0}% del cuadro)",
             subject.label(),
             tally.triangles,
             tally.draws,
+            tally.vertex_bytes as f64 / 1_048_576.0,
             inventory.triangle_share_of(subject) * 100.0,
         ));
     }

@@ -125,6 +125,15 @@ pub(crate) struct SubjectTally {
     pub meshes: u32,
     pub triangles: usize,
     pub draws: usize,
+    /// Bytes de atributos de vértice más índices que estas mallas tienen
+    /// residentes en la GPU.
+    ///
+    /// **El costo que ningún conteo de triángulos muestra.** En el target la
+    /// memoria es LPDDR4X compartida con la CPU y es el recurso más escaso del
+    /// aparato; un triángulo barato de dibujar puede ser caro de tener. Es
+    /// también el número que decide si conviene instancing o vertex pulling,
+    /// que hasta ahora se discutía con aritmética de servilleta.
+    pub vertex_bytes: usize,
 }
 
 /// El recuento del frame, mientras se arma.
@@ -161,7 +170,7 @@ impl SceneCensus {
         subject: Option<Subject>,
         mesh: AssetId<Mesh>,
         material: UntypedAssetId,
-        triangles: usize,
+        cost: MeshCost,
     ) {
         let bucket = subject.map_or(OTHER, Subject::index);
         self.accounted_meshes += 1;
@@ -170,7 +179,8 @@ impl SceneCensus {
         self.subject_batches[bucket].insert((mesh, material));
         let tally = &mut self.subjects[bucket];
         tally.meshes += 1;
-        tally.triangles += triangles;
+        tally.triangles += cost.triangles;
+        tally.vertex_bytes += cost.vertex_bytes;
     }
 
     /// Los draws no se pueden sumar mientras se cuenta —son la cardinalidad de
@@ -265,14 +275,21 @@ fn count_material<M: InstrumentedMaterial>(
         if !visibility.get() {
             continue; // Descartada por frustum, jerarquía o rango: no se envía.
         }
-        let triangles = assets.get(&mesh3d.0).map_or(0, mesh_triangles);
+        let cost = assets.get(&mesh3d.0).map(mesh_cost).unwrap_or_default();
         census.record(
             subject.map(|subject| subject.0),
             mesh3d.0.id(),
             material.0.id().untyped(),
-            triangles,
+            cost,
         );
     }
+}
+
+/// Lo que una malla cuesta, en las dos monedas que importan.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MeshCost {
+    pub triangles: usize,
+    pub vertex_bytes: usize,
 }
 
 /// Triángulos de una malla, con la única sutileza que tiene: una malla sin
@@ -281,6 +298,26 @@ pub(crate) fn mesh_triangles(mesh: &Mesh) -> usize {
     match mesh.indices() {
         Some(indices) => indices.len() / 3,
         None => mesh.count_vertices() / 3,
+    }
+}
+
+/// Triángulos **y** bytes residentes.
+///
+/// Los bytes salen del layout que la malla declara (`get_vertex_size` suma el
+/// tamaño de cada atributo presente) por su cuenta de vértices, más el buffer de
+/// índices. Se lee de la malla y no de una constante nuestra: cambiar un
+/// atributo mueve este número solo, que es la propiedad que un presupuesto
+/// necesita.
+pub(crate) fn mesh_cost(mesh: &Mesh) -> MeshCost {
+    let index_bytes = match mesh.indices() {
+        Some(bevy::mesh::Indices::U16(values)) => values.len() * 2,
+        Some(bevy::mesh::Indices::U32(values)) => values.len() * 4,
+        None => 0,
+    };
+    MeshCost {
+        triangles: mesh_triangles(mesh),
+        vertex_bytes: mesh.count_vertices() * usize::try_from(mesh.get_vertex_size()).unwrap_or(0)
+            + index_bytes,
     }
 }
 
@@ -339,7 +376,12 @@ mod tests {
                     uuid: bevy::asset::uuid::Uuid::from_u128(u128::from(*material)),
                 }
                 .untyped(),
-                *triangles,
+                MeshCost {
+                    triangles: *triangles,
+                    // Un byte por triángulo: los tests de reparto sólo necesitan
+                    // que el canal exista y sume, no un layout realista.
+                    vertex_bytes: *triangles,
+                },
             );
         }
         census

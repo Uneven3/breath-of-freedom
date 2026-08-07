@@ -55,6 +55,13 @@ pub struct GrassUniform {
     /// fragment deduce de qué celda —o sea de qué draw— salió una brizna.
     pub ring_chunks_a: Vec4,
     pub ring_chunks_b: Vec4,
+    /// Qué anillos son cartas: 1 si su primitiva se abre mirando a la cámara.
+    /// Por anillo y no como shader def, porque toda la pradera comparte un
+    /// material y una variante por forma duplicaría sus draws.
+    pub ring_cards_a: Vec4,
+    pub ring_cards_b: Vec4,
+    /// Medio ancho de una carta, en metros.
+    pub card_half_width: f32,
     /// La paleta de diagnóstico, un color por anillo.
     pub ring_colors: [Vec4; crate::visuals::grass_debug::PALETTE_SLOTS],
 }
@@ -89,6 +96,9 @@ impl Default for GrassUniform {
             ring_reaches_b: Vec4::ZERO,
             ring_chunks_a: Vec4::ONE,
             ring_chunks_b: Vec4::ONE,
+            ring_cards_a: Vec4::ZERO,
+            ring_cards_b: Vec4::ZERO,
+            card_half_width: 0.0,
             ring_colors: [Vec4::ONE; crate::visuals::grass_debug::PALETTE_SLOTS],
         }
     }

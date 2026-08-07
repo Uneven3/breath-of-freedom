@@ -51,6 +51,13 @@ enum BladeShape {
     /// Three vertices, one triangle: two base corners and a single tip. The
     /// floor — a blade that no longer resolves does not need a waist.
     Spike,
+    /// Cuatro vértices, dos triángulos: una **carta opaca** del tamaño de un
+    /// matojo, que el vertex shader abre mirando a la cámara — sus cuatro
+    /// vértices se hornean en el centro de la base.
+    ///
+    /// Opaca y no con alfa recortado, que es la carta que `BOTWGrass.md`
+    /// descartó por la ley 3. El porqué y la referencia de escala, en el doc.
+    Card,
 }
 
 impl BladeShape {
@@ -58,16 +65,31 @@ impl BladeShape {
     /// budget quietly stops matching the mesh.
     const fn vertices(self) -> usize {
         match self {
-            Self::Leaf => 4,
+            Self::Leaf | Self::Card => 4,
             Self::Spike => 3,
         }
     }
 
     const fn triangles(self) -> usize {
         match self {
-            Self::Leaf => 2,
+            Self::Leaf | Self::Card => 2,
             Self::Spike => 1,
         }
+    }
+
+    /// Cuánto suelo tapa a lo ancho una primitiva de esta forma. Es lo que hace
+    /// comparable la densidad de una carta con la de una brizna.
+    #[cfg(test)]
+    const fn footprint_m(self) -> f32 {
+        match self {
+            Self::Leaf | Self::Spike => BLADE_WIDTH,
+            Self::Card => CARD_WIDTH,
+        }
+    }
+
+    /// Si el vertex shader tiene que abrir la primitiva mirando a la cámara.
+    const fn faces_camera(self) -> bool {
+        matches!(self, Self::Card)
     }
 }
 
@@ -112,9 +134,13 @@ const RINGS: [Ring; 4] = [
     Ring {
         reach_m: 64.0,
         chunk_m: 32.0,
-        density: 24.0,
+        // Cartas, no briznas: una tapa el suelo de unas cuantas, así que la
+        // densidad cae con el ancho. El anillo más lejano era 688.128 triángulos
+        // para pintar el 2% de la pantalla — medido el 2026-08-07, y es el
+        // motivo de que este escalón exista.
+        density: 1.5,
         width_scale: 1.0,
-        shape: BladeShape::Spike,
+        shape: BladeShape::Card,
     },
 ];
 
@@ -133,6 +159,14 @@ fn ring_reaches(reach_scale: f32) -> (Vec4, Vec4) {
 /// tamaño son.
 fn ring_chunks() -> (Vec4, Vec4) {
     slots(|_, ring| ring.chunk_m, 1.0)
+}
+
+/// Qué anillos abren su primitiva mirando a la cámara.
+fn ring_cards() -> (Vec4, Vec4) {
+    slots(
+        |_, ring| f32::from(u8::from(ring.shape.faces_camera())),
+        0.0,
+    )
 }
 
 /// Un dato por anillo repartido en los ocho casilleros que el uniform tiene.
@@ -210,17 +244,9 @@ const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 #[cfg(test)]
 const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 
-/// Cuántos metros tarda **una** brizna en pasar de nada a entera.
-///
-/// **La constante que gobierna el artefacto, y la que nunca se tocó.** Una
-/// brizna cambia `1/rampa` de su altura por metro caminado; con 1 m era el 100%,
-/// y a la distancia donde ocurría medía 117 px de alto — o sea 147 px de cambio
-/// por metro, en algo que el ojo está mirando. Todo el trabajo previo atacaba el
-/// perfil *espacial* de densidad, que no es lo que se percibe caminando.
-///
-/// Larga sólo sirve junto con [`GROWTH_START_M`] lejos: la rampa se resta del
-/// umbral, así que con umbrales cerca deja briznas a media altura a los pies del
-/// jugador. Las dos se mueven juntas o ninguna.
+/// Cuántos metros tarda **una** brizna en pasar de nada a entera. Larga sólo
+/// sirve con [`GROWTH_START_M`] lejos —la rampa se resta del umbral—, así que
+/// las dos se mueven juntas o ninguna. El porqué, en `BOTWGrass.md`.
 const GROWTH_RAMP_M: f32 = 6.0;
 
 /// Over how many metres, inward from a ring's edge, the thresholds are spread.
@@ -229,21 +255,11 @@ const GROWTH_RAMP_M: f32 = 6.0;
 /// band growing at once is not.** Shortening both together made it worse.
 const GROWTH_SPREAD_M: f32 = 6.0;
 
-/// A partir de qué distancia la pradera empieza a ralear, en metros.
-///
-/// Los umbrales se reparten como `start / (1 - hash)`, así que la fracción viva a
-/// distancia `d` es `start / d`: **la ley 1/d que `BOTWGrass.md` deriva y que
-/// hasta el 2026-08-06 no se aplicaba**. Se plantaba plano y se recortaba en una
-/// banda al borde del anillo — una escalera donde correspondía una rampa, y esa
-/// escalera viajando con la cámara *es* el artefacto de "veo crecer el pasto".
-///
-/// Ocho metros salieron de un barrido cenital midiendo qué tan pareja queda la
-/// pendiente; cuatro da la rampa más lisa pero deja el campo en el look que este
-/// proyecto ya jugó y rechazó, y doce es peor que no hacer nada. La tabla está en
-/// `BOTWGrass.md`.
-///
-/// **No ahorra un triángulo:** la geometría sigue horneada y esto sólo la encoge
-/// en el vertex shader. Arregla la imagen, no el costo.
+/// A partir de qué distancia ralea la pradera, en metros. Los umbrales se
+/// reparten como `start / (1 - hash)`, así que la fracción viva a distancia `d`
+/// es `start / d` — la ley 1/d. **No ahorra un triángulo**: encoge en el vertex
+/// shader, arregla la imagen y no el costo. El barrido que eligió el valor está
+/// en `BOTWGrass.md`.
 const GROWTH_START_M: f32 = 24.0;
 
 /// How far **below** the ground a blade collapses to, in metres.
@@ -276,6 +292,15 @@ const BLADE_WAIST: f32 = 0.30;
 /// Cuánto se hunde la punta de abajo, en metros: en el suelo mismo la brizna
 /// sería infinitamente angosta y dejaría ver tierra donde nace.
 const BLADE_ROOT_SINK: f32 = 0.06;
+
+/// Ancho de una carta, en metros: el de un **matojo de unas pocas briznas**, no
+/// el de una pared de pasto.
+///
+/// La escala sale de una captura de BOTW que el usuario encontró (2026-08-07):
+/// los trazos agrupados que se ven a media distancia son del tamaño de las
+/// flores que tienen al lado, no de un arbusto. La primera versión de esto usaba
+/// 1,6 m y era tres veces más grande de lo que la referencia muestra.
+const CARD_WIDTH: f32 = 0.5;
 /// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
 /// **The ceiling is one metre and it is hard**: the height travels in the
@@ -667,6 +692,17 @@ pub(super) fn roll_meadow_grid(
             missing.len(),
             millis / missing.len() as f64,
         );
+        // Y de quién es la geometría, por anillo. El inventario atribuye por
+        // sistema —pradera contra bosque— y eso no alcanza para decidir qué
+        // anillo conviene reemplazar por otra técnica.
+        for (index, ring) in RINGS.iter().enumerate() {
+            let live = field.live.keys().filter(|key| key.ring == index).count();
+            let blades = live * blades_per_chunk(ring, density) as usize;
+            debug!(
+                "[grass]   anillo {index}: {live} chunks, {blades} briznas, {} tris",
+                blades * ring.shape.triangles(),
+            );
+        }
     }
 }
 
@@ -700,6 +736,10 @@ pub(super) fn track_meadow_focus(
     let (a, b) = ring_chunks();
     data.ring_chunks_a = a;
     data.ring_chunks_b = b;
+    let (a, b) = ring_cards();
+    data.ring_cards_a = a;
+    data.ring_cards_b = b;
+    data.card_half_width = CARD_WIDTH * 0.5;
     data.debug_view =
         grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).shader_index();
     // Desde la constante, no repetido en el default del uniform: la vista
@@ -896,6 +936,20 @@ fn build_chunk_mesh(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Mesh {
                 indices.extend_from_slice(&[first, first + 1, first + 2]);
                 indices.extend_from_slice(&[first + 1, first + 3, first + 2]);
             }
+            BladeShape::Card => {
+                // Los cuatro vértices **en el mismo punto**, el centro de la
+                // base. El vertex shader los abre contra el eje derecho de la
+                // cámara, así que la carta siempre da la cara. Lo que decide
+                // qué esquina es cada vértice ya viaja: el signo del hash dice
+                // izquierda o derecha, y `uv.y` dice abajo o arriba.
+                let base_centre = base - Vec3::Y * BLADE_ROOT_SINK;
+                vertex(base_centre, 0.0, -1.0);
+                vertex(base_centre, 0.0, 1.0);
+                vertex(base_centre, 1.0, 1.0);
+                vertex(base_centre, 1.0, -1.0);
+                indices.extend_from_slice(&[first, first + 1, first + 2]);
+                indices.extend_from_slice(&[first, first + 2, first + 3]);
+            }
             BladeShape::Spike => {
                 // Un triángulo: dos esquinas en la base y una punta. El piso de
                 // la escalera, donde una brizna ya no se resuelve.
@@ -1024,7 +1078,10 @@ mod tests {
             // its blades are seen from closest and each one hides the least
             // ground.
             let inner = index.checked_sub(1).map_or(2.0, |i| RINGS[i].reach_m);
-            let needed = minimum_density(inner, BLADE_WIDTH * ring.width_scale);
+            // El ancho es el de la **forma**, no el de una brizna: una carta tapa
+            // el suelo de un matojo, y medirla contra el piso de una brizna
+            // pediría cien veces más cartas de las que hacen falta.
+            let needed = minimum_density(inner, ring.shape.footprint_m() * ring.width_scale);
             // **Lo que un punto del suelo recibe es la SUMA de los anillos que
             // lo plantan**, no la densidad de su anillo. Medir por anillo suelto
             // era medir algo que no existe. Qué implica eso sobre el
@@ -1390,26 +1447,24 @@ mod tests {
         }
     }
 
-    /// The near ring's blades end in two points; the outer ones do not, because
-    /// out there the extra triangle buys a silhouette nobody can resolve.
+    /// La escalera baja, y lo que baja son **triángulos por metro cuadrado de
+    /// suelo**, no por primitiva: una carta son dos triángulos —más que la púa de
+    /// uno— y cubre el suelo de decenas de briznas. Hoy: 80 / 80 / 40 / 3.
     #[test]
     fn each_rung_of_the_ladder_costs_what_it_claims() {
         let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len() / 3).unwrap_or(0);
-        for shape in [BladeShape::Leaf, BladeShape::Spike] {
+        for shape in [BladeShape::Leaf, BladeShape::Spike, BladeShape::Card] {
             let mesh = build_chunk_mesh(&spec(1, shape, 9), None);
             assert_eq!(triangles(&mesh), shape.triangles(), "{shape:?}");
             assert_eq!(mesh.count_vertices(), shape.vertices(), "{shape:?}");
         }
-        // The ladder has to descend, or the ring order means nothing.
-        let costs: Vec<usize> = RINGS.iter().map(|ring| ring.shape.triangles()).collect();
+        let per_square_metre: Vec<f32> = RINGS
+            .iter()
+            .map(|ring| ring.density * ring.shape.triangles() as f32)
+            .collect();
         assert!(
-            costs.windows(2).all(|pair| pair[0] >= pair[1]),
-            "a further ring may never cost more per blade: {costs:?}"
-        );
-        assert_eq!(
-            RINGS[RINGS.len() - 1].shape,
-            BladeShape::Spike,
-            "the outermost ring sits on the floor of one triangle"
+            per_square_metre.windows(2).all(|pair| pair[0] >= pair[1]),
+            "un anillo más lejano no puede costar más triángulos por m2: {per_square_metre:?}"
         );
     }
 

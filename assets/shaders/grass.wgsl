@@ -64,6 +64,9 @@ struct GrassUniform {
     ring_reaches_b: vec4<f32>,
     ring_chunks_a: vec4<f32>,
     ring_chunks_b: vec4<f32>,
+    ring_cards_a: vec4<f32>,
+    ring_cards_b: vec4<f32>,
+    card_half_width: f32,
     ring_colors: array<vec4<f32>, 8>,
 }
 
@@ -126,6 +129,27 @@ fn ring_reaches() -> array<f32, 8> {
         grass_data.ring_reaches_b.x, grass_data.ring_reaches_b.y,
         grass_data.ring_reaches_b.z, grass_data.ring_reaches_b.w,
     );
+}
+
+/// Si el anillo de esta primitiva la abre mirando a la cámara.
+///
+/// Por anillo y no por shader def: los anillos comparten material —uno solo para
+/// toda la pradera, que es lo que evita duplicar los draws— así que la forma no
+/// puede ser una variante de pipeline.
+fn ring_is_card(reach: f32) -> bool {
+    var flags = array<f32, 8>(
+        grass_data.ring_cards_a.x, grass_data.ring_cards_a.y,
+        grass_data.ring_cards_a.z, grass_data.ring_cards_a.w,
+        grass_data.ring_cards_b.x, grass_data.ring_cards_b.y,
+        grass_data.ring_cards_b.z, grass_data.ring_cards_b.w,
+    );
+    var reaches = ring_reaches();
+    for (var i = 0; i < 8; i = i + 1) {
+        if abs(reaches[i] - reach) < 0.5 {
+            return flags[i] > 0.5;
+        }
+    }
+    return false;
 }
 
 fn ring_inner(reach: f32) -> f32 {
@@ -400,6 +424,25 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     // y la altura de la brizna en la fracción.
     let ring_reach = floor(vertex.uv_b.y);
     let blade_height = fract(vertex.uv_b.y);
+
+    // **La carta se abre acá.** Sus cuatro vértices vienen horneados en el mismo
+    // punto —el centro de la base— y se separan contra el eje derecho de la
+    // cámara, así que siempre da la cara. Una carta representa la masa de
+    // decenas de briznas: si quedara de canto dejaría un hueco de ese tamaño, y
+    // por eso ésta sí gira mientras la brizna cercana no.
+    //
+    // El eje derecho sale de la fila 0 de la matriz de vista, que es la que
+    // lleva el `right` de la cámara en espacio de mundo, aplanado a horizontal
+    // para que la carta se quede parada en vez de inclinarse con el cabeceo.
+    if ring_is_card(ring_reach) {
+        let camera_right = normalize(vec3<f32>(view.view_from_world[0].x, 0.0, view.view_from_world[2].x));
+        world_position = vec4<f32>(
+            world_position.xyz
+                + camera_right * (side * grass_data.card_half_width)
+                + vec3<f32>(0.0, height_factor * blade_height, 0.0),
+            world_position.w,
+        );
+    }
 
     // Viento primero, sobre la posición horneada.
     let sway = wind_offset(world_position.xz, height_factor, blade_height, blade_hash);

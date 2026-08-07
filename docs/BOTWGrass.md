@@ -1012,6 +1012,59 @@ ajustan por ojo en la caja `Pasto`. Lo que no se ajusta es la forma de la curva.
 "Billboard" nombra tres técnicas que no tienen nada que ver entre sí, y conviene
 separarlas porque sólo una es tentadora de verdad:
 
+### La carta opaca: lo que el rechazo de abajo no había considerado (2026-08-07)
+
+**El rechazo de la carta de grupo daba por sentado el alfa recortado.** Toda la
+sección de abajo argumenta contra una carta con textura de silueta, o sea
+`discard`, o sea LRZ/FPK/HSR apagados. Ese argumento sigue en pie — pero
+**describe una carta que no es la única posible.**
+
+Lo trajo el usuario, con una referencia y una observación: en BOTW la carta se
+delata por **una línea horizontal en la base**, y de lejos. Un borde inferior
+recto y sólido dice que ahí no hay recorte haciendo trabajo. Y una carta opaca
+no necesita `discard` en absoluto: la silueta va en la geometría y el borde de
+abajo se hunde en el terreno — que es literalmente lo que pide la ley 3.
+
+Y una advertencia sobre copiar la técnica y no sólo la forma: **BOTW corre en
+Tegra X1, un renderer de modo inmediato**. Puede pagar alpha-test barato. Nuestro
+target es Adreno/Mali, donde no. La forma se copia; el recorte no.
+
+**La escalera queda en tres niveles**, que es lo que el usuario venía pidiendo:
+
+| nivel | distancia | primitiva | triángulos por m² |
+|---|---|---|---:|
+| 0 | 0-13 m | hoja de 2 triángulos | 80 |
+| 1 | 13-24 m | hoja de 2 triángulos | 80 |
+| 2 | 24-40 m | púa de 1 triángulo | 40 |
+| 3 | 40-64 m | **carta opaca de 2 triángulos** | **3** |
+
+La carta se hornea con sus cuatro vértices **en el centro de la base** y el
+vertex shader los abre contra el eje derecho de la cámara. Gira, y acá sí
+corresponde: una carta de canto dejaría un hueco del tamaño de un matojo, y a
+esa distancia el pivoteo es invisible. La escala —0,5 m, un matojo y no una
+pared— sale de la captura de referencia, donde los trazos agrupados miden lo
+mismo que las flores que tienen al lado.
+
+**Medido el mismo día, mismo encuadre, sólo el anillo 3 convertido:**
+
+| | púas | cartas | |
+|---|---:|---:|---|
+| anillo 3, triángulos | 688.128 | **86.016** | −87% |
+| pradera, triángulos | 665.600 | **450.560** | −32% |
+| memoria residente | 56,3 MB | **35,8 MB** | −36% |
+| horneado inicial | 420 ms | **281 ms** | −33% |
+| cobertura de pantalla | 56,60% | **56,92%** | igual |
+| banda más lejana con pasto | 71,8% | **75,0%** | mejor |
+
+**Cuesta ocho veces menos y pinta más.** Es la primera vez en este documento que
+una técnica gana en los cuatro ejes a la vez, y llegó por insistencia del usuario
+contra lo que estas páginas afirmaban.
+
+**Lo que decidió el número, y no estaba antes:** la atribución por anillo, que se
+agregó el mismo día. Los dos anillos lejanos eran el 77% de los triángulos y el
+87% de las briznas para producir el 22% de los píxeles. Sin ese reparto, "las
+cartas convienen" era una opinión.
+
 **1. Brizna que gira hacia la cámara.** No ahorra nada: sigue siendo un quad de
 2 triángulos. Agrega trabajo por frame, y briznas que pivotean al mover la cámara
 se leen como un error. Es lo que suele significar "pasto con billboards".

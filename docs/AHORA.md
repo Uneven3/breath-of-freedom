@@ -27,10 +27,21 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   medición".
 - **Ver sin jugar: `BOF_SHOT=<suite> cargo run`** deja un PNG en `target/shots/`
   y sale; `BOF_SHOT_POSE="x,y,z:dx,dy,dz"` fuerza un encuadre para reproducir una
-  queja; `BOF_SCENE=Pasto cargo run` arranca dentro de una caja sin pasar por el
-  menú. **A diferencia de los tiempos, la estadística de píxeles de una captura
-  es determinista** y no la contamina la carga de la máquina — pero su piso de
-  ruido es **5%**, porque el viento mueve las briznas entre disparos.
+  queja; `BOF_KNOBS="grass-view=5,msaa=1"` fija cualquier perilla del hub desde
+  el arranque; `BOF_SCENE=Pasto cargo run` arranca dentro de una caja sin pasar
+  por el menú. **A diferencia de los tiempos, la estadística de píxeles de una
+  captura es determinista** y no la contamina la carga de la máquina — pero su
+  piso de ruido es **5%**, porque el viento mueve las briznas entre disparos.
+- **Siempre `cargo run`, nunca `./target/debug/...` a secas.** Bevy busca
+  `assets/` junto al ejecutable, así que el binario directo arranca **sin un solo
+  shader** y todo lo demás sigue funcionando: el 2026-08-07 una corrida así sacó
+  una foto de puro cielo mientras el inventario reportaba 691.200 triángulos de
+  pradera al 95% del cuadro. Ahora la foto y la tabla avisan si algún asset falló
+  — pero el aviso existe porque el caso ocurrió.
+- **Contar píxeles: `python3 tools/shot_stats.py <captura.png>`**, con la vista
+  `grass-view=medir` puesta. Cuenta colores planos exactos que la corrida escribió
+  en un `.json` al lado del PNG; el script no conoce ningún color. Reemplaza los
+  perfiles por detección de bordes, que saturan con densidad alta.
 - **F7 en el juego captura lo que el usuario está viendo**, numerada, con la pose
   de cámara impresa ya formateada como `BOF_SHOT_POSE`. Es la única forma de que
   un reporte visual suyo llegue sin pasar por mi interpretación.
@@ -238,40 +249,49 @@ Y el contraejemplo que zanja la discusión de presupuesto: **Flower (PS3, 2009)*
 llena la pantalla con una fracción de este hardware.
 
 **Resuelto y confirmado jugando:** el parpadeo (era z-fighting, no MSAA: la
-brizna colapsaba coplanar con el terreno y ahora se hunde 18 cm); la altura de
-las briznas; la paleta, derivada del suelo donde se paran y no elegida a ojo
-—*"la textura del suelo y del pasto se ven más uniformes"*—; y el LOD de brizna
-de 3/2/1 triángulos por anillo, que salió gratis: *"se siente igual que antes"*.
+brizna se hunde 18 cm); la altura; la paleta, derivada del suelo donde se paran
+—*"se ven más uniformes"*—; y el LOD de brizna 3/2/1 triángulos, gratis:
+*"se siente igual que antes"*.
 
 **Abierto, en orden de cuánto sabemos:**
 
 1. **El crecimiento se nota al avanzar — causa raíz encontrada, plan escrito,
-   sin implementar.** Ocho intentos fallidos, y el noveno reporte agregó
-   cuadrados visibles. No es afinación: la semilla de un chunk incluye el
-   anillo, así que **hay cuatro praderas independientes apiladas sobre el mismo
-   suelo** y cruzar de una a otra siempre se ve. El plan —praderas anidadas, con
-   la posición de la brizna saliendo de una grilla del mundo y cada anillo
-   emitiendo un superconjunto del anterior— está en `BOTWGrass.md`.
-   *(De paso: la pradera **no** sigue a la cámara, las posiciones están ancladas
-   al mundo. Era un malentendido de los dos.)*
+   sin implementar.** Ocho intentos fallidos, y el noveno agregó cuadrados
+   visibles. No es afinación: la semilla de un chunk incluye el anillo, así que
+   **hay cuatro praderas independientes apiladas sobre el mismo suelo** y cruzar
+   de una a otra siempre se ve. El plan —praderas anidadas, cada anillo emitiendo
+   un superconjunto del anterior— está en `BOTWGrass.md`.
+   *(La pradera **no** sigue a la cámara: las posiciones están ancladas al
+   mundo. Era un malentendido de los dos.)*
 2. **Al inclinar la cámara el campo se ralea.** Las briznas no desaparecen: se
-   acortan en pantalla. El detalle cae al 78% donde el ángulo predice 76% — pero
-   *detalle de borde es un proxy*, y el usuario duda con razón. Zanjarlo pide
-   contar píxeles de silueta, no gradiente. Sólo lo arregla que la brizna deje de
-   ser un plano vertical.
+   acortan en pantalla. Medido con *detalle de borde*, que es un proxy y el
+   usuario duda con razón; ahora se puede zanjar contando píxeles de silueta con
+   `grass-view=medir`. Sólo lo arregla que la brizna deje de ser un plano
+   vertical.
 3. **El horizonte no se llena.** Sin tocar.
 4. **La tabla de anillos del código está 5× por encima de la derivada**, y el
    disparador que `BOTWGrass.md` dejó armado —*"si el barrido confirma
    fill-bound, bajar el anillo 0 es la palanca más barata"*— ya se cumplió sin
    que nadie actuara.
+5. **Cuatro anillos plantan sobre el mismo suelo** (visto el 2026-08-07 con
+   `grass-view=medir`): dos tercios del primer plano son briznas de anillos
+   lejanos, las de 1 triángulo. Explica el fill-bound sin misterio — lo que más
+   píxeles cubre se dibuja tres veces. **Deuda deliberada**: ese solapamiento es
+   lo que hoy tapa la costura, así que lo destraba la reescritura anidada del
+   punto 1, no un ajuste. Con número en un test y la tabla en `BOTWGrass.md`.
 
-**Dos lecciones de método que no son sobre pasto:**
+**Tres lecciones de método que no son sobre pasto:**
 
 - **Un mensaje de éxito que no se distingue de un fracaso no es un mensaje de
   éxito.** `"packed 4 canonical PNGs"` se imprimía igual con el arte cargado que
   con el fallback de 1×1, y por eso el terreno mostró el fallback durante meses.
 - **Un número no sirve si el objetivo contra el que mide se eligió a ojo.** Dos
   veces ese día medí con tres decimales la distancia hasta un blanco supuesto.
+- **Una herramienta que no puede fallar tampoco puede avisar.** La ley que pedía
+  que cada material apareciera nombrado en `collect_scene` dejó de significar
+  nada el día en que el conteo se volvió genérico: pasaba sola. Se reescribió
+  como prohibición (`MaterialPlugin` sólo dentro del registro), que sí se puede
+  violar y por lo tanto sí se puede detectar.
 
 ## La suite de medición (2026-08-06)
 
@@ -285,11 +305,9 @@ doc-comments de `suite.rs` y `auto.rs`; acá sólo lo que no se deduce del códi
 Reglas que los tests cobran sobre toda suite, presente y futura: empieza y
 termina en el baseline (la diferencia es la deriva), cada paso mueve **un** eje,
 y el baseline es la configuración que se envía. El reporte abre declarando
-suite, pregunta, escena, perfil, ventana, MSAA, render scale, densidad y alcance
-del pasto, sombras y mirador.
-
-**Perillas nuevas:** `msaa` y `grass-reach`, más un paso de **0 briznas/m²** que
-convierte "cuánto cuesta el pasto" de extrapolación en resta.
+suite, pregunta, escena, perfil, ventana, perillas y mirador. Hay un paso de
+**0 briznas/m²**, que convierte "cuánto cuesta el pasto" de extrapolación en
+resta.
 
 **Tres trampas de esta máquina, encontradas corriendo:**
 
@@ -307,9 +325,19 @@ convierte "cuánto cuesta el pasto" de extrapolación en resta.
   versión usaba umbrales sueltos y dejó pasar una corrida con la GPU al 203% y
   el frame al 6,3%.
 
-**Pendiente que la suite destapó:** ocultar el bosque entero desde el mirador
-canónico vale 0,34 ms, lo que sugiere que **el mirador "del bosque" no mira al
-bosque**. Autorearlo con F4 sigue sin hacerse y ahora tiene evidencia.
+**El reporte declara qué hay en cuadro (2026-08-07).** Cada corrida abre con el
+reparto por sistema —`pradera=15%/92% bosque=15%/0% terreno=1%/5%`, mallas y
+triángulos— y avisa cuando el tema que la suite dice medir cae por debajo del
+10% en cualquiera de las dos. Un mirador es una afirmación, y hasta ahora
+ninguna corrida podía desmentirla: el test que había verificaba que la *escena*
+declarara bosque, que es otra cosa y siempre pasaba.
+
+**Y lo primero que dijo cierra un pendiente viejo con un diagnóstico mejor.**
+Ocultar el bosque valía 0,34 ms y se leyó como "el mirador no mira al bosque".
+El número real: desde ahí el bosque es el **0% de los triángulos**, porque la
+pradera se lleva el **92%**. El mirador no está mal apuntado — la suite general
+está midiendo un frame que es casi todo pasto. Reautorear la ruta con F4 sigue
+pendiente; medir el bosque pide su propia caja.
 
 **Ruido de Bevy, no nuestro:** cada corrida imprime ~270 líneas
 `bevy_render::slab_allocator: Use-after-free`, al despawnear muchas mallas de
@@ -321,17 +349,14 @@ Las ocho fases están en `git log -- docs/CRATES.md` y las leyes en
 `ARCHITECTURE.md`. Lo que sigue informando decisiones y no se deduce del código:
 
 - **Tres decisiones que se apartaron del plan.** `input` no cruzó a simulación:
-  maneja hardware *y* cursor, y dejándolo afuera simulación no declara
-  `bevy_input` ni `bevy_window` y no **puede** leer teclado, en vez de acordarse
-  de no hacerlo. `layout`/`spawn` tampoco: son composición, y el binario es la
-  única capa que ve simulación y presentación a la vez. El reloj sí cruzó, la
-  luz no — `advance_time` escribe cada tick y presentación sólo lee (§20).
+  maneja hardware *y* cursor, y dejándolo afuera simulación **no puede** leer
+  teclado, en vez de acordarse de no hacerlo. `layout`/`spawn` tampoco: son
+  composición. El reloj sí cruzó, la luz no (§20).
 - **Los newtypes de unidades se midieron y se descartaron:** en todo `movement`
-  hay 4 funciones con dos o más `f32` y en dos de ellas comparten unidad. El
-  riesgo que justificaba envolver 141 campos no existe.
+  hay 4 funciones con dos o más `f32` y en dos comparten unidad. El riesgo que
+  justificaba envolver 141 campos no existe.
 - **`bof_presentation` no se creó a propósito:** con las referencias a
-  simulación en cero y la ley congelada en un test, el crate no agregaba nada
-  que no estuviera ya cobrado.
+  simulación en cero y la ley congelada en un test, no agregaba nada.
 - **Al leer un log, ojo:** sólo `sandbox.ron` existe en disco, y `spawn_terrain`
   únicamente loguea cuando encuentra archivo, así que una escena sin heightmap
   arranca plana **y en silencio** — la ausencia de línea no es ausencia de
@@ -354,8 +379,8 @@ detalle está en git; los principios que quedaron:
   sombra usan `info_span!`. "El gpu medido no cambió" **no** implica "no es GPU"
   — e invocar esa ceguera para culpar a las sombras fue el error simétrico. Lo
   que zanjó la duda fue *quitar la escena*.
-- **El medidor dice *cuándo* una técnica vale la pena; no se aplican todas
-  siempre.** Eso es cargo-culting y frena al dev, no al juego.
+- **El medidor dice *cuándo* una técnica vale la pena**; aplicarlas todas siempre
+  es cargo-culting y frena al dev, no al juego.
 - Último perfil móvil medido: **37,3k tris, 62 draws, 53 mats → "medio", por
   materiales.** De ahí sale la ley 1 de `TEXTURES.md`.
 - **Fill antes que geometría (2026-08-06, medido en las tres suites).** En la
@@ -376,10 +401,15 @@ test de ms falla por ruido, se ignora y muere. Carriles separados.
 - Tests de escena (`perf/budget.rs::static_cost`) suman lo que cada fila de
   `SCENES` declara. Es lo que el contador de runtime no puede ser: él grada lo
   que la cámara ve, así que una escena pasada puede leer "bien" desde un rincón.
-  **Y el de runtime tuvo su propio agujero hasta el 2026-08-06**: consultaba
-  mallas por tipo de material y `GrassMaterial` era un tercero, así que nunca
-  contó la pradera. Ahora cuenta por `Mesh3d` y una ley de arquitectura exige
-  que todo `MaterialPlugin` registrado aparezca ahí.
+- **Y las herramientas ya no conocen los materiales por una lista** (2026-08-07).
+  El inventario, la vista de overdraw y el desglose de materiales tenían cada uno
+  la suya, escrita a mano; `GrassMaterial` faltó en las tres, en dos de ellas
+  durante meses. Ahora hay una sola llamada —`add_instrumented_material::<M>()`
+  en `visuals::material_registry`— que engancha el render y las herramientas en
+  el mismo acto, y una ley de arquitectura prohíbe la puerta de atrás. El
+  inventario además **atribuye**: pradera / bosque / terreno / resto, en
+  triángulos y draws, que es el número que cada ajuste del pasto necesitaba y no
+  existía.
 - El terreno son **32768 tris fijos** en toda escena — un tercio del presupuesto
   móvil antes de poner nada encima. Subir `CELLS` es una decisión de presupuesto.
 - Un draw call exacto **no** es testeable sin cámara; lo testeable es la cota.
@@ -398,11 +428,13 @@ pose como `Waypoint` pegable). El flythrough acumula frame/gpu/tris/draws/mats
 
 Pendiente: **autorear la ruta canónica real** con F4 — hoy los tramos se llaman
 `spawn→clearing` en cajas que no tienen ni claro ni bosque, y una regresión de
-~1 ms de GPU pasó dos días inadvertida. **Lo mismo vale para el mirador del
-bosque**, y ahora hay evidencia: la suite `general` mide que ocultar el bosque
-entero desde ahí vale 0,34 ms, o sea que desde ese punto casi no se ve bosque. Diferido salvo que el profiler lo pida:
-impostores, streaming por chunks, y **occlusion culling** — el de Bevy es
-experimental vía meshlets, no mobile-friendly.
+~1 ms de GPU pasó dos días inadvertida. El nombre de un tramo es una afirmación
+que nada verifica, igual que lo era el mirador del bosque antes de que el
+reporte midiera qué hay en cuadro.
+
+Diferido salvo que el profiler lo pida: impostores, streaming por chunks, y
+**occlusion culling** — el de Bevy es experimental vía meshlets, no
+mobile-friendly.
 
 ## Pipeline authored de assets
 
@@ -478,12 +510,12 @@ para decidir cuándo migrar `layout.rs`: reescribir `spawn_stair_segment` como u
   terreno contra los cuerpos. De las 10 restantes, cuatro quedaron ordenadas.
   **Para listarlas por nombre hay que activar la feature `debug` de `bevy_ecs`**
   — sin ella Bevy imprime placeholders y después de `initialize` ya no hay vía.
-- **La pradera cuesta 600.000 triángulos por vista, seis veces el presupuesto
-  móvil entero.** En esta máquina *eso no es lo que cuesta el frame* —es
-  fill-bound—, pero la deuda sigue declarada porque el target es un tiler y ahí
-  el vértice se paga en bandwidth aunque no pinte. **La palanca a tocar primero
-  es el overdraw**, y el dial del hub nunca se usó. El anillo interior de 16 m es
-  la primera candidata a revertir: costó +73% y no compró nada verificable.
+- **La pradera cuesta ~690.000 triángulos por vista** (medido en cuadro, no
+  declarado), y es el **92% de los triángulos del frame** en el Mundo. En esta
+  máquina eso no es lo que cuesta —es fill-bound—, pero la deuda sigue declarada
+  porque el target es un tiler. **La palanca a tocar primero es el overdraw**, y
+  ahora hay dos hallazgos concretos para atacarlo: el dial del hub sigue sin
+  usarse, y el primer plano está plantado por cuatro anillos a la vez.
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

@@ -785,6 +785,75 @@ los 14-20 m.
 un escalón; lo que lo borra es que la densidad sea una función continua de la
 distancia y que la banda sólo decida el *tamaño del lote*.
 
+### Ver el pasto: las vistas de color, y lo primero que mostraron (2026-08-07)
+
+Pedido por el usuario junto con el arreglo de las herramientas, y con el
+argumento correcto: *"quiero ver claramente lo que está pasando en el código con
+distintos colores"*. Todo lo que decide la forma del pasto —a qué anillo
+pertenece una brizna, de qué chunk salió, cuánto de su altura tiene— es
+invisible en la imagen final, porque todo se ve verde. Ocho intentos contra el
+mismo artefacto se discutieron sin poder mirar ninguna de esas cosas.
+
+La perilla `grass-view` (hub F1, o `BOF_KNOBS=grass-view=N`) tiene seis pasos en
+dos familias:
+
+| vista | qué pinta | para qué |
+|---|---|---|
+| `anillo` | un pastel por anillo | dónde cambia el LOD y cuánto se solapan |
+| `chunk` | un pastel por celda | el mapa de **draw calls**: un chunk es una malla y un draw |
+| `brizna` | un pastel por hash | si al acercarse las briznas **se suman** o **se reemplazan** |
+| `crecimiento` | rampa de dos colores | dónde está la banda que crece |
+| `medir` | plano, exacto, sin luz ni niebla ni tonemapping | contar píxeles |
+
+**Ninguna cuesta un byte por vértice ni rehornea la pradera.** El anillo sale de
+`floor(uv1.y)`, la brizna de `uv1.x` y el chunk de `floor(xz / chunk_m)` con los
+tamaños viajando en el uniform. Lo que cambia es lo que el shader **pinta**, no
+lo que dibuja, así que se encienden jugando y sin perturbar la geometría que se
+está juzgando.
+
+Las cuatro primeras tiñen el color real y **dejan la luz puesta** — el campo
+sigue leyéndose como campo, que es la condición para juzgar si algo *se ve* mal.
+La quinta es otra cosa: la cámara apaga tonemapping y dithering, el juego escribe
+la paleta en un `.json` al lado del PNG, y `tools/shot_stats.py` cuenta píxeles
+de colores que no conoce de antemano. **Eso reemplaza los perfiles por detección
+de bordes** que decidieron todo el 2026-08-06 y que este documento ya marcaba
+como defectuosos: saturan con densidad alta y no distinguen una brizna baja de
+una brizna ausente.
+
+#### Lo primero que se vio, y es un defecto de arquitectura
+
+**Cuatro anillos plantan sobre el mismo suelo.** No es que se apilen por
+distancia: coexisten en todo el rango, incluida la posición de la cámara.
+
+Medido desde el mirador canónico, `grass-view=medir` con bandas horizontales
+(fila de pantalla ≈ distancia al suelo):
+
+| banda | anillo 0 | anillo 1 | anillo 2 | anillo 3 |
+|---|---:|---:|---:|---:|
+| lejos | 0% | 14,2% | 39,2% | 18,4% |
+| media | 18,0% | 50,5% | 31,3% | 0% |
+| **primer plano** | **32,9%** | **35,8%** | **28,4%** | 0% |
+
+**Dos tercios del primer plano son briznas de anillos lejanos** — y las del
+anillo 2 son de **un** triángulo, sin punta partida, pensadas para 24-40 m.
+
+*La causa, en el código:* un chunk se descarta sólo si cae **entero** dentro del
+traspaso del anillo interno (`farthest <= handover` en `ring_cells_with_slack`),
+y un chunk de 32 m que contiene a la cámara nunca cae entero dentro de 18 m. Se
+conserva, y planta sus 40 briznas/m² sobre los pies del jugador. El anillo no
+decide "sólo el tamaño de chunk" como dice la sección anterior: decide también
+cuánto se superpone con todos los internos.
+
+*Por qué no se arregló de una:* **ese solapamiento es lo que hoy tapa la costura
+entre anillos.** Sacarlo sin la reescritura de *praderas anidadas* vuelve a
+destapar el artefacto que ocho intentos persiguieron. El sobrecosto está
+comprando algo. Lo que cambia es que ahora se sabe cuánto: queda como deuda con
+número en `no_patch_of_ground_is_planted_by_more_than_two_rings`, y la
+reescritura tiene una medición a favor en vez de una intuición.
+
+*Y explica el fill-bound sin misterio:* el primer plano —donde cada brizna cubre
+más píxeles— se está dibujando tres veces.
+
 ### Los anillos
 
 **La tabla derivada**, con un factor de seguridad ×2,5 sobre el mínimo:

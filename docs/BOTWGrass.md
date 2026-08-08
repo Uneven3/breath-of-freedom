@@ -554,9 +554,58 @@ ella:**
   el índice de la brizna dentro de la secuencia de su baldosa — que es
   justamente el dato que la pertenencia al mundo hace existir.
 
-Lo que sí falta antes de reintentarlo es **la curva de cobertura contra densidad
-a varias distancias**, que las herramientas ya permiten sacar: sin ella, elegir
-cuántas briznas emite cada nivel vuelve a ser adivinar.
+El tercero era lo único que faltaba antes de reintentar, y **está medido**: la
+curva de abajo.
+
+## La curva, y la ley que salió de ella (2026-08-08)
+
+`BOF_SHOT_SWEEP=grass-density` recorre la escalera entera de una perilla en una
+corrida y deja una fila por paso. Con la vista `medir` y el mirador de la suite
+(ojo a 1,6 m, mirando casi horizontal), la cobertura de pantalla por banda:
+
+| briznas/m² | 3-4 | 4-6 | 6-8 | 8-11 | 11-16 | 16-22 | 22-32 | 32-45 | 45-64 |
+|---|---|---|---|---|---|---|---|---|---|
+| 80 | 100,0 | 100,0 | 100,0 | 99,8 | 99,6 | 99,9 | 99,6 | 100,0 | 99,8 |
+| 64 | 100,0 | 100,0 | 100,0 | 99,2 | 98,8 | 99,7 | 98,7 | 99,9 | 99,6 |
+| 52 | 99,8 | 100,0 | 100,0 | 98,3 | 97,5 | 99,0 | 97,2 | 99,7 | 99,4 |
+| 44 | 99,5 | 99,9 | 99,9 | 97,4 | 95,8 | 97,8 | 95,1 | 99,3 | 99,2 |
+| **40** | **99,3** | **99,9** | **99,7** | **96,5** | **94,5** | **96,9** | **93,4** | **99,0** | **98,8** |
+| 30 | 98,2 | 99,0 | 98,9 | 92,7 | 89,3 | 93,2 | 87,4 | 97,2 | 97,5 |
+| 20 | 94,0 | 95,7 | 96,1 | 84,2 | 77,6 | 83,2 | 74,6 | 91,8 | 93,7 |
+| 12 | 82,7 | 84,9 | 86,0 | 67,4 | 59,8 | 65,0 | 56,2 | 78,9 | 83,3 |
+| 6 | 47,1 | 59,2 | 63,7 | 44,3 | 34,7 | 40,7 | 32,5 | 52,5 | 61,9 |
+
+(en % de los píxeles de la banda; el paso 0/m² da cero en todas y no se lista)
+
+**Y se deja describir por una sola constante por banda.** Con las briznas como
+puntos independientes, `C = 1 − e^(−λ·a)`: cada paso propone su propio `a =
+−ln(1−C)/λ`, y todos proponen el mismo. En 22-32 m los nueve pasos dan **0,0682
+m²** con extremos 0,0656 y 0,0690 — ±2,5% sobre un rango de densidad de **13×**.
+
+| banda | 3-4 | 4-6 | 6-8 | 8-11 | 11-16 | 16-22 | 22-32 | 32-45 | 45-64 |
+|---|---|---|---|---|---|---|---|---|---|
+| `a` (m²) | 0,127 | 0,157 | 0,158 | 0,085 | 0,072 | 0,088 | 0,068 | 0,118 | 0,117 |
+
+**Qué es y qué no es.** `a` es *efectiva*: absorbe el solapamiento entre anillos
+del reparto actual y el LOD de la primitiva, no es el área física de una brizna.
+Lo que sí es, es **predictiva** dentro de este reparto — y eso alcanza para lo
+que el Paso 1 necesitaba.
+
+**Lo que contesta:** cuántas briznas necesita una distancia para una cobertura
+objetivo, `λ = −ln(1−C)/a`, en vez de elegirse a ojo. Para 97% pareja:
+
+| banda | 3-4 | 4-6 | 6-8 | 8-11 | 11-16 | 16-22 | 22-32 | 32-45 | 45-64 |
+|---|---|---|---|---|---|---|---|---|---|
+| λ (briznas/m²) | 28 | 22 | 22 | 41 | **49** | 40 | **51** | 30 | 30 |
+
+**La densidad plana de 40/m² está mal repartida:** sobra ~1,5× en el primer
+plano y falta ~25% justo en 11-16 y 22-32 m. Y esas dos bandas son las de las
+fronteras entre anillos — las mismas donde el usuario ve crecer y achicarse el
+pasto al caminar. La queja tiene, además de su causa estructural, un déficit de
+cobertura medible.
+
+Determinista: dos barridos idénticos dieron la misma tabla salvo una celda que
+difiere en 0,1 punto.
 
 **Todo esto salía de la misma decisión: el LOD horneado en mallas estáticas por
 chunk.** De ahí la frontera cuadrada, el reshuffling, el esconder-pero-pagar, los
@@ -833,20 +882,21 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 | Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
 | El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
 
-## Por dónde retomar — mañana (escrito el 2026-08-07 al cerrar)
+## Por dónde retomar (al 2026-08-08)
 
 **Hay una sola cosa que hacer, y todo lo demás espera detrás:** que la brizna
 pertenezca al mundo. Es la decisión del usuario, tomada y repetida en varias
 sesiones, y es lo único que ataca *su punto más importante* —"veo cómo crecen y
-cómo se achican los pastos"—, que ninguna de las tres tandas de arreglos de hoy
-tocó.
+cómo se achican los pastos"—, que ninguna de las tres tandas de arreglos del
+2026-08-07 tocó.
 
 **Cómo entrarle, en el orden que evita repetir el intento fallido:**
 
-1. **Sacar la curva de cobertura contra densidad a varias distancias.** Las
-   herramientas ya la permiten (`grass-density` tiene diez pasos justamente para
-   esto, y `grass-rings` aísla el nivel). Sin ella, cuántas briznas emite cada
-   nivel se vuelve a elegir a ojo — que es el error 3 del intento anterior.
+1. ~~Sacar la curva de cobertura contra densidad a varias distancias.~~
+   **Hecha el 2026-08-08**, con la ley que salió de ella: la tabla y el `a` por
+   banda están más arriba, y `λ = −ln(1−C)/a` reemplaza al ojo para elegir
+   cuántas briznas emite cada nivel. Sale sola con
+   `BOF_SHOT_SWEEP=grass-density BOF_KNOBS=grass-view=6`.
 2. **Posición desde una grilla fija del mundo**, con el índice de la brizna dentro
    de la secuencia de su baldosa viajando en el registro. Ese índice es lo que
    reemplaza al hash como criterio de rango: es el error 2 del intento anterior, y
@@ -854,6 +904,10 @@ tocó.
 3. **Conservar el solapamiento.** Anidar no exige excluir; excluir fue una
    decisión aparte que costó 3× la densidad. El Paso 0 midió que de 8 a 22 m el
    solapamiento **paga** hasta 22 puntos de cobertura.
+   **Y la curva agrega dónde apuntar:** con 40/m² planos sobra ~1,5× en el primer
+   plano y falta ~25% en 11-16 y 22-32 m, que son las bandas de las fronteras. El
+   rediseño puede repartir esa densidad en vez de subirla — el presupuesto de
+   briznas ya alcanza, está mal puesto.
 4. **Validar jugando**, no con capturas: el artefacto es el movimiento. Lo que la
    captura sí puede hacer es el guardrail —que ninguna banda se hunda— y confirmar
    que dos corridas idénticas dan el mismo número.

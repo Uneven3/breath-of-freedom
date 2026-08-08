@@ -34,30 +34,27 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   piso de ruido es **5%**, porque el viento mueve las briznas entre disparos.
 - **Siempre `cargo run`, nunca `./target/debug/...` a secas.** Bevy busca
   `assets/` junto al ejecutable, así que el binario directo arranca **sin un solo
-  shader** y todo lo demás sigue funcionando: el 2026-08-07 una corrida así sacó
-  una foto de puro cielo mientras el inventario reportaba 691.200 triángulos de
-  pradera al 95% del cuadro. Ahora la foto y la tabla avisan si algún asset falló
-  — pero el aviso existe porque el caso ocurrió.
-- **Una curva en una corrida: `BOF_SHOT_SWEEP=<perilla>`** recorre la escalera
-  entera de esa perilla, deja una foto por paso y al final imprime la tabla —
-  una fila por paso, una columna por banda de distancia. Es lo que convierte
-  diez corridas que había que acordarse de nombrar igual en una sola.
+  shader** y todo lo demás sigue reportando: el 2026-08-07 una corrida así sacó
+  una foto de puro cielo declarando 691.200 triángulos de pradera al 95% del
+  cuadro. La foto y la tabla ahora avisan, porque el caso ocurrió.
 - **Contar píxeles: lo hace la misma corrida** (`BOF_KNOBS=grass-view=6`, la
-  vista `medir`). El informe sale en el log junto a la foto: cobertura total, el
-  reparto por anillo y el **perfil por distancia** en metros. Reemplaza los
-  perfiles por detección de bordes, que saturan con densidad alta. **Omite el
-  perfil y dice por qué** cuando la fila de pantalla no se puede convertir en
-  distancia — cámara sin perspectiva, `render-scale` puesto, o más de 20 cm de
-  relieve bajo la línea de vista. Hasta el 2026-08-08 esto era
-  `tools/shot_stats.py`, que decodificaba el PNG por su cuenta; el port a Rust se
-  verificó dando el mismo conteo píxel a píxel sobre la misma captura.
+  vista `medir`). El informe sale en el log junto a la foto: cobertura, reparto
+  por anillo y **perfil por distancia** en metros. **Omite el perfil y dice por
+  qué** cuando la fila de pantalla no se puede convertir en distancia — sin
+  perspectiva, con `render-scale`, o con más de 20 cm de relieve bajo la mirada.
+  Hasta el 2026-08-08 era `tools/shot_stats.py`; el port a Rust se verificó
+  dando el mismo conteo píxel a píxel sobre la misma captura.
+- **Una curva en una corrida: `BOF_SHOT_SWEEP=<perilla>`** recorre la escalera
+  entera de esa perilla, deja una foto por paso e imprime la tabla — una fila por
+  paso, una columna por banda de distancia — más el ajuste `C = 1 − e^(−λ·a)` si
+  el barrido movió la densidad.
 - **Antes de explicar una diferencia entre dos configuraciones, sacar la misma
-  captura dos veces.** Cuesta tres minutos y el 2026-08-07 fue lo único que
-  destapó un bug que apagaba un nivel entero de la pradera con resultado distinto
-  en cada corrida: cada foto suelta parecía una configuración con su explicación
-  plausible. La estadística de píxeles es determinista salvo el viento (piso 5%),
-  así que **una diferencia grande entre dos corridas idénticas es un bug, no
-  ruido**.
+  captura dos veces.** El 2026-08-07 fue lo único que destapó un bug que apagaba
+  un nivel entero con resultado distinto en cada corrida, y cada foto suelta
+  parecía una configuración con su explicación plausible. La estadística de
+  píxeles es determinista salvo el viento (piso 5%), así que **una diferencia
+  grande entre dos corridas idénticas es un bug, no ruido** — con el viento
+  apagado, el barrido del 2026-08-08 repitió 89 de 90 celdas exactas.
 - **F7 en el juego captura lo que el usuario está viendo**, numerada, con la pose
   de cámara impresa ya formateada como `BOF_SHOT_POSE`. Es la única forma de que
   un reporte visual suyo llegue sin pasar por mi interpretación.
@@ -72,13 +69,11 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
 - Debug in-game: **F1 abre el hub** — canales, perillas de render, acciones y la
   secuencia de medición, todo por click. Sobreviven dos teclas: `[`/`]` ciclan
   clips con el navegador abierto, y **P** vuelca el snapshot al log.
-- **El log arranca callado (2026-07-26).** Todos los canales en `off`: el sink
-  de consola escribía siempre y en un playtest de dos minutos puso **208 de 240
-  líneas**, enterrando las 28 que hablaban del juego. El benchmark y el
-  flythrough imprimen sus propias tablas, así que dejar todo apagado no cuesta
-  ninguna medición.
-- `RUST_LOG` **reemplaza** el filtro de Bevy en vez de sumarse, así que usarlo a
-  secas devuelve el spam de `wgpu`/`naga`. Si hace falta:
+- **El log arranca callado (2026-07-26)**, todos los canales en `off`: el sink de
+  consola ponía **208 de 240 líneas** de un playtest, enterrando las 28 que
+  hablaban del juego. Las tablas del benchmark y el flythrough salen igual.
+  `RUST_LOG` **reemplaza** el filtro de Bevy en vez de sumarse, así que a secas
+  devuelve el spam de `wgpu`/`naga`; si hace falta,
   `RUST_LOG=wgpu=error,naga=warn,breath_of_freedom=debug`.
 - **Antes de bindear una tecla, `grep -rhoE "KeyCode::[A-Za-z0-9]+" src/`.**
   Nadie arbitra colisiones (hallazgo C2), así que una tecla ya usada no da error:
@@ -109,11 +104,11 @@ hermanas (`bof_domain`, `bof_simulation`, y el binario); el smoke headless
 levanta el juego completo sin ventana ni GPU.
 
 **Pradera** (ver `BOTWGrass.md`): grilla rodante de cuatro niveles centrada en la
-cámara, briznas horneadas en una malla por chunk. *"Cero trabajo por frame"* fue
-una afirmación de este documento hasta que se midió: hornear un chunk cuesta
-**5,5 ms de media y hasta 9,5**. Nació reemplazando un intento cuya documentación
-afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que el medidor marcaba
-35-46. **Regla que sale de ahí: ningún número entra sin salir del medidor.**
+cámara; desde el Paso 2 ninguna brizna es geometría — cada una es un registro de
+16 bytes que el vertex shader levanta. Nació reemplazando un intento cuya
+documentación afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que el
+medidor marcaba 35-46. **Regla que sale de ahí: ningún número entra sin salir del
+medidor.**
 
 Auditorías: arquitectura (2026-07-17, 4/4 corregidos), calidad (2026-07-24) y
 código (`AUDITORIA_CODIGO_2026-07-25.md`); de esta última siguen abiertas **C1**
@@ -145,9 +140,8 @@ escena**: F5 esculpe donde estés y `Ctrl+S` escribe en el archivo de esa escena
 
 `SceneBuild { Ground, Actors }`: cualquier cosa que se pare sobre el suelo va en
 `Actors`, porque en `Ground` el terreno todavía es un comando encolado y **no se
-puede leer**. Esa fase existe desde que el player nacía 6,6 m bajo tierra — y un
-heightfield es una superficie de una cara, así que desde abajo la caída no
-termina nunca.
+puede leer**. La fase existe desde que el player nacía 6,6 m bajo tierra, y un
+heightfield tiene una sola cara: desde abajo la caída no termina nunca.
 
 ## La herramienta de mapas
 
@@ -214,14 +208,12 @@ undo, y guardado en disco. **Falta** la relectura en vivo (F10 → menú → vol
 ### Lección de la diagonal de la celda (2026-07-26, arreglado)
 
 `parry3d` triangula el heightfield por la **anti-diagonal** y nuestra malla usaba
-la principal: **0,33 m** de desvío en el peor punto y **36% de las muestras** a
-más de 1 cm, invisible en piso plano y por eso sobrevivió. El porqué está en el
-doc de `Terrain::to_collider`; el detalle, en git. Lo que se queda es **por qué
-la suite no lo agarró**: comparaba 6 puntos a mano (con relieve suave las dos
-diagonales casi coinciden) y **nadie enfrentaba la malla que se ve contra la
+la principal: **0,33 m** de desvío en el peor punto, invisible en piso plano y
+por eso sobrevivió. Lo que se queda es **por qué la suite no lo agarró**:
+comparaba 6 puntos a mano y **nadie enfrentaba la malla que se ve contra la
 superficie que se camina**. Ahora se barren 3600 muestras con paso de 2,51 m
-contra celdas de 2,5 m, y se comparan **centroides** de triángulo — los vértices
-no sirven, ahí las triangulaciones coinciden por construcción.
+contra celdas de 2,5 m, comparando **centroides** — en los vértices las dos
+triangulaciones coinciden por construcción.
 
 ### Lecciones del relieve que siguen aplicando
 
@@ -245,39 +237,34 @@ el tuning de wall-climb para pendientes orgánicas, que es tarea de *movimiento*
 ## El pasto — el detalle vive en `BOTWGrass.md`
 
 **Norte (2026-08-07):** el feeling de BOTW en low-poly, y **el móvil dejó de ser
-un veto** — ver `NORTE.md`. Primero que se vea bien; el profiler y la adaptación
-al target vienen después. Target de imagen **900p30**.
+un veto** — ver `NORTE.md`. Primero que se vea bien. Target de imagen **900p30**.
 
 > *"Cuando el pasto se vea bien por sí solo, todo lo demás va a caber bien, lo
-> cual no es cierto al revés."* — y el contraejemplo que zanja la discusión de
-> presupuesto: **Flower (PS3, 2009)** llena la pantalla con una fracción de este
-> hardware.
+> cual no es cierto al revés."* — y el contraejemplo de presupuesto: **Flower
+> (PS3, 2009)** llena la pantalla con una fracción de este hardware.
 
-**Resuelto y jugado:** el parpadeo (era z-fighting, no MSAA); la altura; la
-paleta derivada del suelo; el LOD de brizna; la **brizna de dos triángulos con
-arista horizontal** (misma cobertura, menos geometría, y ahora puede arquearse);
-la **carta opaca** en el nivel lejano (ocho veces menos y pinta más); y el **LOD
-por tamaño en pantalla** en vez de por radio autorado.
+**Resuelto y jugado** (detalle en `BOTWGrass.md`): el parpadeo, la altura, la
+paleta derivada del suelo, la brizna de dos triángulos, la carta opaca lejana y
+el LOD por tamaño en pantalla.
+
+**Decidido, no a reevaluar (2026-08-07):** *"el pasto siempre debió pertenecer al
+mundo"*. La posición de una brizna sale de una grilla fija del **mundo**; el
+nivel decide *cuántas*, nunca *cuáles*, y por eso acercarse sólo agrega. Una
+medición en contra replantea la implementación, no el rumbo.
 
 **Abierto, en orden de cuánto sabemos:**
 
-1. **Los anillos son el problema de fondo**, identificado por el usuario tras
-   tres sesiones y confirmado midiendo. Un nivel decidía cuatro cosas; tres ya se
-   separaron y falta la **semilla**, que sigue incluyendo el nivel — por eso
-   cruzar una frontera reemplaza briznas en vez de agregarlas. La reescritura
-   anidada se implementó, se midió y se revirtió: cuesta 2,9× y deja agujeros,
-   porque el modelo de densidad está mal **en la forma**. Antes de reintentarla
-   hay que medir la curva de cobertura contra densidad a varias distancias.
-2. **El borde de un nivel es un cuadrado** (Chebyshev, cuantizado a chunks). Se
-   hizo visible al derivar las densidades. Misma causa raíz: el LOD horneado.
-3. **La salida de fondo:** que la brizna deje de ser geometría y pase a ser un
-   registro — `MeshTag` + `ShaderStorageBuffer` + instancing, que Bevy soporta de
-   fábrica conservando `ExtendedMaterial`.
-4. **Con el veto levantado**, la carta con **alfa recortado** es el próximo
+1. **Falta el cuarto eje: la semilla sigue incluyendo el nivel.** Es lo único
+   entre el estado actual y la decisión de arriba. El intento anidado se revirtió
+   por dos errores separables (excluir en vez de anidar, y el rango desde un
+   hash) y por un tercero que **ya está saldado**: la curva de cobertura contra
+   densidad, medida el 2026-08-08 y en `BOTWGrass.md` con su ley.
+2. **El borde de un nivel es un cuadrado** (Chebyshev, cuantizado a chunks).
+   Misma causa raíz: el LOD horneado.
+3. **Con el veto levantado**, la carta con **alfa recortado** es el próximo
    experimento: le daría silueta de briznas en vez del borde superior plano.
-5. **El horizonte no se llena.** Sin tocar.
+4. **El horizonte no se llena.** Sin tocar.
 
-**Tres lecciones de método que no son sobre pasto:**
 ## La suite de medición (2026-08-06)
 
 **Correr un barrido ya no requiere jugar.** `BOF_BENCH=<suite> cargo run` entra
@@ -310,11 +297,9 @@ triángulos— y avisa cuando el tema que la suite dice medir cae por debajo del
 ninguna corrida podía desmentirla: el test que había verificaba que la *escena*
 declarara bosque, que es otra cosa y siempre pasaba.
 
-**Y lo primero que dijo cierra un pendiente viejo con mejor diagnóstico.**
-Ocultar el bosque valía 0,34 ms y se leyó como "el mirador no mira al bosque".
-El número real: desde ahí el bosque es el **0% de los triángulos** porque la
-pradera se lleva el **92%**. El mirador no está mal apuntado — la suite general
-mide un frame que es casi todo pasto. Medir el bosque pide su propia caja.
+**Y lo primero que dijo:** ocultar el bosque valía 0,34 ms no por mal mirador,
+sino porque desde ahí el bosque es el **0% de los triángulos** y la pradera se
+lleva el **92%**. Medir el bosque pide su propia caja.
 
 **Ruido de Bevy, no nuestro:** cada corrida imprime ~270 líneas
 `bevy_render::slab_allocator: Use-after-free`, al despawnear muchas mallas de
@@ -324,16 +309,11 @@ golpe. No rompe la corrida ni los números; ensucia el log y no está investigad
 
 Las ocho fases están en `git log -- docs/CRATES.md` y las leyes en
 `ARCHITECTURE.md`. Lo que sigue informando decisiones y no se deduce del código:
-
-- **Tres decisiones que se apartaron del plan.** `input` no cruzó a simulación:
-  dejándolo afuera, simulación **no puede** leer teclado en vez de acordarse de
-  no hacerlo. `layout`/`spawn` tampoco: son composición. El reloj sí cruzó, la
-  luz no (§20).
-- **Los newtypes de unidades se midieron y se descartaron**, y
-  **`bof_presentation` no se creó a propósito**: con las referencias en cero y la
-  ley congelada en un test, no agregaba nada.
-- **Al leer un log, ojo:** una escena sin heightmap arranca plana **y en
-  silencio** — la ausencia de línea no es ausencia de escena.
+`input` no cruzó a simulación —dejándolo afuera, simulación **no puede** leer
+teclado en vez de acordarse de no hacerlo—, `layout`/`spawn` tampoco (son
+composición), el reloj sí cruzó y la luz no (§20); los newtypes de unidades se
+midieron y se descartaron, y `bof_presentation` no se creó a propósito. **Al leer
+un log, ojo:** una escena sin heightmap arranca plana **y en silencio**.
 
 Siguiente en esa línea: instancias discretas, cerrar el ciclo semántico, y jugar
 graybox sobre relieve + tipografía.
@@ -460,6 +440,9 @@ queda más legible.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
+- **`perf/shot.rs` va por 780 líneas** (§16). Hace tres cosas: la máquina de la
+  captura, la leyenda que se escribe al lado, y el barrido de perillas. El corte
+  natural es sacar el barrido, que ya casi no toca a las otras dos.
 - **Paleta/IDs Rust↔WGSL sin unificar, y `terrain_material.rs` sin dividir**
   (§1, §16). Viene de la auditoría del 2026-08-02; no bloquea, pero cada color
   nuevo hay que escribirlo en dos lados que nadie obliga a coincidir.
@@ -472,12 +455,10 @@ queda más legible.
   test impide que la lista crezca; falta el dueño único que traduzca bindings a
   acciones tipadas.
 - **113 pares de sistemas ambiguos en `FixedUpdate`**, auditados uno por uno y
-  congelados en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES`. Asustan menos de lo
-  que parecen: 78 son los `propose` compartiendo el `ProposalBuffer` (la
-  arbitración por `(Priority, weight)` los neutraliza) y 25 son el collider del
-  terreno contra los cuerpos. De las 10 restantes, cuatro quedaron ordenadas.
-  **Para listarlas por nombre hay que activar la feature `debug` de `bevy_ecs`**
-  — sin ella Bevy imprime placeholders y después de `initialize` ya no hay vía.
+  congelados en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES`: 78 son los
+  `propose` compartiendo el `ProposalBuffer` (la arbitración los neutraliza), 25
+  el collider del terreno contra los cuerpos, y de las 10 restantes cuatro
+  quedaron ordenadas.
 - **La pradera cuesta ~690.000 triángulos por vista** (medido en cuadro, no
   declarado), y es el **92% de los triángulos del frame** en el Mundo. En esta
   máquina eso no es lo que cuesta —es fill-bound—, pero la deuda sigue declarada

@@ -70,7 +70,7 @@ mandar cuando se adapte al target — no antes.
 
 ## Estado actual (2026-08-07)
 
-`src/visuals/grass.rs` + `grass_records.rs` + `assets/shaders/grass.wgsl`, 127
+`src/visuals/grass.rs` + `grass_records.rs` + `assets/shaders/grass.wgsl`, 132
 tests. Grilla rodante de cuatro niveles centrada en la **cámara** (nunca en el
 player: el LOD responde a lo que la pantalla muestra). Desde el Paso 2 **ninguna
 brizna es geometría**: cada una es un registro de 16 bytes y el vertex shader la
@@ -144,6 +144,42 @@ usa el techo de la tabla, así que la grilla es la misma y lo único que se muev
 cuántas briznas están a altura completa. Lo que sí cambia es el fill — medido
 entre el paso 0 y el 4, la cobertura sube de 93,4% a 97,9% en 22-32 m, o sea más
 solapamiento y más píxeles pagados.
+
+### Y lo que la perilla contestó: **la rampa no era el problema**
+
+Barrió los cinco pasos jugando y ninguno mató el crecimiento. Su reporte, que es
+el dato más importante de la sesión:
+
+> **"Noto los crecimientos entre los anillos 0-1 y 1-2, se nota, siempre se ha
+> notado, veo cómo crecen y cómo se achican los pastos, y ésa ha sido mi punto
+> más importante. En 0.4 se ve mejor porque los anillos están distribuidos de una
+> forma más random en vez de anillos circulares fijos, pero aún se nota el
+> crecimiento y desaparición del pasto."**
+
+**Su explicación de por qué 0.4 se ve mejor es el diagnóstico.** No es que la
+transición se suavice: es que **se rompe la frontera visible**. Lo que ayuda es
+que deje de haber un círculo, no que el círculo tenga borde blando. Está
+describiendo la solución, no el ajuste.
+
+Y confirma que la escalera de `grass-growth` es un paliativo. Los anillos son
+**cuatro campos de pasto distintos sobre el mismo suelo** —la semilla incluye el
+anillo— así que cruzar 0→1 no es la misma brizna con menos detalle: es un campo
+que se achica hasta desaparecer mientras otro crece desde cero en su lugar. Una
+**sustitución disfrazada de fundido**; la rampa sólo decide cuánto se estira el
+disfraz.
+
+### El billboard no era el color: era el suelo pelado
+
+Se midió el color medio por banda desde una cámara de juego (3,2 m, 15° abajo) y
+la diferencia no existe: 146,2 de luminancia a 3-8 m contra **149,3** a 45-64 —
+el lejano es 2% *más claro*, no más oscuro. Lo que él veía como "otro color" es
+la franja de **terreno sin pasto pasados los 64 m**, un verde oliva liso que
+ocupa buena parte del horizonte. **No es un bug:** ahí después va la niebla, que
+todavía no llega tan cerca. Anotado y cerrado.
+
+Para poder medirlo hizo falta arreglar la herramienta: `write_legend` no escribía
+nada con la vista de diagnóstico apagada, así que **la única captura que muestra
+el color que el jugador ve era la única sin eje de distancias**.
 
 ## El bug que se llevaba el campo: `vertex_index` no arranca en cero
 
@@ -447,22 +483,43 @@ el test *"todas las briznas de un chunk descartado ya están muertas"* pasa a se
 cierto: en Chebyshev no lo era, porque la esquina de un cuadrado está a √2 de su
 lado.
 
-## El problema abierto: los anillos
+## La decisión tomada: **la brizna pertenece al mundo**
 
-**Es el problema de fondo, identificado por el usuario tras tres sesiones.** Un
-nivel decidía cuatro cosas a la vez. Tres ya están separadas:
+> **"El tema del pasto, según yo, sí pertenece al mundo. Esto es algo que hemos
+> discutido varias veces en distintas sesiones; puede que otros agentes se hayan
+> equivocado, pero el pasto siempre debió pertenecer al mundo."**
+> — el usuario, 2026-08-07, cerrando la sesión
+
+**Esto no es una opción a evaluar: es la dirección del proyecto, y lleva varias
+sesiones dicha.** Cualquier agente que retome esto lo hereda decidido. Si una
+medición sale en contra, lo que se replantea es *la implementación*, no el
+rumbo — y hay que decirlo con esas palabras en vez de proponer volver a anillos
+independientes.
+
+**Qué quiere decir, en concreto:** la posición de una brizna sale de una grilla
+fija del **mundo**, no del anillo. Cada baldosa tiene su secuencia determinista de
+briznas y cada distancia dibuja las **primeras N** de esa secuencia. El anillo
+pasa a decidir *cuántas*, nunca *cuáles*.
+
+La propiedad que se compra —y es la que arregla su queja de siempre— es que
+**acercarse sólo agrega**. Las briznas que ya estaban no se mueven, no se achican
+y no se reemplazan, porque son literalmente las mismas. Nada crece en el medio del
+campo: sólo aparece detalle al fondo.
+
+Un nivel decidía cuatro cosas a la vez. Tres ya están separadas:
 
 | eje | estado |
 |---|---|
 | tamaño de chunk | **lo único** que el nivel decide |
 | forma de la primitiva | `shape_at(distancia, pantalla)` |
 | densidad | `density_at(distancia, forma)` |
-| **semilla de la brizna** | **incluye el nivel — pendiente** |
+| **semilla de la brizna** | **incluye el nivel — el trabajo de mañana** |
 
-Mientras la semilla incluya el nivel, cruzar una frontera **reemplaza** briznas
-por otras en vez de agregarlas, y eso siempre se ve.
+### El intento anterior: qué falló, y qué NO falló
 
-### El cuarto eje: implementado, medido y revertido
+**Se intentó una vez y se revirtió, pero el veredicto no fue "la idea no
+sirve".** Fueron dos errores concretos de implementación, y conviene tenerlos
+presentes mañana porque los dos son evitables.
 
 Se escribió entero —semilla en baldosas del mundo de 1 m, cada nivel emitiendo
 las primeras N de la secuencia de cada baldosa, el rango viajando en el vértice,
@@ -483,8 +540,23 @@ Tres hallazgos:
 2. **El rango no es un hash.** Con `anchor/(1-hash)` y rangos chicos, todas las
    briznas de un nivel morían juntas en su borde interno.
 3. **Calibrar una constante no alcanza**, porque lo que falta no es una
-   constante. Antes de reintentarlo hay que medir **la curva de cobertura contra
-   densidad a varias distancias**, que las herramientas ya permiten sacar.
+   constante.
+
+**Y los dos primeros son errores separables de la idea, no consecuencias de
+ella:**
+
+- **Anidar no exige excluir.** Que cada nivel dibujara *sólo* dentro de su banda
+  fue una decisión aparte, y es la que costó el 3×. La pertenencia al mundo dice
+  *de dónde salen las posiciones*; no dice que los niveles no puedan pisarse. Se
+  puede anidar conservando el solapamiento que el Paso 0 midió que **paga**.
+- **El rango no puede salir de un hash.** `anchor/(1-hash)` con rangos chicos
+  mata juntas a todas las briznas de un nivel en su borde interno. Necesita ser
+  el índice de la brizna dentro de la secuencia de su baldosa — que es
+  justamente el dato que la pertenencia al mundo hace existir.
+
+Lo que sí falta antes de reintentarlo es **la curva de cobertura contra densidad
+a varias distancias**, que las herramientas ya permiten sacar: sin ella, elegir
+cuántas briznas emite cada nivel vuelve a ser adivinar.
 
 **Todo esto salía de la misma decisión: el LOD horneado en mallas estáticas por
 chunk.** De ahí la frontera cuadrada, el reshuffling, el esconder-pero-pagar, los
@@ -761,37 +833,47 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 | Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
 | El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
 
-## Por dónde retomar (2026-08-07, segunda sesión del día)
+## Por dónde retomar — mañana (escrito el 2026-08-07 al cerrar)
 
-**Ya se jugó**, y el veredicto está arriba: los cuadrados agresivos se fueron,
-queda el crecimiento al caminar y las cartas que se destacan. **Todo lo que queda
-es en movimiento**, así que el orden de abajo no se valida midiendo.
+**Hay una sola cosa que hacer, y todo lo demás espera detrás:** que la brizna
+pertenezca al mundo. Es la decisión del usuario, tomada y repetida en varias
+sesiones, y es lo único que ataca *su punto más importante* —"veo cómo crecen y
+cómo se achican los pastos"—, que ninguna de las tres tandas de arreglos de hoy
+tocó.
 
-1. **Elegir el paso de `grass-growth` jugando.** Está en el hub F1 con cinco pares
-   `(rampa, dispersión)`; el 0 es lo que ya jugó. Es la única forma de contestar
-   una pregunta que ninguna captura contesta.
-2. **Las cartas se notan demasiado contra el pasto vecino.** Falta saber *por
-   qué* antes de tocar: si es el tamaño (media carta contra briznas de 5,5 cm),
-   la forma (una masa maciza contra púas sueltas) o el sombreado. La respuesta
-   sale de una frase suya, no de una medición — el ancho de la carta se puede
-   poner en una perilla en cuanto se sepa qué mover.
-3. **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con el
-   comentario "cruzar una frontera cuesta un chunk". **Es falso:** cruzar una
-   frontera del anillo 0 pide una *fila* de chunks, y las cuatro grillas ruedan a
-   la vez. Medir el costo de hornear un chunk del anillo 0 (11.700 briznas) antes
-   de elegir el número.
-4. **La semilla de la brizna todavía incluye el nivel.** Es el cuarto eje del
-   problema de los anillos, el único sin separar: cruzar una frontera *reemplaza*
-   briznas en vez de agregarlas. El intento anidado está medido y revertido más
-   arriba, y es la sospecha viva detrás de *"el problema de los anillos todavía
-   se mantiene"*.
-5. **El Paso 5, el viento**, aplazado hasta que el resto esté bien.
+**Cómo entrarle, en el orden que evita repetir el intento fallido:**
 
-**Ya no está pendiente** lo que la sesión anterior dejó anotado: la cobertura del
-primer plano no era un problema de hash ni de raleo —el estado de hoy da 99,3% a
-3-4 m con el mismo shader— y la decisión de revertir el Paso 2 ya no tiene
-sentido: el Paso 2 no era el culpable, sino un bug suyo, y arreglado deja el
-campo mejor de lo que estuvo nunca.
+1. **Sacar la curva de cobertura contra densidad a varias distancias.** Las
+   herramientas ya la permiten (`grass-density` tiene diez pasos justamente para
+   esto, y `grass-rings` aísla el nivel). Sin ella, cuántas briznas emite cada
+   nivel se vuelve a elegir a ojo — que es el error 3 del intento anterior.
+2. **Posición desde una grilla fija del mundo**, con el índice de la brizna dentro
+   de la secuencia de su baldosa viajando en el registro. Ese índice es lo que
+   reemplaza al hash como criterio de rango: es el error 2 del intento anterior, y
+   es el dato que sólo existe cuando la brizna pertenece al mundo.
+3. **Conservar el solapamiento.** Anidar no exige excluir; excluir fue una
+   decisión aparte que costó 3× la densidad. El Paso 0 midió que de 8 a 22 m el
+   solapamiento **paga** hasta 22 puntos de cobertura.
+4. **Validar jugando**, no con capturas: el artefacto es el movimiento. Lo que la
+   captura sí puede hacer es el guardrail —que ninguna banda se hunda— y confirmar
+   que dos corridas idénticas dan el mismo número.
+
+**Detrás, y sólo después:**
+
+- **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con el
+  comentario "cruzar una frontera cuesta un chunk". **Es falso:** cruzar una
+  frontera del anillo 0 pide una *fila*, y las cuatro grillas ruedan a la vez.
+  Medir el costo de hornear un chunk del anillo 0 (11.700 briznas) antes de tocar
+  el número. Puede volverse irrelevante si el rediseño cambia qué se hornea.
+- **El paso de `grass-growth`** que se envía: hoy sigue en el índice 0 (6/6). Si
+  el rediseño elimina las fronteras, la perilla pierde casi todo su sentido y
+  puede quedar sólo como control del raleo lejano.
+- **El Paso 5, el viento**, aplazado desde el principio hasta que el resto esté
+  bien.
+
+**Cerrado hoy, no reabrir:** el color de los billboards (era el terreno sin pasto
+pasados los 64 m, y ahí va la niebla); la cobertura del primer plano (99,3% a
+3-4 m); y revertir el Paso 2 (el culpable era un bug suyo, arreglado).
 
 ## Errores que este documento ya cometió — no reintroducir
 
@@ -888,6 +970,20 @@ mesa el veredicto se cae.
     parece un contador desde cero y no lo es: en un draw indexado incluye el
     `base_vertex`. Lo que hizo el bug caro es que **funciona igual** mientras la
     malla sea grande, porque una malla grande se lleva un slab propio.
+
+19. **Una perilla no arregla una decisión de arquitectura.** El 2026-08-07 se
+    puso `grass-growth` en el hub para atacar "veo crecer el pasto al caminar", y
+    los cinco pasos lo suavizaron sin matarlo — porque lo que se ve no es un
+    parámetro mal calibrado sino que los anillos son **campos distintos**. Antes
+    de ofrecer una perilla, preguntarse si lo que molesta es un valor o una
+    estructura. Si es estructura, la perilla compra tiempo y confunde el
+    diagnóstico.
+
+20. **Cuando el usuario dice "esto ya lo discutimos varias veces", es una
+    decisión, no una opinión a reevaluar.** La pertenencia de la brizna al mundo
+    lleva sesiones dicha y se siguió tratando como una opción abierta, en parte
+    porque una medición previa salió en contra. Una medición en contra replantea
+    *la implementación*; el rumbo lo fija él.
 
 ---
 

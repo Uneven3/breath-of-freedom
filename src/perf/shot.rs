@@ -303,7 +303,14 @@ fn stats_plan(
             .is_flat(),
         geometry,
         sweep_label,
-        density_per_m2: perf.grass_density(),
+        live_density: {
+            // Congelado igual que el resto del plan: cuando la captura vuelve de
+            // la GPU, las perillas pueden haberse movido.
+            let (dial, reach) = (perf.grass_density(), perf.grass_reach_scale());
+            Box::new(move |distance| {
+                crate::visuals::grass::live_blades_per_m2(distance, dial, reach)
+            })
+        },
     }
 }
 
@@ -646,7 +653,11 @@ pub fn drive_auto_shot(
                 if let Some(sweep) = shot.sweep {
                     info!(
                         "[shot] {}",
-                        shot_stats::sweep_table(sweep.knob.label(), &log.rows)
+                        shot_stats::sweep_table(
+                            sweep.knob.label(),
+                            &log.rows,
+                            crate::visuals::grass::BLADE_WIDTH
+                        )
                     );
                 }
                 exit.write(AppExit::Success);

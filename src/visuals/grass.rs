@@ -72,7 +72,7 @@ fn shape_at(distance_m: f32, scale: f32) -> BladeShape {
 /// 2,83× en la huella de la brizna. Con la huella medida, la derivación pide
 /// directamente lo que la imagen entrega — ver [`minimum_density`].
 fn density_at(distance_m: f32, shape: BladeShape) -> f32 {
-    minimum_density(distance_m, shape.footprint_m())
+    minimum_density(distance_m, shape)
 }
 
 /// La brizna, en dos niveles de detalle.
@@ -186,6 +186,38 @@ pub(super) fn farthest_reach(reach_scale: f32) -> f32 {
     ring_reach(RINGS.len() - 1, reach_scale)
 }
 
+/// Cuántas briznas por m² hay **realmente vivas** a esta distancia.
+///
+/// No es lo mismo que `live_density_at`, que dice cuántas la ley *pide*: acá se
+/// cuentan las que la escalera de alcances deja vivas y cuyo nivel todavía tiene
+/// chunks ahí. La diferencia entre las dos es la que hace falta para medir la
+/// **huella real** de una brizna: despejar `a` de `C = 1 − e^(−λ·a)` con el
+/// número del dial en vez de éste da una huella efectiva que absorbe el raleo,
+/// que es como se sobreestimó hasta el 2026-08-08.
+pub(crate) fn live_blades_per_m2(distance_m: f32, dial: f32, reach_scale: f32) -> f32 {
+    // La escalera de **referencia**, igual que `ring_facts`: el número acompaña a
+    // una captura de cualquier tamaño, y uno que cambiara con la ventana no
+    // compara dos corridas.
+    let scale = reference_scale();
+    let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale);
+    let alive: usize = tile_ranges(dial, scale, reach_scale)
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| ring_reach(*index, reach_scale) >= distance_m)
+        .map(|(_, range)| {
+            ladder
+                .get(range.start as usize..range.end as usize)
+                .map_or(0, |tramo| {
+                    tramo
+                        .iter()
+                        .filter(|reach| reach.floor() >= distance_m)
+                        .count()
+                })
+        })
+        .sum();
+    alive as f32 / grass_tiles::TILE_AREA_M2
+}
+
 /// El borde interno de la banda de un anillo. El del primero no es cero: nadie
 /// mira el suelo pegado a la lente, y dividir por cero pediría densidad infinita.
 fn band_inner(index: usize, reach_scale: f32) -> f32 {
@@ -262,12 +294,50 @@ fn slots(of: impl Fn(usize, &Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
 // primos entre sí ese período no cubre todas las alineaciones — el test del peor
 // caso pasaba a ciegas.
 
-/// Cuánto suelo tapa una primitiva, **por metro de ancho y metro de distancia**.
+/// Cuánto suelo tapa una primitiva, **por metro de ancho y metro de distancia**,
+/// medido a cada distancia y no supuesto constante.
 ///
-/// *(a)* Medido el 2026-08-07, y **es** el `COVERAGE_MARGIN = 2,4` que había:
-/// la fórmula anterior era el área de un rectángulo vertical y pedía 2,83× de
-/// más. Barrido y despeje en `BOTWGrass.md` → Paso 0.
-const HIDDEN_PER_WIDTH_PER_METRE: f32 = 0.149;
+/// *(a, 2026-08-08)* Sale de barrer la densidad y despejar `a` de
+/// `C = 1 − e^(−λ·a)` con **la densidad viva de cada banda**. Un solo número
+/// —0,149— describía mal las dos puntas: cerca la ley pedía 1,8× menos de lo que
+/// hace falta y lejos de más, y eso es exactamente el reparto que el usuario
+/// intuyó como *"podemos lograr un mejor ratio de pastos"*.
+///
+/// La tabla es `(distancia, constante)` y se interpola; fuera de rango se
+/// sostiene el extremo. Los puntos son los centros de las bandas del medidor,
+/// así que **una corrida de `BOF_SHOT_SWEEP=grass-density` la vuelve a sacar**.
+const HIDDEN_BY_DISTANCE: [(f32, f32); 7] = [
+    (3.5, 0.082),
+    (5.0, 0.085),
+    (7.0, 0.093),
+    (9.5, 0.109),
+    (13.5, 0.112),
+    (19.0, 0.109),
+    (27.0, 0.114),
+];
+
+/// Y el de la carta, que es otra primitiva: medido 0,185 en 45-64 m contra su
+/// propia huella. **Mayor que el de una brizna**, así que con el número viejo la
+/// pradera plantaba cartas de más justo donde menos se notan.
+const HIDDEN_PER_WIDTH_PER_METRE_CARD: f32 = 0.185;
+
+fn hidden_per_width_per_metre(distance_m: f32, shape: BladeShape) -> f32 {
+    if matches!(shape, BladeShape::Card) {
+        return HIDDEN_PER_WIDTH_PER_METRE_CARD;
+    }
+    let first = HIDDEN_BY_DISTANCE[0];
+    let last = HIDDEN_BY_DISTANCE[HIDDEN_BY_DISTANCE.len() - 1];
+    if distance_m <= first.0 {
+        return first.1;
+    }
+    HIDDEN_BY_DISTANCE
+        .windows(2)
+        .find(|pair| distance_m <= pair[1].0)
+        .map_or(last.1, |pair| {
+            let across = (distance_m - pair[0].0) / (pair[1].0 - pair[0].0);
+            pair[0].1 + across * (pair[1].1 - pair[0].1)
+        })
+}
 
 /// Qué fracción del suelo tiene que quedar tapada para que no se lea como ralo.
 const TARGET_COVERAGE: f32 = 0.95;
@@ -278,8 +348,10 @@ const TARGET_COVERAGE: f32 = 0.95;
 /// **Las briznas caen sobre un hash, no sobre una grilla**, así que la cobertura
 /// es `1 − e^(−λ·a)` y no `λ·a`. Esa forma quedó verificada midiendo (Paso 0);
 /// lo que estaba mal era `a`.
-fn minimum_density(distance_m: f32, width_m: f32) -> f32 {
-    let hidden_per_blade = width_m * distance_m.max(0.5) * HIDDEN_PER_WIDTH_PER_METRE;
+fn minimum_density(distance_m: f32, shape: BladeShape) -> f32 {
+    let distance_m = distance_m.max(0.5);
+    let hidden_per_blade =
+        shape.footprint_m() * distance_m * hidden_per_width_per_metre(distance_m, shape);
     -(1.0 - TARGET_COVERAGE).ln() / hidden_per_blade
 }
 
@@ -348,7 +420,7 @@ const FILL_IN_ONE_FRAME: bool = true;
 
 /// Blade shape. Wide enough at the base to cover ground, tapered at the tip so
 /// it reads as a leaf rather than a strip of paper.
-const BLADE_WIDTH: f32 = 0.055;
+pub(crate) const BLADE_WIDTH: f32 = 0.055;
 /// A qué fracción de la altura está la parte más ancha. Baja y no en el medio:
 /// una hoja ensancha rápido y afina largo, y el rombo simétrico lee como
 /// diamante.
@@ -1412,8 +1484,11 @@ mod tests {
             bof_domain::perf::GRASS_DENSITY_STEPS[6],
         ] {
             let ratio = f64::from(sparse / REFERENCE_DENSITY);
+            // Media brizna de cada lado: las dos cuentas redondean a entero, y la
+            // del baseline arrastra su medio error multiplicado por la razón.
+            let slack = 0.5 * (1.0 + ratio);
             assert!(
-                (per_tile(sparse) - full * ratio).abs() <= 1.0,
+                (per_tile(sparse) - full * ratio).abs() <= slack,
                 "con la perilla en {sparse} el campo no sigue la razón"
             );
         }

@@ -410,8 +410,10 @@ pub(super) struct StatsPlan {
     /// Con qué configuración se sacó, cuando la corrida está barriendo una
     /// perilla. Es la fila de la curva.
     pub sweep_label: Option<String>,
-    /// La densidad del suelo en este disparo, para la ley de cobertura.
-    pub density_per_m2: f32,
+    /// Cuántas briznas por m² están **vivas** a cada distancia del perfil, que es
+    /// lo que la ley de cobertura necesita como `λ`. La corrida lo sabe: sale de
+    /// la escalera de alcances, no de la perilla.
+    pub live_density: Box<dyn Fn(f32) -> f32 + Send + Sync>,
 }
 
 /// Una fila de la curva: una configuración, y qué cobertura dio a cada
@@ -419,11 +421,18 @@ pub(super) struct StatsPlan {
 pub(crate) struct SweepRow {
     pub label: String,
     pub coverage: f64,
-    pub bands: Vec<(f32, f32, f64)>,
-    /// Cuántas briznas por m² tenía el suelo en este disparo. Va acá y no se
-    /// deduce de la etiqueta: la ley de abajo necesita el número, y leerlo de un
-    /// texto formateado es inventar un parser para un dato que ya se tiene.
-    pub density_per_m2: f32,
+    /// Por banda: sus metros, la cobertura medida y **cuántas briznas vivía**.
+    /// La densidad va por banda y no por fila porque la brizna muere con la
+    /// distancia: usar el número de la perilla para todas —como se hizo hasta el
+    /// 2026-08-08— despeja una huella que absorbe el raleo y sale 3× chica.
+    pub bands: Vec<BandSample>,
+}
+
+pub(crate) struct BandSample {
+    pub near: f32,
+    pub far: f32,
+    pub coverage: f64,
+    pub live_per_m2: f32,
 }
 
 /// Lo que el barrido lleva anotado.
@@ -458,9 +467,16 @@ pub(super) fn count_when_captured(
                 bands: stats
                     .bands
                     .iter()
-                    .map(|band| (band.near, band.far, band.coverage()))
+                    .map(|band| BandSample {
+                        near: band.near,
+                        far: band.far,
+                        coverage: band.coverage(),
+                        // En el medio de la banda: la densidad viva cae con la
+                        // distancia, así que tomarla en un extremo sesga el
+                        // despeje hacia arriba o hacia abajo.
+                        live_per_m2: (plan.live_density)(f32::midpoint(band.near, band.far)),
+                    })
                     .collect(),
-                density_per_m2: plan.density_per_m2,
             });
         }
     }
@@ -472,30 +488,32 @@ pub(super) fn count_when_captured(
 /// Las columnas salen de la **primera** fila y las demás se buscan por sus
 /// metros, no por posición: dos corridas con distinto reparto de filas darían
 /// columnas corridas, y una tabla corrida se lee sin notarlo.
-pub(super) fn sweep_table(knob: &str, rows: &[SweepRow]) -> String {
+pub(super) fn sweep_table(knob: &str, rows: &[SweepRow], blade_width_m: f32) -> String {
     use std::fmt::Write as _;
 
     let mut out = format!("la curva de cobertura contra '{knob}':\n");
-    let Some(columns) = rows.first().map(|row| row.bands.clone()) else {
+    let Some(columns) = rows.first().map(|row| {
+        row.bands
+            .iter()
+            .map(|band| (band.near, band.far))
+            .collect::<Vec<_>>()
+    }) else {
         return out + "  (ninguna captura llegó a contarse)\n";
     };
     let header: String = columns
         .iter()
-        .map(|(near, far, _)| format!("{near:>5.0}-{far:<3.0}"))
+        .map(|(near, far)| format!("{near:>5.0}-{far:<3.0}"))
         .collect::<Vec<_>>()
         .join(" ");
     let _ = writeln!(out, "  {:<12} {:>8} {header}", "paso", "pantalla");
     for row in rows {
         let cells: String = columns
             .iter()
-            .map(|(near, far, _)| {
-                row.bands
-                    .iter()
-                    .find(|band| (band.0 - near).abs() < 0.01 && (band.1 - far).abs() < 0.01)
-                    .map_or_else(
-                        || format!("{:>9}", "-"),
-                        |band| format!("{:>8.1}%", band.2 * 100.0),
-                    )
+            .map(|(near, far)| {
+                band_at(row, *near, *far).map_or_else(
+                    || format!("{:>9}", "-"),
+                    |band| format!("{:>8.1}%", band.coverage * 100.0),
+                )
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -506,67 +524,67 @@ pub(super) fn sweep_table(knob: &str, rows: &[SweepRow]) -> String {
             row.coverage * 100.0
         );
     }
-    out + &poisson_law(&columns, rows)
+    out + &poisson_law(&columns, rows, blade_width_m)
 }
 
-/// Qué tan bien la tabla se deja describir por **una sola constante por banda**.
+fn band_at(row: &SweepRow, near: f32, far: f32) -> Option<&BandSample> {
+    row.bands
+        .iter()
+        .find(|band| (band.near - near).abs() < 0.01 && (band.far - far).abs() < 0.01)
+}
+
+/// Cuánto tapa **una** brizna a cada distancia, despejado de la curva.
 ///
-/// Si las briznas caen como puntos independientes, la cobertura a una distancia
-/// es `C = 1 − e^(−λ·a)`, con `λ` la densidad del suelo y `a` el área que una
-/// brizna tapa en esa banda. Despejando, cada paso del barrido propone su propio
-/// `a = −ln(1−C)/λ`; que todos propongan el mismo es lo que convierte la tabla
-/// en una **ley** — con ella, cuántas briznas necesita un nivel para llegar a
-/// una cobertura se calcula en vez de barrerse.
+/// Si caen como puntos independientes, la cobertura es `C = 1 − e^(−λ·a)`: cada
+/// paso del barrido propone su propio `a = −ln(1−C)/λ`, y que todos propongan el
+/// mismo convierte la tabla en una ley. La dispersión sale al lado del promedio
+/// a propósito — un promedio solo no dice si creerle.
 ///
-/// La dispersión entre pasos es lo que dice si creerle: sale al lado, y no un
-/// promedio solo. Sin al menos dos densidades distintas no hay nada que ajustar.
-fn poisson_law(columns: &[(f32, f32, f64)], rows: &[SweepRow]) -> String {
+/// **`λ` es la densidad viva de esa banda, no la de la perilla.** Con la de la
+/// perilla, el raleo por distancia se cuela dentro de `a` y la huella sale hasta
+/// tres veces más chica de lo que es; esa confusión es la que hizo que la ley
+/// pidiera de menos, y sólo se vio cuando el rediseño quitó el solapamiento que
+/// la venía compensando.
+///
+/// La columna `a/(w·d)` es la que importa para corregir la ley: si fuera
+/// constante, la huella crecería lineal con la distancia como `minimum_density`
+/// supone. Donde no lo sea, ahí la ley pide de más o de menos.
+fn poisson_law(columns: &[(f32, f32)], rows: &[SweepRow], blade_width_m: f32) -> String {
     use std::fmt::Write as _;
 
-    let usable: Vec<&SweepRow> = rows.iter().filter(|row| row.density_per_m2 > 0.0).collect();
-    let densities: Vec<f32> = usable.iter().map(|row| row.density_per_m2).collect();
-    let spread = densities.iter().copied().fold(f32::NEG_INFINITY, f32::max)
-        - densities.iter().copied().fold(f32::INFINITY, f32::min);
-    if usable.len() < 2 || spread <= f32::EPSILON {
-        return String::new();
-    }
-
-    let mut out = String::from(
-        "  área tapada por brizna, si las briznas fueran independientes \
-         (C = 1 − e^(−λ·a)):\n",
-    );
+    let mut out = String::from("  cuánto tapa una brizna, despejado de la curva:\n");
     let _ = writeln!(
         out,
-        "  {:<12} {:>8} {:>9} {:>9}",
-        "banda", "a (m²)", "mínimo", "máximo"
+        "  {:<12} {:>8} {:>9} {:>9} {:>10}",
+        "banda", "a (m²)", "mínimo", "máximo", "a/(w·d)"
     );
-    for (near, far, _) in columns {
-        let areas: Vec<f64> = usable
+    let mut printed = false;
+    for (near, far) in columns {
+        let areas: Vec<f64> = rows
             .iter()
             .filter_map(|row| {
-                let coverage = row
-                    .bands
-                    .iter()
-                    .find(|band| (band.0 - near).abs() < 0.01 && (band.1 - far).abs() < 0.01)?
-                    .2;
+                let band = band_at(row, *near, *far)?;
                 // Saturada, `ln(1−C)` es ruido dividido por λ: a 100% no queda
                 // información sobre cuánto tapa cada brizna, sólo que sobran.
-                (coverage > 0.0 && coverage < 0.999)
-                    .then(|| -(1.0 - coverage).ln() / f64::from(row.density_per_m2))
+                (band.coverage > 0.0 && band.coverage < 0.999 && band.live_per_m2 > 0.0)
+                    .then(|| -(1.0 - band.coverage).ln() / f64::from(band.live_per_m2))
             })
             .collect();
         if areas.len() < 2 {
             continue;
         }
+        printed = true;
         let mean = areas.iter().sum::<f64>() / areas.len() as f64;
         let low = areas.iter().copied().fold(f64::INFINITY, f64::min);
         let high = areas.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let middle = f64::from(f32::midpoint(*near, *far));
+        let per_width_per_metre = mean / (f64::from(blade_width_m) * middle);
         let _ = writeln!(
             out,
-            "  {near:>4.0}-{far:<4.0} m {mean:>9.4} {low:>9.4} {high:>9.4}"
+            "  {near:>4.0}-{far:<4.0} m {mean:>9.4} {low:>9.4} {high:>9.4} {per_width_per_metre:>10.3}"
         );
     }
-    out
+    if printed { out } else { String::new() }
 }
 
 #[cfg(test)]
@@ -618,6 +636,19 @@ mod tests {
         assert!(geometry.row_distances(64).is_err());
     }
 
+    fn row(live_per_m2: f32, coverage: f64) -> SweepRow {
+        SweepRow {
+            label: format!("{live_per_m2}/m2"),
+            coverage,
+            bands: vec![BandSample {
+                near: 22.0,
+                far: 32.0,
+                coverage,
+                live_per_m2,
+            }],
+        }
+    }
+
     /// Un campo que **sí** obedece a Poisson tiene que devolver el área con la
     /// que se lo fabricó. Sin esto, la ley podría estar despejando mal y la
     /// tabla se leería igual de convincente.
@@ -626,33 +657,35 @@ mod tests {
         const AREA: f64 = 0.068;
         let rows: Vec<SweepRow> = [6.0f32, 12.0, 20.0, 40.0]
             .into_iter()
-            .map(|density| SweepRow {
-                label: format!("{density}/m2"),
-                coverage: 0.5,
-                bands: vec![(22.0, 32.0, 1.0 - (-f64::from(density) * AREA).exp())],
-                density_per_m2: density,
-            })
+            .map(|live| row(live, 1.0 - (-f64::from(live) * AREA).exp()))
             .collect();
-        let text = poisson_law(&[(22.0, 32.0, 0.0)], &rows);
+        let text = poisson_law(&[(22.0, 32.0)], &rows, 0.055);
         assert!(
             text.contains("0.0680"),
             "la ley no recupera el área con la que se fabricó el campo: {text}"
         );
     }
 
-    /// Barriendo otra perilla la densidad no cambia, y "ajustar" una constante
-    /// contra un solo valor de λ daría un número por banda que parece medido.
+    /// **La densidad que despeja la huella es la viva, no la de la perilla.**
+    /// Dos campos con la misma perilla pero distinto raleo dan coberturas
+    /// distintas: usando el número de la perilla, la huella salía chica y la ley
+    /// terminaba pidiendo menos briznas de las que hacen falta.
     #[test]
-    fn one_density_is_not_a_curve() {
-        let rows: Vec<SweepRow> = (0..3)
-            .map(|step| SweepRow {
-                label: format!("paso {step}"),
-                coverage: 0.5,
-                bands: vec![(22.0, 32.0, 0.9)],
-                density_per_m2: 40.0,
-            })
+    fn the_law_uses_the_density_that_is_alive() {
+        const AREA: f64 = 0.1;
+        let rows: Vec<SweepRow> = [4.0f32, 10.0, 25.0]
+            .into_iter()
+            .map(|live| row(live, 1.0 - (-f64::from(live) * AREA).exp()))
             .collect();
-        assert!(poisson_law(&[(22.0, 32.0, 0.0)], &rows).is_empty());
+        let text = poisson_law(&[(22.0, 32.0)], &rows, 0.055);
+        assert!(text.contains("0.1000"), "{text}");
+    }
+
+    /// Con una sola muestra no hay nada que ajustar, y un número por banda con
+    /// una sola muestra se lee como si estuviera medido.
+    #[test]
+    fn one_sample_is_not_a_curve() {
+        assert!(poisson_law(&[(22.0, 32.0)], &[row(40.0, 0.9)], 0.055).is_empty());
     }
 
     /// Con `render-scale` la imagen renderizada no llena la ventana, así que las

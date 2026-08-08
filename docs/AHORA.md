@@ -460,13 +460,11 @@ queda más legible.
   `propose` compartiendo el `ProposalBuffer` (la arbitración los neutraliza), 25
   el collider del terreno contra los cuerpos, y de las 10 restantes cuatro
   quedaron ordenadas.
-- **La pradera cuesta ~690.000 triángulos por vista** (medido en cuadro, no
-  declarado), y es el **92% de los triángulos del frame** en el Mundo. En esta
-  máquina eso no es lo que cuesta —es fill-bound—, pero la deuda sigue declarada
-  porque el target es un tiler. **La palanca a tocar primero es el overdraw**, y
-  ahora hay dos hallazgos concretos para atacarlo: el dial del hub sigue sin
-  usarse, y un nivel planta su tramo en todo su territorio aunque las briznas
-  mueran antes del borde (1,5-3,4× según el alcance, medido el 2026-08-08).
+- **La pradera es el 92% de los triángulos del frame** y su techo por vista subió
+  a 3 millones el 2026-08-08 como deuda declarada —*"olvidémonos del techo por
+  ahora"*—. Es fill-bound, así que **la palanca es el overdraw**: un nivel planta
+  su tramo en todo su territorio aunque las briznas mueran antes del borde
+  (1,5-3,4× según el alcance, medido).
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

@@ -243,6 +243,14 @@ fn card_teeth(u: f32, count: f32, offset: f32) -> f32 {
 /// cumpliendo —de ahí salió la escalera de alcances— pero por construcción.
 fn blade_growth(world_xz: vec2<f32>, blade_reach: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
+    // **La corona de este nivel empieza acá.** Más cerca, la misma brizna la
+    // dibuja el nivel de adentro: no desaparece, la dibuja otro. Por eso el corte
+    // puede ser duro sin que se vea nada — es un relevo, no una frontera. Un
+    // nivel que dibujara desde los pies del jugador tendría, aislado, briznas por
+    // toda la pantalla, que es como se leyó jugando el 2026-08-08.
+    if distance < f32(grass_data.record_layout.w) {
+        return 0.0;
+    }
     // Un solo umbral, y es de esta brizna: el índice que ocupa en su baldosa ya
     // decidió hasta dónde llega, así que acá no hay ley que repartir ni hash que
     // consultar. Nada nace del lado de adentro tampoco — una brizna existe desde

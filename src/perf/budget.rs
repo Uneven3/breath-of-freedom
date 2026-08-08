@@ -245,11 +245,12 @@ mod tests {
     ///
     /// Y el número que de verdad manda hoy no es éste: la pradera es
     /// *fill-bound*, y lo que se paga son los píxeles. El conteo es guardrail.
-    /// **Subido de 2 a 3 millones el 2026-08-08, como deuda declarada:**
+    /// **Subido de 2 a 4 millones el 2026-08-08, como deuda declarada:**
     /// *"olvidémonos del techo por ahora, optimizamos cuando logremos el feeling
-    /// correcto"*. Lo que lo empujó es que cada nivel llegue hasta donde su forma
-    /// llega, que era la condición para que el campo dejara de leerse por capas.
-    const MEADOW_VIEW_TRIANGLES: usize = 3_000_000;
+    /// correcto"*. Lo empujaron dos cosas del mismo día: que cada nivel llegue
+    /// hasta donde su forma llega, y que los niveles se aniden — el más cercano
+    /// lleva la baldosa entera, incluidas las briznas que sólo se ven de lejos.
+    const MEADOW_VIEW_TRIANGLES: usize = 4_000_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {

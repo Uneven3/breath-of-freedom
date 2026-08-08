@@ -115,32 +115,20 @@ pub const GRASS_DENSITY_STEPS: [f32; 10] =
 /// jugando —*"todavía hay 4 rings"*— porque la herramienta no avisa, sólo miente.
 pub const GRASS_RINGS_STEPS: [&str; 4] = ["todos", "solo 0", "solo 1", "solo 2"];
 
-/// Cómo entra y sale una brizna con la distancia: `(rampa, dispersión)` en
-/// metros.
+/// Cuántos metros tarda **una** brizna en encogerse hasta desaparecer al llegar
+/// a su propio alcance.
 ///
 /// **Es la única perilla que existe para un problema que sólo se ve en
-/// movimiento**, y por eso es una perilla y no una constante. El 2026-08-07 el
-/// usuario reportó, jugando, que *"el crecimiento del pasto a medida que uno
-/// camina todavía se mantiene, pero está suave"* — y no hay captura que lo
-/// muestre: el artefacto **es** el movimiento.
+/// movimiento**, y por eso es una perilla y no una constante: no hay captura que
+/// muestre el crecimiento, el artefacto *es* el movimiento.
 ///
-/// - La **rampa** es lo que tarda *una* brizna en pasar de nada a entera. Corta:
-///   una brizna sola creciendo es imperceptible.
-/// - La **dispersión** es en cuántos metros se reparten los umbrales de briznas
-///   distintas. Larga: es lo que convierte una ola que avanza con el jugador en
-///   un raleo gradual.
-///
-/// El índice 0 es lo que se jugó ese día —**las dos en 6, o sea la rampa tan
-/// larga como la dispersión**, que es exactamente lo que la nota de arriba dice
-/// que no hay que hacer— y de ahí la escalera va separándolas. Se deja como
-/// índice 0 para que la comparación arranque en lo conocido.
-pub const GRASS_GROWTH_STEPS: [(f32, f32); 5] = [
-    (6.0, 6.0),
-    (3.0, 9.0),
-    (1.5, 12.0),
-    (0.8, 16.0),
-    (0.4, 22.0),
-];
+/// **Era `(rampa, dispersión)` y desde el 2026-08-08 la dispersión no existe.**
+/// Repartía los umbrales de briznas distintas para que no crecieran todas juntas;
+/// ahora cada brizna tiene el suyo por construcción —sale del índice que ocupa en
+/// su baldosa— así que el segundo número ya no hacía nada y el hub lo seguía
+/// mostrando. Una perilla que no mueve nada es la misma clase de mentira que un
+/// "solo 3" sobre tres niveles.
+pub const GRASS_GROWTH_STEPS: [f32; 5] = [6.0, 3.0, 1.5, 0.8, 0.4];
 
 /// Scale applied to every ring's reach, for the sweep that separates *how much
 /// grass is near the camera* from *how far the field goes*.
@@ -492,8 +480,8 @@ impl PerfToggles {
         (self.grass_rings_step % GRASS_RINGS_STEPS.len()).checked_sub(1)
     }
 
-    /// La rampa y la dispersión del crecimiento, en metros.
-    pub fn grass_growth(&self) -> (f32, f32) {
+    /// La rampa del crecimiento, en metros.
+    pub fn grass_growth(&self) -> f32 {
         GRASS_GROWTH_STEPS
             .get(self.grass_growth_step)
             .copied()
@@ -661,8 +649,7 @@ impl PerfToggles {
             PerfKnob::GrassReach => format!("{:.0}%", self.grass_reach_scale() * 100.0),
             PerfKnob::GrassRings => self.grass_rings_label().to_string(),
             PerfKnob::GrassGrowth => {
-                let (ramp, spread) = self.grass_growth();
-                format!("{ramp:.1}/{spread:.0}m")
+                format!("{:.1}m", self.grass_growth())
             }
             PerfKnob::GrassDebug => self.grass_debug_label().to_string(),
             PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),

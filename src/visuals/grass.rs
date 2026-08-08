@@ -176,14 +176,10 @@ pub(super) fn farthest_reach(reach_scale: f32) -> f32 {
     ring_reach(RINGS.len() - 1, reach_scale)
 }
 
-/// Cuántas briznas por m² hay **realmente vivas** a esta distancia.
-///
-/// No es lo mismo que `live_density_at`, que dice cuántas la ley *pide*: acá se
-/// cuentan las que la escalera de alcances deja vivas y cuyo nivel todavía tiene
-/// chunks ahí. La diferencia entre las dos es la que hace falta para medir la
-/// **huella real** de una brizna: despejar `a` de `C = 1 − e^(−λ·a)` con el
-/// número del dial en vez de éste da una huella efectiva que absorbe el raleo,
-/// que es como se sobreestimó hasta el 2026-08-08.
+/// Cuántas briznas por m² hay **realmente vivas** a esta distancia — no las que
+/// la ley pide, que es `live_density_at`. La diferencia es lo que hace falta para
+/// medir la huella real: despejarla con el número del dial da una huella que
+/// absorbe el raleo, y así estuvo sobreestimada hasta el 2026-08-08.
 pub(crate) fn live_blades_per_m2(distance_m: f32, dial: f32, reach_scale: f32) -> f32 {
     // La escalera de **referencia**, igual que `ring_facts`: el número acompaña a
     // una captura de cualquier tamaño, y uno que cambiara con la ventana no
@@ -354,30 +350,22 @@ const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 /// pregunta no puede depender de dónde quedó una perilla.
 const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 
-/// La rampa y la dispersión del crecimiento, **con la perilla aplicada**. Vive
-/// en `bof_domain` porque lo que gobierna sólo se ve caminando: lo elige el
-/// usuario barriéndolo, no una captura (`BOTWGrass.md`).
-fn growth_band(perf: &crate::perf::PerfToggles) -> (f32, f32) {
-    perf.grass_growth()
+/// Una distancia en metros, como la lleva el uniform: entera y no negativa.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "reaches are small positive metres, clamped before the cast"
+)]
+fn metres_as_u32(metres: f32) -> u32 {
+    metres.clamp(0.0, 1_000.0) as u32
 }
 
-/// La banda más ancha que la perilla puede pedir. **Sólo para el selector de
-/// chunks y la caja de culling**, que necesitan un techo: un chunk descartado con
-/// briznas todavía vivas adentro es una franja pelada siguiendo al jugador, y eso
-/// no puede depender de dónde quedó una perilla.
-const GROWTH_BAND_MAX_M: f32 = {
-    let steps = bof_domain::perf::GRASS_GROWTH_STEPS;
-    let mut widest = 0.0;
-    let mut index = 0;
-    while index < steps.len() {
-        let (ramp, spread) = steps[index];
-        if ramp + spread > widest {
-            widest = ramp + spread;
-        }
-        index += 1;
-    }
-    widest
-};
+/// La rampa del crecimiento, **con la perilla aplicada**. Vive en `bof_domain`
+/// porque lo que gobierna sólo se ve caminando: lo elige el usuario barriéndolo,
+/// no una captura (`BOTWGrass.md`).
+fn growth_band(perf: &crate::perf::PerfToggles) -> f32 {
+    perf.grass_growth()
+}
 
 /// Desde qué distancia una brizna se abre como carta.
 ///
@@ -424,10 +412,8 @@ const BLADE_ROOT_SINK: f32 = 0.06;
 /// Ancho de una carta, en metros: el de un **matojo de unas pocas briznas**, no
 /// el de una pared. La escala salió de una captura de BOTW; ver `BOTWGrass.md`.
 ///
-/// **Bajado de 0,5 a 0,25 el 2026-08-08 y no cuesta un triángulo**, porque la ley
-/// pide el doble de cartas de la mitad de huella y los niveles se reparten
-/// índices: mueve briznas entre niveles en vez de agregarlas. Lo que cambia es el
-/// grano — con medio metro se leen como manchas sueltas contra el pasto vecino.
+/// **Bajado de 0,5 el 2026-08-08 y no cuesta un triángulo:** la ley pide el doble
+/// de cartas de la mitad de huella. Lo que cambia es el grano.
 const CARD_WIDTH: f32 = 0.25;
 
 /// Qué fracción de su rectángulo conserva la carta al recortar su silueta:
@@ -441,11 +427,8 @@ const CARD_SILHOUETTE_AREA: f32 = 0.583;
 /// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
 /// **The ceiling is one metre and it is hard**: the height travels in the
-/// fraction of `uv1.y` with the ring's reach in the whole part. A test pins it.
-/// Subidas el 2026-08-08 pedidas jugando —*"hacer el pasto un poquito más
-/// largo"*— y con la carta en mente: lo que la distingue de las briznas vecinas
-/// es sobre todo la **masa**, y un campo más alto se le parece más. El techo
-/// deja 4 cm de aire contra el metro para que `fract` no se lo coma.
+/// fraction of `uv1.y` with the reach in the whole part. A test pins it. Subidas
+/// el 2026-08-08 pidiendo *"el pasto un poquito más largo"* jugando.
 const BLADE_HEIGHT_MIN: f32 = 0.55;
 const BLADE_HEIGHT_MAX: f32 = 0.96;
 /// How far a tip may lean off vertical, in metres, so the field is not a bed of
@@ -561,41 +544,25 @@ fn neighbourhood_blades(focus: Vec2) -> usize {
 
 /// Qué tramo de la secuencia de una baldosa lleva cada nivel.
 ///
-/// **Los niveles se reparten índices, no suelo.** Cada brizna la dibuja el nivel
-/// más barato que le alcanza, y como la escalera baja, ese reparto es un tramo
-/// contiguo: nadie dibuja dos veces y nadie pregunta qué otro nivel cubre este
-/// punto — que es lo que costó 3× la vez que se excluyó por zona.
+/// **Cada nivel lleva las briznas vivas en su banda, y eso es un prefijo:** la
+/// escalera baja, así que las que llegan a su borde interno son las primeras. Un
+/// nivel es un **superconjunto** del que sigue, así que al cruzar una frontera la
+/// brizna no se reemplaza: la dibuja el otro, en el mismo lugar. De ahí que los
+/// niveles puedan ser **coronas** y no discos.
 fn tile_ranges(dial: f32, scale: f32, reach_scale: f32) -> Vec<std::ops::Range<u32>> {
     let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale);
     let total = u32::try_from(ladder.len()).unwrap_or(u32::MAX);
-    let mut ranges = vec![0..0; RINGS.len()];
-    let mut first = 0u32;
-    // **Del más lejano al más cercano**, que es el orden de la escalera: las
-    // briznas de índice bajo son las que llegan lejos. Recorrerlo al revés le
-    // daba al nivel de mayor territorio las briznas más tupidas — 7,6 millones
-    // de triángulos contra un techo de dos, que es como se encontró.
-    for index in (0..RINGS.len()).rev() {
-        // Una brizna la dibuja el nivel **más barato que le alcanza**: el más
-        // chico cuyo territorio llega tan lejos como ella. O sea este nivel se
-        // queda con las que pasan el alcance del de adentro.
-        let inner = index
-            .checked_sub(1)
-            .map_or(0.0, |inner| ring_reach(inner, reach_scale));
-        let last = ladder
-            .iter()
-            .position(|blade_reach| blade_reach.floor() <= inner)
-            .and_then(|end| u32::try_from(end).ok())
-            .unwrap_or(total)
-            .max(first);
-        ranges[index] = first..last;
-        first = last;
-    }
-    // Lo que quede sin repartir son las briznas más tupidas, que sólo se ven
-    // encima: van al nivel más cercano, el único cuyo territorio las contiene.
-    if let Some(nearest) = ranges.first_mut() {
-        nearest.end = total.max(nearest.start);
-    }
-    ranges
+    (0..RINGS.len())
+        .map(|index| {
+            let inner = band_inner(index, reach_scale);
+            let last = ladder
+                .iter()
+                .position(|blade_reach| blade_reach.floor() < inner)
+                .and_then(|end| u32::try_from(end).ok())
+                .unwrap_or(total);
+            0..last.min(total)
+        })
+        .collect()
 }
 
 /// Cuántas baldosas de mundo entran en un chunk de este nivel, por lado.
@@ -673,10 +640,10 @@ fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32, reach_scale: f32
             // borde de anillo que se veía cuadrado.
             let nearest = (offset - Vec2::splat(half)).max(Vec2::ZERO).length();
             let farthest = (offset + Vec2::splat(half)).length();
-            // Donde el anillo empieza a **nacer**: `spread + ramp` antes de su
-            // borde interno (`blade_birth` en `grass.wgsl`). El `slack` le da a
-            // este lado la misma histéresis que al de afuera.
-            let handover = (inner_reach - GROWTH_BAND_MAX_M - slack).max(0.0);
+            // El borde interno de la corona: desde que los niveles se anidan, el
+            // de adentro dibuja *las mismas briznas* hasta su alcance, así que
+            // este no tiene nada que hacer ahí. Sólo el `slack` de histéresis.
+            let handover = (inner_reach - slack).max(0.0);
             if nearest > reach_m || farthest <= handover {
                 continue;
             }
@@ -1090,7 +1057,11 @@ pub(super) fn track_meadow_focus(
                 // todo gris — o sea el medidor deja de contar por nivel. El draw
                 // ya sabía cuál es; es el mismo error que `ring_is_card` cerró.
                 u32::try_from(ring).unwrap_or(0),
-                0,
+                // Y desde dónde empieza su corona: más cerca que esto, la misma
+                // brizna la dibuja el nivel de adentro, así que ésta no. En
+                // metros enteros, como el alcance, porque el shader los compara
+                // contra una distancia y no necesita más resolución.
+                metres_as_u32(band_inner(ring, reach_scale)),
             )
         })
         .collect();
@@ -1117,8 +1088,7 @@ fn meadow_uniform(
     let mut uniform = grass_material().extension.grass_data;
     let data = &mut uniform;
     data.focus_xz = camera.translation().xz();
-    let (ramp, _spread) = growth_band(perf);
-    data.growth_ramp = ramp;
+    data.growth_ramp = growth_band(perf);
     data.spike_from_m = spike_from_m(reference_scale());
     data.card_from_m = card_from_m(reference_scale());
     let (a, b) = ring_reaches(perf.grass_reach_scale());
@@ -1440,24 +1410,26 @@ mod tests {
     #[test]
     fn the_density_knob_is_what_actually_lands_on_the_ground() {
         // The failure this system was built to fix: a density that reads well in
-        // a constant but arrives on screen divided by twenty. Desde que la brizna
-        // es del mundo, lo que tiene que llegar intacto es la suma: los tramos de
-        // los cuatro niveles son la secuencia entera de una baldosa, ni una
-        // brizna de más ni de menos.
+        // a constant but arrives on screen divided by twenty. Lo que tiene que
+        // llegar intacto es el tramo del nivel más cercano: es la baldosa
+        // entera, porque su banda empieza donde la ley se evalúa.
         let scale = reference_scale();
         for dial in [REFERENCE_DENSITY, bof_domain::perf::GRASS_DENSITY_STEPS[2]] {
             let ranges = tile_ranges(dial, scale, REFERENCE_REACH);
-            let per_tile: u32 = ranges.iter().map(|range| range.end - range.start).sum();
             let expected =
                 grass_tiles::blades_in_tile(live_density_at(NEAREST_INTEREST_M, dial, scale));
             assert_eq!(
-                per_tile, expected,
+                ranges[0].end, expected,
                 "con la perilla en {dial} la baldosa entera no es la que la ley pide"
             );
-            // Y los tramos se tocan sin huecos ni solapes: una brizna, un nivel.
-            // Encadenan del lejano al cercano, que es como baja la escalera.
+            // **Anidados, no partidos**: cada nivel es un prefijo del anterior, y
+            // por eso la misma brizna pasa de uno a otro al cruzar la frontera en
+            // vez de ser reemplazada.
             for pair in ranges.windows(2) {
-                assert_eq!(pair[1].end, pair[0].start, "los tramos no encajan");
+                assert!(
+                    pair[1].end <= pair[0].end && pair[1].start == 0,
+                    "los niveles dejaron de anidar: {pair:?}"
+                );
             }
         }
     }
@@ -1469,14 +1441,11 @@ mod tests {
     #[test]
     fn the_dial_scales_the_whole_field_by_the_same_ratio() {
         let scale = reference_scale();
-        let per_tile = |dial: f32| -> f64 {
-            f64::from(
-                tile_ranges(dial, scale, REFERENCE_REACH)
-                    .iter()
-                    .map(|range| range.end - range.start)
-                    .sum::<u32>(),
-            )
-        };
+        // El tramo del nivel más cercano, que es la baldosa entera: sumar los
+        // tres contaría dos veces a las que dos niveles comparten desde que se
+        // anidan.
+        let per_tile =
+            |dial: f32| -> f64 { f64::from(tile_ranges(dial, scale, REFERENCE_REACH)[0].end) };
         let full = per_tile(REFERENCE_DENSITY);
         for sparse in [
             bof_domain::perf::GRASS_DENSITY_STEPS[2],
@@ -1534,20 +1503,6 @@ mod tests {
         }
     }
 
-    /// **La perilla de crecimiento no puede pedir una banda que el selector de
-    /// chunks no contemple.** Hoy se cumple por construcción —el techo sale de la
-    /// tabla de pasos— y el test existe para el día en que alguien lo escriba a
-    /// mano: el fallo es una franja pelada siguiendo al jugador.
-    #[test]
-    fn the_chunk_selector_covers_the_widest_growth_the_knob_can_ask_for() {
-        for (ramp, spread) in bof_domain::perf::GRASS_GROWTH_STEPS {
-            assert!(
-                ramp + spread <= GROWTH_BAND_MAX_M,
-                "el paso {ramp}/{spread} nace antes de donde el selector planta",
-            );
-        }
-    }
-
     /// **La pradera lee la perilla, no una constante.** Sin esto el paso se puede
     /// mover en el hub y el campo no cambiar, que es la clase de silencio que
     /// obliga a repetir una sesión de juego entera para descubrirlo.
@@ -1560,23 +1515,22 @@ mod tests {
         assert_eq!(growth_band(&perf), bof_domain::perf::GRASS_GROWTH_STEPS[2]);
     }
 
-    /// **Ningún nivel se queda sin chunk donde sus briznas están vivas.** Es el
-    /// contrato con `blade_growth`: si el territorio se recortara antes que el
-    /// alcance de las briznas, el shader querría dibujar las de un chunk que no
-    /// existe, y lo que se ve es una franja pelada siguiendo al jugador.
+    /// **Ningún nivel se queda sin chunk dentro de su corona.** Es el contrato
+    /// con `blade_growth`: allá la brizna se apaga antes del borde interno de su
+    /// nivel porque la dibuja el de adentro, así que acá el territorio tiene que
+    /// llegar hasta esa misma línea. Si se recortara antes, lo que se ve es una
+    /// franja pelada siguiendo al jugador.
     #[test]
-    fn every_ring_has_chunks_wherever_its_blades_are_alive() {
+    fn every_ring_has_chunks_across_its_own_band() {
         let focus = Vec2::new(3.7, -11.2);
         for (index, ring) in RINGS.iter().enumerate() {
             let cells = ring_cells(index, focus, REFERENCE_REACH);
             let reach = ring_reach(index, REFERENCE_REACH);
-            let born = (band_inner(index, REFERENCE_REACH) - GROWTH_BAND_MAX_M)
-                .max(0.0)
-                .max(NEAREST_INTEREST_M);
+            let inner = band_inner(index, REFERENCE_REACH).max(NEAREST_INTEREST_M);
             for step in 0_u8..48 {
                 let angle = f32::from(step) * std::f32::consts::TAU / 48.0;
                 let direction = Vec2::new(angle.cos(), angle.sin());
-                for distance in [born, f32::midpoint(born, reach), reach * 0.999] {
+                for distance in [inner, f32::midpoint(inner, reach), reach * 0.999] {
                     let point = focus + direction * distance;
                     let half = ring.chunk_m * 0.5;
                     assert!(

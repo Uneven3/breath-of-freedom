@@ -841,8 +841,21 @@ Las dos bandas que se hundían eran las de las fronteras. Cuesta lo mismo:
 362.752 triángulos contra 364.200, 4 draws, y los registros bajan de 8,47 a
 7,83 MB.
 
-**Falta el gate: jugarlo.** Lo que queda es en movimiento, y una foto quieta no
-lo contesta.
+**El gate, jugado el 2026-08-08:**
+
+> **"El crecimiento creo que está mucho mejor que antes, creo que lo que hay que
+> hacer ahora es fine tuning."** — el usuario, tras la tercera sesión del día
+
+Es la primera vez que *"veo cómo crecen y cómo se achican los pastos"* —su punto
+más importante durante tres sesiones— deja de ser el problema de fondo. No es un
+"resuelto": es *mucho mejor*, y lo que sigue es afinar.
+
+Antes, en la misma sesión, había reportado dos cosas que se arreglaron y volvió a
+verificar: los billboards cerca (Paso 3b) y el anillo de matojos. Y una
+observación que vale registrar porque es método: **con la vista de color ve el
+crecimiento y con el color normal casi no.** Es lo esperado —la vista pinta
+categorías planas, así que muestra el cambio de *pertenencia*— pero conviene
+decirlo cuando se pide un veredicto sobre una vista de diagnóstico.
 
 ### Paso 3b — La forma la decide la distancia, no el nivel
 

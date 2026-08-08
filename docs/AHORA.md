@@ -254,13 +254,14 @@ medición en contra replantea la implementación, no el rumbo.
 
 **Abierto, en orden de cuánto sabemos:**
 
-1. **El cuarto eje está implementado (2026-08-08) y falta jugarlo.** La brizna
-   sale de una grilla del mundo y su alcance del índice, no de un hash; medido,
-   la cobertura por banda pasó de 93,4-99,9% a 99,6-100% al mismo costo. Lo que
-   queda es en movimiento, así que **el gate es una sesión de juego**.
-   Y lo que la captura destapó: el nivel de cartas se lleva el 73% del primer
-   plano, porque sus briznas ahora viven también a tres metros. El arreglo es que
-   la forma la decida la distancia (Paso 3b en `BOTWGrass.md`).
+1. **El cuarto eje está hecho y jugado (2026-08-08):** *"el crecimiento creo que
+   está mucho mejor que antes, creo que lo que hay que hacer ahora es fine
+   tunning"*. La brizna sale de una grilla del mundo y su alcance del índice, no
+   de un hash. En la misma sesión se arreglaron los billboards cerca (la forma la
+   decide la distancia) y el anillo de matojos (el umbral de carta es por brizna).
+   **Lo que sigue es afinar**, y la primera decisión es la densidad: con 40/m² la
+   cobertura del primer plano es 76,4% y con 80/m² sube a 94,8% costando el doble
+   de triángulos (728.576 contra 362.752). Detalle en `BOTWGrass.md`.
 2. **El horizonte no se llena** (pasados los 64 m se ve terreno pelado; ahí va la
    niebla, que todavía no llega tan cerca). Sin tocar.
 

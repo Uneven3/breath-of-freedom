@@ -359,7 +359,12 @@ const BLADE_ROOT_SINK: f32 = 0.06;
 
 /// Ancho de una carta, en metros: el de un **matojo de unas pocas briznas**, no
 /// el de una pared. La escala salió de una captura de BOTW; ver `BOTWGrass.md`.
-const CARD_WIDTH: f32 = 0.5;
+///
+/// **Bajado de 0,5 a 0,25 el 2026-08-08 y no cuesta un triángulo**, porque la ley
+/// pide el doble de cartas de la mitad de huella y los niveles se reparten
+/// índices: mueve briznas entre niveles en vez de agregarlas. Lo que cambia es el
+/// grano — con medio metro se leen como manchas sueltas contra el pasto vecino.
+const CARD_WIDTH: f32 = 0.25;
 
 /// Qué fracción de su rectángulo conserva la carta al recortar su silueta:
 /// la integral de `card_silhouette` en `grass.wgsl`.
@@ -1223,13 +1228,9 @@ mod tests {
     }
 
     /// El campo tiene que ser **determinista**: el mismo suelo crece las mismas
-    /// briznas cada sesión, o caminar y volver reordena la pradera y toda
-    /// comparación de capturas —que compara dos fotos del mismo encuadre— deja
-    /// de valer.
-    ///
-    /// Compara los registros, no sus longitudes: comparar longitudes pasaba
-    /// igual si cada brizna se plantaba en otro lado, que es exactamente el
-    /// fallo que este nombre promete atrapar.
+    /// briznas cada sesión, o caminar y volver reordena la pradera y comparar
+    /// dos capturas del mismo encuadre deja de valer. Compara los registros y no
+    /// sus longitudes: contar pasaba igual con cada brizna en otro lado.
     #[test]
     fn blades_are_deterministic_per_patch_of_ground() {
         let a = build_chunk_records(&spec(0..16, 8.0), None).records;
@@ -1460,12 +1461,9 @@ mod tests {
     }
 
     /// **La perilla de crecimiento no puede pedir una banda que el selector de
-    /// chunks no contemple.**
-    ///
-    /// El techo sale de la propia tabla de pasos, así que hoy se cumple por
-    /// construcción; el test existe para el día en que alguien escriba el techo a
-    /// mano. El fallo sería silencioso y sólo visible caminando: una franja pelada
-    /// siguiendo al jugador donde el chunk se fue con briznas vivas adentro.
+    /// chunks no contemple.** Hoy se cumple por construcción —el techo sale de la
+    /// tabla de pasos— y el test existe para el día en que alguien lo escriba a
+    /// mano: el fallo es una franja pelada siguiendo al jugador.
     #[test]
     fn the_chunk_selector_covers_the_widest_growth_the_knob_can_ask_for() {
         for (ramp, spread) in bof_domain::perf::GRASS_GROWTH_STEPS {
@@ -1488,14 +1486,10 @@ mod tests {
         assert_eq!(growth_band(&perf), bof_domain::perf::GRASS_GROWTH_STEPS[2]);
     }
 
-    /// **Ningún nivel se queda sin chunk donde sus briznas están vivas.**
-    ///
-    /// Es el contrato entre este módulo y `blade_growth`: allá la brizna nace
-    /// `spread + ramp` antes del borde interno de su anillo, así que si acá el
-    /// traspaso se recortara antes, el shader querría dibujar briznas de un chunk
-    /// que no existe — y lo que se ve es una franja pelada que sigue al jugador.
-    /// El fallo que este test atrapa es mover una de las dos constantes sin la
-    /// otra.
+    /// **Ningún nivel se queda sin chunk donde sus briznas están vivas.** Es el
+    /// contrato con `blade_growth`: si el territorio se recortara antes que el
+    /// alcance de las briznas, el shader querría dibujar las de un chunk que no
+    /// existe, y lo que se ve es una franja pelada siguiendo al jugador.
     #[test]
     fn every_ring_has_chunks_wherever_its_blades_are_alive() {
         let focus = Vec2::new(3.7, -11.2);
@@ -1560,12 +1554,9 @@ mod tests {
         }
     }
 
-    /// Cuántos anillos plantan sobre el mismo pedazo de suelo.
-    ///
-    /// Un punto lo cubre **un** anillo, o dos dentro de la banda de traspaso.
-    /// Tres es densidad multiplicada que nadie pidió, pagada entera en overdraw
-    /// — y encima con las briznas equivocadas, porque los anillos lejanos son
-    /// los de menos triángulos.
+    /// Cuántos anillos plantan sobre el mismo pedazo de suelo. Uno, o dos dentro
+    /// de la banda de traspaso: tres es densidad que nadie pidió, pagada entera
+    /// en overdraw y con las briznas equivocadas.
     fn rings_covering(point: Vec2, focus: Vec2) -> Vec<usize> {
         (0..RINGS.len())
             .filter(|index| {

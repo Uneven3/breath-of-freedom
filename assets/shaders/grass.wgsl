@@ -109,10 +109,25 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 ///
 /// El vertex mide la distancia a la base y el fragment a su propio punto, así
 /// que una brizna justo en el umbral puede construirse de una forma y recortarse
-/// con la otra. Son 1,5 píxeles a veinte metros: menos que el error de cualquier
+/// con la otra. Son 1,5 píxeles a esa distancia: menos que el error de cualquier
 /// varying que se agregara para evitarlo.
-fn blade_is_card(distance: f32) -> bool {
-    return ring_is_card() && distance >= grass_data.card_from_m;
+///
+/// **Y el umbral es de cada brizna, no del campo.** Con uno solo, todas las
+/// cartas se abren sobre el mismo círculo y lo que se ve es un **anillo de
+/// matojos que sigue al jugador** — encontrado mirando una captura el
+/// 2026-08-08. Repartido, el cambio de forma ocurre en una banda de treinta
+/// metros y deja de haber una línea.
+///
+/// La semilla es la **altura de la brizna**, que es idéntica en sus cuatro
+/// vértices y llega igual al fragment (`fract(uv1.y)`): sin ella los dos lados
+/// elegirían umbrales distintos para la misma brizna. Es el mismo identificador
+/// que usa la vista `brizna`, por la misma razón.
+fn card_distance_for(blade_seed: f32) -> f32 {
+    return grass_data.card_from_m * (0.7 + 0.6 * fract(blade_seed * 91.0));
+}
+
+fn blade_is_card(distance: f32, blade_seed: f32) -> bool {
+    return ring_is_card() && distance >= card_distance_for(blade_seed);
 }
 
 /// Si esta primitiva se abre mirando a la cámara.
@@ -587,7 +602,7 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // **La forma sale de la distancia, no del nivel.** Una brizna del nivel de
     // cartas que hoy está cerca se construye como hoja: con la del nivel
     // quedaría un billboard de medio metro girando a tres metros de la cámara.
-    let as_card = blade_is_card(length(record.xy - grass_data.focus_xz));
+    let as_card = blade_is_card(length(record.xy - grass_data.focus_xz), blade_height);
     let shape = select(SHAPE_LEAF, SHAPE_CARD, as_card);
     let built = blade_vertex(shape, corner, blade_height, record.xy);
     let side = built.side;
@@ -707,11 +722,9 @@ fn fragment(
     // La fase sale de `fract(uv1.y)` —la altura de la carta, idéntica en sus
     // cuatro vértices— por el mismo camino que el tinte por brizna: es el único
     // identificador que el vértice ya carga.
-    // Y se recorta **tanto como la carta esté abierta**: cerca la brizna es
-    // angosta, y unos dientes repartidos sobre 5,5 cm serían un patrón que a esa
-    // distancia sí se ve. Con la apertura en cero el umbral llega a 1 y no
-    // descarta nada, así que la transición no tiene escalón.
-    if blade_is_card(length(in.world_position.xz - grass_data.focus_xz))
+    // Y sólo se recorta la que **hoy** es carta: la misma brizna, más cerca de su
+    // umbral, es una hoja y no lleva silueta que recortar.
+    if blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y))
         && blade_height_factor(in.uv)
             > card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0)) {
         discard;
@@ -731,7 +744,7 @@ fn fragment(
         // las reportaba nueve veces más finas de lo que son, que es exactamente
         // la clase de error que esta vista existe para cazar.
         var width = grass_data.blade_width;
-        if blade_is_card(length(in.world_position.xz - grass_data.focus_xz)) {
+        if blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y)) {
             width = grass_data.card_half_width * 2.0;
         }
         let pixels_wide = width / max(metres_per_pixel, 1e-6);

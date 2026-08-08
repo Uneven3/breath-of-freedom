@@ -35,12 +35,14 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use super::budget::SceneInventory;
 use super::shot_stats::{self, Category, ShotGeometry, shot_geometry};
 use super::suite::BenchSuite;
+use crate::perf::PerfKnob;
 use crate::scene::AppState;
 use crate::visuals::material_registry::Subject;
 
 const SHOT_ENV: &str = "BOF_SHOT";
 const OUT_ENV: &str = "BOF_SHOT_OUT";
 const POSE_ENV: &str = "BOF_SHOT_POSE";
+const SWEEP_ENV: &str = "BOF_SHOT_SWEEP";
 
 /// Un mirador escrito a mano, `x,y,z:dx,dy,dz`.
 ///
@@ -103,12 +105,48 @@ enum Stage {
     Draining(u32),
 }
 
+/// La perilla que la corrida recorre entera, un disparo por paso.
+///
+/// **Una foto sola no es una curva.** El Paso 1 de `BOTWGrass.md` pide cobertura
+/// contra densidad *a varias distancias*, y sacarla a mano eran diez corridas
+/// que había que acordarse de nombrar igual. Acá es una: la corrida mueve la
+/// perilla, deja que la pradera se replante, dispara, y al final imprime la
+/// tabla con una fila por paso.
+#[derive(Clone, Copy)]
+struct Sweep {
+    knob: PerfKnob,
+    step: usize,
+}
+
+/// `BOF_SHOT_SWEEP=grass-density`. Un nombre que no existe **no barre nada** y
+/// lo dice: una corrida que se cree un barrido y saca una foto sola es un
+/// reporte de una tabla de una fila, que se lee como si fuera la respuesta.
+fn configured_sweep() -> Option<Sweep> {
+    let raw = std::env::var(SWEEP_ENV).ok()?;
+    let name = raw.trim();
+    match PerfKnob::ALL.into_iter().find(|knob| knob.label() == name) {
+        Some(knob) => Some(Sweep { knob, step: 0 }),
+        None => {
+            error!(
+                "[shot] {SWEEP_ENV}={name} no nombra ninguna perilla; hay: {}",
+                PerfKnob::ALL
+                    .iter()
+                    .map(|knob| knob.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            None
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct AutoShot {
     suite: BenchSuite,
     out: PathBuf,
     stage: Stage,
     elapsed: f32,
+    sweep: Option<Sweep>,
 }
 
 impl AutoShot {
@@ -117,8 +155,18 @@ impl AutoShot {
         configured_pose().unwrap_or_else(|| self.suite.vantage())
     }
 
+    /// Una foto por suite, o una por paso cuando la corrida barre: dos pasos que
+    /// pisaran el mismo archivo dejarían la tabla sin sus imágenes.
     fn path(&self) -> PathBuf {
-        self.out.join(format!("{}.png", self.suite.label()))
+        match self.sweep {
+            Some(sweep) => self.out.join(format!(
+                "{}_{}_{}.png",
+                self.suite.label(),
+                sweep.knob.label(),
+                sweep.step
+            )),
+            None => self.out.join(format!("{}.png", self.suite.label())),
+        }
     }
 }
 
@@ -150,6 +198,7 @@ pub fn configured_auto_shot() -> Option<AutoShot> {
         out,
         stage: Stage::default(),
         elapsed: 0.0,
+        sweep: configured_sweep(),
     })
 }
 
@@ -231,7 +280,9 @@ pub fn capture_on_request(
     write_legend(&path, &perf, &inventory, camera_pose, &geometry);
     commands
         .spawn(Screenshot::primary_window())
-        .observe(shot_stats::count_when_captured(stats_plan(&perf, geometry)))
+        .observe(shot_stats::count_when_captured(stats_plan(
+            &perf, geometry, None,
+        )))
         .observe(save_to_disk(path));
 }
 
@@ -240,13 +291,19 @@ pub fn capture_on_request(
 /// Viaja al observador por valor y no por consulta: cuando la captura vuelve de
 /// la GPU ya pasaron frames, y las perillas o la cámara pueden haberse movido.
 /// Contar con la configuración de *después* sería describir otra foto.
-fn stats_plan(perf: &crate::perf::PerfToggles, geometry: ShotGeometry) -> shot_stats::StatsPlan {
+fn stats_plan(
+    perf: &crate::perf::PerfToggles,
+    geometry: ShotGeometry,
+    sweep_label: Option<String>,
+) -> shot_stats::StatsPlan {
     shot_stats::StatsPlan {
         categories: shot_categories(perf),
         view: perf.grass_debug_label().to_string(),
         flat: crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step())
             .is_flat(),
         geometry,
+        sweep_label,
+        density_per_m2: perf.grass_density(),
     }
 }
 
@@ -488,12 +545,13 @@ pub fn drive_auto_shot(
     mut exit: MessageWriter<AppExit>,
     time: Res<Time<Real>>,
     inventory: Res<SceneInventory>,
-    perf: Res<crate::perf::PerfToggles>,
+    mut perf: ResMut<crate::perf::PerfToggles>,
     camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     terrain: crate::world::TerrainAccess,
     broken: Res<BrokenAssets>,
     records: Res<crate::visuals::grass::MeadowRecordMemory>,
+    log: Res<shot_stats::ShotStatsLog>,
 ) {
     match shot.stage {
         Stage::EnteringScene => {
@@ -567,20 +625,58 @@ pub fn drive_auto_shot(
                 &terrain,
             );
             write_legend(&path, &perf, &inventory, (position, facing), &geometry);
+            let sweep_label = shot.sweep.map(|sweep| perf.knob_value(sweep.knob));
             commands
                 .spawn(Screenshot::primary_window())
-                .observe(shot_stats::count_when_captured(stats_plan(&perf, geometry)))
+                .observe(shot_stats::count_when_captured(stats_plan(
+                    &perf,
+                    geometry,
+                    sweep_label,
+                )))
                 .observe(save_to_disk(path));
             shot.stage = Stage::Draining(FRAMES_AFTER_SHUTTER);
         }
         Stage::Draining(left) => {
             if let Some(left) = left.checked_sub(1) {
                 shot.stage = Stage::Draining(left);
+            } else if advance_sweep(&mut shot, &mut perf) {
+                shot.stage = Stage::Settling;
+                shot.elapsed = 0.0;
             } else {
+                if let Some(sweep) = shot.sweep {
+                    info!(
+                        "[shot] {}",
+                        shot_stats::sweep_table(sweep.knob.label(), &log.rows)
+                    );
+                }
                 exit.write(AppExit::Success);
             }
         }
     }
+}
+
+/// Mueve el barrido al paso siguiente, o dice que ya no quedan.
+///
+/// Toca las perillas directamente y no por `KnobRequest` porque una corrida de
+/// captura **es** dueña de la configuración mientras dura: entró a la escena,
+/// paró la cámara en el mirador y va a salir sola. Un pedido diferido se
+/// aplicaría un frame después del disparo, o sea a la foto equivocada.
+fn advance_sweep(shot: &mut AutoShot, perf: &mut crate::perf::PerfToggles) -> bool {
+    let Some(sweep) = &mut shot.sweep else {
+        return false;
+    };
+    let next = sweep.step + 1;
+    if next >= sweep.knob.steps() {
+        return false;
+    }
+    sweep.step = next;
+    perf.set_knob_step(sweep.knob, next);
+    info!(
+        "[shot] barrido: {} = {}",
+        sweep.knob.label(),
+        perf.knob_value(sweep.knob)
+    );
+    true
 }
 
 #[cfg(test)]
@@ -593,6 +689,7 @@ mod tests {
             out: PathBuf::from(DEFAULT_OUT),
             stage,
             elapsed: 0.0,
+            sweep: None,
         }
     }
 
@@ -630,5 +727,52 @@ mod tests {
     fn the_file_is_named_after_the_suite() {
         let shot = shot(BenchSuite::Grass, Stage::Settling);
         assert_eq!(shot.path(), PathBuf::from("target/shots/grass.png"));
+    }
+
+    /// Barriendo, cada paso deja su propia imagen: si todos pisaran el mismo
+    /// archivo, la tabla saldría igual y sólo la última foto la respaldaría.
+    #[test]
+    fn every_step_of_a_sweep_keeps_its_own_image() {
+        let mut shot = shot(BenchSuite::Grass, Stage::Settling);
+        shot.sweep = Some(Sweep {
+            knob: PerfKnob::GrassDensity,
+            step: 0,
+        });
+        let mut perf = crate::perf::PerfToggles::default();
+        let mut paths = vec![shot.path()];
+        while advance_sweep(&mut shot, &mut perf) {
+            paths.push(shot.path());
+        }
+        assert_eq!(paths.len(), PerfKnob::GrassDensity.steps());
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), PerfKnob::GrassDensity.steps());
+    }
+
+    /// El barrido recorre la escalera **entera** y para: una vuelta de más
+    /// repetiría el primer paso creyendo que es otro.
+    #[test]
+    fn a_sweep_walks_its_ladder_once() {
+        let mut shot = shot(BenchSuite::Grass, Stage::Settling);
+        shot.sweep = Some(Sweep {
+            knob: PerfKnob::GrassRings,
+            step: 0,
+        });
+        let mut perf = crate::perf::PerfToggles::default();
+        let mut values = vec![perf.knob_value(PerfKnob::GrassRings)];
+        while advance_sweep(&mut shot, &mut perf) {
+            values.push(perf.knob_value(PerfKnob::GrassRings));
+        }
+        assert_eq!(values.len(), PerfKnob::GrassRings.steps());
+        assert!(!advance_sweep(&mut shot, &mut perf));
+    }
+
+    /// Sin barrido, la corrida sale después de una foto. Es lo que separa
+    /// `BOF_SHOT` de `BOF_SHOT_SWEEP`, y nada más lo sostiene.
+    #[test]
+    fn a_plain_shot_never_advances() {
+        let mut shot = shot(BenchSuite::Grass, Stage::Settling);
+        let mut perf = crate::perf::PerfToggles::default();
+        assert!(!advance_sweep(&mut shot, &mut perf));
     }
 }

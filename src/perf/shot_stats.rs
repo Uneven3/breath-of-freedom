@@ -407,6 +407,33 @@ pub(super) struct StatsPlan {
     pub view: String,
     pub flat: bool,
     pub geometry: ShotGeometry,
+    /// Con qué configuración se sacó, cuando la corrida está barriendo una
+    /// perilla. Es la fila de la curva.
+    pub sweep_label: Option<String>,
+    /// La densidad del suelo en este disparo, para la ley de cobertura.
+    pub density_per_m2: f32,
+}
+
+/// Una fila de la curva: una configuración, y qué cobertura dio a cada
+/// distancia.
+pub(crate) struct SweepRow {
+    pub label: String,
+    pub coverage: f64,
+    pub bands: Vec<(f32, f32, f64)>,
+    /// Cuántas briznas por m² tenía el suelo en este disparo. Va acá y no se
+    /// deduce de la etiqueta: la ley de abajo necesita el número, y leerlo de un
+    /// texto formateado es inventar un parser para un dato que ya se tiene.
+    pub density_per_m2: f32,
+}
+
+/// Lo que el barrido lleva anotado.
+///
+/// El observador escribe acá porque la captura vuelve de la GPU varios frames
+/// después del disparo: para cuando hay número, el sistema que lo pidió ya
+/// terminó su turno.
+#[derive(Resource, Default)]
+pub(crate) struct ShotStatsLog {
+    pub rows: Vec<SweepRow>,
 }
 
 /// El observador que cuenta la captura cuando vuelve de la GPU.
@@ -415,8 +442,8 @@ pub(super) struct StatsPlan {
 /// archivo que se acaba de escribir y no una segunda captura parecida.
 pub(super) fn count_when_captured(
     plan: StatsPlan,
-) -> impl FnMut(On<bevy::render::view::screenshot::ScreenshotCaptured>) {
-    move |captured| {
+) -> impl FnMut(On<bevy::render::view::screenshot::ScreenshotCaptured>, ResMut<ShotStatsLog>) {
+    move |captured, mut log| {
         let Some(stats) = analyze(&captured.image, &plan.categories, &plan.geometry) else {
             return;
         };
@@ -424,7 +451,122 @@ pub(super) fn count_when_captured(
             "[shot] {}",
             report(&stats, &plan.categories, &plan.view, plan.flat)
         );
+        if let Some(label) = &plan.sweep_label {
+            log.rows.push(SweepRow {
+                label: label.clone(),
+                coverage: ratio(stats.covered(), stats.pixels),
+                bands: stats
+                    .bands
+                    .iter()
+                    .map(|band| (band.near, band.far, band.coverage()))
+                    .collect(),
+                density_per_m2: plan.density_per_m2,
+            });
+        }
     }
+}
+
+/// La curva: una fila por paso de la perilla, una columna por banda de
+/// distancia.
+///
+/// Las columnas salen de la **primera** fila y las demás se buscan por sus
+/// metros, no por posición: dos corridas con distinto reparto de filas darían
+/// columnas corridas, y una tabla corrida se lee sin notarlo.
+pub(super) fn sweep_table(knob: &str, rows: &[SweepRow]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = format!("la curva de cobertura contra '{knob}':\n");
+    let Some(columns) = rows.first().map(|row| row.bands.clone()) else {
+        return out + "  (ninguna captura llegó a contarse)\n";
+    };
+    let header: String = columns
+        .iter()
+        .map(|(near, far, _)| format!("{near:>5.0}-{far:<3.0}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let _ = writeln!(out, "  {:<12} {:>8} {header}", "paso", "pantalla");
+    for row in rows {
+        let cells: String = columns
+            .iter()
+            .map(|(near, far, _)| {
+                row.bands
+                    .iter()
+                    .find(|band| (band.0 - near).abs() < 0.01 && (band.1 - far).abs() < 0.01)
+                    .map_or_else(
+                        || format!("{:>9}", "-"),
+                        |band| format!("{:>8.1}%", band.2 * 100.0),
+                    )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(
+            out,
+            "  {:<12} {:>7.1}% {cells}",
+            row.label,
+            row.coverage * 100.0
+        );
+    }
+    out + &poisson_law(&columns, rows)
+}
+
+/// Qué tan bien la tabla se deja describir por **una sola constante por banda**.
+///
+/// Si las briznas caen como puntos independientes, la cobertura a una distancia
+/// es `C = 1 − e^(−λ·a)`, con `λ` la densidad del suelo y `a` el área que una
+/// brizna tapa en esa banda. Despejando, cada paso del barrido propone su propio
+/// `a = −ln(1−C)/λ`; que todos propongan el mismo es lo que convierte la tabla
+/// en una **ley** — con ella, cuántas briznas necesita un nivel para llegar a
+/// una cobertura se calcula en vez de barrerse.
+///
+/// La dispersión entre pasos es lo que dice si creerle: sale al lado, y no un
+/// promedio solo. Sin al menos dos densidades distintas no hay nada que ajustar.
+fn poisson_law(columns: &[(f32, f32, f64)], rows: &[SweepRow]) -> String {
+    use std::fmt::Write as _;
+
+    let usable: Vec<&SweepRow> = rows.iter().filter(|row| row.density_per_m2 > 0.0).collect();
+    let densities: Vec<f32> = usable.iter().map(|row| row.density_per_m2).collect();
+    let spread = densities.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+        - densities.iter().copied().fold(f32::INFINITY, f32::min);
+    if usable.len() < 2 || spread <= f32::EPSILON {
+        return String::new();
+    }
+
+    let mut out = String::from(
+        "  área tapada por brizna, si las briznas fueran independientes \
+         (C = 1 − e^(−λ·a)):\n",
+    );
+    let _ = writeln!(
+        out,
+        "  {:<12} {:>8} {:>9} {:>9}",
+        "banda", "a (m²)", "mínimo", "máximo"
+    );
+    for (near, far, _) in columns {
+        let areas: Vec<f64> = usable
+            .iter()
+            .filter_map(|row| {
+                let coverage = row
+                    .bands
+                    .iter()
+                    .find(|band| (band.0 - near).abs() < 0.01 && (band.1 - far).abs() < 0.01)?
+                    .2;
+                // Saturada, `ln(1−C)` es ruido dividido por λ: a 100% no queda
+                // información sobre cuánto tapa cada brizna, sólo que sobran.
+                (coverage > 0.0 && coverage < 0.999)
+                    .then(|| -(1.0 - coverage).ln() / f64::from(row.density_per_m2))
+            })
+            .collect();
+        if areas.len() < 2 {
+            continue;
+        }
+        let mean = areas.iter().sum::<f64>() / areas.len() as f64;
+        let low = areas.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = areas.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let _ = writeln!(
+            out,
+            "  {near:>4.0}-{far:<4.0} m {mean:>9.4} {low:>9.4} {high:>9.4}"
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -474,6 +616,43 @@ mod tests {
         let mut geometry = geometry(3.0, Vec3::new(0.0, -0.26, -1.0), 64);
         geometry.ground_profile = vec![(0.0, 0.0), (4.0, 1.5)];
         assert!(geometry.row_distances(64).is_err());
+    }
+
+    /// Un campo que **sí** obedece a Poisson tiene que devolver el área con la
+    /// que se lo fabricó. Sin esto, la ley podría estar despejando mal y la
+    /// tabla se leería igual de convincente.
+    #[test]
+    fn a_field_built_from_the_law_gives_its_area_back() {
+        const AREA: f64 = 0.068;
+        let rows: Vec<SweepRow> = [6.0f32, 12.0, 20.0, 40.0]
+            .into_iter()
+            .map(|density| SweepRow {
+                label: format!("{density}/m2"),
+                coverage: 0.5,
+                bands: vec![(22.0, 32.0, 1.0 - (-f64::from(density) * AREA).exp())],
+                density_per_m2: density,
+            })
+            .collect();
+        let text = poisson_law(&[(22.0, 32.0, 0.0)], &rows);
+        assert!(
+            text.contains("0.0680"),
+            "la ley no recupera el área con la que se fabricó el campo: {text}"
+        );
+    }
+
+    /// Barriendo otra perilla la densidad no cambia, y "ajustar" una constante
+    /// contra un solo valor de λ daría un número por banda que parece medido.
+    #[test]
+    fn one_density_is_not_a_curve() {
+        let rows: Vec<SweepRow> = (0..3)
+            .map(|step| SweepRow {
+                label: format!("paso {step}"),
+                coverage: 0.5,
+                bands: vec![(22.0, 32.0, 0.9)],
+                density_per_m2: 40.0,
+            })
+            .collect();
+        assert!(poisson_law(&[(22.0, 32.0, 0.0)], &rows).is_empty());
     }
 
     /// Con `render-scale` la imagen renderizada no llena la ventana, así que las

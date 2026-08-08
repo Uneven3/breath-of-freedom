@@ -50,6 +50,7 @@ impl Plugin for PerfPlugin {
         app.init_resource::<ScriptedCameraPose>();
         app.init_resource::<budget::SceneInventory>();
         app.init_resource::<shot::BrokenAssets>();
+        app.init_resource::<shot_stats::ShotStatsLog>();
         app.init_resource::<budget::SceneBudgetWarningState>();
         app.add_message::<BenchmarkRequest>();
         app.add_message::<FlythroughRequest>();

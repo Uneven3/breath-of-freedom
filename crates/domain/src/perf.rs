@@ -266,6 +266,36 @@ impl PerfKnob {
         PerfKnob::Msaa,
     ];
 
+    /// Cuántos pasos tiene la escalera de esta perilla.
+    ///
+    /// Existe para poder **barrerla entera** sin que quien barre conozca su
+    /// tabla: una corrida que recorre una perilla escribiendo un número por paso
+    /// es lo que convierte una medición en una curva. Las booleanas son dos
+    /// pasos, que es lo que `set_knob_step` ya entiende por apagado y encendido.
+    pub fn steps(self) -> usize {
+        match self {
+            PerfKnob::Vsync
+            | PerfKnob::Forest
+            | PerfKnob::Wireframe
+            | PerfKnob::Overdraw
+            | PerfKnob::SunShadows
+            | PerfKnob::MoonShadows
+            | PerfKnob::LeafShadows
+            | PerfKnob::TreeDetail => 2,
+            PerfKnob::Cull => CULL_STEPS.len(),
+            PerfKnob::ShadowRange => SHADOW_CASTER_STEPS.len(),
+            PerfKnob::ShadowDistance => SHADOW_DISTANCE_STEPS.len(),
+            PerfKnob::ShadowMap => SHADOW_MAP_STEPS.len(),
+            PerfKnob::GrassDensity => GRASS_DENSITY_STEPS.len(),
+            PerfKnob::GrassReach => GRASS_REACH_STEPS.len(),
+            PerfKnob::GrassRings => GRASS_RINGS_STEPS.len(),
+            PerfKnob::GrassGrowth => GRASS_GROWTH_STEPS.len(),
+            PerfKnob::GrassDebug => GRASS_DEBUG_STEPS.len(),
+            PerfKnob::RenderScale => RENDER_SCALE_STEPS.len(),
+            PerfKnob::Msaa => MSAA_STEPS.len(),
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             PerfKnob::Vsync => "vsync",
@@ -665,6 +695,39 @@ fn on_off(value: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `steps()` es el largo de la escalera, y quien barre una perilla confía en
+    /// eso sin conocer su tabla. Corto de un paso, el barrido se saltaría una
+    /// configuración en silencio; largo de uno, repetiría la primera creyendo
+    /// que es otra — y una curva con una fila repetida se lee como una meseta.
+    #[test]
+    fn every_knob_ladder_closes_exactly_at_its_own_length() {
+        for knob in PerfKnob::ALL {
+            let mut toggles = PerfToggles::default();
+            let mut seen = Vec::new();
+            for step in 0..knob.steps() {
+                toggles.set_knob_step(knob, step);
+                let value = toggles.knob_value(knob);
+                assert!(
+                    !seen.contains(&value),
+                    "{}: el paso {step} repite el valor '{value}'",
+                    knob.label()
+                );
+                seen.push(value);
+            }
+            // Un paso más allá del final no puede descubrir nada: las
+            // escalonadas dan la vuelta por módulo y las booleanas se quedan en
+            // encendido. Si apareciera un valor nuevo, `steps()` estaría corto y
+            // el barrido se saltaría una configuración.
+            toggles.set_knob_step(knob, knob.steps());
+            let after = toggles.knob_value(knob);
+            assert!(
+                seen.contains(&after),
+                "{}: pasado el final aparece '{after}', que la escalera no recorrió",
+                knob.label()
+            );
+        }
+    }
 
     #[test]
     fn defaults_reproduce_the_shipped_build() {

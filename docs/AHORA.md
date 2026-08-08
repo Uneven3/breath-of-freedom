@@ -38,6 +38,10 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   una foto de puro cielo mientras el inventario reportaba 691.200 triángulos de
   pradera al 95% del cuadro. Ahora la foto y la tabla avisan si algún asset falló
   — pero el aviso existe porque el caso ocurrió.
+- **Una curva en una corrida: `BOF_SHOT_SWEEP=<perilla>`** recorre la escalera
+  entera de esa perilla, deja una foto por paso y al final imprime la tabla —
+  una fila por paso, una columna por banda de distancia. Es lo que convierte
+  diez corridas que había que acordarse de nombrar igual en una sola.
 - **Contar píxeles: lo hace la misma corrida** (`BOF_KNOBS=grass-view=6`, la
   vista `medir`). El informe sale en el log junto a la foto: cobertura total, el
   reparto por anillo y el **perfil por distancia** en metros. Reemplaza los

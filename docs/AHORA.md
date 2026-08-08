@@ -261,11 +261,8 @@ medición en contra replantea la implementación, no el rumbo.
    Y lo que la captura destapó: el nivel de cartas se lleva el 73% del primer
    plano, porque sus briznas ahora viven también a tres metros. El arreglo es que
    la forma la decida la distancia (Paso 3b en `BOTWGrass.md`).
-2. **El borde de un nivel es un cuadrado** (Chebyshev, cuantizado a chunks).
-   Misma causa raíz: el LOD horneado.
-3. **Con el veto levantado**, la carta con **alfa recortado** es el próximo
-   experimento: le daría silueta de briznas en vez del borde superior plano.
-4. **El horizonte no se llena.** Sin tocar.
+2. **El horizonte no se llena** (pasados los 64 m se ve terreno pelado; ahí va la
+   niebla, que todavía no llega tan cerca). Sin tocar.
 
 ## La suite de medición (2026-08-06)
 

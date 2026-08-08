@@ -57,7 +57,7 @@ struct GrassUniform {
     wind_speed: f32,
     tint_variation: f32,
     gradient_bias: f32,
-    growth_start: f32,
+    card_from_m: f32,
     debug_view: u32,
     blade_width: f32,
     ring_reaches_a: vec4<f32>,
@@ -94,24 +94,26 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
     return clamp(uv.y, 0.0, 1.0);
 }
 
-/// Cuánto de su altura conserva una brizna a esta distancia de la cámara.
+/// Si **esta brizna**, a esta distancia, se dibuja como carta.
 ///
-/// Es **crecimiento, no transparencia**: la brizna se encoge hacia su propia
-/// raíz y desaparece siendo geometría, sin blending, sin `discard` y sin orden
-/// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
-/// ventaja principal del chip (ley 3 de `BOTWGrass.md`).
+/// La forma la decide la distancia y no el nivel: desde que la brizna pertenece
+/// al mundo, las de índice bajo —las del nivel de cartas— están vivas también a
+/// tres metros, y ahí un billboard de medio metro gira con la cámara y se ve
+/// (reportado jugando el 2026-08-08). Más cerca del umbral, la misma brizna se
+/// construye como hoja: no desaparece, cambia de forma.
 ///
-/// **El umbral es de la brizna y viene en su registro.** Desde que la brizna
-/// pertenece al mundo, su alcance sale del índice que ocupa en su baldosa: acá
-/// no queda ley que aplicar ni hash que consultar, sólo una rampa de
-/// `growth_ramp` metros antes de su propio final. La ley `1/d` sigue cumpliéndose
-/// —es de donde salió la escalera de alcances— pero se cumple *por construcción*
-/// en vez de reconstruirse por brizna en el shader.
+/// **El salto es duro a propósito.** El umbral es donde la brizna mide un píxel
+/// y medio (`card_from_m`), así que ahí el cambio no se ve; interpolar el ancho
+/// en cambio sí se veía — la carta angosta queda rectangular y con el tope
+/// plano, que es una tira, no una brizna.
 ///
-/// `growth_ramp` es lo que tarda **una** brizna en pasar de entera a nada. Corta
-/// a propósito: una brizna sola encogiéndose es imperceptible, y lo que se
-/// percibía era que todas crecieran juntas — que es justamente lo que ya no
-/// puede pasar, porque cada índice tiene su propio final.
+/// El vertex mide la distancia a la base y el fragment a su propio punto, así
+/// que una brizna justo en el umbral puede construirse de una forma y recortarse
+/// con la otra. Son 1,5 píxeles a veinte metros: menos que el error de cualquier
+/// varying que se agregara para evitarlo.
+fn blade_is_card(distance: f32) -> bool {
+    return ring_is_card() && distance >= grass_data.card_from_m;
+}
 
 /// Si esta primitiva se abre mirando a la cámara.
 ///
@@ -191,7 +193,18 @@ fn card_teeth(u: f32, count: f32, offset: f32) -> f32 {
     return height * (1.0 - abs(across * 2.0 - 1.0));
 }
 
-
+/// Cuánto de su altura conserva una brizna a esta distancia de la cámara.
+///
+/// Es **crecimiento, no transparencia**: la brizna se encoge hacia su propia
+/// raíz y desaparece siendo geometría, sin blending, sin `discard` y sin orden
+/// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
+/// ventaja principal del chip (ley 3 de `BOTWGrass.md`).
+///
+/// **El umbral es de la brizna y viene en su registro.** Desde que la brizna
+/// pertenece al mundo, su alcance sale del índice que ocupa en su baldosa, así
+/// que acá no queda ley que aplicar ni hash que consultar: sólo una rampa de
+/// `growth_ramp` metros antes de su propio final. La ley `1/d` se sigue
+/// cumpliendo —de ahí salió la escalera de alcances— pero por construcción.
 fn blade_growth(world_xz: vec2<f32>, blade_reach: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
     // Un solo umbral, y es de esta brizna: el índice que ocupa en su baldosa ya
@@ -571,7 +584,12 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     let blade_height = fract(record.w);
     let blade_hash = hash_position(record.xy, 0u);
 
-    let built = blade_vertex(grass_data.record_layout.y, corner, blade_height, record.xy);
+    // **La forma sale de la distancia, no del nivel.** Una brizna del nivel de
+    // cartas que hoy está cerca se construye como hoja: con la del nivel
+    // quedaría un billboard de medio metro girando a tres metros de la cámara.
+    let as_card = blade_is_card(length(record.xy - grass_data.focus_xz));
+    let shape = select(SHAPE_LEAF, SHAPE_CARD, as_card);
+    let built = blade_vertex(shape, corner, blade_height, record.xy);
     let side = built.side;
     let height_factor = built.along;
     // `record.z` es la altura del terreno: lo que `uv0.x` llevaba por vértice.
@@ -584,16 +602,23 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     out.uv = vec2<f32>(record.z, height_factor);
     out.uv_b = vec2<f32>(side * blade_hash, record.w);
 
-    // **La carta se abre acá.** Sus cuatro vértices vienen horneados en el mismo
-    // punto —el centro de la base— y se separan contra el eje derecho de la
-    // cámara, así que siempre da la cara. Una carta representa la masa de
-    // decenas de briznas: si quedara de canto dejaría un hueco de ese tamaño, y
-    // por eso ésta sí gira mientras la brizna cercana no.
+    // **La carta se abre acá, y sólo tan lejos como corresponda.** Sus cuatro
+    // vértices vienen horneados en el mismo punto —el centro de la base— y se
+    // separan contra el eje derecho de la cámara, así que siempre da la cara.
+    // Una carta representa la masa de decenas de briznas: si quedara de canto
+    // dejaría un hueco de ese tamaño.
+    //
+    // **Lo que se interpola es el ancho, no si gira.** Desde que la brizna
+    // pertenece al mundo, las de índice bajo —las del nivel de cartas— están
+    // vivas también a tres metros, y ahí una carta de medio metro girando con la
+    // cámara se ve (reportado jugando el 2026-08-08). Angosta no: una brizna de
+    // 5,5 cm que gira es indistinguible de una que no, así que no hace falta un
+    // segundo camino de construcción ni un triángulo más.
     //
     // El eje derecho sale de la fila 0 de la matriz de vista, que es la que
     // lleva el `right` de la cámara en espacio de mundo, aplanado a horizontal
     // para que la carta se quede parada en vez de inclinarse con el cabeceo.
-    if ring_is_card() {
+    if as_card {
         let camera_right = normalize(vec3<f32>(view.view_from_world[0].x, 0.0, view.view_from_world[2].x));
         world_position = vec4<f32>(
             world_position.xyz
@@ -652,7 +677,7 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     //
     // El hash ya hizo su trabajo acá arriba, así que no se pierde nada más que la
     // vista `brizna` sobre las cartas, que pasa a ser un degradado a lo ancho.
-    if ring_is_card() {
+    if as_card {
         out.uv_b = vec2<f32>(side, out.uv_b.y);
     }
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
@@ -682,7 +707,11 @@ fn fragment(
     // La fase sale de `fract(uv1.y)` —la altura de la carta, idéntica en sus
     // cuatro vértices— por el mismo camino que el tinte por brizna: es el único
     // identificador que el vértice ya carga.
-    if ring_is_card()
+    // Y se recorta **tanto como la carta esté abierta**: cerca la brizna es
+    // angosta, y unos dientes repartidos sobre 5,5 cm serían un patrón que a esa
+    // distancia sí se ve. Con la apertura en cero el umbral llega a 1 y no
+    // descarta nada, así que la transición no tiene escalón.
+    if blade_is_card(length(in.world_position.xz - grass_data.focus_xz))
         && blade_height_factor(in.uv)
             > card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0)) {
         discard;
@@ -702,7 +731,7 @@ fn fragment(
         // las reportaba nueve veces más finas de lo que son, que es exactamente
         // la clase de error que esta vista existe para cazar.
         var width = grass_data.blade_width;
-        if ring_is_card() {
+        if blade_is_card(length(in.world_position.xz - grass_data.focus_xz)) {
             width = grass_data.card_half_width * 2.0;
         }
         let pixels_wide = width / max(metres_per_pixel, 1e-6);

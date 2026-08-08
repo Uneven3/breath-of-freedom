@@ -40,8 +40,9 @@ pub struct GrassUniform {
     /// Cuánto aguanta el color de la raíz antes de ceder al de la punta: **0 es
     /// rampa lineal y 1 su cuadrado**. El porqué, en `BOTWGrass.md`.
     pub gradient_bias: f32,
-    /// Desde qué distancia ralea la pradera. Ver `GROWTH_START_M`.
-    pub growth_start: f32,
+    /// Desde qué distancia una brizna se abre como carta; más cerca se construye
+    /// angosta aunque su nivel sea el de las cartas. Ver `grass::card_from_m`.
+    pub card_from_m: f32,
     /// Índice de la vista de diagnóstico. Ver `visuals::grass_debug`.
     pub debug_view: u32,
     /// Ancho de brizna en metros; la vista `subpixel` divide por él.
@@ -94,7 +95,9 @@ impl Default for GrassUniform {
             wind_speed: 1.7,
             tint_variation: 0.16,
             gradient_bias: 1.0,
-            growth_start: 1.0e9,
+            // Lejísimos por default: sin que la pradera lo escriba no se abre
+            // ninguna carta, que es el lado seguro del artefacto.
+            card_from_m: 1.0e9,
             debug_view: 0,
             // La pradera lo escribe desde `BLADE_WIDTH`, su única fuente.
             blade_width: 0.0,

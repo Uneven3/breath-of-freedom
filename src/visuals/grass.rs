@@ -107,12 +107,10 @@ impl BladeShape {
         }
     }
 
-    /// Cuánto suelo tapa a lo ancho una primitiva de esta forma. Es lo que hace
-    /// comparable la densidad de una carta con la de una brizna.
-    ///
-    /// La carta declara **su ancho por lo que su silueta conserva**, no su ancho
-    /// a secas: desde que recorta puntas ya no es un rectángulo lleno, y una
-    /// huella que ignore eso planta la mitad de lo que hace falta.
+    /// Cuánto suelo tapa a lo ancho una primitiva, que es lo que hace comparable
+    /// la densidad de una carta con la de una brizna. La carta declara **lo que
+    /// su silueta conserva** y no su ancho a secas: desde que recorta puntas no
+    /// es un rectángulo lleno, y ignorarlo planta la mitad de lo que hace falta.
     const fn footprint_m(self) -> f32 {
         match self {
             Self::Leaf | Self::Spike => BLADE_WIDTH,
@@ -324,10 +322,16 @@ const GROWTH_BAND_MAX_M: f32 = {
     widest
 };
 
-/// Desde qué distancia raleaba la pradera cuando el shader repartía los umbrales.
-/// Sigue viajando al uniform como declaración; quien ralea ahora es la escalera
-/// de alcances de `grass_tiles`, que arranca en `NEAREST_INTEREST_M`.
-const GROWTH_START_M: f32 = 24.0;
+/// Desde qué distancia una brizna se abre como carta.
+///
+/// **Es el mismo umbral que elige la forma, no un número aparte:** la carta
+/// representa la masa de un matojo y sólo tiene sentido donde una brizna ya no
+/// se resuelve. Más cerca se construye angosta — un billboard de medio metro a
+/// tres metros gira con la cámara, reportado jugando el 2026-08-08.
+fn card_from_m(scale: f32) -> f32 {
+    // Despejado de `width_in_pixels(BLADE_WIDTH, d, scale) = SPIKE_MIN_PIXELS`.
+    BLADE_WIDTH / (SPIKE_MIN_PIXELS * scale).max(1e-6)
+}
 
 /// Hasta cuánto **bajo** el suelo colapsa una brizna. No cero, y ahí está todo:
 /// al ras queda coplanar con el terreno y hace z-fighting, que en pantalla es el
@@ -1040,7 +1044,7 @@ fn meadow_uniform(
     let (ramp, spread) = growth_band(perf);
     data.growth_ramp = ramp;
     data.growth_spread = spread;
-    data.growth_start = GROWTH_START_M;
+    data.card_from_m = card_from_m(reference_scale());
     let (a, b) = ring_reaches(perf.grass_reach_scale());
     data.ring_reaches_a = a;
     data.ring_reaches_b = b;

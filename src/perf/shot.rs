@@ -31,6 +31,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use serde::Serialize;
 
 use super::budget::SceneInventory;
 use super::shot_stats::{self, Category, ShotGeometry, shot_geometry};
@@ -50,21 +51,58 @@ const SWEEP_ENV: &str = "BOF_SHOT_SWEEP";
 /// **reproducir una queja**. Cuando el usuario dice "desde arriba se ve ralo", el
 /// mirador canónico no sirve para verificarlo, y verificar antes de opinar es
 /// justo lo que esta herramienta existe para permitir.
-fn configured_pose() -> Option<(Vec3, Vec3)> {
-    let raw = std::env::var(POSE_ENV).ok()?;
-    let (from, towards) = raw.split_once(':')?;
-    let triple = |text: &str| -> Option<Vec3> {
-        let mut parts = text.split(',').map(|n| n.trim().parse::<f32>());
-        Some(Vec3::new(
-            parts.next()?.ok()?,
-            parts.next()?.ok()?,
-            parts.next()?.ok()?,
-        ))
+fn configured_pose() -> Result<Option<(Vec3, Vec3)>, &'static str> {
+    let raw = match std::env::var(POSE_ENV) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            error!("[shot] {POSE_ENV} no es texto válido");
+            return Err("BOF_SHOT_POSE is not valid Unicode");
+        }
     };
+    match parse_pose(&raw) {
+        Ok(pose) => Ok(Some(pose)),
+        Err(reason) => {
+            error!("[shot] {POSE_ENV}={raw:?} no es x,y,z:dx,dy,dz válido: {reason}");
+            Err(reason)
+        }
+    }
+}
+
+fn parse_pose(raw: &str) -> Result<(Vec3, Vec3), &'static str> {
+    let (from, towards) = raw
+        .split_once(':')
+        .ok_or("BOF_SHOT_POSE needs one ':' separator")?;
+    let triple = |text: &str| -> Result<Vec3, &'static str> {
+        let mut parts = text.split(',').map(|n| n.trim().parse::<f32>());
+        let vector = Vec3::new(
+            parts
+                .next()
+                .ok_or("a vector needs three numbers")?
+                .map_err(|_| "a coordinate is not a number")?,
+            parts
+                .next()
+                .ok_or("a vector needs three numbers")?
+                .map_err(|_| "a coordinate is not a number")?,
+            parts
+                .next()
+                .ok_or("a vector needs three numbers")?
+                .map_err(|_| "a coordinate is not a number")?,
+        );
+        if parts.next().is_some() {
+            return Err("a vector has more than three numbers");
+        }
+        if !vector.is_finite() {
+            return Err("coordinates must be finite");
+        }
+        Ok(vector)
+    };
+    let position = triple(from)?;
     let facing = triple(towards)?.normalize_or_zero();
-    // Una dirección nula dejaría a `look_to` sin base y la cámara en cualquier
-    // parte; mejor ignorar la variable que fotografiar un lugar al azar.
-    (facing != Vec3::ZERO).then(|| Some((triple(from)?, facing)))?
+    if facing == Vec3::ZERO {
+        return Err("facing direction cannot be zero");
+    }
+    Ok((position, facing))
 }
 
 /// Dónde caen las fotos si nadie dice otra cosa.
@@ -82,12 +120,8 @@ const DEFAULT_OUT: &str = "target/shots";
 /// 2026-08-06, ahora en forma de evidencia falsa.
 const SETTLE_SECS: f32 = 4.0;
 
-/// Cuántos frames se dejan pasar entre pedir la foto y salir.
-///
-/// La captura es asíncrona: viaja al mundo de render, espera que la GPU termine
-/// y recién ahí el observador escribe el archivo. Salir en cuanto se pide deja
-/// un PNG de cero bytes.
-const FRAMES_AFTER_SHUTTER: u32 = 12;
+/// Hard stop for a renderer that never returns the asynchronous capture.
+const CAPTURE_TIMEOUT_SECS: f32 = 30.0;
 
 /// Cuánto puede alejarse la cámara del mirador antes de que la foto deje de ser
 /// de donde el reporte dice. Medio metro es lo que ya se midió que vale ~1 ms en
@@ -101,8 +135,9 @@ enum Stage {
     #[default]
     EnteringScene,
     Settling,
-    /// Foto pedida; contando frames para que alcance a escribirse.
-    Draining(u32),
+    /// Foto pedida; esperando la confirmación del observer que recibió sus
+    /// píxeles. El número es el contador que esa captura tiene que alcanzar.
+    AwaitingCapture(u32),
 }
 
 /// La perilla que la corrida recorre entera, un disparo por paso.
@@ -121,11 +156,22 @@ struct Sweep {
 /// `BOF_SHOT_SWEEP=grass-density`. Un nombre que no existe **no barre nada** y
 /// lo dice: una corrida que se cree un barrido y saca una foto sola es un
 /// reporte de una tabla de una fila, que se lee como si fuera la respuesta.
-fn configured_sweep() -> Option<Sweep> {
-    let raw = std::env::var(SWEEP_ENV).ok()?;
+fn configured_sweep() -> Result<Option<Sweep>, &'static str> {
+    let raw = match std::env::var(SWEEP_ENV) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            error!("[shot] {SWEEP_ENV} no es texto válido");
+            return Err("BOF_SHOT_SWEEP is not valid Unicode");
+        }
+    };
+    parse_sweep(&raw).map(Some)
+}
+
+fn parse_sweep(raw: &str) -> Result<Sweep, &'static str> {
     let name = raw.trim();
     match PerfKnob::ALL.into_iter().find(|knob| knob.label() == name) {
-        Some(knob) => Some(Sweep { knob, step: 0 }),
+        Some(knob) => Ok(Sweep { knob, step: 0 }),
         None => {
             error!(
                 "[shot] {SWEEP_ENV}={name} no nombra ninguna perilla; hay: {}",
@@ -135,7 +181,7 @@ fn configured_sweep() -> Option<Sweep> {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            None
+            Err("BOF_SHOT_SWEEP does not name a knob")
         }
     }
 }
@@ -147,12 +193,50 @@ pub struct AutoShot {
     stage: Stage,
     elapsed: f32,
     sweep: Option<Sweep>,
+    pose_override: Option<(Vec3, Vec3)>,
+    invalid: bool,
+}
+
+/// Number of automatic screenshot entities whose asynchronous result reached
+/// the main world. Incremented only by observers attached by `AutoShot`, so an
+/// F7 capture cannot accidentally advance a sweep.
+#[derive(Resource, Default)]
+pub(super) struct ShotCaptureProgress(u32);
+
+fn save_auto_shot(
+    path: PathBuf,
+) -> impl FnMut(
+    On<bevy::render::view::screenshot::ScreenshotCaptured>,
+    ResMut<ShotCaptureProgress>,
+    ResMut<AutoShot>,
+) {
+    move |captured, mut progress, mut shot| {
+        let result = captured
+            .image
+            .clone()
+            .try_into_dynamic()
+            .map_err(|error| format!("formato de pantalla incomprensible: {error}"))
+            .and_then(|image| {
+                image
+                    .to_rgb8()
+                    .save(&path)
+                    .map_err(|error| format!("error de escritura: {error}"))
+            });
+        match result {
+            Ok(()) => info!("[shot] captura guardada en {}", path.display()),
+            Err(error) => {
+                error!("[shot] no se pudo guardar {}: {error}", path.display());
+                shot.invalid = true;
+            }
+        }
+        progress.0 += 1;
+    }
 }
 
 impl AutoShot {
     /// El mirador escrito a mano si lo hay, y si no el de la suite.
     fn pose(&self) -> (Vec3, Vec3) {
-        configured_pose().unwrap_or_else(|| self.suite.vantage())
+        self.pose_override.unwrap_or_else(|| self.suite.vantage())
     }
 
     /// Una foto por suite, o una por paso cuando la corrida barre: dos pasos que
@@ -173,16 +257,16 @@ impl AutoShot {
 /// Lee `BOF_SHOT`. Igual que `BOF_BENCH`, un nombre inválido **no arranca el
 /// juego**: pedir una foto y recibir una sesión jugable es la clase de silencio
 /// que hace perder una tarde.
-pub fn configured_auto_shot() -> Option<AutoShot> {
+pub(super) fn configured_auto_shot() -> Result<Option<AutoShot>, &'static str> {
     let raw = match std::env::var(SHOT_ENV) {
         Ok(raw) => raw,
-        Err(std::env::VarError::NotPresent) => return None,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => {
             error!(
                 "[shot] {SHOT_ENV} no es texto válido; suites: {}",
                 BenchSuite::labels()
             );
-            return None;
+            return Err("BOF_SHOT is not valid Unicode");
         }
     };
     let Some(suite) = BenchSuite::from_label(&raw) else {
@@ -190,16 +274,18 @@ pub fn configured_auto_shot() -> Option<AutoShot> {
             "[shot] {SHOT_ENV}={raw} no nombra ninguna suite; hay: {}",
             BenchSuite::labels()
         );
-        return None;
+        return Err("BOF_SHOT does not name a suite");
     };
     let out = std::env::var(OUT_ENV).map_or_else(|_| PathBuf::from(DEFAULT_OUT), PathBuf::from);
-    Some(AutoShot {
+    Ok(Some(AutoShot {
         suite,
         out,
         stage: Stage::default(),
         elapsed: 0.0,
-        sweep: configured_sweep(),
-    })
+        sweep: configured_sweep()?,
+        pose_override: configured_pose()?,
+        invalid: false,
+    }))
 }
 
 /// El mirador que la foto tiene que sostener.
@@ -402,6 +488,62 @@ fn shot_categories(perf: &crate::perf::PerfToggles) -> Vec<Category> {
     }
 }
 
+#[derive(Serialize)]
+struct Legend<'a> {
+    vista: &'a str,
+    plana: bool,
+    camara: LegendCamera,
+    perfil_suelo: &'a [(f32, f32)],
+    perillas: LegendKnobs<'a>,
+    categorias: Vec<LegendCategory<'a>>,
+    encuadre: LegendFraming,
+}
+
+#[derive(Serialize)]
+struct LegendCamera {
+    pos: [f32; 3],
+    facing: [f32; 3],
+    fov_y: f32,
+    viewport_px: [u32; 2],
+    ojo_sobre_suelo_m: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct LegendKnobs<'a> {
+    densidad_por_m2: f32,
+    alcance: f32,
+    anillos: &'a str,
+}
+
+#[derive(Serialize)]
+struct LegendCategory<'a> {
+    nombre: &'a str,
+    color: [u8; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alcance_m: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chunk_m: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    densidad_por_m2: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tris_por_primitiva: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plantado: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct LegendFraming {
+    mallas_visibles: u32,
+    triangulos: usize,
+    batches_estimados: usize,
+    pradera_triangulos: usize,
+    pradera_batches_estimados: usize,
+}
+
+fn legend_path(path: &std::path::Path) -> PathBuf {
+    path.with_extension("ron")
+}
+
 /// Escribe, al lado del PNG, con qué configuración se sacó la foto.
 ///
 /// Ya no es un contrato con nadie —el conteo vive en la misma corrida desde el
@@ -425,72 +567,75 @@ fn write_legend(
     // —la única que muestra el color que el jugador ve— sin la geometría de
     // cámara, o sea sin eje de distancias.
     let named = shot_categories(perf);
-    let categories: Vec<serde_json::Value> = if view == "subpixel" {
+    let categories = if view == "subpixel" {
         named
             .iter()
-            .map(|band| serde_json::json!({ "nombre": band.name, "color": band.color }))
+            .map(|band| LegendCategory {
+                nombre: &band.name,
+                color: band.color,
+                alcance_m: None,
+                chunk_m: None,
+                densidad_por_m2: None,
+                tris_por_primitiva: None,
+                plantado: None,
+            })
             .collect()
     } else {
         named
             .iter()
             .zip(crate::visuals::grass_debug::ring_legend(perf))
-            .map(|(category, ring)| {
-                serde_json::json!({
-                    "nombre": category.name,
-                    "color": category.color,
-                    "alcance_m": ring.reach_m,
-                    "chunk_m": ring.chunk_m,
-                    "densidad_por_m2": ring.density,
-                    "tris_por_primitiva": ring.triangles_per_blade,
-                    // Un anillo apagado cuenta cero píxeles, que es un número
-                    // perfectamente creíble para uno que sí se plantó y no se
-                    // ve. La corrida declara cuál es cuál.
-                    "plantado": ring.planted,
-                })
+            .map(|(category, ring)| LegendCategory {
+                nombre: &category.name,
+                color: category.color,
+                alcance_m: Some(ring.reach_m),
+                chunk_m: Some(ring.chunk_m),
+                densidad_por_m2: Some(ring.density),
+                tris_por_primitiva: Some(ring.triangles_per_blade),
+                // Un anillo apagado cuenta cero píxeles, que es un número
+                // perfectamente creíble para uno que sí se plantó y no se ve.
+                // La corrida declara cuál es cuál.
+                plantado: Some(ring.planted),
             })
             .collect()
     };
     let meadow = inventory.subject(Subject::Meadow);
     let flat =
         crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).is_flat();
-    let legend = serde_json::json!({
-        "vista": view,
+    let legend = Legend {
+        vista: view,
         // Que la vista pinte plano y exacto lo declara el shader, que es quien
         // sabe cuáles lo hacen.
-        "plana": flat,
-        "camara": {
-            "pos": [pose.0.x, pose.0.y, pose.0.z],
-            "facing": [pose.1.x, pose.1.y, pose.1.z],
+        plana: flat,
+        camara: LegendCamera {
+            pos: pose.0.to_array(),
+            facing: pose.1.to_array(),
             // Con estos tres la fila de pantalla se convierte en metros, que es
             // el eje x del perfil por distancia.
-            "fov_y": geometry.fov_y,
-            "viewport_px": [geometry.viewport.0, geometry.viewport.1],
-            "ojo_sobre_suelo_m": geometry.eye_above_ground_m,
+            fov_y: geometry.fov_y,
+            viewport_px: [geometry.viewport.0, geometry.viewport.1],
+            ojo_sobre_suelo_m: geometry.eye_above_ground_m,
         },
         // La altura del terreno bajo la línea de vista, cada pocos metros. La
         // conversión fila→distancia supone suelo plano; esto es lo que permite
         // **verificar** la suposición en vez de arrastrarla.
-        "perfil_suelo": geometry
-            .ground_profile
-            .iter()
-            .map(|(distance, height)| serde_json::json!([distance, height]))
-            .collect::<Vec<_>>(),
-        "perillas": {
-            "densidad_por_m2": perf.grass_density(),
-            "alcance": perf.grass_reach_scale(),
-            "anillos": perf.grass_rings_label(),
+        perfil_suelo: &geometry.ground_profile,
+        perillas: LegendKnobs {
+            densidad_por_m2: perf.grass_density(),
+            alcance: perf.grass_reach_scale(),
+            anillos: perf.grass_rings_label(),
         },
-        "categorias": categories,
-        "encuadre": {
-            "mallas_visibles": inventory.visible_meshes,
-            "triangulos": inventory.triangles,
-            "draws": inventory.draws,
-            "pradera_triangulos": meadow.triangles,
-            "pradera_draws": meadow.draws,
+        categorias: categories,
+        encuadre: LegendFraming {
+            mallas_visibles: inventory.visible_meshes,
+            triangulos: inventory.triangles,
+            batches_estimados: inventory.draws,
+            pradera_triangulos: meadow.triangles,
+            pradera_batches_estimados: meadow.draws,
         },
-    });
-    let path = path.with_extension("json");
-    match serde_json::to_string_pretty(&legend) {
+    };
+    let path = legend_path(path);
+    let pretty = ron::ser::PrettyConfig::default().compact_arrays(true);
+    match ron::ser::to_string_pretty(&legend, pretty) {
         Ok(text) => {
             if let Err(error) = std::fs::write(&path, text) {
                 error!("[shot] no se pudo escribir {}: {error}", path.display());
@@ -513,7 +658,7 @@ fn log_framing(inventory: &SceneInventory, records: &crate::visuals::grass::Mead
             continue;
         }
         parts.push(format!(
-            "{}={} tris/{} draws/{:.1} MB ({:.0}% del cuadro)",
+            "{}={} tris/{} draws~/{:.1} MB ({:.0}% del cuadro)",
             subject.label(),
             tally.triangles,
             tally.draws,
@@ -526,7 +671,7 @@ fn log_framing(inventory: &SceneInventory, records: &crate::visuals::grass::Mead
     // lo que antes eran vértices, y sin esta línea una corrida declararía una
     // caída de memoria que es en parte mudanza.
     info!(
-        "[shot] escena: {} mallas visibles, {} triángulos, {} draws · {} · registros de pradera \
+        "[shot] escena: {} mallas visibles, {} triángulos, {} draws~ · {} · registros de pradera \
          {:.2} MB en {} chunks",
         inventory.visible_meshes,
         inventory.triangles,
@@ -544,7 +689,7 @@ fn log_framing(inventory: &SceneInventory, records: &crate::visuals::grass::Mead
     reason = "una foto declara de dónde es y con qué se sacó: escena, mirador, \
               inventario, perillas y si algún asset falló"
 )]
-pub fn drive_auto_shot(
+pub(super) fn drive_auto_shot(
     mut commands: Commands,
     mut shot: ResMut<AutoShot>,
     mut next_scene: ResMut<NextState<AppState>>,
@@ -559,6 +704,7 @@ pub fn drive_auto_shot(
     broken: Res<BrokenAssets>,
     records: Res<crate::visuals::grass::MeadowRecordMemory>,
     log: Res<shot_stats::ShotStatsLog>,
+    progress: Res<ShotCaptureProgress>,
 ) {
     match shot.stage {
         Stage::EnteringScene => {
@@ -605,6 +751,7 @@ pub fn drive_auto_shot(
                 let (at, aim) = (camera.0.translation(), camera.0.forward().as_vec3());
                 if at.distance(position) > POSE_TOLERANCE_M || aim.dot(facing) < POSE_TOLERANCE_DOT
                 {
+                    shot.invalid = true;
                     warn!(
                         "[shot] LA CÁMARA NO ESTÁ EN EL MIRADOR: está en \
                          ({:.1},{:.1},{:.1}) mirando ({:.2},{:.2},{:.2}). La foto no es del \
@@ -613,25 +760,28 @@ pub fn drive_auto_shot(
                     );
                 }
             } else {
+                shot.invalid = true;
                 warn!("[shot] sin cámara: no se puede verificar de dónde es la foto");
             }
             // Lo que la foto no puede mostrar: si dos encuadres discrepan, hace
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
             warn_on_broken_assets(&broken);
+            shot.invalid |= broken.count() > 0;
             log_framing(&inventory, &records);
             // La geometría sale de la cámara **real**, no del mirador pedido:
             // si las dos discrepan el aviso de arriba ya sonó, y una conversión
             // a metros hecha sobre una pose que la foto no tiene sería un
             // número exacto de otra escena.
+            let actual_pose = camera.as_ref().map_or((position, facing), |camera| {
+                (camera.0.translation(), camera.0.forward().as_vec3())
+            });
             let geometry = shot_geometry(
-                camera.as_ref().map_or((position, facing), |camera| {
-                    (camera.0.translation(), camera.0.forward().as_vec3())
-                }),
+                actual_pose,
                 camera.as_ref().map(|camera| camera.1),
                 window.as_deref().map(|w| &**w),
                 &terrain,
             );
-            write_legend(&path, &perf, &inventory, (position, facing), &geometry);
+            write_legend(&path, &perf, &inventory, actual_pose, &geometry);
             let sweep_label = shot.sweep.map(|sweep| perf.knob_value(sweep.knob));
             commands
                 .spawn(Screenshot::primary_window())
@@ -640,13 +790,20 @@ pub fn drive_auto_shot(
                     geometry,
                     sweep_label,
                 )))
-                .observe(save_to_disk(path));
-            shot.stage = Stage::Draining(FRAMES_AFTER_SHUTTER);
+                .observe(save_auto_shot(path));
+            shot.stage = Stage::AwaitingCapture(progress.0 + 1);
+            shot.elapsed = 0.0;
         }
-        Stage::Draining(left) => {
-            if let Some(left) = left.checked_sub(1) {
-                shot.stage = Stage::Draining(left);
-            } else if advance_sweep(&mut shot, &mut perf) {
+        Stage::AwaitingCapture(expected) => {
+            shot.elapsed += time.delta_secs();
+            if progress.0 < expected {
+                if shot.elapsed >= CAPTURE_TIMEOUT_SECS {
+                    error!("[shot] la GPU no devolvió la captura en {CAPTURE_TIMEOUT_SECS:.0}s");
+                    exit.write(AppExit::error());
+                }
+                return;
+            }
+            if advance_sweep(&mut shot, &mut perf) {
                 shot.stage = Stage::Settling;
                 shot.elapsed = 0.0;
             } else {
@@ -660,7 +817,11 @@ pub fn drive_auto_shot(
                         )
                     );
                 }
-                exit.write(AppExit::Success);
+                exit.write(if shot.invalid {
+                    AppExit::error()
+                } else {
+                    AppExit::Success
+                });
             }
         }
     }
@@ -701,6 +862,8 @@ mod tests {
             stage,
             elapsed: 0.0,
             sweep: None,
+            pose_override: None,
+            invalid: false,
         }
     }
 
@@ -738,6 +901,10 @@ mod tests {
     fn the_file_is_named_after_the_suite() {
         let shot = shot(BenchSuite::Grass, Stage::Settling);
         assert_eq!(shot.path(), PathBuf::from("target/shots/grass.png"));
+        assert_eq!(
+            legend_path(&shot.path()),
+            PathBuf::from("target/shots/grass.ron")
+        );
     }
 
     /// Barriendo, cada paso deja su propia imagen: si todos pisaran el mismo
@@ -785,5 +952,32 @@ mod tests {
         let mut shot = shot(BenchSuite::Grass, Stage::Settling);
         let mut perf = crate::perf::PerfToggles::default();
         assert!(!advance_sweep(&mut shot, &mut perf));
+    }
+
+    /// A misspelled sweep used to silently take one ordinary screenshot and
+    /// exit 0, leaving a plausible one-row "curve" behind.
+    #[test]
+    fn an_unknown_sweep_is_rejected_instead_of_becoming_one_shot() {
+        assert!(parse_sweep("grass-density").is_ok());
+        assert!(parse_sweep("grass-densitty").is_err());
+        assert!(parse_sweep("").is_err());
+    }
+
+    #[test]
+    fn malformed_reproduction_poses_are_rejected_not_silently_replaced() {
+        let (position, facing) = parse_pose("1,2,3:0,0,-2").expect("valid pose");
+        assert_eq!(position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(facing, Vec3::NEG_Z);
+
+        for malformed in [
+            "",
+            "1,2,3",
+            "1,2:0,0,-1",
+            "1,2,3,4:0,0,-1",
+            "1,2,3:0,0,0",
+            "NaN,2,3:0,0,-1",
+        ] {
+            assert!(parse_pose(malformed).is_err(), "accepted {malformed:?}");
+        }
     }
 }

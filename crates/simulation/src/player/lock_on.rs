@@ -11,8 +11,8 @@ use bevy_math::prelude::*;
 use bevy_transform::prelude::*;
 
 use crate::enemies::Enemy;
-use crate::movement::Player;
 use crate::movement::facing::FacingSource;
+use crate::movement::{ActorId, Player};
 use bof_domain::input::InputConsumeCursor;
 use bof_domain::input::action::IntentAction;
 use bof_domain::input::frame::{ActiveActions, ControlOrientation, InputControlledBy};
@@ -38,27 +38,42 @@ fn look_direction(orientation: &ControlOrientation) -> Vec3 {
         * Vec3::NEG_Z
 }
 
-/// The most crosshair-centered enemy within range and the acquire cone.
+/// The most crosshair-centered enemy within range and the acquire cone. Ties
+/// prefer distance, world position and authored identity in that order.
 fn acquire(
     origin: Vec3,
     orientation: &ControlOrientation,
-    enemies: &Query<(Entity, &Transform), With<Enemy>>,
+    enemies: &Query<(Entity, &ActorId, &Transform), With<Enemy>>,
 ) -> Option<Entity> {
     let look = look_direction(orientation);
-    let mut best: Option<Entity> = None;
-    let mut best_alignment = CONE_MIN_DOT;
-    for (entity, transform) in enemies {
-        let to = transform.translation - origin;
-        if to.length_squared() > ACQUIRE_RANGE * ACQUIRE_RANGE {
-            continue;
-        }
-        let alignment = to.normalize_or_zero().dot(look);
-        if alignment > best_alignment {
-            best_alignment = alignment;
-            best = Some(entity);
-        }
-    }
-    best
+    enemies
+        .iter()
+        .filter_map(|(entity, actor_id, transform)| {
+            let position = transform.translation;
+            let to = position - origin;
+            let distance_squared = to.length_squared();
+            if distance_squared > ACQUIRE_RANGE * ACQUIRE_RANGE {
+                return None;
+            }
+            let alignment = to.normalize_or_zero().dot(look);
+            (alignment > CONE_MIN_DOT).then_some((
+                entity,
+                *actor_id,
+                position,
+                alignment,
+                distance_squared,
+            ))
+        })
+        .max_by(|left, right| {
+            left.3
+                .total_cmp(&right.3)
+                .then_with(|| right.4.total_cmp(&left.4))
+                .then_with(|| right.2.x.total_cmp(&left.2.x))
+                .then_with(|| right.2.y.total_cmp(&left.2.y))
+                .then_with(|| right.2.z.total_cmp(&left.2.z))
+                .then_with(|| right.1.cmp(&left.1))
+        })
+        .map(|(entity, ..)| entity)
 }
 
 /// Runs before `resolve_facing`: consumes the lock-on toggle, acquires/drops a
@@ -76,37 +91,36 @@ pub fn update_lock_on(
         ),
         With<Player>,
     >,
-    enemies: Query<(Entity, &Transform), With<Enemy>>,
+    enemies: Query<(Entity, &ActorId, &Transform), With<Enemy>>,
 ) {
-    let Ok((source, transform, orientation, mut facing, mut cursor)) = player.single_mut() else {
-        return;
-    };
-    let Some(frame) = actions.frame(source.0) else {
-        return;
-    };
-    let toggled = cursor.0.consume(frame, IntentAction::LockOn);
+    for (source, transform, orientation, mut facing, mut cursor) in &mut player {
+        let Some(frame) = actions.frame(source.0) else {
+            continue;
+        };
+        let toggled = cursor.0.consume(frame, IntentAction::LockOn);
 
-    // Break a lock whose target vanished or wandered past the hysteresis range.
-    if let FacingSource::LockOn(target) = *facing {
-        let held = enemies.get(target).is_ok_and(|(_, target_tf)| {
-            transform
-                .translation
-                .distance_squared(target_tf.translation)
-                <= BREAK_RANGE * BREAK_RANGE
-        });
-        if !held {
-            *facing = FacingSource::Free;
+        // Break a lock whose target vanished or wandered past the hysteresis range.
+        if let FacingSource::LockOn(target) = *facing {
+            let held = enemies.get(target).is_ok_and(|(_, _, target_tf)| {
+                transform
+                    .translation
+                    .distance_squared(target_tf.translation)
+                    <= BREAK_RANGE * BREAK_RANGE
+            });
+            if !held {
+                *facing = FacingSource::Free;
+            }
         }
-    }
 
-    if !toggled {
-        return;
-    }
-    match *facing {
-        FacingSource::LockOn(_) => *facing = FacingSource::Free,
-        FacingSource::Free | FacingSource::Look => {
-            if let Some(target) = acquire(transform.translation, orientation, &enemies) {
-                *facing = FacingSource::LockOn(target);
+        if !toggled {
+            continue;
+        }
+        match *facing {
+            FacingSource::LockOn(_) => *facing = FacingSource::Free,
+            FacingSource::Free | FacingSource::Look => {
+                if let Some(target) = acquire(transform.translation, orientation, &enemies) {
+                    *facing = FacingSource::LockOn(target);
+                }
             }
         }
     }
@@ -116,7 +130,7 @@ pub fn update_lock_on(
 mod tests {
     use super::*;
     use bevy_ecs::system::RunSystemOnce;
-    use bof_domain::input::frame::LOCAL_INPUT_SOURCE;
+    use bof_domain::input::frame::{InputSource, LOCAL_INPUT_SOURCE};
 
     fn spawn_player(world: &mut World) -> Entity {
         world
@@ -147,9 +161,17 @@ mod tests {
         let player = spawn_player(&mut world);
         // Centered enemy straight ahead (-Z) and an off-axis one to the side.
         let centered = world
-            .spawn((Enemy, Transform::from_xyz(0.0, 0.0, -8.0)))
+            .spawn((
+                Enemy,
+                ActorId::authored(10),
+                Transform::from_xyz(0.0, 0.0, -8.0),
+            ))
             .id();
-        world.spawn((Enemy, Transform::from_xyz(9.0, 0.0, -2.0)));
+        world.spawn((
+            Enemy,
+            ActorId::authored(11),
+            Transform::from_xyz(9.0, 0.0, -2.0),
+        ));
 
         toggle(&mut world);
         world.run_system_once(update_lock_on).unwrap();
@@ -165,8 +187,16 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(ActiveActions::default());
         let player = spawn_player(&mut world);
-        world.spawn((Enemy, Transform::from_xyz(0.0, 0.0, 8.0))); // behind (+Z)
-        world.spawn((Enemy, Transform::from_xyz(0.0, 0.0, -100.0))); // too far
+        world.spawn((
+            Enemy,
+            ActorId::authored(10),
+            Transform::from_xyz(0.0, 0.0, 8.0),
+        )); // behind (+Z)
+        world.spawn((
+            Enemy,
+            ActorId::authored(11),
+            Transform::from_xyz(0.0, 0.0, -100.0),
+        )); // too far
 
         toggle(&mut world);
         world.run_system_once(update_lock_on).unwrap();
@@ -179,7 +209,11 @@ mod tests {
         world.insert_resource(ActiveActions::default());
         let player = spawn_player(&mut world);
         let target = world
-            .spawn((Enemy, Transform::from_xyz(0.0, 0.0, -8.0)))
+            .spawn((
+                Enemy,
+                ActorId::authored(10),
+                Transform::from_xyz(0.0, 0.0, -8.0),
+            ))
             .id();
 
         toggle(&mut world);
@@ -195,5 +229,35 @@ mod tests {
             .z = -100.0;
         world.run_system_once(update_lock_on).unwrap();
         assert_eq!(facing(&mut world, player), FacingSource::Free);
+    }
+
+    #[test]
+    fn one_players_lock_input_is_not_disabled_by_another_player() {
+        let mut world = World::new();
+        world.insert_resource(ActiveActions::default());
+        let local = spawn_player(&mut world);
+        let remote = world
+            .spawn((
+                Player,
+                Transform::from_xyz(20.0, 0.0, 0.0),
+                InputControlledBy(InputSource(1)),
+                ControlOrientation::default(),
+                FacingSource::Free,
+                LockOnInputCursor::default(),
+            ))
+            .id();
+        let target = world
+            .spawn((
+                Enemy,
+                ActorId::authored(10),
+                Transform::from_xyz(0.0, 0.0, -8.0),
+            ))
+            .id();
+
+        toggle(&mut world);
+        world.run_system_once(update_lock_on).unwrap();
+
+        assert_eq!(facing(&mut world, local), FacingSource::LockOn(target));
+        assert_eq!(facing(&mut world, remote), FacingSource::Free);
     }
 }

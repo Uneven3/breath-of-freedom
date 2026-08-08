@@ -545,8 +545,7 @@ impl PerfToggles {
             PerfKnob::LeafShadows => self.leaf_shadows = !self.leaf_shadows,
             PerfKnob::TreeDetail => self.tree_detail = !self.tree_detail,
             PerfKnob::GrassDensity => {
-                self.grass_density_step =
-                    (self.grass_density_step + 1) % GRASS_DENSITY_STEPS.len()
+                self.grass_density_step = (self.grass_density_step + 1) % GRASS_DENSITY_STEPS.len()
             }
             PerfKnob::GrassReach => {
                 self.grass_reach_step = (self.grass_reach_step + 1) % GRASS_REACH_STEPS.len()

@@ -25,13 +25,13 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   primera corrida**: el 2026-08-06 tres barridos dieron 10,89 / 11,88 / 3,83 ms
   para el mismo pasto con Blender y Firefox arriba. Detalle en "La suite de
   medición".
-- **Ver sin jugar: `BOF_SHOT=<suite> cargo run`** deja un PNG en `target/shots/`
-  y sale; `BOF_SHOT_POSE="x,y,z:dx,dy,dz"` fuerza un encuadre para reproducir una
-  queja; `BOF_KNOBS="grass-view=5,msaa=1"` fija cualquier perilla del hub desde
-  el arranque; `BOF_SCENE=Pasto cargo run` arranca dentro de una caja sin pasar
-  por el menú. **A diferencia de los tiempos, la estadística de píxeles de una
-  captura es determinista** y no la contamina la carga de la máquina — pero su
-  piso de ruido es **5%**, porque el viento mueve las briznas entre disparos.
+- **Ver sin jugar: `BOF_SHOT=<suite> cargo run`** deja un PNG y su registro RON
+  en `target/shots/` y sale; `BOF_SHOT_POSE="x,y,z:dx,dy,dz"` reproduce un
+  encuadre y `BOF_KNOBS="grass-view=5,msaa=1"` fija perillas desde el arranque.
+  `BOF_SCENE=Pasto cargo run` salta el menú y entra directo a la caja.
+  Configuración, pose o escritura inválida terminan con código distinto de cero.
+  La estadística de píxeles no la contamina la carga de la máquina, pero tiene
+  piso de ruido de **5%** porque el viento mueve las briznas entre disparos.
 - **Siempre `cargo run`, nunca `./target/debug/...` a secas.** Bevy busca
   `assets/` junto al ejecutable, así que el binario directo arranca **sin un solo
   shader** y todo lo demás sigue reportando: el 2026-08-07 una corrida así sacó
@@ -82,6 +82,12 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   feature `debug` de `bevy_ecs`: sin ella Bevy imprime placeholders y después de
   `Schedule::initialize` el grafo ya no resuelve nombres. Revertila después —
   crea otra variante en el build compartido.
+
+## Foco inmediato (2026-08-08)
+
+Al retomar: continuar el barrido fuera de los contratos ya cubiertos (pickups,
+lock-on, HUD montado y herramientas perf/shot); priorizar scheduling y tests que
+sólo prueban su helper. El checkpoint jugado sigue mandando sobre una suite verde.
 
 ## Estado (2026-08-04)
 
@@ -335,7 +341,7 @@ git y quedaron los principios:
   Lo que zanjó la duda fue *quitar la escena*.
 - **El medidor dice *cuándo* una técnica vale la pena**; aplicarlas todas siempre
   es cargo-culting y frena al dev, no al juego.
-- Último perfil móvil medido: **37,3k tris, 62 draws, 53 mats → "medio", por
+- Último perfil móvil medido: **37,3k tris, 62 batches~, 53 mats → "medio", por
   materiales.** De ahí sale la ley 1 de `TEXTURES.md`.
 - **Fill antes que geometría (2026-08-06, medido en las tres suites).** En la
   caja Pasto bajar la resolución a la mitad ahorra más GPU que apagar la pradera
@@ -344,9 +350,9 @@ git y quedaron los principios:
 
 ### Presupuesto de polígonos como contrato (2026-07-25)
 
-**Conteos sí, milisegundos no.** Los tris/draws/materiales son *dato*:
-deterministas, testeables. Los tiempos son *medición*: un test de ms falla por
-ruido, se ignora y muere. Carriles separados.
+**Conteos sí, milisegundos no.** Tris/materiales son dato exacto; `draws~` es la
+cota inferior determinista de pares `(malla, material)`, no draw calls del
+render world. Los tiempos son medición: un test de ms muere por ruido.
 
 - `build.rs` cuenta triángulos por LOD al importar cada GLB; el presupuesto vive
   en `schema.rs::lod0_triangle_budget` y **falla el build nombrando el asset** —
@@ -361,8 +367,7 @@ ruido, se ignora y muere. Carriles separados.
   en `visuals::material_registry`— que engancha el render y las herramientas en
   el mismo acto, y una ley de arquitectura prohíbe la puerta de atrás. El
   inventario además **atribuye**: pradera / bosque / terreno / resto, en
-  triángulos y draws, que es el número que cada ajuste del pasto necesitaba y no
-  existía.
+  triángulos y batches~, que es el número que cada ajuste del pasto necesitaba.
 - El terreno son **32768 tris fijos** en toda escena — un tercio del presupuesto
   móvil antes de poner nada encima. Subir `CELLS` es una decisión de presupuesto.
 - Un draw call exacto **no** es testeable sin cámara; lo testeable es la cota.
@@ -377,7 +382,7 @@ ruido, se ignora y muere. Carriles separados.
 Un solo `Camera3d`; los modos son comportamientos gateados por `CameraMode` **en
 la entidad cámara**, no entidades distintas — re-spawnear rompería los
 `Single<With<Camera3d>>`. **Orbit** (gameplay) y **Freecam** (F3; **F4** loguea la
-pose como `Waypoint` pegable). El flythrough acumula frame/gpu/tris/draws/mats
+pose como `Waypoint` pegable). El flythrough acumula frame/gpu/tris/draws~/mats
 **por tramo**, así correr la misma ruta hoy y en un mes compara peras con peras.
 
 Pendiente: **autorear la ruta canónica real** con F4 — hoy los tramos se llaman
@@ -471,12 +476,6 @@ queda más legible.
   "la lluvia moja y afecta el agarre" (`NORTE.md`) y de la tracción por
   superficie; la tabla `KINDS` ya tiene dónde colgar el dato. Toca el feeling de
   locomoción, así que no entra sin checkpoint jugado.
-- **El HUD de locomoción miente mientras montás.** Al montar, el player pierde
-  `LocomotionEnabled` y los servicios dejan de actualizar sus facts, pero la
-  sección sigue mostrando los últimos valores a pie **sin marcarlos como
-  congelados**. El caballo ya tiene los suyos (`grounded`/`surface` en la
-  sección Mount, 2026-08-04); falta que la del player diga que está en pausa en
-  vez de mostrar un dato viejo como si fuera de ahora.
 - **Audio real:** el paso es un `debug!`; falta cargar `.ogg` y reproducirlo en
   el cue `Step`. Y el timing por **foot-plant**: el acumulador de zancada es un
   stopgap hasta que la animación emita eventos de pisada.

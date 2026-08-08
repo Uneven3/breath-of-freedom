@@ -12,6 +12,8 @@ pub(crate) const MOBILE_MATERIALS: usize = 64;
 pub(crate) struct SceneInventory {
     pub visible_meshes: u32,
     pub triangles: usize,
+    /// Lower-bound estimate of visible `(mesh, material)` batches, not render
+    /// world draw calls. Kept as a guardrail; every presentation labels it `~`.
     pub draws: usize,
     pub materials: usize,
     pub ranged_culled: u32,
@@ -111,7 +113,7 @@ pub(crate) fn warn_scene_budget(
     let grade = scene_budget_grade(&scene);
     match budget_transition(warning.0, grade) {
         BudgetTransition::Exceeded(grade) => warn!(
-            "[budget/mobile] scene {}: tris={}/{} draws={}/{} mats={}/{} — reduce visible detail, lots, or material variants",
+            "[budget/mobile] scene {}: tris={}/{} draws~={}/{} mats={}/{} — reduce visible detail, lots, or material variants",
             grade.label(),
             scene.triangles,
             MOBILE_TRIANGLES,
@@ -122,7 +124,7 @@ pub(crate) fn warn_scene_budget(
         ),
         BudgetTransition::Recovered(grade) => {
             info!(
-                "[budget/mobile] scene recovered to {}: tris={} draws={} mats={}",
+                "[budget/mobile] scene recovered to {}: tris={} draws~={} mats={}",
                 grade.label(),
                 scene.triangles,
                 scene.draws,

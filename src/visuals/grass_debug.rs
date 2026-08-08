@@ -43,8 +43,8 @@ pub(crate) fn slot_srgb(slot: usize) -> [u8; 3] {
 ///
 /// Sale de los anillos y de la paleta, nunca escrita a mano: una leyenda que hay
 /// que mantener sincronizada a mano es una leyenda que va a mentir. La consumen
-/// el log —cuando la vista cambia— y el archivo que acompaña a cada captura, que
-/// es de donde el analizador lee los colores en vez de conocerlos.
+/// el log —cuando la vista cambia— y el registro RON que acompaña a cada
+/// captura, para que la evidencia conserve qué colores significaban qué.
 pub(crate) struct RingLegend {
     pub slot: usize,
     pub reach_m: f32,

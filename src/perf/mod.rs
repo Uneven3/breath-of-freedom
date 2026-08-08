@@ -39,17 +39,30 @@ impl Plugin for PerfPlugin {
         // Sólo existe cuando `BOF_BENCH` la pide, y los sistemas que la mueven
         // se gatean con `resource_exists`: sin la variable, nada de esto corre
         // ni cuesta un frame.
-        if let Some(auto) = auto::configured_auto_bench() {
-            app.insert_resource(auto);
-        }
-        if let Some(auto) = shot::configured_auto_shot() {
-            app.insert_resource(auto);
+        let auto_bench = auto::configured_auto_bench();
+        let auto_shot = shot::configured_auto_shot();
+        match (auto_bench, auto_shot) {
+            (Ok(Some(bench)), Ok(None)) => {
+                app.insert_resource(bench);
+            }
+            (Ok(None), Ok(Some(shot))) => {
+                app.insert_resource(shot);
+            }
+            (Ok(None), Ok(None)) => {}
+            (Ok(Some(_)), Ok(Some(_))) => {
+                error!("[perf] BOF_BENCH y BOF_SHOT son modos excluyentes");
+                app.add_systems(Startup, exit_invalid_automation_config);
+            }
+            _ => {
+                app.add_systems(Startup, exit_invalid_automation_config);
+            }
         }
         app.init_resource::<Benchmark>();
         app.init_resource::<Flythrough>();
         app.init_resource::<ScriptedCameraPose>();
         app.init_resource::<budget::SceneInventory>();
         app.init_resource::<shot::BrokenAssets>();
+        app.init_resource::<shot::ShotCaptureProgress>();
         app.init_resource::<shot_stats::ShotStatsLog>();
         app.init_resource::<budget::SceneBudgetWarningState>();
         app.add_message::<BenchmarkRequest>();
@@ -80,6 +93,13 @@ impl Plugin for PerfPlugin {
         );
         app.add_systems(Startup, log_active_profile);
     }
+}
+
+/// An invalid automation request must make `cargo run` fail. Merely omitting
+/// its resource would launch the normal game, which is indistinguishable from
+/// a typo in a script until somebody notices the window is still open.
+fn exit_invalid_automation_config(mut exit: MessageWriter<AppExit>) {
+    exit.write(AppExit::error());
 }
 
 fn log_active_profile(perf: Res<PerfToggles>) {
@@ -174,7 +194,7 @@ pub struct PassCost {
 ///
 /// Returns an empty list when the adapter has no timestamp queries, so the HUD
 /// can say "unavailable" instead of reporting a fake zero.
-pub fn gpu_pass_costs(diagnostics: &DiagnosticsStore) -> (Vec<PassCost>, f64) {
+pub fn gpu_pass_costs(diagnostics: &DiagnosticsStore) -> (Vec<PassCost>, Option<f64>) {
     const FIELD: &str = "/elapsed_gpu";
 
     let spans: Vec<(String, f64)> = diagnostics
@@ -182,7 +202,11 @@ pub fn gpu_pass_costs(diagnostics: &DiagnosticsStore) -> (Vec<PassCost>, f64) {
         .filter_map(|diagnostic| {
             let path = diagnostic.path().as_str();
             let stem = path.strip_suffix(FIELD)?.strip_prefix("render/")?;
-            Some((stem.to_string(), diagnostic.smoothed()?))
+            // Benchmark runners average their own, bounded sample window. A
+            // diagnostic EMA crosses step boundaries and would attribute some
+            // of the previous configuration to the next one.
+            let millis = diagnostic.value()?;
+            (millis.is_finite() && millis >= 0.0).then(|| (stem.to_string(), millis))
         })
         .collect();
 
@@ -200,6 +224,84 @@ pub fn gpu_pass_costs(diagnostics: &DiagnosticsStore) -> (Vec<PassCost>, f64) {
         .collect();
 
     passes.sort_by(|a, b| b.millis.total_cmp(&a.millis));
-    let total = passes.iter().map(|pass| pass.millis).sum();
+    let total = (!passes.is_empty()).then(|| passes.iter().map(|pass| pass.millis).sum());
     (passes, total)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use bevy::diagnostic::{Diagnostic, DiagnosticMeasurement, DiagnosticPath};
+    use bevy::platform::time::Instant;
+
+    use super::*;
+
+    fn measured(path: &str, values: &[f64]) -> Diagnostic {
+        let mut diagnostic = Diagnostic::new(DiagnosticPath::new(path.to_string()));
+        let mut now = Instant::now();
+        for value in values {
+            diagnostic.add_measurement(DiagnosticMeasurement {
+                time: now,
+                value: *value,
+            });
+            now += Duration::from_millis(16);
+        }
+        diagnostic
+    }
+
+    /// A benchmark owns its averaging window. Reading Bevy's EMA here leaks a
+    /// previous render configuration into the current step.
+    #[test]
+    fn gpu_cost_uses_the_latest_frame_not_cross_step_smoothing() {
+        let mut diagnostics = DiagnosticsStore::default();
+        diagnostics.add(measured(
+            "render/core_3d/main_opaque_pass_3d/elapsed_gpu",
+            &[2.0, 8.0],
+        ));
+
+        let (passes, total) = gpu_pass_costs(&diagnostics);
+
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].millis, 8.0);
+        assert_eq!(total, Some(8.0));
+    }
+
+    /// Nested render spans overlap. Keeping the parent would count the same
+    /// GPU work twice and make the total larger than the frame it describes.
+    #[test]
+    fn gpu_cost_sums_only_leaf_spans() {
+        let mut diagnostics = DiagnosticsStore::default();
+        diagnostics.add(measured("render/core_3d/elapsed_gpu", &[10.0]));
+        diagnostics.add(measured(
+            "render/core_3d/main_opaque_pass_3d/elapsed_gpu",
+            &[6.0],
+        ));
+        diagnostics.add(measured("render/core_3d/bloom/elapsed_gpu", &[2.0]));
+
+        let (passes, total) = gpu_pass_costs(&diagnostics);
+
+        assert_eq!(passes.len(), 2);
+        assert_eq!(total, Some(8.0));
+        assert!(passes.iter().all(|pass| pass.name != "core_3d"));
+    }
+
+    #[test]
+    fn adapters_without_gpu_timestamps_do_not_report_zero() {
+        let (passes, total) = gpu_pass_costs(&DiagnosticsStore::default());
+
+        assert!(passes.is_empty());
+        assert_eq!(total, None);
+    }
+
+    #[test]
+    fn invalid_gpu_measurements_do_not_poison_a_report() {
+        let mut diagnostics = DiagnosticsStore::default();
+        diagnostics.add(measured("render/core_3d/elapsed_gpu", &[f64::NAN]));
+
+        let (passes, total) = gpu_pass_costs(&diagnostics);
+
+        assert!(passes.is_empty());
+        assert_eq!(total, None);
+    }
 }

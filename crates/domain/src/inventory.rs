@@ -276,11 +276,36 @@ pub enum PickupMode {
     Interact,
 }
 
-/// An item sitting in the world, not yet in anyone's `Inventory`.
+/// An item sitting in the world, not yet in anyone's `Inventory`. `claimed`
+/// closes the frame between inventory mutation and deferred despawn: a second
+/// actor must observe that the first already owns it.
 #[derive(Component, Clone, Copy)]
 pub struct WorldItem {
     pub stack: ItemStack,
     pub mode: PickupMode,
+    claimed: bool,
+}
+
+impl WorldItem {
+    pub const fn new(stack: ItemStack, mode: PickupMode) -> Self {
+        Self {
+            stack,
+            mode,
+            claimed: false,
+        }
+    }
+
+    pub const fn is_claimed(&self) -> bool {
+        self.claimed
+    }
+
+    pub fn claim(&mut self) -> bool {
+        if self.claimed {
+            return false;
+        }
+        self.claimed = true;
+        true
+    }
 }
 
 /// Inventory's own trigger cursor — a newtype, not the raw

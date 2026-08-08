@@ -29,7 +29,7 @@ pub fn spawn_world_item(
     let mut item = commands.spawn((
         DespawnOnExit(scene),
         Name::new(name.to_string()),
-        WorldItem { stack, mode },
+        WorldItem::new(stack, mode),
         Mesh3d(meshes.add(Cuboid::new(dims.x, dims.y, dims.z))),
         MeshMaterial3d(palette.handle(material_key)),
         Transform::from_translation(position),

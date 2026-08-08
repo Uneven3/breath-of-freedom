@@ -87,6 +87,7 @@ struct LegAccum {
     frame_sum: f64,
     frame_max: f64,
     gpu_sum: f64,
+    gpu_samples: u32,
     tris_sum: u64,
     draws_sum: u64,
     materials_sum: u64,
@@ -256,12 +257,16 @@ pub(super) fn advance_flythrough(
         && let Some(frame_ms) = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
             .and_then(|d| d.value())
+            .filter(|value| value.is_finite() && *value > 0.0)
     {
         let (_, gpu_ms) = super::gpu_pass_costs(&diagnostics);
         let accum = &mut run.accums[run.leg];
         accum.frame_sum += frame_ms;
         accum.frame_max = accum.frame_max.max(frame_ms);
-        accum.gpu_sum += gpu_ms;
+        if let Some(gpu_ms) = gpu_ms {
+            accum.gpu_sum += gpu_ms;
+            accum.gpu_samples += 1;
+        }
         accum.tris_sum += scene.triangles as u64;
         accum.draws_sum += scene.draws as u64;
         accum.materials_sum += scene.materials as u64;
@@ -354,7 +359,7 @@ fn report(accums: &[LegAccum]) {
     info!("[flythrough] ---- results (frame ms, lower is better) ----");
     info!(
         "[flythrough] {:<22} {:>8} {:>8} {:>8} {:>8} {:>6} {:>5} {:>8} {:>5}",
-        "leg", "frame", "max", "gpu", "tris", "draws", "mats", "grade", "n"
+        "leg", "frame", "max", "gpu", "tris", "draws~", "mats", "grade", "n"
     );
     let mut worst: Option<(usize, u8)> = None;
     for (i, accum) in accums.iter().enumerate() {
@@ -369,11 +374,15 @@ fn report(accums: &[LegAccum]) {
         if worst.is_none_or(|(_, s)| severity(grade) > s) {
             worst = Some((i, severity(grade)));
         }
+        let gpu = if accum.gpu_samples > 0 {
+            format!("{:>8.2}", accum.gpu_sum / f64::from(accum.gpu_samples))
+        } else {
+            format!("{:>8}", "n/a")
+        };
         info!(
-            "[flythrough] {name:<22} {:>8.2} {:>8.2} {:>8.2} {:>8} {:>6} {:>5} {:>8} {:>5}",
+            "[flythrough] {name:<22} {:>8.2} {:>8.2} {gpu} {:>8} {:>6} {:>5} {:>8} {:>5}",
             accum.frame_sum / n,
             accum.frame_max,
-            accum.gpu_sum / n,
             kilo(inventory.triangles),
             inventory.draws,
             inventory.materials,

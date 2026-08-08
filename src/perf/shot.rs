@@ -33,6 +33,7 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 use super::budget::SceneInventory;
+use super::shot_stats::{self, Category, ShotGeometry, shot_geometry};
 use super::suite::BenchSuite;
 use crate::scene::AppState;
 use crate::visuals::material_registry::Subject;
@@ -230,7 +231,23 @@ pub fn capture_on_request(
     write_legend(&path, &perf, &inventory, camera_pose, &geometry);
     commands
         .spawn(Screenshot::primary_window())
+        .observe(shot_stats::count_when_captured(stats_plan(&perf, geometry)))
         .observe(save_to_disk(path));
+}
+
+/// Lo que el conteo necesita saber, tomado en el momento del disparo.
+///
+/// Viaja al observador por valor y no por consulta: cuando la captura vuelve de
+/// la GPU ya pasaron frames, y las perillas o la cámara pueden haberse movido.
+/// Contar con la configuración de *después* sería describir otra foto.
+fn stats_plan(perf: &crate::perf::PerfToggles, geometry: ShotGeometry) -> shot_stats::StatsPlan {
+    shot_stats::StatsPlan {
+        categories: shot_categories(perf),
+        view: perf.grass_debug_label().to_string(),
+        flat: crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step())
+            .is_flat(),
+        geometry,
+    }
 }
 
 /// Avisa si la foto se sacó con assets rotos.
@@ -290,77 +307,43 @@ fn warn_on_broken_assets(broken: &BrokenAssets) {
     );
 }
 
-/// Escribe, al lado del PNG, qué significa cada color de la foto.
+/// Qué cuenta el analizador en esta corrida: un nombre y el color plano que lo
+/// identifica.
 ///
-/// **El analizador no conoce ningún color.** Los lee de acá, y por eso no puede
-/// quedar desincronizado de la corrida que sacó la foto: la paleta y la leyenda
-/// salen de `visuals::grass_debug` y de la tabla de anillos, no de una constante
-/// repetida en un script. Un color escrito a mano en la herramienta de análisis
-/// sería exactamente el bug que este trabajo vino a cerrar, con otro disfraz.
+/// **Categorías, no anillos.** Lo que se cuenta lo declara la vista puesta: la
+/// vista `subpixel` reparte por ancho en píxeles, y la que venga después
+/// repartirá por otra cosa. Atar el conteo a la técnica de LOD del momento lo
+/// obligaría a cambiar cada vez que la técnica cambie — y la técnica está
+/// justamente en discusión.
 ///
-/// Se escribe siempre que haya una vista puesta, incluso en las de *ver*: saber
-/// qué configuración produjo una imagen es la mitad de poder compararla con
-/// otra.
-/// Lo que hace falta para convertir una fila de pantalla en una distancia.
-///
-/// **Existe para el Paso 0 de `BOTWGrass.md`**, que necesita la curva de
-/// cobertura contra densidad *a varias distancias*. El perfil por bandas del
-/// analizador siempre supo que la fila de arriba está más lejos; lo que no podía
-/// decir es *cuánto*, y una curva sin eje x no es una curva. Con el campo de
-/// visión, el alto del viewport y la altura del ojo sobre el suelo, la fila `y`
-/// sale por trigonometría — y la aritmética es exacta **sólo si el suelo es
-/// plano**, así que la corrida no lo supone: muestrea el terreno a lo largo de
-/// la línea de vista y deja el perfil escrito para que el analizador lo
-/// verifique en vez de creerle.
-struct ShotGeometry {
-    fov_y: f32,
-    viewport: (u32, u32),
-    eye_above_ground_m: Option<f32>,
-    ground_profile: Vec<(f32, f32)>,
-}
-
-/// Hasta dónde se muestrea el suelo, y cada cuánto. Cubre el anillo más lejano
-/// (64 m) con holgura.
-const GROUND_PROFILE_M: f32 = 80.0;
-const GROUND_PROFILE_STEP_M: f32 = 4.0;
-
-fn shot_geometry(
-    pose: (Vec3, Vec3),
-    projection: Option<&Projection>,
-    window: Option<&Window>,
-    terrain: &crate::world::TerrainAccess,
-) -> ShotGeometry {
-    let (position, facing) = pose;
-    // La proyección de la corrida, no una constante: el `fov` de esta cámara se
-    // mueve al apuntar y al tensar el arco (`camera::rig`), así que escribir 45°
-    // sería declarar una geometría que la foto puede no tener.
-    let fov_y = match projection {
-        Some(Projection::Perspective(perspective)) => perspective.fov,
-        _ => f32::NAN,
-    };
-    let viewport = window.map_or((0, 0), |window| {
-        (window.physical_width(), window.physical_height())
-    });
-    let ground_here = terrain.height_at(position.xz());
-    let along = facing.xz().normalize_or_zero();
-    let mut ground_profile = Vec::new();
-    if along != Vec2::ZERO {
-        let mut distance = 0.0;
-        while distance <= GROUND_PROFILE_M {
-            if let Some(height) = terrain.height_at(position.xz() + along * distance) {
-                ground_profile.push((distance, height));
-            }
-            distance += GROUND_PROFILE_STEP_M;
-        }
-    }
-    ShotGeometry {
-        fov_y,
-        viewport,
-        eye_above_ground_m: ground_here.map(|ground| position.y - ground),
-        ground_profile,
+/// Con la vista apagada no hay nada plano que contar, y la lista vacía es lo que
+/// hace que el informe se limite a describir la imagen.
+fn shot_categories(perf: &crate::perf::PerfToggles) -> Vec<Category> {
+    match perf.grass_debug_label() {
+        "off" => Vec::new(),
+        "subpixel" => crate::visuals::grass_debug::subpixel_legend()
+            .into_iter()
+            .map(|band| Category {
+                name: band.name,
+                color: band.color,
+            })
+            .collect(),
+        _ => crate::visuals::grass_debug::ring_legend(perf)
+            .into_iter()
+            .map(|ring| Category {
+                name: format!("anillo {}", ring.slot),
+                color: ring.color,
+            })
+            .collect(),
     }
 }
 
+/// Escribe, al lado del PNG, con qué configuración se sacó la foto.
+///
+/// Ya no es un contrato con nadie —el conteo vive en la misma corrida desde el
+/// 2026-08-08— sino el registro de la captura: qué perillas, qué anillos se
+/// plantaron y desde dónde. Sin eso, dos PNG del mismo encuadre son dos imágenes
+/// que no se pueden comparar.
 fn write_legend(
     path: &std::path::Path,
     perf: &crate::perf::PerfToggles,
@@ -371,32 +354,26 @@ fn write_legend(
     use crate::visuals::material_registry::Subject;
 
     let view = perf.grass_debug_label();
-    // **Categorías, no anillos.** El analizador cuenta lo que la corrida declare
-    // y no sabe qué es un anillo: la vista `subpixel` reparte por ancho en
-    // píxeles, y la que venga después repartirá por otra cosa. Atar el script a
-    // la técnica de LOD del momento sería obligarlo a cambiar cada vez que la
-    // técnica cambie — y la técnica está justamente en discusión.
+    // Los nombres y los colores salen de la misma lista que el conteo usa: una
+    // leyenda que dijera otra cosa que el informe describiría otra captura.
     // **Con la vista apagada la leyenda se escribe igual, sin categorías.** Hasta
     // el 2026-08-07 no se escribía, y eso dejaba a la captura del **juego real**
     // —la única que muestra el color que el jugador ve— sin la geometría de
-    // cámara, o sea sin eje de distancias. Se descubrió queriendo medir por qué
-    // las cartas lejanas se leen de otro color que el pasto cercano, que es una
-    // pregunta sobre la imagen jugada y no sobre una vista de diagnóstico. Las
-    // categorías sí dependen de la vista; el resto de la leyenda, no.
-    let categories: Vec<serde_json::Value> = if view == "off" {
-        Vec::new()
-    } else if view == "subpixel" {
-        crate::visuals::grass_debug::subpixel_legend()
-            .into_iter()
+    // cámara, o sea sin eje de distancias.
+    let named = shot_categories(perf);
+    let categories: Vec<serde_json::Value> = if view == "subpixel" {
+        named
+            .iter()
             .map(|band| serde_json::json!({ "nombre": band.name, "color": band.color }))
             .collect()
     } else {
-        crate::visuals::grass_debug::ring_legend(perf)
-            .into_iter()
-            .map(|ring| {
+        named
+            .iter()
+            .zip(crate::visuals::grass_debug::ring_legend(perf))
+            .map(|(category, ring)| {
                 serde_json::json!({
-                    "nombre": format!("anillo {}", ring.slot),
-                    "color": ring.color,
+                    "nombre": category.name,
+                    "color": category.color,
                     "alcance_m": ring.reach_m,
                     "chunk_m": ring.chunk_m,
                     "densidad_por_m2": ring.density,
@@ -414,19 +391,14 @@ fn write_legend(
         crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step()).is_flat();
     let legend = serde_json::json!({
         "vista": view,
-        // Que la vista pinte plano y exacto lo declara la corrida, no una lista
-        // en el analizador: quien sabe cuáles lo hacen es el shader.
+        // Que la vista pinte plano y exacto lo declara el shader, que es quien
+        // sabe cuáles lo hacen.
         "plana": flat,
-        // La pose, porque el analizador la necesita para saber si sus propias
-        // cuentas valen: el perfil por bandas trata la fila de pantalla como
-        // distancia, y eso sólo es cierto con la cámara casi horizontal. Sin
-        // este dato el script tendría que suponerlo, que es la clase de error
-        // que este trabajo vino a cerrar.
         "camara": {
             "pos": [pose.0.x, pose.0.y, pose.0.z],
             "facing": [pose.1.x, pose.1.y, pose.1.z],
-            // Con estos tres la fila de pantalla se convierte en metros; sin
-            // ellos el perfil por bandas ordena por distancia pero no la mide.
+            // Con estos tres la fila de pantalla se convierte en metros, que es
+            // el eje x del perfil por distancia.
             "fov_y": geometry.fov_y,
             "viewport_px": [geometry.viewport.0, geometry.viewport.1],
             "ojo_sobre_suelo_m": geometry.eye_above_ground_m,
@@ -597,6 +569,7 @@ pub fn drive_auto_shot(
             write_legend(&path, &perf, &inventory, (position, facing), &geometry);
             commands
                 .spawn(Screenshot::primary_window())
+                .observe(shot_stats::count_when_captured(stats_plan(&perf, geometry)))
                 .observe(save_to_disk(path));
             shot.stage = Stage::Draining(FRAMES_AFTER_SHUTTER);
         }

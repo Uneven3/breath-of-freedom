@@ -19,6 +19,7 @@ pub mod data;
 pub mod flythrough;
 pub mod sequence;
 pub mod shot;
+mod shot_stats;
 pub mod suite;
 
 use bevy::diagnostic::DiagnosticsStore;

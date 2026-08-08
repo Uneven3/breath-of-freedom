@@ -21,9 +21,9 @@ use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 
 use crate::visuals::grass_cover;
-use crate::visuals::grass_records::{RECORD_BYTES, RingRecords, blade_record, ring_index_mesh};
 use crate::visuals::grass_debug;
 use crate::visuals::grass_material::{GrassExtension, GrassMaterial, GrassUniform};
+use crate::visuals::grass_records::{RECORD_BYTES, RingRecords, blade_record, ring_index_mesh};
 use crate::world::TerrainAccess;
 use crate::world::forest::{hash_u32, hash_unit};
 
@@ -1171,7 +1171,10 @@ mod tests {
         assert_eq!(a, b, "el mismo chunk sorteó otro campo");
         // Y la otra mitad, que sin ella lo pasaría un generador constante.
         let other = build_chunk_records(&spec(64, 12), None).records;
-        assert_ne!(a, other, "dos chunks con semillas distintas dieron lo mismo");
+        assert_ne!(
+            a, other,
+            "dos chunks con semillas distintas dieron lo mismo"
+        );
     }
 
     /// Un registro son **cuatro números y nada más**: base en XZ, suelo, y el
@@ -1202,7 +1205,11 @@ mod tests {
         let spec = spec(256, 3);
         for record in build_chunk_records(&spec, None).records {
             let packed = record[3];
-            assert_eq!(packed.floor(), spec.ring_reach_m, "el alcance no vuelve entero");
+            assert_eq!(
+                packed.floor(),
+                spec.ring_reach_m,
+                "el alcance no vuelve entero"
+            );
             let height = packed.fract();
             assert!(
                 (0.0..=BLADE_HEIGHT_MAX).contains(&height),

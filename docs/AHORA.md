@@ -38,14 +38,15 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   una foto de puro cielo mientras el inventario reportaba 691.200 triángulos de
   pradera al 95% del cuadro. Ahora la foto y la tabla avisan si algún asset falló
   — pero el aviso existe porque el caso ocurrió.
-- **Contar píxeles: `python3 tools/shot_stats.py <captura.png>`**, con la vista
-  `grass-view=medir` puesta. Cuenta colores planos exactos que la corrida escribió
-  en un `.json` al lado del PNG; el script no conoce ningún color. Reemplaza los
-  perfiles por detección de bordes, que saturan con densidad alta. Sin leyenda
-  describe la imagen (luminancia, desviación, saturación), y **se niega a hacer
-  el perfil por bandas si la cámara está inclinada**: ahí la fila de pantalla ya
-  no ordena por distancia, así que el perfil describiría algo que no existe. Lo
-  verifica contra la pose que la corrida escribió, no lo supone.
+- **Contar píxeles: lo hace la misma corrida** (`BOF_KNOBS=grass-view=6`, la
+  vista `medir`). El informe sale en el log junto a la foto: cobertura total, el
+  reparto por anillo y el **perfil por distancia** en metros. Reemplaza los
+  perfiles por detección de bordes, que saturan con densidad alta. **Omite el
+  perfil y dice por qué** cuando la fila de pantalla no se puede convertir en
+  distancia — cámara sin perspectiva, `render-scale` puesto, o más de 20 cm de
+  relieve bajo la línea de vista. Hasta el 2026-08-08 esto era
+  `tools/shot_stats.py`, que decodificaba el PNG por su cuenta; el port a Rust se
+  verificó dando el mismo conteo píxel a píxel sobre la misma captura.
 - **Antes de explicar una diferencia entre dos configuraciones, sacar la misma
   captura dos veces.** Cuesta tres minutos y el 2026-08-07 fue lo único que
   destapó un bug que apagaba un nivel entero de la pradera con resultado distinto

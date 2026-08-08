@@ -122,7 +122,7 @@ constante. Un radio en metros describe una resolución, no un campo.
 > evidente que se pueda capturar en una foto, ahora todos los problemas son en
 > movimiento."**
 >
-> **La última frase cambia el método.** `BOF_SHOT` y `shot_stats.py` ya no pueden
+> **La última frase cambia el método.** `BOF_SHOT` y su conteo de píxeles ya no pueden
 > zanjar lo que queda: miden una imagen fija y lo que sobra es una imagen que
 > cambia. De acá en adelante, lo que se pueda poner en una perilla del hub se pone
 > —él lo barre jugando y contesta en una sesión— y lo que no, se decide con su
@@ -308,9 +308,9 @@ píxeles *gana*.
 
 Las de *ver* tiñen el color real y dejan la luz puesta — el campo sigue
 leyéndose como campo, que es la condición para juzgar si algo *se ve* mal. Las de
-*medir* pintan plano y exacto: la cámara apaga tonemapping y dithering, el juego
-escribe la paleta en un `.json` al lado del PNG, y `tools/shot_stats.py` cuenta
-píxeles de colores **que no conoce de antemano**.
+*medir* pintan plano y exacto: la cámara apaga tonemapping y dithering, y **la
+misma corrida cuenta los píxeles de cada color** sobre los bytes que van al
+archivo (`perf/shot_stats.rs`).
 
 Eso reemplaza los perfiles por detección de bordes que decidieron todo el
 2026-08-06: saturan con densidad alta y no distinguen una brizna baja de una
@@ -318,16 +318,16 @@ ausente — por eso no vieron el galón de briznas a media altura.
 
 ### El eje x: la fila de pantalla, en metros
 
-`shot_stats.py` repartía la imagen en bandas de filas iguales, que **ordenan por
-distancia sin medirla** — y una curva sin eje x no es una curva. Ahora la corrida
-escribe su campo de visión, su viewport y la altura del ojo sobre el suelo, y el
-analizador convierte cada fila a la distancia donde su rayo toca el suelo. Con
-eso el conteo se reparte en anillos de metros (`--metros`).
+El primer analizador repartía la imagen en bandas de filas iguales, que **ordenan
+por distancia sin medirla** — y una curva sin eje x no es una curva. Ahora la
+corrida usa su campo de visión, su viewport y la altura del ojo sobre el suelo
+para convertir cada fila en la distancia donde su rayo toca el suelo, y reparte
+el conteo en anillos de metros.
 
 **La conversión supone suelo plano, así que la corrida no lo supone:** muestrea
-el terreno a lo largo de la línea de vista y escribe el perfil al lado del PNG.
-Si ondula más de 20 cm, el analizador **omite** la tabla en vez de imprimir
-metros creíbles y equivocados. Y de paso el reparto por filas quedó desmentido:
+el terreno a lo largo de la línea de vista. Si ondula más de 20 cm, **omite** la
+tabla y dice por qué, en vez de imprimir metros creíbles y equivocados. Y de paso
+el reparto por filas quedó desmentido:
 desde el mirador canónico, el **40% superior del cuadro es cielo** y las pocas
 filas pegadas al horizonte se llevan de veinte metros al infinito.
 

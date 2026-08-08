@@ -254,11 +254,13 @@ medición en contra replantea la implementación, no el rumbo.
 
 **Abierto, en orden de cuánto sabemos:**
 
-1. **Falta el cuarto eje: la semilla sigue incluyendo el nivel.** Es lo único
-   entre el estado actual y la decisión de arriba. El intento anidado se revirtió
-   por dos errores separables (excluir en vez de anidar, y el rango desde un
-   hash) y por un tercero que **ya está saldado**: la curva de cobertura contra
-   densidad, medida el 2026-08-08 y en `BOTWGrass.md` con su ley.
+1. **El cuarto eje está implementado (2026-08-08) y falta jugarlo.** La brizna
+   sale de una grilla del mundo y su alcance del índice, no de un hash; medido,
+   la cobertura por banda pasó de 93,4-99,9% a 99,6-100% al mismo costo. Lo que
+   queda es en movimiento, así que **el gate es una sesión de juego**.
+   Y lo que la captura destapó: el nivel de cartas se lleva el 73% del primer
+   plano, porque sus briznas ahora viven también a tres metros. El arreglo es que
+   la forma la decida la distancia (Paso 3b en `BOTWGrass.md`).
 2. **El borde de un nivel es un cuadrado** (Chebyshev, cuantizado a chunks).
    Misma causa raíz: el LOD horneado.
 3. **Con el veto levantado**, la carta con **alfa recortado** es el próximo

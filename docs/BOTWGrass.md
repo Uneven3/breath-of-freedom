@@ -808,29 +808,59 @@ reshuffling y el esconder-pero-pagar.
 - **Gate:** mismo aspecto, memoria y horneado abajo, draws abajo, frontera
   cuadrada desaparecida. Ataca los desperdicios **1** y **2**.
 
-### Paso 3 — Praderas anidadas y exclusivas
+### Paso 3 — La brizna pertenece al mundo — **HECHO (2026-08-08)**
 
-Con la brizna como registro, "emitir las primeras N de la secuencia de una
-baldosa" es trivial y rehornear es barato. Cada nivel emite un **superconjunto**
-del siguiente, así que cruzar una frontera cambia la copia, no el campo.
+`visuals/grass_tiles.rs`. El suelo se reparte en baldosas de 2 m; cada baldosa
+tiene su secuencia determinista y la brizna `j` está siempre en el mismo lugar,
+la dibuje quien la dibuje. Los tres cambios que lo hacen funcionar, y que son
+exactamente los tres errores del intento revertido:
 
-Ya se escribió una vez y se revirtió. **Por dos cosas, no una:** la densidad
-—que el Paso 0 corrige— y un bug real, que la ley `1/d` estaba escrita para un
-hash y recibía un rango, así que todas las briznas de un nivel morían juntas en
-su borde interno. La forma correcta es `d = K/f`. Ese arreglo entra en el gate.
+1. **El alcance sale del índice, no de un hash.** La escalera de alcances es la
+   ley de densidad *invertida*: `live_density_at` dice cuántas hacen falta a una
+   distancia, y la escalera contesta hasta dónde sigue haciendo falta la número
+   `j`. La densidad viva a cualquier distancia *es* la que la ley pide.
+2. **Anidar no exigió excluir.** Los niveles se reparten *índices*, no suelo:
+   cada brizna la dibuja el nivel más barato que le alcanza. Nadie dibuja dos
+   veces y nadie pregunta qué otro nivel cubre este punto — que es lo que costó
+   3× la vez anterior.
+3. **La curva se midió antes** (arriba), así que cuántas emite cada nivel salió
+   de una cuenta y no del ojo.
 
-**Y ahora el costo se calcula antes de escribirlo.** El Paso 0 verificó que los
-niveles se pisan como sucesos independientes, así que la cobertura de un campo
-exclusivo sale de la aritmética: con la huella medida, el nivel que quede solo en
-cada banda tiene que llegar por sí mismo a la cobertura que hoy dan tres. En las
-bandas de 8 a 22 m eso es reponer entre 8 y 22 puntos, que en densidad es
-`−ln(1−C)` y no una regla de tres — el error que hizo fallar el primer intento.
-De 3 a 8 m, en cambio, no hay nada que reponer: el anillo 0 ya llega solo al 99%.
+El shader pierde la ley `1/d`, los dos hashes de umbral y el nacimiento del lado
+de adentro: `blade_growth` es una rampa hasta el alcance que la brizna trae en su
+registro. **No hay frontera que cruzar.**
 
-- **Color:** `rango` (las mismas briznas conservan su color al cruzar) y `medir`
-  (un solo nivel por banda).
-- **Gate:** caminar sin ver crecer nada, **y** verificar que el mapeo rango↔ley
-  no volvió a entrar mal.
+**Medido** (vista `medir`, mirador de la suite, dos corridas idénticas):
+
+| banda | 3-4 | 4-6 | 6-8 | 8-11 | 11-16 | 16-22 | 22-32 | 32-45 | 45-64 |
+|---|---|---|---|---|---|---|---|---|---|
+| antes | 99,3 | 99,9 | 99,7 | 96,5 | **94,5** | 96,9 | **93,4** | 99,0 | 98,8 |
+| ahora | 99,6 | 99,9 | 99,9 | 100,0 | **100,0** | 100,0 | **100,0** | 100,0 | 99,6 |
+
+Las dos bandas que se hundían eran las de las fronteras. Cuesta lo mismo:
+362.752 triángulos contra 364.200, 4 draws, y los registros bajan de 8,47 a
+7,83 MB.
+
+**Falta el gate: jugarlo.** Lo que queda es en movimiento, y una foto quieta no
+lo contesta.
+
+### Paso 3b — La forma la decide la distancia, no el nivel
+
+**Lo que la captura destapó al terminar el Paso 3:** el nivel de cartas se lleva
+el **73% del primer plano**. Sus briznas son las de índice bajo —las que llegan
+lejos— y ahora están vivas también a tres metros, donde antes el nacimiento del
+lado de adentro las apagaba. La foto quieta se ve bien; un billboard a 3 m gira
+con la cámara, y eso sólo se ve caminando.
+
+**Apagarlas cerca no es la salida:** su densidad es parte de la que la ley pide,
+así que quitarlas ralea la banda, y hacerlas desaparecer al acercarse rompe
+justamente lo que el Paso 3 compró.
+
+La salida es que **la misma brizna cambie de forma con la distancia**: hoja de
+cerca, carta de lejos, sin desaparecer. Es la ley que el LOD de este sistema ya
+sigue —la escalera la decide la pantalla— aplicada a la primitiva. Pide que
+todas las mallas índice lleven dos triángulos por brizna y que el recorte de
+silueta se decida por brizna en vez de por material.
 
 ### Paso 4 — Plantar sólo lo que la cámara mira
 
@@ -897,20 +927,16 @@ cómo se achican los pastos"—, que ninguna de las tres tandas de arreglos del
    banda están más arriba, y `λ = −ln(1−C)/a` reemplaza al ojo para elegir
    cuántas briznas emite cada nivel. Sale sola con
    `BOF_SHOT_SWEEP=grass-density BOF_KNOBS=grass-view=6`.
-2. **Posición desde una grilla fija del mundo**, con el índice de la brizna dentro
-   de la secuencia de su baldosa viajando en el registro. Ese índice es lo que
-   reemplaza al hash como criterio de rango: es el error 2 del intento anterior, y
-   es el dato que sólo existe cuando la brizna pertenece al mundo.
-3. **Conservar el solapamiento.** Anidar no exige excluir; excluir fue una
-   decisión aparte que costó 3× la densidad. El Paso 0 midió que de 8 a 22 m el
-   solapamiento **paga** hasta 22 puntos de cobertura.
-   **Y la curva agrega dónde apuntar:** con 40/m² planos sobra ~1,5× en el primer
-   plano y falta ~25% en 11-16 y 22-32 m, que son las bandas de las fronteras. El
-   rediseño puede repartir esa densidad en vez de subirla — el presupuesto de
-   briznas ya alcanza, está mal puesto.
-4. **Validar jugando**, no con capturas: el artefacto es el movimiento. Lo que la
-   captura sí puede hacer es el guardrail —que ninguna banda se hunda— y confirmar
-   que dos corridas idénticas dan el mismo número.
+2. ~~Posición desde una grilla fija del mundo.~~ ~~Conservar el solapamiento.~~
+   **Hechas el 2026-08-08** — el Paso 3 de arriba, con los tres errores del
+   intento anterior evitados y la cobertura por banda medida antes y después.
+3. **Validar jugando**, que es lo único que falta de este paso: el artefacto es
+   el movimiento. Lo que la captura ya hizo es el guardrail —ninguna banda se
+   hunde, todas dan 99,6-100%— y confirmar que dos corridas idénticas dan el
+   mismo número.
+4. **Y después, el Paso 3b:** la forma la decide la distancia. La captura dejó
+   al nivel de cartas con el 73% del primer plano, y un billboard a 3 m gira con
+   la cámara.
 
 **Detrás, y sólo después:**
 

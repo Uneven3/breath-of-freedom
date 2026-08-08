@@ -50,7 +50,7 @@ struct GrassUniform {
     time: f32,
     focus_xz: vec2<f32>,
     growth_ramp: f32,
-    growth_spread: f32,
+    spike_from_m: f32,
     growth_sink: f32,
     wind_dir: vec2<f32>,
     wind_strength: f32,
@@ -128,6 +128,27 @@ fn card_distance_for(blade_seed: f32) -> f32 {
 
 fn blade_is_card(distance: f32, blade_seed: f32) -> bool {
     return ring_is_card() && distance >= card_distance_for(blade_seed);
+}
+
+/// La forma con la que se construye **esta** brizna, a esta distancia.
+///
+/// Las tres salen del mismo criterio que la escalera de LOD ya usaba —cuántos
+/// píxeles mide de ancho— pero aplicado por brizna. El nivel sólo aporta cuántos
+/// triángulos tiene reservados en su malla, y todos reservan dos: la púa deja el
+/// segundo degenerado (sus esquinas 2 y 3 caen en la punta) y no paga fragmentos.
+///
+/// Sin esto, una brizna de un nivel de púas que hoy está cerca se construía como
+/// hoja pero sólo tenía un triángulo indexado: **media hoja**, que es *"pastos
+/// chicos que se renderizan incluso cerca"* (jugando, 2026-08-08).
+///
+/// El umbral de la púa también va repartido por brizna, con otra semilla que el
+/// de la carta: con uno solo, el cambio de forma vuelve a ser un círculo.
+fn blade_shape_at(distance: f32, blade_seed: f32) -> u32 {
+    if blade_is_card(distance, blade_seed) {
+        return SHAPE_CARD;
+    }
+    let spike_at = grass_data.spike_from_m * (0.75 + 0.5 * fract(blade_seed * 57.0));
+    return select(SHAPE_LEAF, SHAPE_SPIKE, distance >= spike_at);
 }
 
 /// Si esta primitiva se abre mirando a la cámara.
@@ -602,8 +623,8 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // **La forma sale de la distancia, no del nivel.** Una brizna del nivel de
     // cartas que hoy está cerca se construye como hoja: con la del nivel
     // quedaría un billboard de medio metro girando a tres metros de la cámara.
-    let as_card = blade_is_card(length(record.xy - grass_data.focus_xz), blade_height);
-    let shape = select(SHAPE_LEAF, SHAPE_CARD, as_card);
+    let shape = blade_shape_at(length(record.xy - grass_data.focus_xz), blade_height);
+    let as_card = shape == SHAPE_CARD;
     let built = blade_vertex(shape, corner, blade_height, record.xy);
     let side = built.side;
     let height_factor = built.along;

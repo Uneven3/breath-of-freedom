@@ -24,9 +24,9 @@ pub struct GrassUniform {
     /// Cuántos metros tarda **una** brizna en crecer entera. Corto: una brizna
     /// creciendo es invisible, una banda entera creciendo a la vez no.
     pub growth_ramp: f32,
-    /// En cuántos metros se reparten los umbrales por su hash. Largo: es lo que
-    /// convierte una ola que viaja con el jugador en un raleo con la distancia.
-    pub growth_spread: f32,
+    /// Desde qué distancia una brizna se dibuja como púa en vez de hoja. Ver
+    /// `grass::spike_from_m`.
+    pub spike_from_m: f32,
     /// Hasta cuánto **bajo** el suelo colapsa una brizna. No cero: coplanar con
     /// el terreno hace z-fighting, que en pantalla es un parpadeo.
     pub growth_sink: f32,
@@ -85,7 +85,7 @@ impl Default for GrassUniform {
             focus_xz: Vec2::ZERO,
             // Shrinks nothing by default; the meadow overwrites these.
             growth_ramp: 0.0,
-            growth_spread: 0.0,
+            spike_from_m: 1.0e9,
             growth_sink: 0.0,
             wind_dir: Vec2::new(0.80, 0.60),
             // **Apagado el 2026-08-06 por decisión del usuario** mientras se

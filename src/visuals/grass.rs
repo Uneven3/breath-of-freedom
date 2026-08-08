@@ -92,14 +92,6 @@ enum BladeShape {
 }
 
 impl BladeShape {
-    /// Triángulos por brizna, en el tipo que la malla índice usa para contar.
-    const fn triangle_count(self) -> u32 {
-        match self {
-            Self::Leaf | Self::Card => 2,
-            Self::Spike => 1,
-        }
-    }
-
     const fn triangles(self) -> usize {
         match self {
             Self::Leaf | Self::Card => 2,
@@ -295,15 +287,10 @@ fn slots(of: impl Fn(usize, &Ring) -> f32, empty: f32) -> (Vec4, Vec4) {
 /// Cuánto suelo tapa una primitiva, **por metro de ancho y metro de distancia**,
 /// medido a cada distancia y no supuesto constante.
 ///
-/// *(a, 2026-08-08)* Sale de barrer la densidad y despejar `a` de
-/// `C = 1 − e^(−λ·a)` con **la densidad viva de cada banda**. Un solo número
-/// —0,149— describía mal las dos puntas: cerca la ley pedía 1,8× menos de lo que
-/// hace falta y lejos de más, y eso es exactamente el reparto que el usuario
-/// intuyó como *"podemos lograr un mejor ratio de pastos"*.
-///
-/// La tabla es `(distancia, constante)` y se interpola; fuera de rango se
-/// sostiene el extremo. Los puntos son los centros de las bandas del medidor,
-/// así que **una corrida de `BOF_SHOT_SWEEP=grass-density` la vuelve a sacar**.
+/// *(a, 2026-08-08)* Despejado de `C = 1 − e^(−λ·a)` con la densidad **viva** de
+/// cada banda. Un solo número —0,149— pedía 1,8× menos de lo necesario cerca y
+/// de más lejos. Se interpola, y los puntos son los centros de las bandas del
+/// medidor: `BOF_SHOT_SWEEP=grass-density` vuelve a sacarla entera.
 const HIDDEN_BY_DISTANCE: [(f32, f32); 7] = [
     (3.5, 0.082),
     (5.0, 0.085),
@@ -401,6 +388,13 @@ const GROWTH_BAND_MAX_M: f32 = {
 fn card_from_m(scale: f32) -> f32 {
     // Despejado de `width_in_pixels(BLADE_WIDTH, d, scale) = SPIKE_MIN_PIXELS`.
     BLADE_WIDTH / (SPIKE_MIN_PIXELS * scale).max(1e-6)
+}
+
+/// Y desde dónde pierde la cintura. **Los dos umbrales son los mismos que
+/// `shape_at` usa**: la forma la decide la pantalla, ahora también por brizna y
+/// no sólo por nivel.
+fn spike_from_m(scale: f32) -> f32 {
+    BLADE_WIDTH / (LEAF_MIN_PIXELS * scale).max(1e-6)
 }
 
 /// Hasta cuánto **bajo** el suelo colapsa una brizna. No cero, y ahí está todo:
@@ -912,8 +906,11 @@ pub(super) fn roll_meadow_grid(
     for ring in 0..RINGS.len() {
         let blades = blades_per_chunk(ring, density, scale, reach_scale);
         if field.records[ring].mesh.is_none() && planted_ring(&perf, ring) && blades > 0 {
-            let triangles = shape_for_ring(ring, scale, reach_scale).triangle_count();
-            field.records[ring].mesh = Some(meshes.add(ring_index_mesh(blades, triangles)));
+            // **Dos triángulos para todos, no el de la forma del nivel.** La
+            // forma la decide la distancia, y con un solo triángulo indexado una
+            // brizna cercana de un nivel de púas salía **media hoja**. La púa no
+            // paga el segundo: sus esquinas 2 y 3 caen en la punta y degenera.
+            field.records[ring].mesh = Some(meshes.add(ring_index_mesh(blades, 2)));
             field.records[ring].stride = blades;
         }
     }
@@ -1120,9 +1117,9 @@ fn meadow_uniform(
     let mut uniform = grass_material().extension.grass_data;
     let data = &mut uniform;
     data.focus_xz = camera.translation().xz();
-    let (ramp, spread) = growth_band(perf);
+    let (ramp, _spread) = growth_band(perf);
     data.growth_ramp = ramp;
-    data.growth_spread = spread;
+    data.spike_from_m = spike_from_m(reference_scale());
     data.card_from_m = card_from_m(reference_scale());
     let (a, b) = ring_reaches(perf.grass_reach_scale());
     data.ring_reaches_a = a;

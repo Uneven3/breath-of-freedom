@@ -103,9 +103,10 @@ procedencia compatible.
 hermanas (`bof_domain`, `bof_simulation`, y el binario); el smoke headless
 levanta el juego completo sin ventana ni GPU.
 
-**Pradera** (ver `BOTWGrass.md`): grilla rodante de cuatro niveles centrada en la
-cámara; desde el Paso 2 ninguna brizna es geometría — cada una es un registro de
-16 bytes que el vertex shader levanta. Nació reemplazando un intento cuya
+**Pradera** (ver `BOTWGrass.md`): grilla rodante de **tres niveles, uno por forma
+de brizna**, centrada en la cámara; desde el Paso 2 ninguna brizna es geometría
+—cada una es un registro de 16 bytes que el vertex shader levanta— y desde el
+Paso 3 su posición sale del mundo y no del nivel. Nació reemplazando un intento cuya
 documentación afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que el
 medidor marcaba 35-46. **Regla que sale de ahí: ningún número entra sin salir del
 medidor.**
@@ -464,7 +465,8 @@ queda más legible.
   máquina eso no es lo que cuesta —es fill-bound—, pero la deuda sigue declarada
   porque el target es un tiler. **La palanca a tocar primero es el overdraw**, y
   ahora hay dos hallazgos concretos para atacarlo: el dial del hub sigue sin
-  usarse, y el primer plano está plantado por cuatro anillos a la vez.
+  usarse, y un nivel planta su tramo en todo su territorio aunque las briznas
+  mueran antes del borde (1,5-3,4× según el alcance, medido el 2026-08-08).
 - **`GroundFacts.surface` se publica y nadie la consume.** El sensor la
   resuelve por punto de contacto y el HUD la muestra, pero ningún motor la usa:
   correr sobre arena, roca o pasto largo da exactamente el mismo movimiento.

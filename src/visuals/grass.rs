@@ -1648,12 +1648,11 @@ mod tests {
             .collect()
     }
 
-    /// Cuántos anillos se permiten hoy sobre el mismo suelo.
-    ///
-    /// **Debería ser 2 y es 4.** Es deuda con número, igual que
-    /// `MEADOW_VIEW_TRIANGLES` en `perf::budget` — no una tolerancia: si sube,
-    /// el test cae.
-    const RINGS_OVER_THE_SAME_GROUND: usize = 4;
+    /// Cuántos niveles se permiten hoy sobre el mismo suelo: **todos**, desde que
+    /// se reparten índices y no suelo. Pisarse dejó de ser densidad multiplicada
+    /// —una brizna la dibuja un solo nivel— y pasó a ser sólo territorio
+    /// compartido. Lo que el test sigue cobrando es que no aparezca un cuarto.
+    const RINGS_OVER_THE_SAME_GROUND: usize = 3;
 
     /// **El defecto que las vistas de color destaparon el 2026-08-07.** El test
     /// de cobertura de arriba verifica que no queden huecos; nadie había
@@ -1762,6 +1761,33 @@ mod tests {
                     "a {scale}x el anillo {index} hornea {baked} m y el uniform manda \
                      {sent:?}: el shader no va a encontrar su anillo y va a anclar la ley \
                      1/d en cero"
+                );
+            }
+        }
+    }
+
+    /// **Las herramientas de diagnóstico tienen que conocer los niveles que hay.**
+    ///
+    /// El 2026-08-08 la pradera bajó de cuatro niveles a tres y la perilla siguió
+    /// ofreciendo "solo 3": ese paso deja el campo **vacío**, y como una escena
+    /// vacía es un resultado creíble, la herramienta no falla — miente. Lo
+    /// encontró el usuario jugando, que es exactamente a quien no le tiene que
+    /// pasar. Un paso por nivel, más el "todos".
+    #[test]
+    fn the_ring_knob_offers_exactly_the_levels_that_exist() {
+        assert_eq!(
+            bof_domain::perf::GRASS_RINGS_STEPS.len(),
+            RINGS.len() + 1,
+            "la perilla de anillos y la pradera no hablan del mismo campo"
+        );
+        let mut perf = crate::perf::PerfToggles::default();
+        for step in 0..bof_domain::perf::GRASS_RINGS_STEPS.len() {
+            perf.set_knob_step(crate::perf::PerfKnob::GrassRings, step);
+            if let Some(only) = perf.grass_only_ring() {
+                assert!(
+                    only < RINGS.len(),
+                    "el paso '{}' aísla un nivel que no existe",
+                    bof_domain::perf::GRASS_RINGS_STEPS[step],
                 );
             }
         }

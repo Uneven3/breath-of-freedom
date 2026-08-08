@@ -22,7 +22,7 @@ use bevy::prelude::*;
 
 /// Los anillos de distancia del perfil, en metros. Geométricos y no uniformes a
 /// propósito: la cobertura cae como `1/d`, así que lo que importa es el orden de
-/// magnitud. Cubren los cuatro anillos de la pradera (64 m).
+/// magnitud. Cubren los tres niveles de la pradera (64 m).
 const DEFAULT_RANGES: [f32; 11] = [2.0, 3.0, 4.0, 6.0, 8.0, 11.0, 16.0, 22.0, 32.0, 45.0, 64.0];
 
 /// Cuánto puede ondular el suelo bajo la línea de vista antes de que convertir

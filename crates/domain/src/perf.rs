@@ -109,7 +109,11 @@ pub const GRASS_DENSITY_STEPS: [f32; 10] =
 ///
 /// Índice 0 = todos, e índice `k+1` = sólo el anillo `k`. Pedir un anillo que no
 /// existe deja el campo vacío, que es visible y no silencioso.
-pub const GRASS_RINGS_STEPS: [&str; 5] = ["todos", "solo 0", "solo 1", "solo 2", "solo 3"];
+/// **Tiene que tener un paso por nivel más el "todos", y un test lo cobra.** Con
+/// uno de más, la perilla ofrece un nivel que no existe y el campo se va entero:
+/// pasó el 2026-08-08 al bajar de cuatro niveles a tres, y lo encontró el usuario
+/// jugando —*"todavía hay 4 rings"*— porque la herramienta no avisa, sólo miente.
+pub const GRASS_RINGS_STEPS: [&str; 4] = ["todos", "solo 0", "solo 1", "solo 2"];
 
 /// Cómo entra y sale una brizna con la distancia: `(rampa, dispersión)` en
 /// metros.

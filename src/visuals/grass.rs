@@ -298,15 +298,34 @@ const REFERENCE_DENSITY: f32 = bof_domain::perf::GRASS_DENSITY_STEPS[0];
 /// pregunta no puede depender de dónde quedó una perilla.
 const REFERENCE_REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 
-/// Cuántos metros tarda **una** brizna en pasar de nada a entera. Larga sólo
-/// sirve con [`GROWTH_START_M`] lejos —la rampa se resta del umbral—, así que
-/// las dos se mueven juntas o ninguna. El porqué, en `BOTWGrass.md`.
-const GROWTH_RAMP_M: f32 = 6.0;
+/// La rampa y la dispersión del crecimiento, en metros, **con la perilla
+/// aplicada**.
+///
+/// Vive en `bof_domain::perf::GRASS_GROWTH_STEPS` y no acá porque lo que
+/// gobierna sólo se ve **caminando**: ninguna captura lo muestra, así que la
+/// única forma de elegir el número es que el usuario lo barra jugando. Ver el
+/// veredicto del 2026-08-07 en `BOTWGrass.md`.
+fn growth_band(perf: &crate::perf::PerfToggles) -> (f32, f32) {
+    perf.grass_growth()
+}
 
-/// En cuántos metros se reparten los umbrales hacia adentro del borde. Separado
-/// de la rampa a propósito: **una brizna creciendo es invisible, una banda entera
-/// no.**
-const GROWTH_SPREAD_M: f32 = 6.0;
+/// La banda más ancha que la perilla puede pedir. **Sólo para el selector de
+/// chunks y la caja de culling**, que necesitan un techo: un chunk descartado con
+/// briznas todavía vivas adentro es una franja pelada siguiendo al jugador, y eso
+/// no puede depender de dónde quedó una perilla.
+const GROWTH_BAND_MAX_M: f32 = {
+    let steps = bof_domain::perf::GRASS_GROWTH_STEPS;
+    let mut widest = 0.0;
+    let mut index = 0;
+    while index < steps.len() {
+        let (ramp, spread) = steps[index];
+        if ramp + spread > widest {
+            widest = ramp + spread;
+        }
+        index += 1;
+    }
+    widest
+};
 
 /// Desde qué distancia ralea la pradera. Los umbrales van como
 /// `start / (1 - hash)`, así que la fracción viva a `d` es `start / d`. **No
@@ -530,7 +549,7 @@ fn ring_cells_with_slack(index: usize, focus: Vec2, slack: f32, reach_scale: f32
             // Donde el anillo empieza a **nacer**: `spread + ramp` antes de su
             // borde interno (`blade_birth` en `grass.wgsl`). El `slack` le da a
             // este lado la misma histéresis que al de afuera.
-            let handover = (inner_reach - GROWTH_SPREAD_M - GROWTH_RAMP_M - slack).max(0.0);
+            let handover = (inner_reach - GROWTH_BAND_MAX_M - slack).max(0.0);
             if nearest > reach_m || farthest <= handover {
                 continue;
             }
@@ -975,8 +994,9 @@ fn meadow_uniform(
     let mut uniform = grass_material().extension.grass_data;
     let data = &mut uniform;
     data.focus_xz = camera.translation().xz();
-    data.growth_ramp = GROWTH_RAMP_M;
-    data.growth_spread = GROWTH_SPREAD_M;
+    let (ramp, spread) = growth_band(perf);
+    data.growth_ramp = ramp;
+    data.growth_spread = spread;
     data.growth_start = GROWTH_START_M;
     let (a, b) = ring_reaches(perf.grass_reach_scale());
     data.ring_reaches_a = a;
@@ -1343,6 +1363,35 @@ mod tests {
         }
     }
 
+    /// **La perilla de crecimiento no puede pedir una banda que el selector de
+    /// chunks no contemple.**
+    ///
+    /// El techo sale de la propia tabla de pasos, así que hoy se cumple por
+    /// construcción; el test existe para el día en que alguien escriba el techo a
+    /// mano. El fallo sería silencioso y sólo visible caminando: una franja pelada
+    /// siguiendo al jugador donde el chunk se fue con briznas vivas adentro.
+    #[test]
+    fn the_chunk_selector_covers_the_widest_growth_the_knob_can_ask_for() {
+        for (ramp, spread) in bof_domain::perf::GRASS_GROWTH_STEPS {
+            assert!(
+                ramp + spread <= GROWTH_BAND_MAX_M,
+                "el paso {ramp}/{spread} nace antes de donde el selector planta",
+            );
+        }
+    }
+
+    /// **La pradera lee la perilla, no una constante.** Sin esto el paso se puede
+    /// mover en el hub y el campo no cambiar, que es la clase de silencio que
+    /// obliga a repetir una sesión de juego entera para descubrirlo.
+    #[test]
+    fn the_growth_band_follows_the_knob() {
+        let mut perf = crate::perf::PerfToggles::default();
+        let first = growth_band(&perf);
+        perf.set_knob_step(bof_domain::perf::PerfKnob::GrassGrowth, 2);
+        assert_ne!(growth_band(&perf), first);
+        assert_eq!(growth_band(&perf), bof_domain::perf::GRASS_GROWTH_STEPS[2]);
+    }
+
     /// **Ningún nivel se queda sin chunk donde sus briznas están vivas.**
     ///
     /// Es el contrato entre este módulo y `blade_growth`: allá la brizna nace
@@ -1357,7 +1406,7 @@ mod tests {
         for (index, ring) in RINGS.iter().enumerate() {
             let cells = ring_cells(index, focus, REFERENCE_REACH);
             let reach = ring_reach(index, REFERENCE_REACH);
-            let born = (band_inner(index, REFERENCE_REACH) - GROWTH_SPREAD_M - GROWTH_RAMP_M)
+            let born = (band_inner(index, REFERENCE_REACH) - GROWTH_BAND_MAX_M)
                 .max(0.0)
                 .max(NEAREST_INTEREST_M);
             for step in 0_u8..48 {

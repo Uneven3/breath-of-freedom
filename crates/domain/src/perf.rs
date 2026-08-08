@@ -111,6 +111,33 @@ pub const GRASS_DENSITY_STEPS: [f32; 10] =
 /// existe deja el campo vacío, que es visible y no silencioso.
 pub const GRASS_RINGS_STEPS: [&str; 5] = ["todos", "solo 0", "solo 1", "solo 2", "solo 3"];
 
+/// Cómo entra y sale una brizna con la distancia: `(rampa, dispersión)` en
+/// metros.
+///
+/// **Es la única perilla que existe para un problema que sólo se ve en
+/// movimiento**, y por eso es una perilla y no una constante. El 2026-08-07 el
+/// usuario reportó, jugando, que *"el crecimiento del pasto a medida que uno
+/// camina todavía se mantiene, pero está suave"* — y no hay captura que lo
+/// muestre: el artefacto **es** el movimiento.
+///
+/// - La **rampa** es lo que tarda *una* brizna en pasar de nada a entera. Corta:
+///   una brizna sola creciendo es imperceptible.
+/// - La **dispersión** es en cuántos metros se reparten los umbrales de briznas
+///   distintas. Larga: es lo que convierte una ola que avanza con el jugador en
+///   un raleo gradual.
+///
+/// El índice 0 es lo que se jugó ese día —**las dos en 6, o sea la rampa tan
+/// larga como la dispersión**, que es exactamente lo que la nota de arriba dice
+/// que no hay que hacer— y de ahí la escalera va separándolas. Se deja como
+/// índice 0 para que la comparación arranque en lo conocido.
+pub const GRASS_GROWTH_STEPS: [(f32, f32); 5] = [
+    (6.0, 6.0),
+    (3.0, 9.0),
+    (1.5, 12.0),
+    (0.8, 16.0),
+    (0.4, 22.0),
+];
+
 /// Scale applied to every ring's reach, for the sweep that separates *how much
 /// grass is near the camera* from *how far the field goes*.
 ///
@@ -210,13 +237,14 @@ pub enum PerfKnob {
     GrassDensity,
     GrassReach,
     GrassRings,
+    GrassGrowth,
     GrassDebug,
     RenderScale,
     Msaa,
 }
 
 impl PerfKnob {
-    pub const ALL: [PerfKnob; 18] = [
+    pub const ALL: [PerfKnob; 19] = [
         PerfKnob::Vsync,
         PerfKnob::Forest,
         PerfKnob::Wireframe,
@@ -232,6 +260,7 @@ impl PerfKnob {
         PerfKnob::GrassDensity,
         PerfKnob::GrassReach,
         PerfKnob::GrassRings,
+        PerfKnob::GrassGrowth,
         PerfKnob::GrassDebug,
         PerfKnob::RenderScale,
         PerfKnob::Msaa,
@@ -254,6 +283,7 @@ impl PerfKnob {
             PerfKnob::GrassDensity => "grass-density",
             PerfKnob::GrassReach => "grass-reach",
             PerfKnob::GrassRings => "grass-rings",
+            PerfKnob::GrassGrowth => "grass-growth",
             PerfKnob::GrassDebug => "grass-view",
             PerfKnob::RenderScale => "render-scale",
             PerfKnob::Msaa => "msaa",
@@ -315,6 +345,10 @@ pub struct PerfToggles {
     /// Indexes [`GRASS_RINGS_STEPS`]. Como las dos de arriba, cambia qué se
     /// hornea y no sólo qué se pinta: la grilla se tira entera.
     pub grass_rings_step: usize,
+    /// Indexes [`GRASS_GROWTH_STEPS`]. **No re-hornea nada**: la rampa y la
+    /// dispersión viajan en el uniform, así que se puede barrer caminando y
+    /// comparar sin que la pradera se reconstruya debajo.
+    pub grass_growth_step: usize,
     /// Indexes [`GRASS_DEBUG_STEPS`]. Cambia lo que el shader pinta, no lo que
     /// dibuja: ni un triángulo de diferencia, para que mirar y medir sean el
     /// mismo campo.
@@ -347,6 +381,7 @@ impl Default for PerfToggles {
             grass_density_step: 0,
             grass_reach_step: 0,
             grass_rings_step: 0,
+            grass_growth_step: 0,
             grass_debug_step: 0,
             render_scale_step: 0,
             msaa_step: 0,
@@ -423,6 +458,14 @@ impl PerfToggles {
         (self.grass_rings_step % GRASS_RINGS_STEPS.len()).checked_sub(1)
     }
 
+    /// La rampa y la dispersión del crecimiento, en metros.
+    pub fn grass_growth(&self) -> (f32, f32) {
+        GRASS_GROWTH_STEPS
+            .get(self.grass_growth_step)
+            .copied()
+            .unwrap_or(GRASS_GROWTH_STEPS[0])
+    }
+
     pub fn grass_rings_label(&self) -> &'static str {
         GRASS_RINGS_STEPS[self.grass_rings_step % GRASS_RINGS_STEPS.len()]
     }
@@ -489,6 +532,9 @@ impl PerfToggles {
             PerfKnob::GrassRings => {
                 self.grass_rings_step = (self.grass_rings_step + 1) % GRASS_RINGS_STEPS.len()
             }
+            PerfKnob::GrassGrowth => {
+                self.grass_growth_step = (self.grass_growth_step + 1) % GRASS_GROWTH_STEPS.len()
+            }
             PerfKnob::GrassDebug => {
                 self.grass_debug_step = (self.grass_debug_step + 1) % GRASS_DEBUG_STEPS.len()
             }
@@ -537,6 +583,7 @@ impl PerfToggles {
             PerfKnob::GrassDensity => self.grass_density_step = step % GRASS_DENSITY_STEPS.len(),
             PerfKnob::GrassReach => self.grass_reach_step = step % GRASS_REACH_STEPS.len(),
             PerfKnob::GrassRings => self.grass_rings_step = step % GRASS_RINGS_STEPS.len(),
+            PerfKnob::GrassGrowth => self.grass_growth_step = step % GRASS_GROWTH_STEPS.len(),
             PerfKnob::GrassDebug => self.grass_debug_step = step % GRASS_DEBUG_STEPS.len(),
             PerfKnob::RenderScale => self.render_scale_step = step % RENDER_SCALE_STEPS.len(),
             PerfKnob::Msaa => self.msaa_step = step % MSAA_STEPS.len(),
@@ -579,6 +626,10 @@ impl PerfToggles {
             PerfKnob::GrassDensity => format!("{:.0}/m2", self.grass_density()),
             PerfKnob::GrassReach => format!("{:.0}%", self.grass_reach_scale() * 100.0),
             PerfKnob::GrassRings => self.grass_rings_label().to_string(),
+            PerfKnob::GrassGrowth => {
+                let (ramp, spread) = self.grass_growth();
+                format!("{ramp:.1}/{spread:.0}m")
+            }
             PerfKnob::GrassDebug => self.grass_debug_label().to_string(),
             PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),
             PerfKnob::Msaa => match self.msaa_samples() {

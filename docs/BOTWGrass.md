@@ -111,6 +111,40 @@ constante. Un radio en metros describe una resolución, no un campo.
 > 2, invisible para toda captura desde el mirador fijo porque **el nivel que
 > apagaba cambiaba en cada corrida**.
 
+> ## El segundo veredicto del 2026-08-07, jugando
+>
+> Después del arreglo del `vertex_index`:
+>
+> **"El problema de los anillos y el crecimiento del pasto a medida que uno
+> camina todavía se mantiene, pero está suave, ya no desaparecen chunks de pasto
+> agresivamente. Los billboards son muy notorios en comparación con el otro
+> pasto, pero creo que estamos más cerca de lograr un buen feeling. No hay nada
+> evidente que se pueda capturar en una foto, ahora todos los problemas son en
+> movimiento."**
+>
+> **La última frase cambia el método.** `BOF_SHOT` y `shot_stats.py` ya no pueden
+> zanjar lo que queda: miden una imagen fija y lo que sobra es una imagen que
+> cambia. De acá en adelante, lo que se pueda poner en una perilla del hub se pone
+> —él lo barre jugando y contesta en una sesión— y lo que no, se decide con su
+> descripción.
+
+### La primera consecuencia: `grass-growth` es una perilla
+
+Buscando el crecimiento que él ve caminando apareció una contradicción entre el
+código y su propio comentario: la rampa dice *"corta, una brizna sola creciendo
+es imperceptible"* y la dispersión *"larga, es lo que convierte la ola en un
+raleo"* — y **las dos valían 6**. Con la rampa igual de larga que la dispersión,
+una brizna tarda seis metros de caminata en salir: más de un segundo, que es
+tiempo de sobra para verla crecer.
+
+No se corrigió a ojo. `GRASS_GROWTH_STEPS` pone cinco pares `(rampa, dispersión)`
+en el hub, con el índice 0 en el 6/6 que él jugó, para que la comparación arranque
+en lo conocido. **Los triángulos no cambian entre pasos**: el selector de chunks
+usa el techo de la tabla, así que la grilla es la misma y lo único que se mueve es
+cuántas briznas están a altura completa. Lo que sí cambia es el fill — medido
+entre el paso 0 y el 4, la cobertura sube de 93,4% a 97,9% en 22-32 m, o sea más
+solapamiento y más píxeles pagados.
+
 ## El bug que se llevaba el campo: `vertex_index` no arranca en cero
 
 Encontrado el 2026-08-07 después de descartar, midiendo, el rodado, el frustum
@@ -729,25 +763,29 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 
 ## Por dónde retomar (2026-08-07, segunda sesión del día)
 
-**Lo primero es jugarlo.** Todo lo de esta tanda está medido con capturas
-repetidas y ninguna cifra baja de 93%, pero el veredicto de la mañana enseñó que
-los números buenos no son el objetivo. Hasta que el campo pase por sus manos
-caminando, no se toca nada más.
+**Ya se jugó**, y el veredicto está arriba: los cuadrados agresivos se fueron,
+queda el crecimiento al caminar y las cartas que se destacan. **Todo lo que queda
+es en movimiento**, así que el orden de abajo no se valida midiendo.
 
-Después, en orden:
-
-1. **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con el
+1. **Elegir el paso de `grass-growth` jugando.** Está en el hub F1 con cinco pares
+   `(rampa, dispersión)`; el 0 es lo que ya jugó. Es la única forma de contestar
+   una pregunta que ninguna captura contesta.
+2. **Las cartas se notan demasiado contra el pasto vecino.** Falta saber *por
+   qué* antes de tocar: si es el tamaño (media carta contra briznas de 5,5 cm),
+   la forma (una masa maciza contra púas sueltas) o el sombreado. La respuesta
+   sale de una frase suya, no de una medición — el ancho de la carta se puede
+   poner en una perilla en cuanto se sepa qué mover.
+3. **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con el
    comentario "cruzar una frontera cuesta un chunk". **Es falso:** cruzar una
    frontera del anillo 0 pide una *fila* de chunks, y las cuatro grillas ruedan a
-   la vez. No está medido que se vea —el bug del `vertex_index` explicaba lo que
-   se le achacaba— pero el razonamiento no se sostiene. Medir el costo de hornear
-   un chunk del anillo 0 (11.700 briznas) antes de elegir el número.
-2. **La semilla de la brizna todavía incluye el nivel.** Es el cuarto eje del
+   la vez. Medir el costo de hornear un chunk del anillo 0 (11.700 briznas) antes
+   de elegir el número.
+4. **La semilla de la brizna todavía incluye el nivel.** Es el cuarto eje del
    problema de los anillos, el único sin separar: cruzar una frontera *reemplaza*
    briznas en vez de agregarlas. El intento anidado está medido y revertido más
-   arriba.
-3. **El Paso 5, el viento**, que quedó explícitamente aplazado hasta que el resto
-   estuviera bien.
+   arriba, y es la sospecha viva detrás de *"el problema de los anillos todavía
+   se mantiene"*.
+5. **El Paso 5, el viento**, aplazado hasta que el resto esté bien.
 
 **Ya no está pendiente** lo que la sesión anterior dejó anotado: la cobertura del
 primer plano no era un problema de hash ni de raleo —el estado de hoy da 99,3% a

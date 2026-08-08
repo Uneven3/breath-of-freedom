@@ -27,6 +27,7 @@ mod grass_cover;
 pub(crate) mod grass_debug;
 pub mod grass_material;
 mod grass_records;
+mod grass_tiles;
 pub mod horse;
 pub(crate) mod material_registry;
 pub mod player;

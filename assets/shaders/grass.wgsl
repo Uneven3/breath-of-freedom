@@ -101,43 +101,17 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
 /// ventaja principal del chip (ley 3 de `BOTWGrass.md`).
 ///
-/// La banda es del borde de **su** anillo, no del anillo más lejano: los
-/// anillos internos también ruedan, y sin banda propia sus chunks nacían
-/// enteros y de una. `ring_reach` viaja por vértice justamente para esto.
+/// **El umbral es de la brizna y viene en su registro.** Desde que la brizna
+/// pertenece al mundo, su alcance sale del índice que ocupa en su baldosa: acá
+/// no queda ley que aplicar ni hash que consultar, sólo una rampa de
+/// `growth_ramp` metros antes de su propio final. La ley `1/d` sigue cumpliéndose
+/// —es de donde salió la escalera de alcances— pero se cumple *por construcción*
+/// en vez de reconstruirse por brizna en el shader.
 ///
-/// **Y son dos números, no uno, porque son dos fenómenos distintos.** Hasta el
-/// 2026-08-06 una sola constante gobernaba las dos cosas y por eso no había
-/// forma de arreglar el crecimiento: acortarla las acortaba a las dos.
-///
-/// - `growth_ramp` es lo que tarda **una** brizna en pasar de nada a entera.
-///   Corta. Una brizna sola creciendo es imperceptible; lo que se percibe es
-///   *que todas crezcan juntas*.
-/// - `growth_spread` es en cuántos metros se reparten los **umbrales** de las
-///   distintas briznas, corridos por su hash. Largo. Esto es lo que convierte
-///   una ola que avanza con el jugador en un raleo gradual hacia el borde: a
-///   cada distancia sobrevive una fracción distinta del anillo, y lo que el ojo
-///   lee es densidad que baja con la distancia, que es lo que hace un campo de
-///   verdad.
-///
-/// Con la rampa corta metida dentro de una dispersión larga, en ningún momento
-/// hay una franja donde todo esté creciendo a la vez — que era exactamente el
-/// artefacto reportado jugando.
-/// El borde **interno** del anillo al que pertenece esta brizna: el alcance más
-/// grande que sea menor que el suyo.
-///
-/// Es lo que hace que la ley 1/d sea continua entre anillos. Anclada en un punto
-/// global, cada anillo entrega menos de lo que le toca en su mitad interna y
-/// deja un escalón — el artefacto que sobrevivió a toda la sesión del
-/// 2026-08-06. Anclada acá, la densidad superviviente es `C/d` en todas partes y
-/// el anillo pasa a decidir sólo el tamaño de chunk.
-fn ring_reaches() -> array<f32, 8> {
-    return array<f32, 8>(
-        grass_data.ring_reaches_a.x, grass_data.ring_reaches_a.y,
-        grass_data.ring_reaches_a.z, grass_data.ring_reaches_a.w,
-        grass_data.ring_reaches_b.x, grass_data.ring_reaches_b.y,
-        grass_data.ring_reaches_b.z, grass_data.ring_reaches_b.w,
-    );
-}
+/// `growth_ramp` es lo que tarda **una** brizna en pasar de entera a nada. Corta
+/// a propósito: una brizna sola encogiéndose es imperceptible, y lo que se
+/// percibía era que todas crecieran juntas — que es justamente lo que ya no
+/// puede pasar, porque cada índice tiene su propio final.
 
 /// Si esta primitiva se abre mirando a la cámara.
 ///
@@ -217,81 +191,15 @@ fn card_teeth(u: f32, count: f32, offset: f32) -> f32 {
     return height * (1.0 - abs(across * 2.0 - 1.0));
 }
 
-fn ring_inner(reach: f32) -> f32 {
-    var reaches = ring_reaches();
-    var inner = 0.0;
-    for (var i = 0; i < 8; i = i + 1) {
-        if reaches[i] < reach && reaches[i] > inner {
-            inner = reaches[i];
-        }
-    }
-    return inner;
-}
 
-/// Cuánto de su altura tiene una brizna que todavía está **más cerca que su
-/// anillo**.
-///
-/// El espejo del borde exterior, y el arreglo de las tres quejas del 2026-08-07.
-/// Hasta ese día el descarte por cercanía **no existía**: la ley `1/d` sólo ralea
-/// lo lejano, así que un chunk del anillo 3 —32 m de lado— que asomaba la punta
-/// más allá de la frontera se plantaba entero, con sus cartas de medio metro a un
-/// metro de la cámara. La decisión era del chunk; acá pasa a ser de la brizna.
-///
-/// **Y es una banda, no un corte.** Un umbral duro sería un círculo de cartas
-/// apareciendo a distancia fija que se mueve con el jugador: el mismo pop, con
-/// otra forma. Los umbrales se reparten por hash igual que en el borde, así que
-/// lo que se ve es densidad que **sube** con la distancia.
-///
-/// La banda termina en `inner` y empieza `spread + ramp` antes — justo donde el
-/// anillo de adentro todavía está entero, que es por qué el traspaso no deja
-/// pozo. Lo que se recorta es sólo de la frontera hacia adentro: el solapamiento
-/// de 8 a 22 m **paga** cobertura y sigue intacto *(Paso 0, `BOTWGrass.md`)*.
-fn blade_birth(distance: f32, inner: f32, blade_hash: f32) -> f32 {
-    // El anillo 0 no tiene nada adentro: nace pegado a la cámara y así queda.
-    if inner <= 0.0 {
-        return 1.0;
-    }
-    // Hash propio, por lo mismo que el del borde: con el de la ley, las briznas
-    // que nacen últimas serían justo las que mueren primero y el anillo entero se
-    // estrecharía a una banda en vez de llenar su territorio.
-    let birth_hash = fract(blade_hash * 3.7191 + 0.813);
-    let born_at = inner - grass_data.growth_spread * birth_hash;
-    return smoothstep(born_at - grass_data.growth_ramp, born_at, distance);
-}
-
-fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
+fn blade_growth(world_xz: vec2<f32>, blade_reach: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
-    // Dos umbrales, y la brizna muere en el primero que llegue.
-    //
-    // El de la **ley**: `start / (1 - hash)` reparte los umbrales de modo que la
-    // fracción sobreviviente a distancia `d` sea exactamente `start / d` — la ley
-    // 1/d que deriva `BOTWGrass.md`, continua en vez de concentrada al borde.
-    //
-    // El del **borde**: la ley sola deja ~25% de las briznas vivas al llegar al
-    // alcance del anillo, y ahí se cortan de golpe. Medido: la escalera se movía
-    // de los 10-16 m al borde exacto. Esta banda las apaga antes de llegar.
-    //
-    // Hashes distintos a propósito: con el mismo, las que la ley perdona son
-    // justo las que el borde mata primero, y el reparto se vuelve un escalón
-    // otra vez.
-    let edge_hash = fract(blade_hash * 7.1234 + 0.371);
-    let inner = ring_inner(ring_reach);
-    let anchor = max(inner, grass_data.growth_start);
-    let by_law = anchor / max(1.0 - blade_hash, 1e-4);
-    let by_edge = ring_reach - grass_data.growth_spread * edge_hash;
-    let ends = min(by_law, by_edge);
-    let starts = ends - grass_data.growth_ramp;
-    // Y el nacimiento, del lado de adentro. **Multiplicado, no `min`**: son dos
-    // recortes de la misma altura y entre los dos umbrales valen 1 los dos, así
-    // que el producto deja el territorio del anillo intacto y sólo suaviza las
-    // dos puntas.
-    //
-    // El intento anterior de un borde interno —un recorte duro en `inner`— dejaba
-    // un pozo en cada frontera, porque el anillo de afuera nacía donde el de
-    // adentro moría. Esta versión no: la banda de nacimiento termina en `inner` y
-    // ocupa el tramo donde el anillo de adentro **todavía está entero**.
-    return (1.0 - smoothstep(starts, ends, distance))
-        * blade_birth(distance, inner, blade_hash);
+    // Un solo umbral, y es de esta brizna: el índice que ocupa en su baldosa ya
+    // decidió hasta dónde llega, así que acá no hay ley que repartir ni hash que
+    // consultar. Nada nace del lado de adentro tampoco — una brizna existe desde
+    // los pies del jugador hasta su propio final, y por eso no hay frontera que
+    // cruzar.
+    return 1.0 - smoothstep(blade_reach - grass_data.growth_ramp, blade_reach, distance);
 }
 
 /// Ruido barato y determinista, para la ráfaga.
@@ -370,20 +278,14 @@ const SUBPIXEL_GREEN: f32 = 2.0;
 /// campo.
 const DEBUG_TINT: f32 = 0.72;
 
-/// El anillo de esta brizna, como índice de la paleta.
+/// El nivel de este draw, como índice de la paleta.
 ///
-/// Sale del alcance que ya viaja empaquetado en `uv1.y`, así que **ninguna de
-/// estas vistas cuesta un byte por vértice ni obliga a rehornear la pradera**.
-/// Ése es el motivo por el que se pueden encender jugando: lo que cambia es lo
-/// que el shader pinta, no lo que se dibuja.
-fn ring_slot(reach: f32) -> u32 {
-    var reaches = ring_reaches();
-    for (var i = 0u; i < 8u; i = i + 1u) {
-        if abs(reaches[i] - reach) < 0.5 {
-            return i;
-        }
-    }
-    return 7u; // El casillero de "ninguno", que en la paleta es el gris.
+/// **Lo dice el material, no una tabla.** Salía de buscar el alcance del vértice
+/// entre los de los anillos, y desde que cada brizna lleva **su propio** alcance
+/// esa búsqueda no encuentra nada: las vistas pintarían todo del gris de
+/// "ninguno" y el medidor contaría cero por nivel. El draw ya sabe cuál es.
+fn ring_slot() -> u32 {
+    return grass_data.record_layout.z;
 }
 
 fn ring_chunk_m(slot: u32) -> f32 {
@@ -425,7 +327,7 @@ fn pastel(seed: vec2<f32>, whiten: f32) -> vec3<f32> {
 fn debug_colour(
     base: vec3<f32>,
     world_xz: vec2<f32>,
-    ring_reach: f32,
+    blade_reach: f32,
     blade_hash: f32,
     blade_height: f32,
     metres_per_pixel: f32,
@@ -434,7 +336,7 @@ fn debug_colour(
     if view == DEBUG_OFF || view == DEBUG_MEASURE {
         return base;
     }
-    let slot = ring_slot(ring_reach);
+    let slot = ring_slot();
     var tint = vec3<f32>(1.0);
     if view == DEBUG_RING {
         tint = grass_data.ring_colors[slot].rgb;
@@ -462,7 +364,7 @@ fn debug_colour(
     } else if view == DEBUG_GROWTH {
         // Dos entradas de la paleta y no dos colores nuevos: el shader no
         // inventa colores, los recibe.
-        let grown = blade_growth(world_xz, ring_reach, blade_hash);
+        let grown = blade_growth(world_xz, blade_reach);
         tint = mix(
             grass_data.ring_colors[0].rgb,
             grass_data.ring_colors[3].rgb,
@@ -665,7 +567,7 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // `uv1.y` llevaba dos números en uno y el registro los sigue llevando: el
     // alcance del anillo en metros enteros y la altura de la brizna en la
     // fracción.
-    let ring_reach = floor(record.w);
+    let blade_reach = floor(record.w);
     let blade_height = fract(record.w);
     let blade_hash = hash_position(record.xy, 0u);
 
@@ -734,7 +636,7 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     world_position.y = mix(
         ground_y - grass_data.growth_sink,
         world_position.y,
-        blade_growth(world_position.xz, ring_reach, blade_hash),
+        blade_growth(world_position.xz, blade_reach),
     );
 
     out.world_position = world_position;
@@ -825,7 +727,7 @@ fn fragment(
     if grass_data.debug_view == DEBUG_MEASURE {
         var measured: FragmentOutput;
         measured.color = vec4<f32>(
-            grass_data.ring_colors[ring_slot(floor(in.uv_b.y))].rgb,
+            grass_data.ring_colors[ring_slot()].rgb,
             1.0,
         );
         return measured;

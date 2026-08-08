@@ -136,15 +136,14 @@ impl BladeShape {
 
 /// Los tres niveles, de la cámara hacia afuera: **uno por forma de brizna.**
 ///
-/// Eran cuatro y los dos primeros tenían la misma forma, así que el segundo no
-/// aportaba más que una frontera — *"hay muchos anillos"*, jugando el
-/// 2026-08-08. Un nivel no es un escalón de densidad: es un **tamaño de chunk y
-/// una forma**. El alcance del primero se queda corto respecto de la suya a
-/// propósito; cuánto costaba estirarlo está medido en `BOTWGrass.md`.
+/// Eran cuatro y los dos primeros tenían la misma forma, así que el segundo sólo
+/// aportaba una frontera — *"hay muchos anillos"*, jugando el 2026-08-08. Un
+/// nivel es un **tamaño de chunk y una forma**, y llega hasta donde su forma
+/// llega; el costo de eso quedó declarado como deuda en `BOTWGrass.md`.
 const RINGS: [Ring; 3] = [
     Ring {
-        reach_m: 16.0,
-        chunk_m: 8.0,
+        reach_m: 24.0,
+        chunk_m: 12.0,
     },
     Ring {
         reach_m: 40.0,

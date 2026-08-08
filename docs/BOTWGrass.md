@@ -964,13 +964,20 @@ cambia el campo: quita un borde. Quedan `16 m` (hoja, chunks de 8), `40 m` (púa
 16) y `64 m` (carta, 32) — y la mezcla carta↔púa que él pide ya existe, porque el
 umbral de carta está repartido por brizna entre 34 y 62 m.
 
-**Lo que no se pudo hacer y por qué:** llevar el primero a los 24 m que su propia
-forma pide. Un nivel planta su tramo en **todo** su territorio aunque las briznas
-mueran antes del borde, así que estirarlo de 16 a 24 m multiplica por 3,4 el área
-donde se plantan las más tupidas: **2.404.640 triángulos declarados contra un
-techo de 2.000.000**, medido al intentarlo. A 16 m el desperdicio es 1,5×. Lo que
-se paga es que entre 16 y 24 m la brizna se dibuja como púa donde la escalera de
-formas pediría hoja: 3,6 píxeles de ancho, sin cintura.
+**Lo que costó, y por qué se pagó igual.** Un nivel planta su tramo en **todo**
+su territorio aunque las briznas mueran antes del borde, así que llevar el
+primero de 16 a 24 m multiplica por 3,4 el área donde se plantan las más tupidas.
+El primer intento se recortó a 16 m para no pasar el techo; el veredicto del
+usuario fue **no recortar el diseño por el techo**:
+
+> *"Olvidémonos del techo por ahora, optimizamos cuando logremos el feeling
+> correcto."*
+
+Así que cada nivel llega hasta donde su forma llega, el techo por vista sube de 2
+a **3 millones** de triángulos como deuda declarada, y los chunks del primer
+nivel pasan a 12 m para que el conteo de draws siga entrando. Es la misma regla
+que el proyecto ya tenía escrita —primero se ve bien, después se optimiza— con la
+diferencia de que ahora el costo está anotado con su número.
 
 Y el pasto va **más largo** (0,55-0,96 m contra 0,45-0,90), también pedido
 jugando: lo que distingue una carta de sus briznas vecinas es sobre todo la masa,

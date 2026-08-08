@@ -371,15 +371,21 @@ fn write_legend(
     use crate::visuals::material_registry::Subject;
 
     let view = perf.grass_debug_label();
-    if view == "off" {
-        return;
-    }
     // **Categorías, no anillos.** El analizador cuenta lo que la corrida declare
     // y no sabe qué es un anillo: la vista `subpixel` reparte por ancho en
     // píxeles, y la que venga después repartirá por otra cosa. Atar el script a
     // la técnica de LOD del momento sería obligarlo a cambiar cada vez que la
     // técnica cambie — y la técnica está justamente en discusión.
-    let categories: Vec<serde_json::Value> = if view == "subpixel" {
+    // **Con la vista apagada la leyenda se escribe igual, sin categorías.** Hasta
+    // el 2026-08-07 no se escribía, y eso dejaba a la captura del **juego real**
+    // —la única que muestra el color que el jugador ve— sin la geometría de
+    // cámara, o sea sin eje de distancias. Se descubrió queriendo medir por qué
+    // las cartas lejanas se leen de otro color que el pasto cercano, que es una
+    // pregunta sobre la imagen jugada y no sobre una vista de diagnóstico. Las
+    // categorías sí dependen de la vista; el resto de la leyenda, no.
+    let categories: Vec<serde_json::Value> = if view == "off" {
+        Vec::new()
+    } else if view == "subpixel" {
         crate::visuals::grass_debug::subpixel_legend()
             .into_iter()
             .map(|band| serde_json::json!({ "nombre": band.name, "color": band.color }))

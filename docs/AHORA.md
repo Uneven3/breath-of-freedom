@@ -37,17 +37,14 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   shader** y todo lo demás sigue reportando: el 2026-08-07 una corrida así sacó
   una foto de puro cielo declarando 691.200 triángulos de pradera al 95% del
   cuadro. La foto y la tabla ahora avisan, porque el caso ocurrió.
-- **Contar píxeles: lo hace la misma corrida** (`BOF_KNOBS=grass-view=6`, la
-  vista `medir`). El informe sale en el log junto a la foto: cobertura, reparto
-  por anillo y **perfil por distancia** en metros. **Omite el perfil y dice por
-  qué** cuando la fila de pantalla no se puede convertir en distancia — sin
-  perspectiva, con `render-scale`, o con más de 20 cm de relieve bajo la mirada.
-  Hasta el 2026-08-08 era `tools/shot_stats.py`; el port a Rust se verificó
-  dando el mismo conteo píxel a píxel sobre la misma captura.
-- **Una curva en una corrida: `BOF_SHOT_SWEEP=<perilla>`** recorre la escalera
-  entera de esa perilla, deja una foto por paso e imprime la tabla — una fila por
-  paso, una columna por banda de distancia — más el ajuste `C = 1 − e^(−λ·a)` si
-  el barrido movió la densidad.
+- **Contar píxeles: lo hace la misma corrida** (`BOF_KNOBS=grass-view=6`). El
+  informe sale en el log junto a la foto: cobertura, reparto por nivel y perfil
+  por distancia en metros. **Omite el perfil y dice por qué** cuando la fila de
+  pantalla no se puede convertir en distancia (sin perspectiva, con
+  `render-scale`, o con más de 20 cm de relieve bajo la mirada).
+- **Una curva en una corrida: `BOF_SHOT_SWEEP=<perilla>`** recorre su escalera
+  entera, deja una foto por paso e imprime la tabla —fila por paso, columna por
+  banda— más el despeje de `C = 1 − e^(−λ·a)` contra la densidad **viva**.
 - **Antes de explicar una diferencia entre dos configuraciones, sacar la misma
   captura dos veces.** El 2026-08-07 fue lo único que destapó un bug que apagaba
   un nivel entero con resultado distinto en cada corrida, y cada foto suelta
@@ -70,20 +67,17 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   secuencia de medición, todo por click. Sobreviven dos teclas: `[`/`]` ciclan
   clips con el navegador abierto, y **P** vuelca el snapshot al log.
 - **El log arranca callado (2026-07-26)**, todos los canales en `off`: el sink de
-  consola ponía **208 de 240 líneas** de un playtest, enterrando las 28 que
-  hablaban del juego. Las tablas del benchmark y el flythrough salen igual.
-  `RUST_LOG` **reemplaza** el filtro de Bevy en vez de sumarse, así que a secas
-  devuelve el spam de `wgpu`/`naga`; si hace falta,
-  `RUST_LOG=wgpu=error,naga=warn,breath_of_freedom=debug`.
+  consola ponía **208 de 240 líneas** de un playtest. `RUST_LOG` **reemplaza** el
+  filtro de Bevy en vez de sumarse, así que a secas devuelve el spam de `wgpu`;
+  si hace falta, `RUST_LOG=wgpu=error,naga=warn,breath_of_freedom=debug`.
 - **Antes de bindear una tecla, `grep -rhoE "KeyCode::[A-Za-z0-9]+" src/`.**
   Nadie arbitra colisiones (hallazgo C2), así que una tecla ya usada no da error:
   da una función que "no hace nada". **F7 se gastó el 2026-08-06** en la captura
   in-game; quedan **F9, F11, F12**.
 - Commits a `main`, mensajes convencionales, sin push sin pedido explícito.
-- **El `build-dir` compartido no cumple su premisa.** Cargo cachea por set de
-  features resuelto y avian3d activa las que otros proyectos no piden: medido el
-  2026-08-01, **39 variantes de `libbevy_render` y 136 GB**. Decisión abierta;
-  nunca `rm -rf` sobre lo que Cargo administra.
+- **El `build-dir` compartido no cumple su premisa:** Cargo cachea por set de
+  features y avian3d activa las que otros proyectos no piden — **39 variantes de
+  `libbevy_render` y 136 GB** (2026-08-01). Nunca `rm -rf` sobre lo de Cargo.
 - **Para listar las ambigüedades de scheduling por nombre**, activá un rato la
   feature `debug` de `bevy_ecs`: sin ella Bevy imprime placeholders y después de
   `Schedule::initialize` el grafo ya no resuelve nombres. Revertila después —
@@ -245,25 +239,34 @@ un veto** — ver `NORTE.md`. Primero que se vea bien. Target de imagen **900p30
 > (PS3, 2009)** llena la pantalla con una fracción de este hardware.
 
 **Resuelto y jugado** (detalle en `BOTWGrass.md`): el parpadeo, la altura, la
-paleta derivada del suelo, la brizna de dos triángulos, la carta opaca lejana y
-el LOD por tamaño en pantalla.
+paleta derivada del suelo, la brizna de dos triángulos, la carta opaca lejana, el
+LOD por tamaño en pantalla y **el crecimiento al caminar**.
 
 **Decidido, no a reevaluar (2026-08-07):** *"el pasto siempre debió pertenecer al
-mundo"*. La posición de una brizna sale de una grilla fija del **mundo**; el
-nivel decide *cuántas*, nunca *cuáles*, y por eso acercarse sólo agrega. Una
-medición en contra replantea la implementación, no el rumbo.
+mundo"*. La posición sale de una grilla fija del **mundo**; el nivel decide
+*cuántas*, nunca *cuáles*. Una medición en contra replantea la implementación,
+no el rumbo.
 
-**Abierto, en orden de cuánto sabemos:**
+**Jugado y aceptado el 2026-08-08**, tras ocho sesiones de juego suyas en el día:
+*"el crecimiento creo que está mucho mejor que antes"* y, al cerrar, *"las
+fronteras están bien, ese nunca fue el problema... anillo 0 y 1 están bien"*. La
+brizna sale de una grilla del mundo y su alcance del índice; los niveles son tres
+—uno por forma— y **coronas**, cada uno dibujando sólo su banda.
 
-1. **El cuarto eje está hecho y jugado (2026-08-08):** *"el crecimiento creo que
-   está mucho mejor que antes, creo que lo que hay que hacer ahora es fine
-   tunning"*. La brizna sale de una grilla del mundo y su alcance del índice, no
-   de un hash. En la misma sesión se arreglaron los billboards cerca (la forma la
-   decide la distancia) y el anillo de matojos (el umbral de carta es por brizna).
-   **Lo que sigue es afinar**, y la primera decisión es la densidad: con 40/m² la
-   cobertura del primer plano es 76,4% y con 80/m² sube a 94,8% costando el doble
-   de triángulos (728.576 contra 362.752). Detalle en `BOTWGrass.md`.
-2. **El horizonte no se llena** (pasados los 64 m se ve terreno pelado; ahí va la
+**Abierto, en orden:**
+
+1. **Los billboards.** *"Los billboards son el problema ahora."* Es la queja que
+   sobrevivió el día entero. Se le atacó el anillo (umbral repartido por brizna,
+   34-62 m) y el grano (la carta bajó de 0,5 a 0,25 m) y sigue notándose. Lo que
+   se sabe y lo que no se probó, en `BOTWGrass.md` → *Por dónde retomar*.
+2. **Los anillos como arquitectura no lo convencen** —*"sigo pensando que anillos
+   no es la solución correcta"*, dicho tres veces el 2026-08-08—. No es un pedido
+   inmediato (el 0 y el 1 están bien) pero es dirección de fondo: no tratarlo
+   como cerrado.
+3. **Los milisegundos, sin medir.** La geometría casi se duplicó hoy (1.264.384
+   triángulos en cuadro contra 654.848) y el techo por vista subió a 4 millones
+   como deuda explícita. Todo lo de hoy son conteos y píxeles.
+4. **El horizonte no se llena** (pasados los 64 m se ve terreno pelado; ahí va la
    niebla, que todavía no llega tan cerca). Sin tocar.
 
 ## La suite de medición (2026-08-06)
@@ -281,8 +284,8 @@ configuración que se envía.
 **Tres trampas de esta máquina, encontradas corriendo:**
 
 - **Cerrar Blender (o cualquier cosa que use la GPU) antes de medir.** Con él
-  abierto, tres corridas de la misma configuración dieron costos del pasto entre
-  2,36 y 3,77 ms, con derivas internas de 0,2. Lo externo no aparece en la tabla.
+  abierto, tres corridas iguales dieron el pasto entre 2,36 y 3,77 ms con derivas
+  internas de 0,2: lo externo no aparece en la tabla.
 - **La ventana tiene que estar visible.** En Wayland nativo el compositor no
   manda frame callbacks a una superficie oculta y el juego entero se duerme —
   1,9 s de CPU en 105 de reloj, sin medir nada. Para correr en segundo plano:
@@ -292,15 +295,11 @@ configuración que se envía.
   El reporte lo detecta y avisa que hay que leer `d-gpu`.
 
 **El reporte declara qué hay en cuadro (2026-08-07).** Cada corrida abre con el
-reparto por sistema —`pradera=15%/92% bosque=15%/0% terreno=1%/5%`, mallas y
-triángulos— y avisa cuando el tema que la suite dice medir cae por debajo del
-10% en cualquiera de las dos. Un mirador es una afirmación, y hasta ahora
-ninguna corrida podía desmentirla: el test que había verificaba que la *escena*
-declarara bosque, que es otra cosa y siempre pasaba.
-
-**Y lo primero que dijo:** ocultar el bosque valía 0,34 ms no por mal mirador,
-sino porque desde ahí el bosque es el **0% de los triángulos** y la pradera se
-lleva el **92%**. Medir el bosque pide su propia caja.
+reparto por sistema y avisa cuando el tema que la suite dice medir cae por debajo
+del 10%. Un mirador es una afirmación, y hasta entonces ninguna corrida podía
+desmentirla. **Lo primero que dijo:** ocultar el bosque valía 0,34 ms no por mal
+mirador, sino porque desde ahí el bosque es el **0% de los triángulos** y la
+pradera el **92%**. Medir el bosque pide su propia caja.
 
 **Ruido de Bevy, no nuestro:** cada corrida imprime ~270 líneas
 `bevy_render::slab_allocator: Use-after-free`, al despawnear muchas mallas de

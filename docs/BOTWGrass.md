@@ -985,58 +985,58 @@ y un campo más alto se le parece más.
 
 Medido: cobertura 91-99% pareja, 654.848 triángulos y **5 draws** en vez de 6.
 
-**Lo que sigue, en orden:**
+**Jugado y aceptado** al cerrar el día: el primer plano no se reportó ralo, y las
+fronteras quedaron explícitamente fuera de la lista de problemas. Lo que sigue
+está en *Por dónde retomar*, al final.
 
-1. **Jugarlo.** El objetivo de la ley es 95% y el primer plano queda en 91%:
-   falta ver si eso se lee como ralo caminando o si ya está bien.
-2. **Medir los milisegundos.** Todo lo de arriba son conteos; el pasto se llevaba
-   12,94 ms de GPU de un cuadro de 15,29 **antes** de subir la densidad 1,67×.
-   `BOF_BENCH=grass` con la máquina libre.
-3. **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1` con un
-   comentario que ya no describe el sistema.
+## Por dónde retomar (cierre del 2026-08-08)
 
-## Por dónde retomar (al 2026-08-08)
+**Lo que el usuario dijo al cerrar, textual, porque es el mapa:**
 
-**Hay una sola cosa que hacer, y todo lo demás espera detrás:** que la brizna
-pertenezca al mundo. Es la decisión del usuario, tomada y repetida en varias
-sesiones, y es lo único que ataca *su punto más importante* —"veo cómo crecen y
-cómo se achican los pastos"—, que ninguna de las tres tandas de arreglos del
-2026-08-07 tocó.
+> *"Las fronteras están bien, ese nunca fue el problema, y usé cámara libre para
+> ver. Anillo 0 y 1 están bien (sigo pensando que anillos no es la solución
+> correcta), los billboards son el problema ahora."*
 
-**Cómo entrarle, en el orden que evita repetir el intento fallido:**
+Tres cosas, y conviene no mezclarlas:
 
-1. ~~Sacar la curva de cobertura contra densidad a varias distancias.~~
-   **Hecha el 2026-08-08**, con la ley que salió de ella: la tabla y el `a` por
-   banda están más arriba, y `λ = −ln(1−C)/a` reemplaza al ojo para elegir
-   cuántas briznas emite cada nivel. Sale sola con
-   `BOF_SHOT_SWEEP=grass-density BOF_KNOBS=grass-view=6`.
-2. ~~Posición desde una grilla fija del mundo.~~ ~~Conservar el solapamiento.~~
-   **Hechas el 2026-08-08** — el Paso 3 de arriba, con los tres errores del
-   intento anterior evitados y la cobertura por banda medida antes y después.
-3. **Validar jugando**, que es lo único que falta de este paso: el artefacto es
-   el movimiento. Lo que la captura ya hizo es el guardrail —ninguna banda se
-   hunde, todas dan 99,6-100%— y confirmar que dos corridas idénticas dan el
-   mismo número.
-4. **Y después, el Paso 3b:** la forma la decide la distancia. La captura dejó
-   al nivel de cartas con el 73% del primer plano, y un billboard a 3 m gira con
-   la cámara.
+1. **Las fronteras y los niveles 0 y 1 están aceptados.** Verificado por él con
+   cámara libre, no de paso. Ahí no hay trabajo pendiente.
+2. **El siguiente problema son los billboards.** Es la queja que sobrevivió el
+   día entero: *"la diferencia entre el pasto normal y el billboard sigue siendo
+   muy notoria"*. Hoy se le atacó el **anillo** (el umbral va repartido por
+   brizna entre 34 y 62 m) y el **grano** (la carta bajó de 0,5 a 0,25 m), y aun
+   así sigue siendo lo que se nota.
+3. **Los anillos siguen sin convencerlo como arquitectura**, dicho tres veces en
+   el día. No es un pedido de cambio inmediato —el 0 y el 1 están bien— pero es
+   la dirección de fondo, igual que *"la brizna pertenece al mundo"* lo fue ayer.
+   Quien retome esto **no lo trata como cerrado**.
 
-**Detrás, y sólo después:**
+### Lo que se sabe del billboard, para no arrancar de cero
 
-- **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con el
-  comentario "cruzar una frontera cuesta un chunk". **Es falso:** cruzar una
-  frontera del anillo 0 pide una *fila*, y las cuatro grillas ruedan a la vez.
-  Medir el costo de hornear un chunk del anillo 0 (11.700 briznas) antes de tocar
-  el número. Puede volverse irrelevante si el rediseño cambia qué se hornea.
-- **El paso de `grass-growth`** que se envía: hoy sigue en el índice 0 (6/6). Si
-  el rediseño elimina las fronteras, la perilla pierde casi todo su sentido y
-  puede quedar sólo como control del raleo lejano.
-- **El Paso 5, el viento**, aplazado desde el principio hasta que el resto esté
-  bien.
+- Se abre a partir de `card_from_m` ≈ 48 m con el viewport de referencia —donde
+  la brizna mide 1,5 px— y el umbral va **repartido por brizna** entre 0,7× y
+  1,3× de eso, o sea 34-62 m. Más cerca, la misma brizna se dibuja como hoja.
+- Mide 0,25 m de ancho y su silueta conserva el 58,3% del rectángulo
+  (`CARD_SILHOUETTE_AREA`, integral de `card_silhouette` en el shader).
+- **El color no es el problema:** medido el 2026-08-07 desde una cámara de juego,
+  la luminancia va de 146,2 a 3-8 m a 149,3 a 45-64.
+- Lo que **no** se probó: que la altura y el ancho sigan a la distancia como ya
+  hace la forma; que la carta tenga variación de tono por instancia; que el
+  solape carta↔púa sea más ancho.
 
-**Cerrado hoy, no reabrir:** el color de los billboards (era el terreno sin pasto
-pasados los 64 m, y ahí va la niebla); la cobertura del primer plano (99,3% a
-3-4 m); y revertir el Paso 2 (el culpable era un bug suyo, arreglado).
+### Detrás, y sólo después
+
+- **Medir los milisegundos.** Todo lo de hoy son conteos, y la geometría casi se
+  duplicó: 1.264.384 triángulos en cuadro contra 654.848. El pasto se llevaba
+  12,94 ms de GPU de un cuadro de 15,29 **antes** de eso. `BOF_BENCH=grass`.
+- **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1`, con un
+  comentario que ya no describe el sistema.
+- **El Paso 5, el viento**, aplazado desde el principio: *"el viento sigue siendo
+  algo que sólo vamos a hacer cuando todo lo demás esté bien"*.
+
+**Cerrado, no reabrir:** el color de los billboards; la cobertura del primer
+plano; revertir el Paso 2; y el techo de triángulos mientras el feeling no esté
+—*"olvidémonos del techo por ahora"*—.
 
 ## Errores que este documento ya cometió — no reintroducir
 

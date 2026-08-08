@@ -383,6 +383,15 @@ constantes de ojo.
    `0,149 · ancho · d`. Con eso el margen desaparece: la derivación pide
    directamente lo que la imagen entrega.
 
+> **El 0,149 quedó corregido el 2026-08-08 y la constante ya no es una sola.**
+> Este despeje usó el número de la **perilla** como `λ`, y con eso el raleo por
+> distancia se cuela dentro de la huella. Despejando contra la densidad **viva**
+> —que la corrida sabe desde que la escalera de alcances es determinista— la
+> constante va de **0,082 cerca a 0,114** a 27 m, y **0,185** para la carta. O
+> sea la ley pedía 1,8× menos briznas de las que hacen falta en el primer plano.
+> No se notaba porque el solapamiento de tres niveles lo compensaba; el Paso 3
+> lo quitó y quedó a la vista. Tabla y corrección: `hidden_per_width_per_metre`.
+
 **Cómo se despejó.** Diez densidades (de 0,15× a 2×) × nueve anillos de
 distancia, contando píxeles por anillo con `grass-view=medir`. Dos anillos con
 densidades distintas —23,8 y 12,9/m²— y **formas distintas** —hoja de dos
@@ -924,6 +933,32 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 | El solapamiento sale de la tabla de desperdicio | listado como desperdicio puro, contra lo que el propio doc mide |
 | Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
 | El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
+
+## El fine tuning, y con qué números empieza (2026-08-08)
+
+Con el crecimiento ya en *"mucho mejor que antes"*, lo que queda es afinar. La
+primera vuelta ya está hecha y salió de una intuición suya —*"siento que podemos
+lograr un mejor ratio de pastos"*— que resultó medible: la ley pedía de menos
+cerca y de más lejos.
+
+| configuración | 3-4 m | 11-16 m | 22-32 m | 45-64 m | triángulos |
+|---|---|---|---|---|---|
+| ley vieja, dial 40 | 76,4% | 88,8% | 90,1% | 99,0% | 362.752 |
+| ley vieja, dial 80 | 94,8% | 98,7% | 99,1% | 99,9% | 728.576 |
+| **ley medida, dial 40** | **91,0%** | **94,3%** | **95,0%** | 98,4% | **605.952** |
+
+La ley medida da casi la imagen del dial 80 con **17% menos triángulos**, y la
+cobertura queda pareja en 91-95% en vez de repartida entre 76% y 99%.
+
+**Lo que sigue, en orden:**
+
+1. **Jugarlo.** El objetivo de la ley es 95% y el primer plano queda en 91%:
+   falta ver si eso se lee como ralo caminando o si ya está bien.
+2. **Medir los milisegundos.** Todo lo de arriba son conteos; el pasto se llevaba
+   12,94 ms de GPU de un cuadro de 15,29 **antes** de subir la densidad 1,67×.
+   `BOF_BENCH=grass` con la máquina libre.
+3. **El horneado va a 1 chunk por frame.** `CHUNKS_BAKED_PER_FRAME = 1` con un
+   comentario que ya no describe el sistema.
 
 ## Por dónde retomar (al 2026-08-08)
 

@@ -134,22 +134,21 @@ impl BladeShape {
     }
 }
 
-/// Los cuatro anillos, de la cámara hacia afuera. **Un anillo no es un escalón
-/// de densidad: es un tamaño de chunk.** Cada uno se planta a lo que la
-/// derivación pide en su **borde interno**, y el shader ancla ahí su ley `1/d`
-/// (`ring_inner` en `grass.wgsl`). Todo el porqué, en `docs/BOTWGrass.md`.
-const RINGS: [Ring; 4] = [
+/// Los tres niveles, de la cámara hacia afuera: **uno por forma de brizna.**
+///
+/// Eran cuatro y los dos primeros tenían la misma forma, así que el segundo no
+/// aportaba más que una frontera — *"hay muchos anillos"*, jugando el
+/// 2026-08-08. Un nivel no es un escalón de densidad: es un **tamaño de chunk y
+/// una forma**. El alcance del primero se queda corto respecto de la suya a
+/// propósito; cuánto costaba estirarlo está medido en `BOTWGrass.md`.
+const RINGS: [Ring; 3] = [
     Ring {
-        reach_m: 13.0,
+        reach_m: 16.0,
         chunk_m: 8.0,
     },
     Ring {
-        reach_m: 24.0,
-        chunk_m: 16.0,
-    },
-    Ring {
         reach_m: 40.0,
-        chunk_m: 32.0,
+        chunk_m: 16.0,
     },
     Ring {
         reach_m: 64.0,
@@ -450,8 +449,12 @@ const CARD_SILHOUETTE_AREA: f32 = 0.583;
 ///
 /// **The ceiling is one metre and it is hard**: the height travels in the
 /// fraction of `uv1.y` with the ring's reach in the whole part. A test pins it.
-const BLADE_HEIGHT_MIN: f32 = 0.45;
-const BLADE_HEIGHT_MAX: f32 = 0.90;
+/// Subidas el 2026-08-08 pedidas jugando —*"hacer el pasto un poquito más
+/// largo"*— y con la carta en mente: lo que la distingue de las briznas vecinas
+/// es sobre todo la **masa**, y un campo más alto se le parece más. El techo
+/// deja 4 cm de aire contra el metro para que `fract` no se lo coma.
+const BLADE_HEIGHT_MIN: f32 = 0.55;
+const BLADE_HEIGHT_MAX: f32 = 0.96;
 /// How far a tip may lean off vertical, in metres, so the field is not a bed of
 /// nails. Deterministic per blade — this is authored variety, not animation.
 ///

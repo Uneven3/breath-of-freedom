@@ -950,6 +950,34 @@ cerca y de más lejos.
 La ley medida da casi la imagen del dial 80 con **17% menos triángulos**, y la
 cobertura queda pareja en 91-95% en vez de repartida entre 76% y 99%.
 
+### Tres niveles, uno por forma (2026-08-08)
+
+> *"Hay muchos anillos, esa es la sensación que realmente me da. Deberían ser
+> cero, uno y billboard... con cero la brizna de dos triángulos, el uno la de un
+> triángulo, y el billboard después. Incluso siento que el billboard debería
+> mezclarse un poco con el LOD uno."*
+
+Eran cuatro y **los dos primeros tenían la misma forma** —los dos hoja—, así que
+el segundo no aportaba nada más que una frontera. Desde el Paso 3 el nivel ya no
+decide *cuáles* briznas, sólo cuántas caben en su buffer, así que fusionarlos no
+cambia el campo: quita un borde. Quedan `16 m` (hoja, chunks de 8), `40 m` (púa,
+16) y `64 m` (carta, 32) — y la mezcla carta↔púa que él pide ya existe, porque el
+umbral de carta está repartido por brizna entre 34 y 62 m.
+
+**Lo que no se pudo hacer y por qué:** llevar el primero a los 24 m que su propia
+forma pide. Un nivel planta su tramo en **todo** su territorio aunque las briznas
+mueran antes del borde, así que estirarlo de 16 a 24 m multiplica por 3,4 el área
+donde se plantan las más tupidas: **2.404.640 triángulos declarados contra un
+techo de 2.000.000**, medido al intentarlo. A 16 m el desperdicio es 1,5×. Lo que
+se paga es que entre 16 y 24 m la brizna se dibuja como púa donde la escalera de
+formas pediría hoja: 3,6 píxeles de ancho, sin cintura.
+
+Y el pasto va **más largo** (0,55-0,96 m contra 0,45-0,90), también pedido
+jugando: lo que distingue una carta de sus briznas vecinas es sobre todo la masa,
+y un campo más alto se le parece más.
+
+Medido: cobertura 91-99% pareja, 654.848 triángulos y **5 draws** en vez de 6.
+
 **Lo que sigue, en orden:**
 
 1. **Jugarlo.** El objetivo de la ley es 95% y el primer plano queda en 91%:

@@ -40,6 +40,9 @@ const WARMUP_SECS: f32 = 0.5;
 const MAX_SECS_PER_STEP: f32 = WARMUP_SECS + SETTLE_SECS + MEASURE_SECS;
 /// Slack on top, to tolerate long frames without stranding the toggles.
 const RUN_SLACK_SECS: f32 = 15.0;
+/// Time a manually selected suite gives its scene to finish spawning before the
+/// runner parks the camera and starts warming pipelines.
+pub(super) const SCENE_SETTLE_SECS: f32 = 2.0;
 
 /// Movement past this (metres from the anchor) invalidates the step.
 const STILLNESS_TOLERANCE: f32 = 0.75;
@@ -193,13 +196,20 @@ pub struct FinishedRun {
 
 #[derive(Resource, Default)]
 pub struct Benchmark {
+    pub(super) pending: Option<PendingRun>,
     pub run: Option<RunState>,
     pub finished: Option<FinishedRun>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct PendingRun {
+    request: BenchmarkRequest,
+    elapsed: f32,
+}
+
 impl Benchmark {
     pub fn is_running(&self) -> bool {
-        self.run.is_some()
+        self.pending.is_some() || self.run.is_some()
     }
 
     /// The pose the camera holds for the duration, so presentation can park it
@@ -216,6 +226,14 @@ impl Benchmark {
 
     /// Progress text: which step, and how far into it.
     pub fn status(&self) -> Option<String> {
+        if let Some(pending) = self.pending {
+            let phase = if pending.elapsed == 0.0 {
+                "entrando a su escena"
+            } else {
+                "asentando escena"
+            };
+            return Some(format!("{} · {phase}", pending.request.suite.label()));
+        }
         let run = self.run.as_ref()?;
         let steps = run.suite.steps();
         let step = steps.get(run.index)?;
@@ -279,25 +297,75 @@ impl BenchmarkRequest {
 pub(super) fn start_requested_runs(
     mut requests: MessageReader<BenchmarkRequest>,
     mut benchmark: ResMut<Benchmark>,
+    flythrough: Res<super::Flythrough>,
     mut toggles: ResMut<PerfToggles>,
     time: Res<Time<Real>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
     terrain_debug: Res<crate::visuals::terrain_material::TerrainDebugState>,
     scene: Res<State<crate::scene::AppState>>,
+    mut next_scene: ResMut<NextState<crate::scene::AppState>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
 ) {
-    let Some(request) = requests.read().copied().next() else {
+    let incoming = requests.read().copied().next();
+    if incoming.is_some() && benchmark.is_running() {
+        if benchmark.run.is_some() {
+            finalize_benchmark(
+                &mut benchmark,
+                &mut toggles,
+                time.elapsed_secs(),
+                FinishReason::Aborted("cancelled by operator"),
+            );
+        } else {
+            reject_benchmark(&mut benchmark, time.elapsed_secs(), "cancelled by operator");
+        }
         return;
-    };
-    if benchmark.is_running() {
-        finalize_benchmark(
+    }
+    if incoming.is_some() && flythrough.is_running() {
+        warn!("[bench] cannot start — a flythrough is already running");
+        reject_benchmark(
             &mut benchmark,
-            &mut toggles,
             time.elapsed_secs(),
-            FinishReason::Aborted("cancelled by operator"),
+            "flythrough is already running",
         );
         return;
     }
+
+    let request = if let Some(request) = incoming {
+        if request.vantage == VantageMode::Canonical {
+            let wanted = crate::scene::AppState::Scene(request.suite.scene());
+            if *scene.get() != wanted {
+                benchmark.finished = None;
+                benchmark.pending = Some(PendingRun {
+                    request,
+                    elapsed: 0.0,
+                });
+                next_scene.set(wanted);
+                info!(
+                    "[bench] entering suite '{}' scene before measuring",
+                    request.suite.label()
+                );
+                return;
+            }
+        }
+        request
+    } else {
+        let Some(pending) = benchmark.pending.as_mut() else {
+            return;
+        };
+        let wanted = crate::scene::AppState::Scene(pending.request.suite.scene());
+        if *scene.get() != wanted {
+            pending.elapsed = 0.0;
+            next_scene.set(wanted);
+            return;
+        }
+        pending.elapsed += time.delta_secs();
+        if pending.elapsed < SCENE_SETTLE_SECS {
+            return;
+        }
+        let request = pending.request;
+        benchmark.pending = None;
+        request
+    };
     let Some(camera) = camera else {
         warn!("[bench] cannot start — camera missing or ambiguous");
         reject_benchmark(
@@ -351,6 +419,7 @@ pub(super) fn start_requested_runs(
 }
 
 fn reject_benchmark(benchmark: &mut Benchmark, at: f32, reason: &'static str) {
+    benchmark.pending = None;
     benchmark.run = None;
     benchmark.finished = Some(FinishedRun {
         at,
@@ -1092,6 +1161,32 @@ mod tests {
         app.add_plugins(bevy::state::app::StatesPlugin)
             .init_state::<crate::scene::AppState>()
             .init_resource::<Benchmark>()
+            .init_resource::<crate::perf::Flythrough>()
+            .init_resource::<PerfToggles>()
+            .init_resource::<crate::visuals::terrain_material::TerrainDebugState>()
+            .init_resource::<Time<Real>>()
+            .add_message::<BenchmarkRequest>()
+            .add_systems(Update, start_requested_runs);
+        app.world_mut().write_message(BenchmarkRequest::new(
+            BenchSuite::General,
+            VantageMode::Here,
+        ));
+
+        app.update();
+
+        let benchmark = app.world().resource::<Benchmark>();
+        let finished = benchmark.finished.as_ref().expect("rejection must finish");
+        assert_eq!(finished.aborted, Some("camera missing or ambiguous"));
+        assert!(!benchmark.is_running());
+    }
+
+    #[test]
+    fn a_canonical_run_enters_its_declared_scene_before_measuring() {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .init_state::<crate::scene::AppState>()
+            .init_resource::<Benchmark>()
+            .init_resource::<crate::perf::Flythrough>()
             .init_resource::<PerfToggles>()
             .init_resource::<crate::visuals::terrain_material::TerrainDebugState>()
             .init_resource::<Time<Real>>()
@@ -1103,11 +1198,18 @@ mod tests {
         ));
 
         app.update();
+        app.update();
 
+        assert_eq!(
+            *app.world()
+                .resource::<State<crate::scene::AppState>>()
+                .get(),
+            crate::scene::AppState::Scene(crate::scene::SceneId::Grass)
+        );
         let benchmark = app.world().resource::<Benchmark>();
-        let finished = benchmark.finished.as_ref().expect("rejection must finish");
-        assert_eq!(finished.aborted, Some("camera missing or ambiguous"));
-        assert!(!benchmark.is_running());
+        assert!(benchmark.pending.is_some());
+        assert!(benchmark.run.is_none());
+        assert!(benchmark.finished.is_none());
     }
 
     #[test]

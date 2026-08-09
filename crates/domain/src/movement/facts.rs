@@ -7,21 +7,14 @@ use bevy_math::{Vec2, Vec3};
 
 use crate::asset_pipeline::schema::SurfaceKind;
 
-/// Wall-contact snapshot captured by the active motor's `move_and_slide` call
-/// this frame. Read by `snap_to_ground`'s riser guard and by the wall-jump /
-/// edge-leap launch-normal fallbacks. (Grounded state comes from
-/// `GroundService`'s downward probe, not from here.)
+/// Wall contact from `move_and_slide`; grounding comes from the downward probe.
 #[derive(Component, Debug, Clone, Default)]
 pub struct BodyContact {
     pub on_wall: bool,
     pub wall_normal: Vec3,
 }
 
-/// Published by `GroundService` (slope-filtered grounded state).
-///
-/// The three diagnostic fields decompose `grounded` so the debug HUD/logs can
-/// say *which* condition dropped it: `grounded = probe_hit && slope_ok &&
-/// ascend_dot <= GroundSensing::ascend_epsilon`.
+/// Slope-filtered grounding plus the facts that explain its decision.
 #[derive(Component, Debug, Clone, Default)]
 pub struct GroundFacts {
     pub grounded: bool,
@@ -40,12 +33,7 @@ pub struct GroundFacts {
     pub surface: SurfaceKind,
 }
 
-/// Published by `LedgeService` — wall/ledge sensor state (`can_climb`,
-/// `can_continue_climb`, wall normals, mantle/vault targets).
-///
-/// Positional facts are `Option<Vec3>`, not a `Vec3::ZERO` sentinel: `None`
-/// can't be confused with a legitimate point at the origin, and consumers are
-/// forced to handle the missing case.
+/// Wall/ledge sensor state. Optional positions distinguish absence from origin.
 #[derive(Component, Debug, Clone, Default)]
 pub struct LedgeFacts {
     pub can_climb: bool,

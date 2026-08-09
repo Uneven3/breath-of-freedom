@@ -23,8 +23,6 @@ const BENCH_ENV: &str = "BOF_BENCH";
 /// grilla, los assets terminan de cargar y el player cae al suelo. Pedir la
 /// corrida en el primer frame mediría esa carga. Dos segundos alcanzan porque
 /// el precalentamiento de la propia secuencia hace el resto.
-const SETTLE_SECS: f32 = 2.0;
-
 /// En qué punto del ritual está la corrida automática.
 #[derive(Default, PartialEq, Eq, Debug, Clone, Copy)]
 enum Stage {
@@ -114,7 +112,7 @@ pub fn drive_auto_bench(
         }
         Stage::Settling => {
             auto.elapsed += time.delta_secs();
-            if auto.elapsed >= SETTLE_SECS {
+            if auto.elapsed >= super::sequence::SCENE_SETTLE_SECS {
                 requests.write(BenchmarkRequest::new(auto.suite, VantageMode::Canonical));
                 auto.stage = Stage::Running;
             }
@@ -161,6 +159,7 @@ mod tests {
                 elapsed: 0.0,
             })
             .insert_resource(Benchmark {
+                pending: None,
                 run: None,
                 finished: Some(finished),
             })

@@ -1,13 +1,6 @@
-//! **La brizna pertenece al mundo**, no al nivel que la dibuja.
-//!
-//! El suelo se reparte en baldosas fijas del mundo; cada baldosa tiene una
-//! secuencia determinista de briznas, y la brizna `j` de una baldosa está
-//! siempre en el mismo lugar y con la misma altura, la dibuje quien la dibuje.
-//! Su alcance sale del **índice** y no de un hash: las de índice bajo se ven de
-//! lejos, y acercarse sólo agrega las de índice alto sin mover ninguna anterior.
-//!
-//! La decisión, el intento que falló antes y por qué el hash era el error:
-//! `BOTWGrass.md`.
+//! **La brizna pertenece al mundo**, no al nivel que la dibuja. Cada baldosa
+//! tiene una secuencia determinista: las de índice bajo llegan más lejos y
+//! acercarse sólo agrega índices altos. Decisión completa en `BOTWGrass.md`.
 
 use bevy::prelude::*;
 

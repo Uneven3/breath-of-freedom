@@ -40,11 +40,6 @@ impl Terrain {
 
     // ---- brushes: the vocabulary the sculpt tool draws with ----------------
 
-    /// Raise (or lower, with negative `delta`) the grid around `center`, with a
-    /// smooth falloff to `radius`.
-    ///
-    /// The stroke relaxes itself as it lifts (see [`RELAX_PER_METRE`]) — without
-    /// that, holding the button builds a tent with a sharp apex instead of a
     pub fn to_ron(&self) -> Result<String, String> {
         let config = ron::ser::PrettyConfig::default().compact_arrays(true);
         ron::ser::to_string_pretty(

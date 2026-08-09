@@ -124,12 +124,17 @@ impl RingRecords {
     /// hace falta.
     pub fn write(&mut self, slot: u32, records: &[[f32; 4]]) {
         let stride = self.stride as usize;
+        assert_eq!(
+            records.len(),
+            stride,
+            "a grass chunk must fill exactly one fixed-stride record slot"
+        );
         let needed = (slot as usize + 1) * stride * RECORD_BYTES;
         if self.data.len() < needed {
             self.data.resize(needed, 0);
         }
         let start = slot as usize * stride * RECORD_BYTES;
-        for (index, record) in records.iter().take(stride).enumerate() {
+        for (index, record) in records.iter().enumerate() {
             let at = start + index * RECORD_BYTES;
             for (lane, value) in record.iter().enumerate() {
                 self.data[at + lane * 4..at + lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
@@ -183,7 +188,7 @@ pub(super) const VERTICES_PER_BLADE: u32 = 4;
 /// su casillero, o sea **ceros**, y desaparecía. Cuál nivel caía dependía del
 /// orden de asignación, así que dos corridas idénticas daban campos distintos.
 /// Un atributo viaja con el vértice y no sabe nada de dónde vive la malla.
-pub(super) fn ring_index_mesh(blades: u32, triangles_per_blade: u32) -> Mesh {
+pub(super) fn ring_index_mesh(blades: u32, triangles_per_blade: usize) -> Mesh {
     let vertices = blades as usize * VERTICES_PER_BLADE as usize;
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -301,11 +306,21 @@ mod tests {
         );
     }
 
-    /// La malla índice tiene un triángulo por púa y dos por hoja, y sus índices
-    /// nunca salen del rango de vértices que declara.
+    #[test]
+    #[should_panic(expected = "must fill exactly one fixed-stride record slot")]
+    fn a_partial_write_cannot_leave_a_stale_slot_tail() {
+        let mut ring = RingRecords {
+            stride: 2,
+            ..RingRecords::default()
+        };
+        ring.write(0, &[[1.0, 2.0, 3.0, 4.0]]);
+    }
+
+    /// La malla soporta ambos layouts y sus índices nunca salen del rango de
+    /// vértices declarado; producción envía siempre dos triángulos por brizna.
     #[test]
     fn the_index_mesh_indexes_only_vertices_it_has() {
-        for (triangles_per_blade, triangles) in [(1_u32, 1_usize), (2, 2)] {
+        for (triangles_per_blade, triangles) in [(1_usize, 1_usize), (2, 2)] {
             let mesh = ring_index_mesh(5, triangles_per_blade);
             let vertices = u32::try_from(mesh.count_vertices()).expect("malla chica de test");
             assert_eq!(vertices, 5 * VERTICES_PER_BLADE);

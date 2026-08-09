@@ -70,8 +70,8 @@ mandar cuando se adapte al target — no antes.
 
 ## Estado actual (2026-08-07)
 
-`src/visuals/grass.rs` + `grass_records.rs` + `assets/shaders/grass.wgsl`, 132
-tests. Grilla rodante de cuatro niveles centrada en la **cámara** (nunca en el
+`src/visuals/grass.rs` + `grass_records.rs` + `assets/shaders/grass.wgsl`, con
+tests de contrato. Grilla rodante de tres niveles centrada en la **cámara** (nunca en el
 player: el LOD responde a lo que la pantalla muestra). Desde el Paso 2 **ninguna
 brizna es geometría**: cada una es un registro de 16 bytes y el vertex shader la
 construye.
@@ -752,9 +752,8 @@ que la ley `1/d` ralea otras briznas.
   compartido con los niveles horneados. Son 0,23 de los 0,98 MB: recortarlos
   llevaría el ahorro a ~8×.
 - El horneado inicial dio **2,31 ms por chunk de media** contra los 5,53 medidos
-  antes, pero **la comparación no es limpia**: entre medio cambió la densidad y
-  la media mezcla chunks grabados con horneados. Cuando los cuatro niveles estén
-  convertidos se vuelve a medir.
+  antes, pero la comparación quedó inválida: entre medio cambió la densidad y
+  mezcló chunks grabados con horneados. Las mediciones posteriores usan la suite.
 
 #### Y el medidor mentía sobre la memoria
 

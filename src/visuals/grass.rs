@@ -1,12 +1,4 @@
-//! La pradera: una **grilla rodante de chunks centrada en la cámara**.
-//!
-//! Presentación pura — sin collider ni sentido de simulación. Este módulo decide
-//! **qué se planta**: qué nivel, en qué celdas y con qué forma. De dónde sale
-//! cada brizna lo decide [`super::grass_tiles`] y cómo llega a la GPU,
-//! [`super::grass_records`]. El plan entero, en `docs/BOTWGrass.md`.
-//!
-//! Dos decisiones cargan el diseño: una brizna **no es una entidad** —el ECS ve
-//! una por chunk— y el campo es un **vecindario, no un lugar**.
+//! Pradera rodante de presentación: una brizna no es una entidad.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::Aabb;
@@ -23,23 +15,15 @@ use crate::visuals::grass_records::{RECORD_BYTES, RingRecords, blade_record, rin
 use crate::visuals::grass_tiles;
 use crate::world::TerrainAccess;
 
-/// One LOD ring: how far out it reaches, how big its chunks are, and how thickly
-/// it plants them.
-///
-/// `reach_m` is a Chebyshev radius. The seam that leaves between two rings is a
-/// strip up to half a chunk wide; after the terrain tint it reads as sparser
-/// grass over green ground rather than as a hole.
+/// One LOD ring. `reach_m` is a Chebyshev radius; seams read as sparse grass
+/// over the terrain tint rather than as holes.
 struct Ring {
     reach_m: f32,
     chunk_m: f32,
 }
 
-/// Cuánto mundo cubre un píxel **por metro de distancia**.
-///
-/// Es la constante que convierte metros en píxeles: a distancia `d`, un píxel
-/// mide `d · esto` metros. Sale del campo de visión vertical y de la altura del
-/// viewport, así que **el LOD sigue a la pantalla**: bajar a 900p acerca todas
-/// las fronteras un 19% sin tocar una constante.
+/// Metros cubiertos por un píxel y por metro de distancia, derivados de FOV y
+/// viewport para que el LOD siga a la pantalla.
 fn metres_per_pixel_at_one_metre(fov_y: f32, viewport_height: f32) -> f32 {
     2.0 * (fov_y * 0.5).tan() / viewport_height.max(1.0)
 }
@@ -54,11 +38,8 @@ fn width_in_pixels(width_m: f32, distance_m: f32, scale: f32) -> f32 {
 /// de antes.
 const CARDS_ENABLED: bool = false;
 
-/// Qué primitiva corresponde a esta distancia.
-///
-/// **La decisión es el tamaño en pantalla, no un radio**, y ésa es la parte que
-/// no se discute: un radio en metros describe una resolución, no un campo. Los
-/// dos umbrales sí son de ojo. El porqué, en `BOTWGrass.md`.
+/// Primitiva para esta distancia, elegida por tamaño en pantalla y no por un
+/// radio atado a una resolución. Los umbrales visuales viven en `BOTWGrass.md`.
 fn shape_at(distance_m: f32, scale: f32) -> BladeShape {
     let pixels = width_in_pixels(BLADE_WIDTH, distance_m, scale);
     if pixels >= LEAF_MIN_PIXELS {
@@ -97,13 +78,6 @@ enum BladeShape {
 }
 
 impl BladeShape {
-    const fn triangles(self) -> usize {
-        match self {
-            Self::Leaf | Self::Card => 2,
-            Self::Spike => 1,
-        }
-    }
-
     /// Cuánto suelo tapa a lo ancho una primitiva, que es lo que hace comparable
     /// la densidad de una carta con la de una brizna. La carta declara **lo que
     /// su silueta conserva** y no su ancho a secas: desde que recorta puntas no
@@ -151,6 +125,10 @@ const RINGS: [Ring; 3] = [
         chunk_m: 32.0,
     },
 ];
+
+/// Triángulos enviados por brizna. La púa degenera el segundo en el shader, pero
+/// el presupuesto cuenta primitivas enviadas igual que el censo de la malla.
+const SUBMITTED_TRIANGLES_PER_BLADE: usize = 2;
 
 /// Cuántos píxeles de ancho tiene que medir una brizna para merecer cada forma.
 ///
@@ -481,10 +459,8 @@ pub(super) struct GrassField {
 /// incógnita, no una medición.
 #[cfg(test)]
 pub(crate) fn meadow_triangles() -> usize {
-    // Not `blades * 2`: a notched tip is three triangles, and the two inner
-    // rings have one. A budget that assumed two everywhere would under-declare
-    // the meadow by a third of its near geometry — the kind of quiet error a
-    // budget exists to make loud.
+    // La malla índice reserva dos para todas las formas. Que la púa degenere uno
+    // después del vertex shader no lo borra de la geometría enviada.
     let period = RINGS
         .iter()
         .map(|ring| ring.chunk_m)
@@ -498,11 +474,10 @@ pub(crate) fn meadow_triangles() -> usize {
                 .enumerate()
                 .map(|(index, _)| {
                     let scale = reference_scale();
-                    let per_blade = shape_for_ring(index, scale, REFERENCE_REACH).triangles();
                     ring_cells(index, focus, REFERENCE_REACH).len()
                         * blades_per_chunk(index, REFERENCE_DENSITY, scale, REFERENCE_REACH)
                             as usize
-                        * per_blade
+                        * SUBMITTED_TRIANGLES_PER_BLADE
                 })
                 .sum();
             worst = worst.max(triangles);
@@ -813,7 +788,7 @@ fn grass_material() -> GrassMaterial {
 /// neighbourhood that needs blades, not the player's.
 #[expect(
     clippy::too_many_arguments,
-    reason = "baking a chunk needs the terrain, the assets, the dial and the scene"
+    reason = "rolling owns ECS entities, mesh assets, field state and terrain sampling"
 )]
 pub(super) fn roll_meadow_grid(
     mut commands: Commands,
@@ -822,32 +797,20 @@ pub(super) fn roll_meadow_grid(
     perf: Res<crate::perf::PerfToggles>,
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
-    camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
-    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
     mut dial: Local<Option<(usize, usize, usize)>>,
 ) {
     let Some(camera) = camera else {
         return;
     };
-    let (camera, projection) = *camera;
     let focus = camera.translation().xz();
     let density = perf.grass_density();
     let reach_scale = perf.grass_reach_scale();
-    // **La escalera de LOD sigue a la pantalla.** El campo de visión y la altura
-    // del viewport deciden cuántos píxeles mide una brizna a cada distancia, y de
-    // ahí sale qué primitiva le toca. Si no hay ventana todavía, la referencia:
-    // vale más hornear con la escalera del escritorio que no hornear.
-    let viewport_height = window.map_or(REFERENCE_VIEWPORT_HEIGHT, |window| {
-        window.physical_height() as f32
-    });
-    let scale = match projection {
-        Projection::Perspective(perspective) => {
-            metres_per_pixel_at_one_metre(perspective.fov, viewport_height)
-        }
-        // Sin perspectiva no hay "píxeles por metro a distancia d": una
-        // ortográfica los tiene constantes. La referencia es lo honesto.
-        Projection::Orthographic(_) | Projection::Custom(_) => reference_scale(),
-    };
+    // El layout de registros queda en la referencia: cambiarlo con cada paso del
+    // zoom invalidaba el stride sin tirar los chunks ya horneados. La forma sí
+    // sigue al viewport, pero lo hace enteramente en el shader; ver
+    // `track_meadow_focus`. Así el FOV no mezcla casilleros de dos layouts.
+    let scale = reference_scale();
 
     // Densidad, alcance y anillos cambian **cuántas briznas** tiene un chunk, y
     // de eso depende la malla índice del nivel entero. Son el único evento que
@@ -882,7 +845,8 @@ pub(super) fn roll_meadow_grid(
             // forma la decide la distancia, y con un solo triángulo indexado una
             // brizna cercana de un nivel de púas salía **media hoja**. La púa no
             // paga el segundo: sus esquinas 2 y 3 caen en la punta y degenera.
-            field.records[ring].mesh = Some(meshes.add(ring_index_mesh(blades, 2)));
+            field.records[ring].mesh =
+                Some(meshes.add(ring_index_mesh(blades, SUBMITTED_TRIANGLES_PER_BLADE)));
             field.records[ring].stride = blades;
         }
     }
@@ -1024,7 +988,7 @@ pub(super) fn roll_meadow_grid(
             let blades = live * blades_per_chunk(index, density, scale, reach_scale) as usize;
             debug!(
                 "[grass]   anillo {index}: {live} chunks, {blades} primitivas, {} tris",
-                blades * shape_for_ring(index, scale, reach_scale).triangles(),
+                blades * SUBMITTED_TRIANGLES_PER_BLADE,
             );
         }
     }
@@ -1033,13 +997,14 @@ pub(super) fn roll_meadow_grid(
 /// Tell the shader where the camera is, so the outermost blades can shrink
 /// before their chunk disappears.
 ///
-/// Dos materiales para toda la pradera significa **dos** escrituras de uniform
-/// por frame, no una por chunk. Casi el mismo valor: lo que los separa es el modo
-/// de alfa y el `record_stride`.
+/// Un material por nivel significa **tres** escrituras de uniform por frame, no
+/// una por chunk. Casi el mismo valor: lo que los separa es el modo de alfa y el
+/// `record_stride`.
 pub(super) fn track_meadow_focus(
     field: Res<GrassField>,
     mut materials: ResMut<Assets<GrassMaterial>>,
-    camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     sun: Option<Single<&GlobalTransform, With<DirectionalLight>>>,
     perf: Res<crate::perf::PerfToggles>,
     time: Res<Time>,
@@ -1049,7 +1014,18 @@ pub(super) fn track_meadow_focus(
     // cartas se construyen como hojas: el nivel lejano desaparece, y no por un
     // frame sino hasta la siguiente escritura. El caso y su síntoma, en
     // `BOTWGrass.md`.
-    let scale = reference_scale();
+    let viewport_height = window.map_or(REFERENCE_VIEWPORT_HEIGHT, |window| {
+        window.physical_height() as f32
+    });
+    let scale = camera.as_ref().map_or(reference_scale(), |camera| {
+        let (_, projection) = **camera;
+        match projection {
+            Projection::Perspective(perspective) => {
+                metres_per_pixel_at_one_metre(perspective.fov, viewport_height)
+            }
+            Projection::Orthographic(_) | Projection::Custom(_) => reference_scale(),
+        }
+    });
     let reach_scale = perf.grass_reach_scale();
     let layouts: Vec<UVec4> = (0..RINGS.len())
         .map(|ring| {
@@ -1070,14 +1046,27 @@ pub(super) fn track_meadow_focus(
             )
         })
         .collect();
-    let data = camera
-        .map(|camera| meadow_uniform(&camera, sun.as_deref().map(|sun| &**sun), &perf, &time));
+    let data = camera.as_ref().map(|camera| {
+        let (camera, _) = **camera;
+        meadow_uniform(
+            camera,
+            sun.as_deref().map(|sun| &**sun),
+            &perf,
+            &time,
+            scale,
+        )
+    });
     for (ring, handle) in field.materials.iter().enumerate() {
         if let Some(mut material) = materials.get_mut(handle) {
             if let Some(data) = &data {
                 material.extension.grass_data = GrassUniform { ..*data };
             }
             material.extension.grass_data.record_layout = layouts[ring];
+            material.base.alpha_mode = if shape_for_ring(ring, scale, reach_scale).faces_camera() {
+                AlphaMode::Mask(0.5)
+            } else {
+                AlphaMode::Opaque
+            };
         }
     }
 }
@@ -1089,23 +1078,21 @@ fn meadow_uniform(
     sun: Option<&GlobalTransform>,
     perf: &crate::perf::PerfToggles,
     time: &Time,
+    screen_scale: f32,
 ) -> GrassUniform {
     let mut uniform = grass_material().extension.grass_data;
     let data = &mut uniform;
     data.focus_xz = camera.translation().xz();
     data.growth_ramp = growth_band(perf);
-    data.spike_from_m = spike_from_m(reference_scale());
-    data.card_from_m = card_from_m(reference_scale());
+    data.spike_from_m = spike_from_m(screen_scale);
+    data.card_from_m = card_from_m(screen_scale);
     let (a, b) = ring_reaches(perf.grass_reach_scale());
     data.ring_reaches_a = a;
     data.ring_reaches_b = b;
     let (a, b) = ring_chunks();
     data.ring_chunks_a = a;
     data.ring_chunks_b = b;
-    let (a, b) = ring_cards(
-        metres_per_pixel_at_one_metre(REFERENCE_FOV_Y, REFERENCE_VIEWPORT_HEIGHT),
-        perf.grass_reach_scale(),
-    );
+    let (a, b) = ring_cards(screen_scale, perf.grass_reach_scale());
     data.ring_cards_a = a;
     data.ring_cards_b = b;
     data.card_half_width = CARD_WIDTH * 0.5;
@@ -1165,7 +1152,7 @@ pub(super) fn ring_facts(perf: &crate::perf::PerfToggles) -> Vec<RingFacts> {
             // enteras la aparta un poco de la tabla.
             density: blades_per_chunk(slot, dial, scale, reach_scale) as f32
                 / (ring.chunk_m * ring.chunk_m),
-            triangles_per_blade: shape_for_ring(slot, scale, reach_scale).triangles(),
+            triangles_per_blade: SUBMITTED_TRIANGLES_PER_BLADE,
             planted: perf.grass_only_ring().is_none_or(|only| only == slot),
         })
         .collect()

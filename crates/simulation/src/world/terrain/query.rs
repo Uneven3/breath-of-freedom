@@ -1,8 +1,6 @@
 //! Lectura del terreno: alturas, pendientes, y qué significa cada celda.
 //!
-//! Todo lo que consulta la grilla sin cambiarla. Es la mitad que consume el
-//! resto de la simulación —`TerrainAccess` la enruta— mientras que esculpir
-//! vive en [`super::sculpt`] y guardar en [`super::persist`].
+//! Consultas puras; `TerrainAccess` las enruta y mutación/persistencia viven aparte.
 
 use bevy_math::prelude::*;
 
@@ -14,14 +12,12 @@ impl Terrain {
         self.points
     }
 
-    /// How many times the height grid has changed. Only meaningful compared
-    /// against a previously observed value.
+    /// Height-grid revision, meaningful relative to an earlier observation.
     pub fn relief_revision(&self) -> u32 {
         self.relief_revision
     }
 
-    /// Cells per side — one fewer than [`Terrain::points`], since a cell is the
-    /// quad *between* four corners.
+    /// Cells per side: one fewer than the point count.
     pub fn cells(&self) -> usize {
         self.points - 1
     }
@@ -35,11 +31,7 @@ impl Terrain {
         self.kinds[row * self.cells() + col]
     }
 
-    /// What the ground is made of at an arbitrary world XZ.
-    ///
-    /// Nearest cell, never interpolated: the answer is "stone" or "sand", and
-    /// there is no blend of the two to return. Read every tick by the ground
-    /// probe, so it stays a couple of divisions and an index.
+    /// Ground kind at world XZ; semantic values use the nearest cell, never a blend.
     pub fn kind_at(&self, xz: Vec2) -> TerrainKind {
         let (row, col) = self.cell_at(xz);
         self.kind(row, col)
@@ -53,17 +45,13 @@ impl Terrain {
         (index(xz.x), index(xz.y))
     }
 
-    /// World XZ of the *centre* of cell `(row, col)` — half a cell past its
-    /// low corner, which is the point a paint brush measures its radius against.
+    /// World XZ of the centre of cell `(row, col)`.
     pub(super) fn cell_centre_xz(&self, row: usize, col: usize) -> Vec2 {
         let spacing = self.extent / self.cells() as f32;
         self.point_xz(row, col) + Vec2::splat(spacing * 0.5)
     }
 
-    /// World XZ of grid point `(row, col)`, independent of its height. The one
-    /// mapping the collider and the visual mesh must agree on, so they never
-    /// drift: parry centers the heightfield on the entity origin, spanning
-    /// `[-extent/2, extent/2]`.
+    /// World XZ mapping shared by collider and visual mesh.
     pub(super) fn point_xz(&self, row: usize, col: usize) -> Vec2 {
         grid_xz(self.points, self.extent, row * self.points + col)
     }
@@ -74,22 +62,8 @@ impl Terrain {
         Vec3::new(xz.x, self.height(row, col), xz.y)
     }
 
-    /// Ground height at an arbitrary world XZ — **on the actual surface**, not
-    /// on a smooth approximation of it.
-    ///
-    /// Anything *placed* in the world needs this the moment the ground stops
-    /// being flat: a spawn point authored as a constant `y` puts an actor
-    /// underground the first time someone sculpts a hill over it, and a
-    /// heightfield is a one-sided surface — from below it does not catch you,
-    /// so you fall forever.
-    ///
-    /// It samples the **triangle**, not a bilinear patch. Both the collider and
-    /// the visual mesh cut each cell into two flat triangles; a bilinear patch
-    /// bulges above that surface inside the quad — by half a metre on 2.5 m cells
-    /// with real relief. Lifting a body onto the bulge is how the player ended up
-    /// hovering above sculpted ground.
-    ///
-    /// **Which diagonal is not ours to choose** — see [`Terrain::to_collider`].
+    /// Height on the same triangle surface used by collider and visual mesh.
+    /// Bilinear interpolation would bulge above those triangles and lift actors.
     pub fn height_at(&self, xz: Vec2) -> f32 {
         let last = (self.points - 1) as f32;
         let fx = ((xz.x / self.extent + 0.5) * last).clamp(0.0, last);

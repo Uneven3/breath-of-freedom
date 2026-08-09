@@ -1,21 +1,8 @@
 //! Estado por actor de los motores de locomoción.
 //!
-//! Cada motor guarda unas pocas cosas entre ticks: si el salto ya soltó el
-//! botón, cuántos frames de gracia le quedan a la escalera, si el sprint quedó
-//! bloqueado por stamina. Son datos por entidad, no lógica — §19 los quiere
-//! separados del sistema que los usa.
-//!
-//! Están acá y no con su motor por una razón concreta: **las capacidades viven
-//! en [`super::abilities`], que es domain**, y una capacidad tiene que poder
-//! declarar `#[require]` sobre su bookkeeping. Con el estado del otro lado de la
-//! frontera esa declaración invertiría la dependencia, y sin ella se puede
-//! spawnear un actor con `SprintMovement` y sin `SprintLock`: el sprint no
-//! funciona y **nada avisa**, porque en ECS una query que no engancha no es un
-//! error, es silencio.
-//!
-//! Los campos son públicos porque no protegen ningún invariante: son latches y
-//! contadores que su motor escribe. La excepción es [`KinematicArc`], que sí
-//! tiene uno (`elapsed <= duration`) y por eso conserva su API.
+//! Latches and counters kept beside domain capabilities so their `#[require]`
+//! contracts cannot spawn incomplete actors. `KinematicArc` alone hides fields
+//! because it maintains `elapsed <= duration`.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;

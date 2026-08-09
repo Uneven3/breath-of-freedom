@@ -269,6 +269,9 @@ fn spawn_proxy(
                 MeshMaterial3d(parts.trunk_material.clone()),
                 Transform::from_xyz(0.0, parts.trunk_height * 0.5, 0.0),
                 FoliageMesh,
+                crate::visuals::material_registry::VisualSubject(
+                    crate::visuals::material_registry::Subject::Forest,
+                ),
             ));
             // Canopy: tagged as leaf, so it obeys the leaf-shadow and LOD knobs
             // exactly like the detailed model's foliage.
@@ -278,6 +281,9 @@ fn spawn_proxy(
                 Transform::from_xyz(0.0, parts.canopy_y, 0.0),
                 FoliageMesh,
                 FoliageLeaf,
+                crate::visuals::material_registry::VisualSubject(
+                    crate::visuals::material_registry::Subject::Forest,
+                ),
             ));
         });
     });
@@ -397,6 +403,32 @@ pub(super) fn apply_forest_perf(
 mod tests {
     use super::*;
 
+    fn proxy_parts() -> ProxyParts {
+        ProxyParts {
+            trunk_mesh: default(),
+            trunk_material: default(),
+            trunk_height: 2.0,
+            canopy_mesh: default(),
+            canopy_material: default(),
+            canopy_y: 2.5,
+        }
+    }
+
+    fn spawn_one_proxy(
+        mut commands: Commands,
+        proxies: Res<TreeProxyAssets>,
+        catalog: Res<VisualCatalog>,
+    ) {
+        let owner = commands.spawn_empty().id();
+        spawn_proxy(
+            &mut commands,
+            owner,
+            AppearanceKey::COMMON_TREE_1,
+            &proxies,
+            &catalog,
+        );
+    }
+
     #[test]
     fn every_tree_kind_has_a_registered_recipe() {
         let catalog = VisualCatalog::default();
@@ -421,5 +453,31 @@ mod tests {
         for kind in kinds {
             assert!(catalog.recipe(appearance_for(kind)).is_some());
         }
+    }
+
+    #[test]
+    fn both_proxy_meshes_are_attributed_to_the_forest() {
+        let mut app = App::new();
+        app.insert_resource(TreeProxyAssets {
+            rounded: proxy_parts(),
+            conical: proxy_parts(),
+            gnarled: proxy_parts(),
+        })
+        .insert_resource(VisualCatalog::default())
+        .add_systems(Update, spawn_one_proxy);
+
+        app.update();
+
+        let world = app.world_mut();
+        let mut subjects = world.query::<&crate::visuals::material_registry::VisualSubject>();
+        assert_eq!(
+            subjects
+                .iter(world)
+                .filter(|subject| {
+                    subject.0 == crate::visuals::material_registry::Subject::Forest
+                })
+                .count(),
+            2
+        );
     }
 }

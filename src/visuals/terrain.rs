@@ -1,9 +1,5 @@
-//! The terrain visual: a flat-shaded low-poly mesh generated from the world's
-//! height grid ([`crate::world::Terrain`]).
-//!
-//! Presentation only — the mesh is rebuilt whenever the grid changes (including
-//! the frame it first appears), so future sculpting shows up live. Each triangle
-//! owns its vertices and a single face normal, for the faceted look.
+//! Flat-shaded presentation mesh generated from [`crate::world::Terrain`]. It
+//! refreshes with the grid and gives every triangle one face normal.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;

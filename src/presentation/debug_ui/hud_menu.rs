@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use crate::debug::channel::HudSectionToggle;
 use crate::debug::snapshot::{HudVisibility, SectionId};
 use crate::input::ModalInputFocusRequest;
+use crate::perf::{Benchmark, Flythrough};
 
 use super::style::{
     BORDER, PANEL, ROW, TEXT_BRIGHT, TEXT_MUTED, body_font, heading_font, row_node, section_title,
@@ -128,10 +129,16 @@ pub(super) fn spawn_hud_menu(mut commands: Commands) {
 /// The one key. Everything else inside is a click.
 pub(super) fn toggle_hud_menu(
     keys: Res<ButtonInput<KeyCode>>,
+    benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
     mut state: ResMut<HudMenuState>,
     root: Single<Entity, With<HudMenuRoot>>,
     mut focus: MessageWriter<ModalInputFocusRequest>,
 ) {
+    if benchmark.is_running() || flythrough.is_running() {
+        set_open(&mut state, false, *root, &mut focus);
+        return;
+    }
     if !keys.just_pressed(KeyCode::F2) {
         return;
     }

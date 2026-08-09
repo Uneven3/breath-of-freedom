@@ -42,10 +42,13 @@ type VitalsReport<'a> = (
 );
 
 pub(super) fn collect_vitals(
-    player: Single<VitalsReport, With<Player>>,
+    player: Query<VitalsReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (stamina, hp, inventory, weapon) = *player;
+    let Ok((stamina, hp, inventory, weapon)) = player.single() else {
+        snapshot.clear(SectionId::Vitals);
+        return;
+    };
     let weapon_status = match weapon {
         Some(durability) => format!(
             "{} {}/{}",
@@ -91,10 +94,13 @@ type LocomotionReport<'a> = (
 );
 
 pub(super) fn collect_locomotion(
-    player: Single<LocomotionReport, With<Player>>,
+    player: Query<LocomotionReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (state, vel, ground, facing, intents, enabled) = *player;
+    let Ok((state, vel, ground, facing, intents, enabled)) = player.single() else {
+        snapshot.clear(SectionId::Locomotion);
+        return;
+    };
     if !enabled {
         snapshot.set(SectionId::Locomotion, vec![Field::new("status", "paused")]);
         return;
@@ -135,10 +141,13 @@ type ContactReport<'a> = (
 );
 
 pub(super) fn collect_contact(
-    player: Single<ContactReport, With<Player>>,
+    player: Query<ContactReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (contact, stairs, ladder, ledge) = *player;
+    let Ok((contact, stairs, ladder, ledge)) = player.single() else {
+        snapshot.clear(SectionId::Contact);
+        return;
+    };
     let n = ledge.climb_normal.unwrap_or(Vec3::ZERO);
     snapshot.set(
         SectionId::Contact,
@@ -163,10 +172,13 @@ pub(super) fn collect_contact(
 type CombatReport<'a> = (&'a CombatState, &'a DrawStrength);
 
 pub(super) fn collect_combat(
-    player: Single<CombatReport, With<Player>>,
+    player: Query<CombatReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (combat, draw) = *player;
+    let Ok((combat, draw)) = player.single() else {
+        snapshot.clear(SectionId::Combat);
+        return;
+    };
     snapshot.set(
         SectionId::Combat,
         vec![
@@ -265,6 +277,10 @@ pub(super) fn collect_scene(
     // The diagnostic replaces StandardMaterial handles, so its temporary
     // render representation is not a valid production budget sample.
     if perf.overdraw || diagnostic.overdraw_material_override {
+        if *inventory != SceneInventory::default() {
+            *inventory = SceneInventory::default();
+        }
+        snapshot.clear(SectionId::Scene);
         return;
     }
     // **Triángulos y mallas visibles se cuentan acá y sólo acá**: un `Mesh3d` lo
@@ -442,7 +458,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{Vec3, World};
 
-    use super::{DebugSnapshot, SectionId, collect_locomotion, format_clock, kilo};
+    use super::{DebugSnapshot, Field, SectionId, collect_locomotion, format_clock, kilo};
     use bof_domain::movement::BodyVelocity;
     use bof_domain::movement::Player;
     use bof_domain::movement::facing::FacingSource;
@@ -488,6 +504,26 @@ mod tests {
                 .line(SectionId::Locomotion)
                 .as_deref(),
             Some("locomotion: status=paused")
+        );
+    }
+
+    #[test]
+    fn absent_player_clears_the_previous_locomotion_report() {
+        let mut world = World::new();
+        let mut snapshot = DebugSnapshot::default();
+        snapshot.set(
+            SectionId::Locomotion,
+            vec![Field::new("state", "stale walk")],
+        );
+        world.insert_resource(snapshot);
+
+        world.run_system_once(collect_locomotion).unwrap();
+
+        assert!(
+            world
+                .resource::<DebugSnapshot>()
+                .get(SectionId::Locomotion)
+                .is_none()
         );
     }
 }

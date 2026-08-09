@@ -180,7 +180,7 @@ impl BenchSuite {
     ///
     /// Una por suite y no una global, porque el mirador del bosque no sirve
     /// para medir pasto: desde ahí la pradera es un cuarto de la pantalla y
-    /// cualquier delta suyo queda enterrado. Ver [`VANTAGES`].
+    /// cualquier delta suyo queda enterrado. Ver la sección `VANTAGES`.
     pub const fn vantage(self) -> (Vec3, Vec3) {
         match self {
             BenchSuite::General | BenchSuite::Shadows => (FOREST_VANTAGE, FOREST_FACING),

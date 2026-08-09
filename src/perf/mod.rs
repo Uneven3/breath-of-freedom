@@ -167,10 +167,11 @@ fn apply_knob_requests(
     mut requests: MessageReader<PerfKnobToggle>,
     mut toggles: ResMut<PerfToggles>,
     benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
 ) {
     for request in requests.read() {
-        if benchmark.is_running() {
-            warn!("[perf] ignoring knob change while the benchmark runs");
+        if benchmark.is_running() || flythrough.is_running() {
+            warn!("[perf] ignoring knob change while a measurement runs");
             continue;
         }
         toggles.set_selected(request.0);

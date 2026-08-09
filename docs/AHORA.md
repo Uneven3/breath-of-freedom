@@ -1,14 +1,8 @@
 # Ahora — el trabajo presente
 
-Conversación de trabajo entre sesiones y agentes. Presupuesto: **≤500
-líneas**; lo cerrado se borra (queda en git), no se acumula. Léelo antes de
-continuar; actualízalo tras cada decisión aceptada, checkpoint jugado o
-cambio de foco. Reglas en `ARCHITECTURE.md`, visión en `NORTE.md`. Los sistemas
-visuales tienen un doc por tema: `TEXTURES.md`, `BOTWGrass.md`,
-`GraphicalTechniques.md`, `BOTWMovements.md`, `CHARACTER_ANIMATION_IK.md`.
-El plan que llevó a los tres crates cerró el 2026-08-04 y su documento se
-borró: lo vivo quedó en `ARCHITECTURE.md` (las capas y qué cobra cada frontera)
-y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
+Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
+`ARCHITECTURE.md`, visión en `NORTE.md`; visuales en `TEXTURES.md`, `BOTWGrass.md`,
+`GraphicalTechniques.md`, `BOTWMovements.md` y `CHARACTER_ANIMATION_IK.md`.
 
 ## Cómo trabajar en este repo
 
@@ -107,14 +101,10 @@ levanta el juego completo sin ventana ni GPU.
 **Pradera** (ver `BOTWGrass.md`): grilla rodante de **tres niveles, uno por forma
 de brizna**, centrada en la cámara; desde el Paso 2 ninguna brizna es geometría
 —cada una es un registro de 16 bytes que el vertex shader levanta— y desde el
-Paso 3 su posición sale del mundo y no del nivel. Nació reemplazando un intento cuya
-documentación afirmaba "0.0 ms CPU" y "60 FPS estables" el mismo día en que el
-medidor marcaba 35-46. **Regla que sale de ahí: ningún número entra sin salir del
-medidor.**
-
-Auditorías: arquitectura (2026-07-17, 4/4 corregidos), calidad (2026-07-24) y
-código (`AUDITORIA_CODIGO_2026-07-25.md`); de esta última siguen abiertas **C1**
-(`Vec<Vec<f32>>` por tick esculpido) y **C2** — ambas en Deudas anotadas.
+Paso 3 su posición sale del mundo y no del nivel. Checkpoint tras la auditoría
+del 2026-08-09: *"se ve bien en general"*. Reemplazó un intento que afirmaba
+"0.0 ms CPU" y "60 FPS estables" mientras medía 35-46. **Regla: ningún número
+entra sin salir del medidor.**
 
 ## Escenas: cajas de prueba + mundo
 
@@ -207,16 +197,6 @@ de una celda.
 Validado jugando (2026-07-26): pintado, `surface=Dirt→Stone→Dirt` bajo los pies,
 undo, y guardado en disco. **Falta** la relectura en vivo (F10 → menú → volver).
 
-### Lección de la diagonal de la celda (2026-07-26, arreglado)
-
-`parry3d` triangula el heightfield por la **anti-diagonal** y nuestra malla usaba
-la principal: **0,33 m** de desvío en el peor punto, invisible en piso plano y
-por eso sobrevivió. Lo que se queda es **por qué la suite no lo agarró**:
-comparaba 6 puntos a mano y **nadie enfrentaba la malla que se ve contra la
-superficie que se camina**. Ahora se barren 3600 muestras con paso de 2,51 m
-contra celdas de 2,5 m, comparando **centroides** — en los vértices las dos
-triangulaciones coinciden por construcción.
-
 ### Lecciones del relieve que siguen aplicando
 
 - **Resolución 128 celdas (2,5 m/vértice).** Con 64 el pincel cubría 1-2
@@ -280,76 +260,19 @@ simulación hoy son dos formas activas, no tres.
 
 ## La suite de medición (2026-08-06)
 
-**Correr un barrido ya no requiere jugar.** `BOF_BENCH=<suite> cargo run` entra
-a la caja de la suite, se para en su mirador, mide, escribe la tabla y cierra.
-Tres suites en `perf/suite.rs` como **dato**: `grass`, `general`, `shadows`;
-agregar una es una variante y una tabla, el motor no se toca. Los porqués están
-en los doc-comments de `suite.rs` y `auto.rs`.
-
-Reglas que los tests cobran sobre toda suite: empieza y termina en el baseline
-(la diferencia es la deriva), cada paso mueve **un** eje, y el baseline es la
-configuración que se envía.
-
-**Tres trampas de esta máquina, encontradas corriendo:**
-
-- **Cerrar Blender (o cualquier cosa que use la GPU) antes de medir.** Con él
-  abierto, tres corridas iguales dieron el pasto entre 2,36 y 3,77 ms con derivas
-  internas de 0,2: lo externo no aparece en la tabla.
-- **La ventana tiene que estar visible.** En Wayland nativo el compositor no
-  manda frame callbacks a una superficie oculta y el juego entero se duerme —
-  1,9 s de CPU en 105 de reloj, sin medir nada. Para correr en segundo plano:
-  `WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= BOF_BENCH=grass cargo run`. **Sólo
-  para medir**; el juego se juega en Wayland nativo.
-- **El frame suele quedar clavado por la presentación** mientras la GPU varía.
-  El reporte lo detecta y avisa que hay que leer `d-gpu`.
-
-**El reporte declara qué hay en cuadro (2026-08-07).** Cada corrida abre con el
-reparto por sistema y avisa cuando el tema que la suite dice medir cae por debajo
-del 10%. Un mirador es una afirmación, y hasta entonces ninguna corrida podía
-desmentirla. **Lo primero que dijo:** ocultar el bosque valía 0,34 ms no por mal
-mirador, sino porque desde ahí el bosque es el **0% de los triángulos** y la
-pradera el **92%**. Medir el bosque pide su propia caja.
-
-**Ruido de Bevy, no nuestro:** cada corrida imprime ~270 líneas
-`bevy_render::slab_allocator: Use-after-free`, al despawnear muchas mallas de
-golpe. No rompe la corrida ni los números; ensucia el log y no está investigado.
-
-## Crates: cerrado (2026-08-04), y lo que quedó vivo de ahí
-
-Las ocho fases están en `git log -- docs/CRATES.md` y las leyes en
-`ARCHITECTURE.md`. Lo que sigue informando decisiones y no se deduce del código:
-`input` no cruzó a simulación —dejándolo afuera, simulación **no puede** leer
-teclado en vez de acordarse de no hacerlo—, `layout`/`spawn` tampoco (son
-composición), el reloj sí cruzó y la luz no (§20); los newtypes de unidades se
-midieron y se descartaron, y `bof_presentation` no se creó a propósito. **Al leer
-un log, ojo:** una escena sin heightmap arranca plana **y en silencio**.
-
-Siguiente en esa línea: instancias discretas, cerrar el ciclo semántico, y jugar
-graybox sobre relieve + tipografía.
+`BOF_BENCH=<suite> cargo run` entra a la escena, espera, mide y cierra. Las suites
+en `perf/suite.rs` exigen baseline al inicio/final y un eje por paso;
+rechazan escena o inventario ajenos. Cerrar consumidores de GPU y mantener la
+ventana visible: Wayland duerme superficies ocultas. Con presentación fija,
+leer `d-gpu`.
 
 ## Rendimiento: lo que sigue informando decisiones
 
-**Y desde el 2026-08-07 va después del feeling** (`NORTE.md`): el profiler y la
-adaptación al target se construyen cuando la imagen esté lograda. El peor punto
-del bosque pasó de ~72 ms a nunca bajar de 60 (2026-07-21); el detalle está en
-git y quedaron los principios:
-
-- **El graybox tiene que ser honesto sobre el costo.** Los árboles Quaternius
-  fingían ser baratos; se reemplazaron por proxies procedurales instanciados.
-- **El costo es propiedad de la representación, no de la identidad.** `TreeKind`
-  resuelve a dos tiers en `VisualCatalog`; impostores e instancing se enchufan
-  ahí sin tocar simulación.
-- **Ceguera medida:** el total `gpu:` suma solo spans registrados y los pases de
-  sombra usan `info_span!`. "El gpu medido no cambió" **no** implica "no es GPU".
-  Lo que zanjó la duda fue *quitar la escena*.
-- **El medidor dice *cuándo* una técnica vale la pena**; aplicarlas todas siempre
-  es cargo-culting y frena al dev, no al juego.
-- Último perfil móvil medido: **37,3k tris, 62 batches~, 53 mats → "medio", por
-  materiales.** De ahí sale la ley 1 de `TEXTURES.md`.
-- **Fill antes que geometría (2026-08-06, medido en las tres suites).** En la
-  caja Pasto bajar la resolución a la mitad ahorra más GPU que apagar la pradera
-  entera: el frame se va en píxeles pintados, no en vértices transformados. Vale
-  para elegir en qué orden atacar cualquier sistema visual nuevo.
+El feeling precede a la adaptación al target (`NORTE.md`). El graybox debe ser
+honesto sobre el costo y `VisualCatalog` mantiene ese costo en la representación,
+no en la identidad. Los tiempos GPU sólo suman spans instrumentados: ausencia en
+la tabla exige A/B, no una conclusión. En las tres suites el frame resultó
+fill-bound; bajar resolución ahorró más GPU que apagar la pradera.
 
 ### Presupuesto de polígonos como contrato (2026-07-25)
 
@@ -399,22 +322,11 @@ es experimental vía meshlets, y la Polaris 11 del dev no los soporta.
 
 ## Pipeline authored de assets
 
-El contrato permanente Blender→GLB→Bevy vive en `ASSET_PIPELINE.md`; el de
-texturas en `TEXTURES.md`. Scanner estricto limitado a `assets/game/authored/`,
-manifiesto build-time como única autoridad espacial, carga visual con fallback y
-swap atómico.
-
-Primera vertical: `tree_pine_a`, arte propio low-poly con LOD0/1/2, `UCY_Trunk`,
-tags y socket. Falta el checkpoint jugado antes de retirar Quaternius `Pine_1`.
-
-**Contrato futuro de animación:** `schema.rs::PLAYER_CLIP_CONTRACT` y `build.rs`
-rechazan un GLB authored incompleto, pero no hay rig runtime mientras el player
-sea la cápsula graybox. Blending e IK viven en sus docs de dominio.
-
-**Facing unificado**: `FacingSource { Free, Look, LockOn(Entity) }` con
-`resolve_facing` como dueño único tras `TickActiveMotor`, así los motores no
-pelean por rotar el cuerpo. Encima: lock-on, intención facing-relativa con
-`StrafeDir` (circle-strafe real), y arco que auto-apunta al objetivo lockeado.
+El contrato Blender→GLB→Bevy vive en `ASSET_PIPELINE.md`; texturas en
+`TEXTURES.md`. El scanner authored genera la autoridad espacial build-time y la
+carga hace fallback/swap atómico. `tree_pine_a` espera checkpoint antes de
+retirar `Pine_1`. El contrato de clips ya rechaza GLB incompletos, pero el rig
+runtime espera un personaje propio; blending e IK viven en sus docs de dominio.
 
 ### Colisiones e hitboxes para assets finales (decisión 2026-07-19)
 
@@ -448,7 +360,7 @@ queda más legible.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
-- **`perf/shot.rs` va por 780 líneas** (§16). Hace tres cosas: la máquina de la
+- **`perf/shot.rs` va por 983 líneas** (§16). Hace tres cosas: la máquina de la
   captura, la leyenda que se escribe al lado, y el barrido de perillas. El corte
   natural es sacar el barrido, que ya casi no toca a las otras dos.
 - **Paleta/IDs Rust↔WGSL sin unificar, y `terrain_material.rs` sin dividir**
@@ -459,7 +371,7 @@ queda más legible.
 - **C1 — allocation en `FixedUpdate`:** `rebuild_terrain_collider` arma un
   `Vec<Vec<f32>>` que Avian vuelve a aplanar, ~130 allocations por tick
   esculpido. La vía barata exige `parry` como dep directa.
-- **C2 — hardware leído fuera de `input`,** en **13 archivos** (eran 15). El
+- **C2 — hardware leído fuera de `input`,** en **12 archivos** (eran 15). El
   test impide que la lista crezca; falta el dueño único que traduzca bindings a
   acciones tipadas.
 - **113 pares de sistemas ambiguos en `FixedUpdate`**, auditados uno por uno y

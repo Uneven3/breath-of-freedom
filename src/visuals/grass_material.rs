@@ -1,7 +1,5 @@
-//! Custom WGSL Material Extension for BOTW Grass rendering pipeline.
-//!
-//! Provides the uniform data structure (`GrassUniform`) and registers
-//! `ExtendedMaterial<StandardMaterial, GrassExtension>` with Bevy's PBR pipeline.
+//! Grass uniforms and the PBR `ExtendedMaterial<StandardMaterial,
+//! GrassExtension>` registration.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;

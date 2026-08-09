@@ -472,6 +472,8 @@ fn collect_source_layers(sources: &[Handle<Image>], images: &Assets<Image>) -> O
 
 fn apply_debug_view_requests(
     mut requests: MessageReader<TerrainDebugViewRequest>,
+    benchmark: Res<crate::perf::Benchmark>,
+    flythrough: Res<crate::perf::Flythrough>,
     mut state: ResMut<TerrainDebugState>,
     terrain: Option<Res<TerrainMaterialAssets>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
@@ -479,6 +481,10 @@ fn apply_debug_view_requests(
     let Some(view) = requests.read().last().map(|request| request.0) else {
         return;
     };
+    if benchmark.is_running() || flythrough.is_running() {
+        warn!("[terrain] ignoring diagnostic view change while a measurement runs");
+        return;
+    }
     state.view = view;
     let Some(terrain) = terrain else {
         return;

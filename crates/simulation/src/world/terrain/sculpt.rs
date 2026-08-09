@@ -15,6 +15,8 @@ use super::{
 use crate::world::terrain_kind::TerrainKind;
 
 impl Terrain {
+    /// Raise or lower the grid with smooth falloff, relaxing it as it moves so a
+    /// held stroke grows a rounded dome rather than integrating into a tent.
     pub fn raise_area(&mut self, center: Vec2, radius: f32, delta: f32) {
         self.brush(center, radius, |_grid, _idx, falloff| delta * falloff);
         let relax = (delta.abs() * RELAX_PER_METRE).min(MAX_RELAX_PER_STEP);

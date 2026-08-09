@@ -6,7 +6,7 @@
 //!
 //! - [`player`] — the player's collision-matched capsule, bow, interpolation.
 //! - [`enemy`] — enemy capsules + awareness tint.
-//! - [`grass`] — the decorative meadow: authored tufts swaying in a wind field.
+//! - [`grass`] — the procedural meadow: GPU records swaying in a wind field.
 //! - [`horse`] — horse graybox capsule.
 //! - [`probe`] — the TraversalProbe dummy's capsule.
 //! - [`vfx`] — transient effects (swing arc placeholder).
@@ -41,7 +41,7 @@ pub use catalog::{AppearanceBinding, AppearanceKey, TreeSilhouette, VisualCatalo
 pub use player::PlayerVisual;
 
 /// Exponential decay rate for visual smoothing, fed to
-/// [`StableInterpolate::smooth_nudge`](bevy::math::StableInterpolate::smooth_nudge).
+/// [`StableInterpolate::smooth_nudge`].
 ///
 /// It is a *rate*, not a per-frame fraction. The previous form —
 /// `(RATE * dt).clamp(0.0, 1.0)` as a lerp factor — was frame-rate dependent

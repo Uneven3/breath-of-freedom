@@ -239,9 +239,8 @@ const STAIRS: &[StairRow] = &[
     },
 ];
 
-/// The sky every walkable scene needs: sun, moon discs and ambient light. Split
-/// from [`setup_graybox`] so the editor scene can have light to read shapes by
-/// without inheriting a forest.
+/// The sky every walkable scene needs: sun, moon discs and ambient light. Kept
+/// separate from graybox content so the editor gets light without a forest.
 pub(super) fn setup_sky(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

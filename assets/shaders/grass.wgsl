@@ -822,7 +822,7 @@ fn fragment(
     // Una rampa continua se mira; una banda se **cuenta**. La pregunta que esta
     // vista existe para contestar —a qué distancia una brizna deja de resolverse—
     // se contestaba comparando colores a ojo, que es justo lo que esta sesión
-    // vino a sacar del medio. Con tres bandas exactas, `shot_stats.py` dice qué
+    // vino a sacar del medio. Con tres bandas exactas, `perf::shot_stats` dice qué
     // fracción del pasto está por debajo de un píxel.
     if grass_data.debug_view == DEBUG_SUBPIXEL {
         // El ancho es el de **esta** primitiva, no el de una brizna. Una carta

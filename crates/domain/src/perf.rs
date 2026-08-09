@@ -63,56 +63,16 @@ pub const SHADOW_MAP_STEPS: [usize; 3] = [2048, 1024, 512];
 /// Meadow density in blades per m². Index 0 is what the field ships at, so a
 /// fresh launch measures the real game.
 ///
-/// This is half of the pair that separates *fill-bound* from *vertex-bound*
-/// (`BOTWGrass.md` → Presupuesto): if GPU time tracks this dial, the meadow is
-/// paying for the pixels it covers, and density is the cheapest lever in the
-/// system. It lives here rather than in `visuals::grass` because a dial outside
-/// [`PerfKnob`] cannot enter the A/B matrix — no warmup, no settle window, no
-/// parked camera, no drift check — and what it produces is an impression, not a
-/// measurement.
-///
-/// El último paso es **cero**, y existe por una pregunta que el barrido no podía
-/// contestar: cuánto cuesta la pradera *entera*. Con el paso más ralo en 10/m²
-/// lo más que se sabía era la pendiente de la curva, y extrapolar a cero es una
-/// estimación, no una medición. Un paso en cero la convierte en resta.
-///
-/// **Diez pasos desde el 2026-08-07, y por una razón concreta.** Los cinco que
-/// había —40, 64, 30, 12, 0— dan cuatro puntos útiles, no monótonos y con nada
-/// por encima de 1,6×. El Paso 0 de `BOTWGrass.md` necesita **la curva** de
-/// cobertura contra densidad, porque el modelo `C/d` está mal en la forma (a
-/// 90/m² predice 95% y la imagen da 81%) y con cuatro puntos no se distingue una
-/// curva de otra. Diez porque divide a 420, el período con que el test del hub
-/// cierra la vuelta de todas las perillas.
-///
-/// El índice 0 sigue siendo 40: es [`crate::perf::GRASS_DENSITY_STEPS`]`[0]` lo
-/// que la pradera toma como referencia, así que moverlo cambiaría el campo que
-/// el juego envía en vez de barrerlo. Y los cuatro valores viejos —64, 30, 12 y
-/// 0— siguen **en la tabla** aunque cambien de índice: la matriz de benchmark
-/// mide esos pasos por nombre, y reemplazarlos por vecinos redondos volvería
-/// incomparables las corridas anteriores por nada.
+/// Diez puntos permiten medir la curva; cero mide el costo total sin extrapolar.
+/// Los valores históricos 64, 30, 12 y 0 se conservan para comparar corridas.
 pub const GRASS_DENSITY_STEPS: [f32; 10] =
     [40.0, 80.0, 64.0, 52.0, 44.0, 30.0, 20.0, 12.0, 6.0, 0.0];
 
 /// Qué anillos de la pradera se plantan: todos, o uno solo.
 ///
-/// **Existe para repartir el solapamiento.** La vista `medir` cuenta los píxeles
-/// que cada anillo *gana* en el test de profundidad, y eso no contesta la
-/// pregunta que el Paso 0 tiene que contestar: cuánta cobertura **aporta** un
-/// anillo, o sea cuánto se perdería sin él. Un píxel que el anillo 0 gana puede
-/// tener al anillo 1 justo detrás, y entonces quitarlo no descubre nada.
-///
-/// Con un anillo solo por corrida se mide `C_k` por banda, y de ahí sale si los
-/// niveles se pisan como sucesos independientes —`C = 1 − Π(1 − C_k)`— que es la
-/// forma que el modelo de Poisson predice. Verificar esa predicción es la mitad
-/// del Paso 0: si se cumple, el costo de quitar cualquier subconjunto de niveles
-/// se calcula en vez de medirse.
-///
-/// Índice 0 = todos, e índice `k+1` = sólo el anillo `k`. Pedir un anillo que no
-/// existe deja el campo vacío, que es visible y no silencioso.
-/// **Tiene que tener un paso por nivel más el "todos", y un test lo cobra.** Con
-/// uno de más, la perilla ofrece un nivel que no existe y el campo se va entero:
-/// pasó el 2026-08-08 al bajar de cuatro niveles a tres, y lo encontró el usuario
-/// jugando —*"todavía hay 4 rings"*— porque la herramienta no avisa, sólo miente.
+/// Aísla la cobertura aportada por cada nivel, no solo quién gana el depth test.
+/// Índice 0 = todos e índice `k+1` = solo el anillo `k`; un test ata el largo al
+/// número de niveles para que la herramienta no ofrezca anillos inexistentes.
 pub const GRASS_RINGS_STEPS: [&str; 4] = ["todos", "solo 0", "solo 1", "solo 2"];
 
 /// Cuántos metros tarda **una** brizna en encogerse hasta desaparecer al llegar
@@ -367,8 +327,8 @@ pub struct PerfToggles {
     /// Indexes [`GRASS_RINGS_STEPS`]. Como las dos de arriba, cambia qué se
     /// hornea y no sólo qué se pinta: la grilla se tira entera.
     pub grass_rings_step: usize,
-    /// Indexes [`GRASS_GROWTH_STEPS`]. **No re-hornea nada**: la rampa y la
-    /// dispersión viajan en el uniform, así que se puede barrer caminando y
+    /// Indexes [`GRASS_GROWTH_STEPS`]. **No re-hornea nada**: la rampa viaja en
+    /// el uniform, así que se puede barrer caminando y
     /// comparar sin que la pradera se reconstruya debajo.
     pub grass_growth_step: usize,
     /// Indexes [`GRASS_DEBUG_STEPS`]. Cambia lo que el shader pinta, no lo que

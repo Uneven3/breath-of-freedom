@@ -5,9 +5,8 @@
 //! - **relief** — the height grid, in metres, on the grid's corners.
 //! - **meaning** — what each cell is *made of* ([`TerrainKind`]), on the quads.
 //!
-//! Data lives here in `world` (data-in-the-world). The flat-shaded visual is
-//! generated in [`crate::visuals::terrain`], and the in-engine authoring tool
-//! lives in [`crate::editor`]. One grid → several representations, kept in sync by
+//! Data lives here in `world`; presentation generates the flat-shaded visual and
+//! the application owns the editor. One grid feeds several representations via
 //! change detection: mutating [`Terrain`] re-triggers the mesh rebuild, and the
 //! collider rebuild when the *relief* specifically moved
 //! ([`Terrain::relief_revision`]).
@@ -15,8 +14,7 @@
 //! **The grid owns *how* it changes.** Every brush the editor offers is a method
 //! here; the editor only decides *where and when* one fires. That split is what
 //! keeps a new brush from needing a new system — it is a closure handed to
-//! [`Terrain::brush_stroke`], or in the semantic layer's case
-//! [`Terrain::paint_area`].
+//! its shared brush traversal, or [`Terrain::paint_area`] for semantics.
 
 use std::path::Path;
 

@@ -2,8 +2,8 @@
 //!
 //! # Por qué acá y no en un script
 //!
-//! Hasta el 2026-08-08 esto era `tools/shot_stats.py`: la corrida escribía un
-//! `.json` con la paleta y la geometría, y el script decodificaba el PNG para
+//! Hasta el 2026-08-08 esto era un script externo: la corrida escribía un
+//! `.json` con paleta/geometría, y otro proceso decodificaba el PNG para
 //! contar colores. Dos programas y un contrato entre ellos para una pregunta
 //! que la corrida ya podía contestar sola — tenía los píxeles en memoria, la
 //! paleta, la pose de la cámara y el terreno bajo la línea de vista.

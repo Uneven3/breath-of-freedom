@@ -1,18 +1,8 @@
 //! What the ground **is**, cell by cell — the level's semantic layer.
 //!
-//! The height grid says what shape the ground has; this says what it is *made
-//! of*. It is data for the simulation and nothing else: no mesh, no texture, no
-//! colour is named here. Presentation reads the kind and decides how to show it,
-//! the same separation that lets `TreeKind` live in `world` while
-//! `VisualCatalog` picks the model — which is what allowed swapping the forest
-//! to procedural proxies without touching a line of simulation.
-//!
-//! **Properties come from the table, not from the brush.** You paint one
-//! meaning — "this is tall grass" — and everything that follows from it (what it
-//! sounds like underfoot, whether it burns, whether a blade clears it) is looked
-//! up here. Two things fall out of that: a cell can never be flammable stone,
-//! and changing what tall grass *means* is one row edited, not every level
-//! repainted.
+//! The height grid owns shape; this layer owns meaning without naming render
+//! assets. Properties come from one table, so changing a kind never repaints a
+//! level and impossible combinations cannot be authored.
 
 use serde::{Deserialize, Serialize};
 

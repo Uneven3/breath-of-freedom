@@ -83,6 +83,13 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   `Schedule::initialize` el grafo ya no resuelve nombres. Revertila después —
   crea otra variante en el build compartido.
 
+## Foco inmediato (2026-08-09)
+
+Al retomar: **empezar a optimizar la pradera** — pedido explícito al cerrar,
+*"el feeling recién se está logrando"*. Primer paso: `BOF_BENCH=grass cargo
+run`; el último número conocido (12,94 ms de 15,29) es de antes de los tres
+niveles y ya no vale.
+
 ## Estado (2026-08-04)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/
@@ -253,21 +260,23 @@ fronteras están bien, ese nunca fue el problema... anillo 0 y 1 están bien"*. 
 brizna sale de una grilla del mundo y su alcance del índice; los niveles son tres
 —uno por forma— y **coronas**, cada uno dibujando sólo su banda.
 
-**Abierto, en orden:**
+**Los billboards, resueltos y jugados (2026-08-09):** *"ahora sí se ve bien, el
+problema siempre fueron los billboards."* No era el tamaño (engordar la púa sola
+no cambió nada jugado), era la técnica. `CARDS_ENABLED = false` en `grass.rs`
+saca la carta de la simulación sin sacarla del código; `true` vuelve a lo de
+antes. Detalle en `BOTWGrass.md` → *Tres experimentos del 2026-08-09*.
 
-1. **Los billboards.** *"Los billboards son el problema ahora."* Es la queja que
-   sobrevivió el día entero. Se le atacó el anillo (umbral repartido por brizna,
-   34-62 m) y el grano (la carta bajó de 0,5 a 0,25 m) y sigue notándose. Lo que
-   se sabe y lo que no se probó, en `BOTWGrass.md` → *Por dónde retomar*.
-2. **Los anillos como arquitectura no lo convencen** —*"sigo pensando que anillos
-   no es la solución correcta"*, dicho tres veces el 2026-08-08—. No es un pedido
-   inmediato (el 0 y el 1 están bien) pero es dirección de fondo: no tratarlo
-   como cerrado.
-3. **Los milisegundos, sin medir.** La geometría casi se duplicó hoy (1.264.384
-   triángulos en cuadro contra 654.848) y el techo por vista subió a 4 millones
-   como deuda explícita. Todo lo de hoy son conteos y píxeles.
-4. **El horizonte no se llena** (pasados los 64 m se ve terreno pelado; ahí va la
-   niebla, que todavía no llega tan cerca). Sin tocar.
+**La niebla, empujada con techo a propósito (2026-08-09):** llegaba casi
+invisible (~3%) al corte de los 64 m; ahora 40-80 m, tope 70% — *"un poco
+mejor"*, jugado. **No seguir subiéndola**: el arco alcanza 120 m y BOTW se apoya
+en vistas largas — más niebla deja de ser atmósfera y pasa a límite de dibujado.
+Si molesta, vestir el terreno más allá de los 64 m es el arreglo pendiente, no
+otra vuelta de perilla.
+
+**Abierto:** optimizar (Foco inmediato, arriba); vestir el terreno más allá de
+los 64 m (arriba); y **los anillos como arquitectura**, que siguen sin
+convencerlo —dicho tres veces el 2026-08-08— aunque con la carta fuera de la
+simulación hoy son dos formas activas, no tres.
 
 ## La suite de medición (2026-08-06)
 
@@ -454,10 +463,10 @@ queda más legible.
   test impide que la lista crezca; falta el dueño único que traduzca bindings a
   acciones tipadas.
 - **113 pares de sistemas ambiguos en `FixedUpdate`**, auditados uno por uno y
-  congelados en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES`: 78 son los
-  `propose` compartiendo el `ProposalBuffer` (la arbitración los neutraliza), 25
-  el collider del terreno contra los cuerpos, y de las 10 restantes cuatro
-  quedaron ordenadas.
+  congelados en `scheduling_audit::FIXED_UPDATE_AMBIGUITIES` (desglose completo
+  en el doc-comment de esa constante). Re-verificado 2026-08-08: los 113 están
+  explicados, cero acción de código pendiente — el número es un guardrail, no
+  una tarea.
 - **La pradera es el 92% de los triángulos del frame** y su techo por vista subió
   a 3 millones el 2026-08-08 como deuda declarada —*"olvidémonos del techo por
   ahora"*—. Es fill-bound, así que **la palanca es el overdraw**: un nivel planta

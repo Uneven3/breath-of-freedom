@@ -49,6 +49,11 @@ fn width_in_pixels(width_m: f32, distance_m: f32, scale: f32) -> f32 {
     width_m / (distance_m.max(0.1) * scale).max(1e-6)
 }
 
+/// Experimento 2026-08-09, detalle en `BOTWGrass.md` → *Por dónde retomar*:
+/// saca la carta de la simulación sin sacarla del código. `true` vuelve a lo
+/// de antes.
+const CARDS_ENABLED: bool = false;
+
 /// Qué primitiva corresponde a esta distancia.
 ///
 /// **La decisión es el tamaño en pantalla, no un radio**, y ésa es la parte que
@@ -58,7 +63,7 @@ fn shape_at(distance_m: f32, scale: f32) -> BladeShape {
     let pixels = width_in_pixels(BLADE_WIDTH, distance_m, scale);
     if pixels >= LEAF_MIN_PIXELS {
         BladeShape::Leaf
-    } else if pixels >= SPIKE_MIN_PIXELS {
+    } else if pixels >= SPIKE_MIN_PIXELS || !CARDS_ENABLED {
         BladeShape::Spike
     } else {
         BladeShape::Card

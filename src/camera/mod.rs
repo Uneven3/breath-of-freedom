@@ -45,11 +45,16 @@ const SPRING_PROBE_RADIUS: f32 = 0.2;
 /// Fade out the player model if the camera is closer than this to prevent clipping.
 const FIRST_PERSON_THRESHOLD: f32 = 0.8;
 
-// A light atmospheric veil, not weather: the playable course stays fully
-// readable and only distant geometry eases into the sky color.
-const FOG_START_METERS: f32 = 45.0;
-const FOG_END_METERS: f32 = 240.0;
-const FOG_MAX_ALPHA: f32 = 0.3;
+// Was a light atmospheric veil (45/240/0.3, gradual over 150m+): at the
+// meadow's own 64 m edge that sat at ~3-9% opacity, close enough to invisible
+// that the grass's own LOD cutoff read as a hole in the ground. **Steepened
+// 2026-08-09, played**: a 150m+ gradual ramp and a real presence at 64 m are
+// mutually exclusive this close to the camera, so the ramp is short on
+// purpose now — most of its effect lands by ~80 m, right past where the
+// meadow itself ends. Still translucent, never a wall (`FOG_MAX_ALPHA < 1`).
+const FOG_START_METERS: f32 = 40.0;
+const FOG_END_METERS: f32 = 80.0;
+const FOG_MAX_ALPHA: f32 = 0.7;
 
 const SHAKE_DECAY_PER_SEC: f32 = 2.2;
 const SHAKE_MAX_OFFSET: f32 = 0.25;
@@ -436,15 +441,22 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// Not "distant" anymore (2026-08-09): a ramp gradual enough to stay far
+    /// away is too weak to cover the meadow's own 64 m edge, so the two
+    /// properties this test still holds are the ones that still matter —
+    /// clear right next to the player, and never a fully opaque wall.
     #[test]
-    fn distance_fog_is_a_distant_translucent_veil() {
+    fn distance_fog_stays_clear_up_close_and_never_fully_opaque() {
         let fog = soft_distance_fog(Color::srgb(0.4, 0.6, 0.8));
 
         let FogFalloff::Linear { start, end } = fog.falloff else {
             panic!("soft atmosphere must use the predictable linear falloff");
         };
         assert!(start >= 40.0, "near gameplay must remain completely clear");
-        assert!(end - start >= 150.0, "fog transition must stay gradual");
-        assert!(fog.color.to_srgba().alpha <= 0.3);
+        assert!(end > start, "the ramp must go somewhere");
+        assert!(
+            fog.color.to_srgba().alpha < 1.0,
+            "a veil, however strong, must stay translucent"
+        );
     }
 }

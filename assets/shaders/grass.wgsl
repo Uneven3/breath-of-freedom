@@ -130,6 +130,51 @@ fn blade_is_card(distance: f32, blade_seed: f32) -> bool {
     return ring_is_card() && distance >= card_distance_for(blade_seed);
 }
 
+/// Cuánto crece una primitiva **dentro de su propia banda**, del umbral en el
+/// que nace hasta su propio alcance. Compartida por la carta y la púa — ver
+/// `CARD_GROWTH_MIN`/`MAX` y `SPIKE_GROWTH_MIN`/`MAX`.
+///
+/// **No toca el salto que ya existe.** En el umbral vale el mínimo, así que el
+/// cambio de forma sigue siendo del mismo tamaño que hoy — interpolar *eso* ya
+/// se probó una vez para la carta y se veía como una tira, no una brizna
+/// (`BOTWGrass.md`). Lo que crece es sólo lo que pasa *después*: a igual
+/// densidad, una primitiva más lejana representa más masa de pasto que una
+/// recién nacida, y hoy las dos miden lo mismo sin que la perspectiva ni el
+/// raleo de densidad lo compensen.
+fn growth_scale(distance: f32, threshold: f32, blade_reach: f32, min_scale: f32, max_scale: f32) -> f32 {
+    let span = max(blade_reach - threshold, 1e-3);
+    let t = clamp((distance - threshold) / span, 0.0, 1.0);
+    return mix(min_scale, max_scale, t);
+}
+
+/// Candidato a explicar por qué se sigue notando la banda de cartas
+/// (`BOTWGrass.md` → *Por dónde retomar*). **Sin medir**, valor a ojo para
+/// jugarlo; si hace falta, se sweepea como perilla igual que `grass-growth`.
+const CARD_GROWTH_MIN: f32 = 1.0;
+const CARD_GROWTH_MAX: f32 = 1.6;
+
+fn card_growth_scale(distance: f32, threshold: f32, blade_reach: f32) -> f32 {
+    return growth_scale(distance, threshold, blade_reach, CARD_GROWTH_MIN, CARD_GROWTH_MAX);
+}
+
+/// La otra mitad del experimento: engordar la púa en vez de reemplazarla por
+/// una carta, para comparar las dos sin sacar ninguna (jugando, 2026-08-09).
+/// No toca la carta ni la hoja — sólo el ancho de la púa, y sólo lejos de su
+/// propio nacimiento. **Sin medir**, valor a ojo.
+const SPIKE_GROWTH_MIN: f32 = 1.0;
+const SPIKE_GROWTH_MAX: f32 = 3.0;
+
+fn spike_growth_scale(distance: f32, threshold: f32, blade_reach: f32) -> f32 {
+    return growth_scale(distance, threshold, blade_reach, SPIKE_GROWTH_MIN, SPIKE_GROWTH_MAX);
+}
+
+/// Desde dónde una brizna pierde la cintura, repartido por brizna igual que
+/// `card_distance_for` — con otra semilla, para que el cambio de forma no
+/// vuelva a ser un círculo.
+fn spike_distance_for(blade_seed: f32) -> f32 {
+    return grass_data.spike_from_m * (0.75 + 0.5 * fract(blade_seed * 57.0));
+}
+
 /// La forma con la que se construye **esta** brizna, a esta distancia.
 ///
 /// Las tres salen del mismo criterio que la escalera de LOD ya usaba —cuántos
@@ -147,7 +192,7 @@ fn blade_shape_at(distance: f32, blade_seed: f32) -> u32 {
     if blade_is_card(distance, blade_seed) {
         return SHAPE_CARD;
     }
-    let spike_at = grass_data.spike_from_m * (0.75 + 0.5 * fract(blade_seed * 57.0));
+    let spike_at = spike_distance_for(blade_seed);
     return select(SHAPE_LEAF, SHAPE_SPIKE, distance >= spike_at);
 }
 
@@ -535,7 +580,7 @@ struct BladeVertex {
     side: f32,
 }
 
-fn blade_vertex(shape: u32, corner: u32, height: f32, world_xz: vec2<f32>) -> BladeVertex {
+fn blade_vertex(shape: u32, corner: u32, height: f32, world_xz: vec2<f32>, spike_width_scale: f32) -> BladeVertex {
     // **Inicializados, no dados por cero.** WGSL no promete que un `var` sin
     // inicializar valga cero, y las esquinas de la base no escriben `along`: una
     // altura basura ahí manda el vértice a cualquier parte, que es un triángulo
@@ -569,12 +614,16 @@ fn blade_vertex(shape: u32, corner: u32, height: f32, world_xz: vec2<f32>) -> Bl
     let tip = vec3<f32>(lean.x, height, lean.y);
 
     if shape == SHAPE_SPIKE {
-        // Un triángulo: dos esquinas en la base y una punta.
+        // Un triángulo: dos esquinas en la base y una punta. **El ancho crece
+        // con la distancia** (`spike_growth_scale`), para comparar contra la
+        // carta sin sacarla — la punta no escala, sólo la base, así que la
+        // silueta sigue terminando afilada y no se engorda como un poste.
+        let spike_across = across * spike_width_scale;
         if corner == 0u {
-            out.offset = vec3<f32>(-across.x, 0.0, -across.y);
+            out.offset = vec3<f32>(-spike_across.x, 0.0, -spike_across.y);
             out.side = -1.0;
         } else if corner == 1u {
-            out.offset = vec3<f32>(across.x, 0.0, across.y);
+            out.offset = vec3<f32>(spike_across.x, 0.0, spike_across.y);
             out.side = 1.0;
         } else {
             out.offset = tip;
@@ -631,9 +680,13 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // **La forma sale de la distancia, no del nivel.** Una brizna del nivel de
     // cartas que hoy está cerca se construye como hoja: con la del nivel
     // quedaría un billboard de medio metro girando a tres metros de la cámara.
-    let shape = blade_shape_at(length(record.xy - grass_data.focus_xz), blade_height);
+    let distance_to_focus = length(record.xy - grass_data.focus_xz);
+    let shape = blade_shape_at(distance_to_focus, blade_height);
     let as_card = shape == SHAPE_CARD;
-    let built = blade_vertex(shape, corner, blade_height, record.xy);
+    // Sólo importa cuando `shape == SHAPE_SPIKE`; para hoja y carta el valor
+    // no se usa, así que calcularlo siempre es más barato que un branch más.
+    let spike_width_scale = spike_growth_scale(distance_to_focus, spike_distance_for(blade_height), blade_reach);
+    let built = blade_vertex(shape, corner, blade_height, record.xy, spike_width_scale);
     let side = built.side;
     let height_factor = built.along;
     // `record.z` es la altura del terreno: lo que `uv0.x` llevaba por vértice.
@@ -664,10 +717,14 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // para que la carta se quede parada en vez de inclinarse con el cabeceo.
     if as_card {
         let camera_right = normalize(vec3<f32>(view.view_from_world[0].x, 0.0, view.view_from_world[2].x));
+        // Crece dentro de su propia banda, del umbral en el que nace hasta su
+        // propio alcance — ver `card_growth_scale`. En el umbral vale 1.0, así
+        // que el salto de hoja a carta sigue midiendo lo mismo que antes.
+        let growth = card_growth_scale(distance_to_focus, card_distance_for(blade_height), blade_reach);
         world_position = vec4<f32>(
             world_position.xyz
-                + camera_right * (side * grass_data.card_half_width)
-                + vec3<f32>(0.0, height_factor * blade_height, 0.0),
+                + camera_right * (side * grass_data.card_half_width * growth)
+                + vec3<f32>(0.0, height_factor * blade_height * growth, 0.0),
             world_position.w,
         );
     }
@@ -772,9 +829,22 @@ fn fragment(
         // mide 0,5 m contra los 5,5 cm de una brizna: medirlas con la misma vara
         // las reportaba nueve veces más finas de lo que son, que es exactamente
         // la clase de error que esta vista existe para cazar.
+        //
+        // **Y una púa lejos no mide lo mismo que una cerca**, desde que
+        // `spike_growth_scale` la engorda con la distancia (experimento
+        // 2026-08-09): sin esto, la vista subestimaría cuántos píxeles mide una
+        // púa crecida y reportaría desperdicio de cuarteto que ya no existe.
+        let subpixel_distance = length(in.world_position.xz - grass_data.focus_xz);
+        let subpixel_seed = fract(in.uv_b.y);
         var width = grass_data.blade_width;
-        if blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y)) {
+        if blade_is_card(subpixel_distance, subpixel_seed) {
             width = grass_data.card_half_width * 2.0;
+        } else if subpixel_distance >= spike_distance_for(subpixel_seed) {
+            width *= spike_growth_scale(
+                subpixel_distance,
+                spike_distance_for(subpixel_seed),
+                floor(in.uv_b.y),
+            );
         }
         let pixels_wide = width / max(metres_per_pixel, 1e-6);
         var band = 0u;

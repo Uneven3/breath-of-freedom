@@ -1024,6 +1024,27 @@ Tres cosas, y conviene no mezclarlas:
   hace la forma; que la carta tenga variación de tono por instancia; que el
   solape carta↔púa sea más ancho.
 
+### Tres experimentos del 2026-08-09, jugados
+
+1. **La variación de tono ya corría sobre la carta.** No hacía falta
+   implementarla: `blade_tint` usa `fract(record.w)`, el mismo identificador
+   por brizna que hoja y púa, y la carta sólo pisa `uv_b.x`. No era la causa.
+2. **La carta crece con la distancia** (`card_growth_scale`, 1,0×→1,6× dentro
+   de su propia banda) — agregado, sin jugar todavía si alcanza por sí solo.
+3. **Engordar la púa (idea 3) no cambió nada, jugado.** *"Está igual que
+   antes."* La causa más probable: la púa tiene yaw al azar, no mira a
+   cámara — triplicar su ancho no ayuda a una brizna que queda de canto según
+   el ángulo, porque lo que ves depende del ángulo, no del número. El
+   billboard no es "más ancho", es "siempre muestra su ancho completo", y eso
+   es lo que compra mirar a cámara. Esto es evidencia a favor de que el
+   billboard hace un trabajo real, no sólo caro.
+
+**Ahora en la simulación (`CARDS_ENABLED = false` en `grass.rs`):** en vez de
+sacar el código de la carta, se apagó su uso — todo blade que hubiera sido
+carta ahora es púa engordada (`spike_growth_scale`, 1,0×→3,0×), por pedido
+explícito de comparar las dos sin perder ninguna. `true` vuelve a lo de antes
+sin tocar nada más. Falta jugarlo.
+
 ### Detrás, y sólo después
 
 - **Medir los milisegundos.** Todo lo de hoy son conteos, y la geometría casi se

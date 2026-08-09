@@ -83,12 +83,6 @@ y el detalle de las ocho fases en `git log -- docs/CRATES.md`.
   `Schedule::initialize` el grafo ya no resuelve nombres. Revertila después —
   crea otra variante en el build compartido.
 
-## Foco inmediato (2026-08-08)
-
-Al retomar: continuar el barrido fuera de los contratos ya cubiertos (pickups,
-lock-on, HUD montado y herramientas perf/shot); priorizar scheduling y tests que
-sólo prueban su helper. El checkpoint jugado sigue mandando sobre una suite verde.
-
 ## Estado (2026-08-04)
 
 Jugable y validado: locomoción completa multi-actor (walk/sprint/sneak/jump/

@@ -17,6 +17,7 @@ use material_registry::InstrumentedMaterialAppExt;
 
 mod arrows;
 pub mod budget;
+mod card_mesh_lab;
 pub mod catalog;
 mod diagnostic;
 pub mod enemy;
@@ -83,6 +84,7 @@ impl Plugin for VisualsPlugin {
                 forest::build_tree_proxy_assets,
                 arrows::init_assets,
                 grass::init_meadow_material,
+                card_mesh_lab::build_card_mesh_lab_assets,
             ),
         );
         for id in crate::scene::SceneId::ALL {
@@ -91,6 +93,12 @@ impl Plugin for VisualsPlugin {
                 grass::reset_meadow.run_if(crate::scene::scene_has(|c| c.meadow)),
             );
         }
+        app.add_systems(
+            OnEnter(crate::scene::AppState::Scene(
+                crate::scene::SceneId::CardMesh,
+            )),
+            card_mesh_lab::spawn_card_mesh_lab,
+        );
         app.add_systems(
             Update,
             (
@@ -132,6 +140,8 @@ impl Plugin for VisualsPlugin {
                 )
                     .chain()
                     .run_if(crate::scene::scene_has(|c| c.meadow)),
+                card_mesh_lab::face_card_meshes
+                    .run_if(crate::scene::scene_has(|c| c.card_mesh_lab)),
                 terrain::sync_terrain_visual,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),

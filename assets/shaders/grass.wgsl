@@ -22,9 +22,8 @@
 // posición horneado— no puede reproducir la misma geometría, y sin eso la
 // profundidad no coincidiría con lo que el pase principal dibuja. Ambos
 // caminos llaman a `build_blade`, para que no puedan divergir con el tiempo.
-// Y el fragment de prepass default tampoco alcanza: no conoce el recorte de
-// silueta procedural de la carta (`card_silhouette`), que no es un canal de
-// alfa de textura — sin recortarlo ahí, el prepass escribiría profundidad
+// Y el fragment de prepass default tampoco alcanza: no conoce la máscara alpha
+// de la carta — sin recortarlo ahí, el prepass escribiría profundidad
 // para el cuadrado entero de cada carta en vez de su silueta, y algo detrás
 // del hueco recortado se perdería por early-Z contra una silueta que el pase
 // principal nunca dibuja.
@@ -109,11 +108,31 @@ var interaction_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
 var interaction_sampler: sampler;
 
+@group(#{MATERIAL_BIND_GROUP}) @binding(104)
+var card_albedo: texture_2d<f32>;
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(105)
+var card_albedo_sampler: sampler;
+
 /// Altura normalizada del vértice a lo largo de la brizna: 0 en la raíz, 1 en
 /// la punta. Una sola definición, porque el viento, el degradado y el aplastado
 /// del Paso 9 multiplican todos por exactamente esto.
 fn blade_height_factor(uv: vec2<f32>) -> f32 {
     return clamp(uv.y, 0.0, 1.0);
+}
+
+/// UV de la carta de mata. La malla índice sólo transporta lado y altura; no
+/// puede usar UV0 porque allí viaja la dirección `(brizna, esquina)` que ubica
+/// el registro en el `ShaderBuffer`.
+fn card_uv(in: VertexOutput) -> vec2<f32> {
+    return vec2<f32>(in.uv_b.x * 0.5 + 0.5, 1.0 - blade_height_factor(in.uv));
+}
+
+/// La misma muestra resuelve detalle, alpha y prepass. Las derivadas se calculan
+/// antes de cualquier branch no uniforme en el caller; así el pase de color y
+/// profundidad no pueden divergir en el borde de la textura.
+fn sample_card_albedo(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    return textureSampleGrad(card_albedo, card_albedo_sampler, uv, dx, dy);
 }
 
 /// Si **esta brizna**, a esta distancia, se dibuja como carta.
@@ -229,95 +248,6 @@ fn blade_shape_at(distance: f32, blade_seed: f32) -> u32 {
 /// resultado distinto en cada corrida (2026-08-07).
 fn ring_is_card() -> bool {
     return grass_data.record_layout.y == SHAPE_CARD;
-}
-
-/// Hasta qué altura la carta es opaca en toda su anchura. Por debajo es masa
-/// llena; por encima se abre en puntas.
-const CARD_BASE_FILL: f32 = 0.28;
-/// La punta más baja que puede tener un diente, como fracción de la altura de la
-/// carta. Muy bajo el borde lee como sierra; muy alto, como el bloque de antes.
-///
-/// **0,75 salió midiendo, no de ojo.** Con 0,55 la banda de 45-64 m caía a 95,9%
-/// aunque la densidad ya compensara el área recortada, y la razón es que a esa
-/// distancia el suelo se ve casi de canto: lo que lo tapa es la **altura** de la
-/// masa, no su ancho, y recortar puntas la baja. Subir el piso de los dientes
-/// devuelve altura sin devolver el borde plano: 97,4% *(a, 2026-08-07)*.
-const CARD_TIP_MIN: f32 = 0.75;
-/// Techo del ancho de antialiasing del recorte (ver su uso en `fragment`). El
-/// rango completo de `card_silhouette` en `card_distance` mide `1 −
-/// CARD_BASE_FILL ≈ 0,72`; un techo bien por debajo de eso garantiza que
-/// quede un núcleo sólido en el centro de la carta aunque `fwidth` explote a
-/// distancia. Valor a ojo, para jugarlo — no midió una banda como
-/// `CARD_TIP_MIN`.
-const CARD_AA_MAX: f32 = 0.12;
-/// Ancho mínimo de la carta en píxeles para dibujar su silueta dentada. Por
-/// debajo, se pierde el detalle y se dibuja un bloque sólido — ver
-/// `resolve_silhouette` en `fragment`.
-///
-/// **16 estaba mal — apagaba el dentado siempre, no sólo lejos.** Una carta
-/// recién nacida (umbral `card_from_m`, ~35-65 m con el reparto por brizna)
-/// ya mide 5-9 px, por debajo de 16: nunca llegaba a dibujar un diente. El
-/// valor tiene que caer bien por debajo de dónde una carta nace, no por
-/// encima — 5 px dice "todavía faltan más de 60-70 m para este umbral"
-/// (`326/5 ≈ 65 m` con el cálculo de `card_from_m`). A ojo, para jugarlo.
-const CARD_SILHOUETTE_MIN_PIXELS: f32 = 5.0;
-
-/// La silueta de la carta: qué altura tiene la masa de pasto en esta columna.
-///
-/// Devuelve la altura normalizada (0 en la base, 1 en el tope de la carta) hasta
-/// la que hay pasto en la coordenada horizontal `u` ∈ [-1, 1]. Fuera de eso, la
-/// carta no dibuja: es lo que la convierte de un rectángulo con el borde plano
-/// —que a media distancia se lee como una hilera de bloques— en un grupo de
-/// puntas.
-///
-/// **Dos capas de dientes triangulares, no una.** Una sola deja huecos hasta la
-/// base entre diente y diente, que a esta distancia lee como un peine. Dos capas
-/// de períodos distintos, desfasadas, y el máximo de las dos: las bases se
-/// solapan y lo que queda irregular es sólo el borde de arriba, que es donde una
-/// masa de pasto de verdad es irregular.
-///
-/// Sin textura y sin `pow`: el frame es fill-bound *(a, 2026-08-06)* y esto se
-/// paga por fragmento. Son dos `fract`, dos `abs` y un `max`.
-///
-/// **Si cambiás estos números, actualizá `CARD_SILHOUETTE_AREA` en `grass.rs`.**
-/// Es la integral de esta función, y de ella sale cuántas cartas se plantan: con
-/// la fracción vieja el campo lejano queda ralo y sólo se nota midiendo.
-fn card_silhouette(u: f32, phase: f32) -> f32 {
-    // **La fase es por carta, y no es un adorno.** Todas las cartas se abren
-    // mirando a la cámara, así que quedan paralelas entre sí: con una silueta
-    // idéntica, los huecos de una caen exactamente sobre los de la que tiene
-    // detrás y el suelo se ve por el mismo lugar en todas. Medido *(a)*: sin
-    // fase, la banda de 45-64 m se quedaba en 95,4% donde el área de la silueta
-    // predecía 99%, y ese hueco es justamente la correlación que Poisson supone
-    // que no existe.
-    //
-    // El período de cada capa, en dientes por carta. **Recalibrado 2026-08-10
-    // (era 7 y 5).** La carta bajó a 0,25 m el 2026-08-08 y estos números
-    // nunca se movieron con ella: con 7 dientes, cada uno medía 3,6 cm —
-    // *más angosto que una brizna real* (`BLADE_WIDTH` = 5,7 cm) — así que
-    // ninguna pantalla a distancia de juego podía resolverlos como "unas
-    // briznas juntas"; sólo podía leerlos como ruido. Tres y dos, coprimos
-    // igual que antes, dan dientes de 8,3 y 12,5 cm — más anchos que una
-    // brizna, lo mínimo para que la silueta lea como un grupo de puntas y no
-    // como textura de sub-píxel.
-    let a = card_teeth(u, 3.0, phase);
-    let b = card_teeth(u, 2.0, 0.37 + phase * 1.7);
-    // El piso: abajo la masa está llena. Sin esto la carta se abre hasta la
-    // tierra y deja pasar el suelo entre las puntas.
-    return max(max(a, b), CARD_BASE_FILL);
-}
-
-/// Una capa de dientes: `count` puntas a lo ancho, desplazadas por `offset`, cada
-/// una con su altura propia.
-fn card_teeth(u: f32, count: f32, offset: f32) -> f32 {
-    let s = (u * 0.5 + 0.5) * count + offset;
-    let column = floor(s);
-    let across = fract(s);
-    // La altura de esta punta. `fract(·)` de un múltiplo grande descorrelaciona
-    // columnas vecinas sin una tabla ni un seno.
-    let height = CARD_TIP_MIN + fract(column * 0.618034) * (1.0 - CARD_TIP_MIN);
-    // Triángulo: sube hasta el centro de la columna y baja.
-    return height * (1.0 - abs(across * 2.0 - 1.0));
 }
 
 /// Cuánto de su altura conserva una brizna a esta distancia de la cámara.
@@ -919,55 +849,17 @@ fn fragment(
     // en control de flujo no uniforme no está definida.
     let metres_per_pixel = length(fwidth(in.world_position.xz));
 
-    // **El recorte de la carta, antes que nada — mismo motivo que arriba.** La
-    // distancia a la silueta y su ancho en pantalla también salen de un `fwidth`,
-    // así que también viajan afuera de cualquier branch. Calculados para toda
-    // brizna, no sólo cartas: es el mismo precio que ya paga `metres_per_pixel`.
-    let card_height = blade_height_factor(in.uv);
-    let card_silhouette_edge = card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0));
-    let card_distance = card_height - card_silhouette_edge;
-    // Acotado y no sólo `max`: sostiene un núcleo sólido en el centro de la
-    // carta aunque `fwidth` crezca — defensa de segunda línea. La primera es
-    // `resolve_silhouette`, más abajo: a esta distancia el problema real no es
-    // el ancho de la banda, es que el patrón entero (7 y 5 dientes) ya no
-    // entra en un par de píxeles.
-    let card_aa_width = clamp(fwidth(card_distance), 1e-5, CARD_AA_MAX);
+    // **El recorte de la carta, antes que nada — mismo motivo que arriba.**
+    // Las derivadas van afuera del branch de la carta, para que `textureSampleGrad`
+    // siga siendo válida y color/profundidad evalúen el mismo texel.
+    let card_texture_uv = card_uv(in);
+    let card_texture_dx = dpdx(card_texture_uv);
+    let card_texture_dy = dpdy(card_texture_uv);
 
-    // **Puntos de cielo en el anillo lejano — reportado y visto en captura el
-    // 2026-08-10.** `card_silhouette` mete ~6 dientes a lo ancho de la carta;
-    // cuando la carta entera mide un par de píxeles, cada píxel ya cruza
-    // varios dientes y su valor puntual (un sample, no un promedio del
-    // patrón) cae close al borde de alguno **casi siempre** — no es que la
-    // banda de antialiasing se agrande, es que el patrón se volvió ruido de
-    // muestreo. `AlphaToCoverage` convierte ese ruido en cobertura fraccional
-    // de MSAA, y lo que se cuela por el hueco es el cielo. Acotar
-    // `card_aa_width` (arriba) no alcanza: casi todo píxel ya "está cerca de
-    // un borde" aunque la banda sea angosta. La solución es la misma que ya
-    // usa la escalera hoja/púa/carta: apagar el detalle que la pantalla no
-    // puede resolver, no perseguirlo con más antialiasing.
-    let card_width_px = (grass_data.card_half_width * 2.0) / max(metres_per_pixel, 1e-6);
-    let resolve_silhouette = card_width_px >= CARD_SILHOUETTE_MIN_PIXELS;
-
-    // **Descarta lejos del borde, difumina cerca.** Con `AlphaToCoverage` un
-    // alfa fraccional se convierte en cobertura de muestras MSAA en vez de en
-    // transparencia real — pero sólo sirve si el borde en sí no es un salto de
-    // 0 a 1. El `discard` se queda para el grueso de lo recortado (barato, y
-    // las vistas `medir`/`subpixel` de abajo siguen viendo lo mismo que la
-    // pantalla ahí); sólo la banda de ~1 píxel alrededor del borde pasa a
-    // alfa suave. Esa banda es la única parte que `medir`/`subpixel` miden
-    // distinto de lo que se dibuja — error acotado a un píxel de silueta.
-    //
-    // Y sólo se recorta la que **hoy** es carta y se resuelve en pantalla: la
-    // misma brizna, más cerca de su umbral, es una hoja y no lleva silueta que
-    // recortar; y lejos de `resolve_silhouette`, la carta se dibuja como
-    // bloque sólido — pierde los dientes, pero deja de ser un colador.
     var card_alpha = 1.0;
     let is_card_blade = blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y));
-    if is_card_blade && resolve_silhouette {
-        if card_distance > card_aa_width {
-            discard;
-        }
-        card_alpha = clamp(0.5 - card_distance / card_aa_width, 0.0, 1.0);
+    if is_card_blade {
+        card_alpha = sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy).a;
     }
 
     // **Sub-píxel**: en bandas planas y exactas, no en una rampa.
@@ -1115,6 +1007,16 @@ fn fragment(
         colour.a,
     );
 
+    // La ilustración aporta la lectura de hojas superpuestas, no una segunda
+    // iluminación. Conservamos el degradado, tinte por brizna y transmisión
+    // de la pradera, y aplicamos sólo su variación de luminosidad normalizada
+    // contra el promedio visible del asset (#529338, luma lineal 0,231).
+    if is_card_blade {
+        let card_rgb = sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy).rgb;
+        let tone = clamp(dot(card_rgb, vec3<f32>(0.2126, 0.7152, 0.0722)) / 0.231, 0.72, 1.28);
+        colour = vec4<f32>(colour.rgb * tone, colour.a);
+    }
+
     pbr_input.material.base_color = vec4<f32>(colour.rgb, colour.a * card_alpha);
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
@@ -1164,15 +1066,14 @@ fn fragment(
 #ifdef PREPASS_PIPELINE
 @fragment
 fn fragment(in: VertexOutput) -> FragmentOutput {
-    // Mismo cálculo que el pase principal (ver ahí el porqué); acá sólo
-    // interesa el corte binario, no la banda de antialiasing de ~1 píxel —
-    // para profundidad no hay nada que suavizar.
-    let card_height = blade_height_factor(in.uv);
-    let card_silhouette_edge = card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0));
-    let card_distance = card_height - card_silhouette_edge;
     let is_card_blade = blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y));
-    if is_card_blade && card_distance > 0.0 {
-        discard;
+    if is_card_blade {
+        let card_texture_uv = card_uv(in);
+        let card_texture_dx = dpdx(card_texture_uv);
+        let card_texture_dy = dpdy(card_texture_uv);
+        if sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy).a < 0.5 {
+            discard;
+        }
     }
 
     var out: FragmentOutput;

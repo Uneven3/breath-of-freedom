@@ -401,21 +401,17 @@ const BLADE_WAIST: f32 = 0.30;
 /// sería infinitamente angosta y dejaría ver tierra donde nace.
 const BLADE_ROOT_SINK: f32 = 0.06;
 
-/// Ancho de una carta, en metros: el de un **matojo de unas pocas briznas**, no
-/// el de una pared. La escala salió de una captura de BOTW; ver `BOTWGrass.md`.
-///
-/// **Bajado de 0,5 el 2026-08-08 y no cuesta un triángulo:** la ley pide el doble
-/// de cartas de la mitad de huella. Lo que cambia es el grano.
-const CARD_WIDTH: f32 = 0.25;
+/// Ancho de una carta, en metros. A 0,30 m la ley reduce 16,7% las cartas que
+/// ya son Card, sin tocar otra perilla; el contador de triángulos enviados aún
+/// no baja porque el anillo reserva sus registros desde el borde de púas.
+const CARD_WIDTH: f32 = 0.30;
 
-/// Qué fracción de su rectángulo conserva la carta al recortar su silueta:
-/// la integral de `card_silhouette` en `grass.wgsl`.
+/// Estimación de huella con la que se calibró la carta procedural anterior.
 ///
-/// **Vive en dos lados, y es deuda declarada**: cambiar los dientes allá sin
-/// tocar esto deja las cartas ralas. La red es medir — con la fracción mal, la
-/// banda de 45-64 m no llega al 99% en `grass-view=medir`, que es como se
-/// encontró que hacía falta.
-/// Dientes bajados a 3/2 (2026-08-10), esto sin tocar — `BOTWGrass.md` §1.
+/// La carta ilustrada la conserva provisionalmente para aislar el reemplazo
+/// visual: su alpha efectivo se tiene que medir por distancia antes de cambiar
+/// densidad. Cambiarlo a ojo haría que la escalera pase tests sin representar
+/// la cobertura que ve el jugador.
 const CARD_SILHOUETTE_AREA: f32 = 0.583;
 /// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
@@ -660,6 +656,7 @@ pub(super) fn init_meadow_material(
     mut commands: Commands,
     mut materials: ResMut<Assets<GrassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
+    asset_server: Res<AssetServer>,
 ) {
     // Un buffer y un material por nivel. El buffer arranca con un registro de
     // relleno porque un `ShaderBuffer` vacío no es un binding válido, y el
@@ -674,9 +671,14 @@ pub(super) fn init_meadow_material(
             RenderAssetUsages::default(),
         )))
     });
+    // Una sola textura compartida por los tres materiales: no agrega batches y
+    // cubre las briznas del anillo lejano que, por distancia individual, aún
+    // están construidas como hoja o púa.
+    let card_albedo = asset_server.load("textures/props/T_GrassMeadowCard_Albedo.png");
     let materials = std::array::from_fn(|ring| {
         let mut material = grass_material();
         material.extension.blade_records = records[ring].buffer.clone();
+        material.extension.card_albedo = Some(card_albedo.clone());
         if shape_for_ring(ring, reference_scale(), REFERENCE_REACH).faces_camera() {
             // Recomendado por Bevy para foliage: borde antialiaseado por
             // cobertura de MSAA en vez de un corte binario, sin el costo de
@@ -784,6 +786,7 @@ fn grass_material() -> GrassMaterial {
                 ..default()
             },
             interaction_map: None,
+            card_albedo: None,
             // El campo lo llena `init_meadow_material`, que es quien tiene el
             // `Assets<ShaderBuffer>`.
             blade_records: Handle::default(),
@@ -1438,6 +1441,42 @@ mod tests {
         assert!(
             !wgsl.contains("const BLADE_WAIST"),
             "la cintura volvió a estar escrita en el shader: mandala por uniform",
+        );
+    }
+
+    /// La carta de pradera es una textura del material extendido, no una entidad
+    /// aparte ni una silueta que color y prepass puedan interpretar distinto.
+    #[test]
+    fn textured_card_contract_is_shared_by_colour_and_prepass() {
+        assert!(
+            std::path::Path::new("assets/textures/props/T_GrassMeadowCard_Albedo.png").is_file(),
+            "la carta de pradera tiene que tener su fuente PNG"
+        );
+        let wgsl = std::fs::read_to_string("assets/shaders/grass.wgsl")
+            .expect("el shader de la pradera tiene que estar donde el material lo pide");
+        for declaration in [
+            "@binding(104)\nvar card_albedo: texture_2d<f32>;",
+            "@binding(105)\nvar card_albedo_sampler: sampler;",
+            "fn sample_card_albedo(",
+        ] {
+            assert!(
+                wgsl.contains(declaration),
+                "la carta texturada perdió `{declaration}`"
+            );
+        }
+        assert_eq!(
+            wgsl.matches("sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy)")
+                .count(),
+            3,
+            "color, detalle y prepass deben usar la misma muestra de carta"
+        );
+        assert!(
+            wgsl.contains(".a < 0.5"),
+            "el prepass tiene que respetar el cutoff que usa AlphaToCoverage cuando MSAA está apagado"
+        );
+        assert!(
+            !wgsl.contains("CARD_SILHOUETTE_MIN_PIXELS"),
+            "la carta texturada no puede volver a un fallback de rectángulo sólido"
         );
     }
 

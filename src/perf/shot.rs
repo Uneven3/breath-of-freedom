@@ -471,6 +471,10 @@ fn warn_on_broken_assets(broken: &BrokenAssets) {
 fn shot_categories(perf: &crate::perf::PerfToggles) -> Vec<Category> {
     match perf.grass_debug_label() {
         "off" => Vec::new(),
+        // `forma` conserva luz y A2C; sus colores son un diagnóstico visual y
+        // el píxel resuelto puede contener varias primitivas. No publicar un
+        // histograma de anillos en cero como si fuera una medición.
+        "forma" => Vec::new(),
         "subpixel" => crate::visuals::grass_debug::subpixel_legend()
             .into_iter()
             .map(|band| Category {

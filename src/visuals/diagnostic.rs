@@ -441,6 +441,7 @@ mod tests {
             extension: crate::visuals::grass_material::GrassExtension {
                 grass_data: default(),
                 interaction_map: None,
+                card_albedo: None,
                 blade_records: Handle::default(),
             },
         };

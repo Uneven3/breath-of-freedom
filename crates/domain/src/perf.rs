@@ -732,13 +732,10 @@ mod tests {
             toggles.step_selected();
             assert_ne!(toggles.knob_text(*knob), baseline, "{}", knob.label());
 
-            // ...and the cycle must close, so an A/B can be repeated exactly.
-            // 420 = lcm(2 bool, 4 cull, 4 shadow-range, 5 shadow-dist, 3
-            // shadow-map, 10 grass-density, 5 grass-rings, 7 grass-view). Se
-            // ajusta cuando una escalera cambia de largo: el número está para
-            // que la vuelta cierre, no para limitar cuántos pasos puede tener
-            // una perilla.
-            for _ in 1..420 {
+            // ...and its own cycle must close, so an A/B can be repeated
+            // exactly. No usamos un m.c.m. mágico: agregar una vista o un dial
+            // no puede volver roja esta prueba por aritmética ajena al dial.
+            for _ in 1..knob.steps() {
                 toggles.step_selected();
             }
             assert_eq!(toggles.knob_text(*knob), baseline, "{}", knob.label());

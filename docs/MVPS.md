@@ -28,11 +28,9 @@ que los demás sean decidibles en vez de opinables.
 
 **Qué se construye**
 
-1. **Los diales sueltos entran al hub.** `GrassDensity` pasa a `PerfKnob`, se
-   borra el `KeyCode::F8` de `visuals/grass.rs`, y el dial queda dentro de la
-   matriz de `perf/sequence.rs`. Hoy es el único ajuste visual fuera del
-   registro, así que lo que produce no tiene warmup, ni asentamiento, ni
-   chequeo de deriva: no es atribuible.
+1. **Hecho — los diales sueltos entraron al hub.** `GrassDensity` ya es un
+   `PerfKnob`, no existe el binding F8 y la secuencia le da warmup, asentamiento
+   y chequeo de deriva.
    *(`BOTWGrass.md` Paso 0 · `GraphicalTechniques.md` ley 6.)*
 2. **El overdraw publica un número.** Hoy es un mapa de calor aditivo que
    satura alrededor de las 17 capas: responde "¿dónde?" pero no "¿cuánto?" ni
@@ -185,6 +183,8 @@ no castear y el mapa a 1024 px las bajó de ~70% del frame a 2,74 ms.
   **cascadas dobles** en cada crepúsculo, dos veces por día de juego, justo
   cuando el sol rasante produce los volúmenes más grandes. El corte pasa a ser
   comparativo: sólo el astro dominante castea.
+  **Hecho en código y cubierto por barrido minuto a minuto (2026-08-10); falta
+  checkpoint jugado.**
 - **El caso del relámpago, de una vez.** Un destello de 50.000 lux cruza el
   umbral y enciende las cascadas por un frame — el frame que tiene que ser
   instantáneo. El destello va en una luz que no castea.
@@ -204,34 +204,26 @@ números del target.
 
 ## MVP 6 — El pasto se paga solo
 
-El bloque más grande, y el que más cambia lo que se ve. Va después del MVP 0
-porque su primer paso es una medición que puede reordenar el resto.
+**Adelantado por decisión explícita del 2026-08-07/10:** se priorizó lograr el
+feeling antes de terminar la instrumentación móvil del MVP 0. La base ya está
+activa: `ExtendedMaterial`, registros de 16 B, terreno teñido y tres anillos por
+tamaño en pantalla. No cierra mientras el borde/anillo siga visible.
 
 **Qué se construye, en este orden**
 
-1. **`ExtendedMaterial` enchufado y el shader arreglado.** `grass_material.rs` y
-   `grass.wgsl` existen, están registrados y **no se usan**; el shader tiene
-   tres bugs reales (posición sin transformar a clip space, fragment que nunca
-   llama al PBR, `vertex.color` ignorado). El entregable es que el campo se vea
-   **idéntico** con el material nuevo puesto.
-2. **El vértice adelgazado**: de 48 B a 12 B, quitando normal, color y uv, que
-   son derivables. No cambia un píxel y es prerrequisito de todo lo demás.
-3. **El terreno teñido** del mismo verde que la raíz de la brizna: es lo que
-   hace pagables las densidades de los anillos, porque las briznas dejan de ser
-   responsables de tapar el suelo.
-4. **Los anillos de densidad**: la densidad necesaria cae como 1/d, así que a
-   20 m las 45 briznas/m² actuales son treinta veces la cobertura necesaria.
-   6,2× el área por el 78% de los triángulos.
+1. Medir una baseline repetible con la implementación activa.
+2. Perturbar por posición de mundo la distancia de transición para romper los
+   círculos de LOD sin mover las briznas entre niveles.
+3. Sólo si lo anterior no basta, sesgar el LOD por posición en pantalla.
+4. Resolver el borde lejano con otra técnica; aumentar otra vez el alcance no
+   cuenta como solución.
 
 *(`BOTWGrass.md`, Fases 0 a 2. Ahí están las cuentas.)*
 
 **Criterio de aceptación**
 
-Cada paso se cierra jugando la caja `Pasto` y midiendo con la secuencia A/B. Los
-dos primeros deben ser **neutrales a la vista** — cambiar el motor sin cambiar
-la imagen es la única forma de saber que el cambio fue limpio. Los dos últimos
-se juzgan mirando: no debe verse el anillo donde baja la densidad, ni el borde
-del campo.
+Cada paso se cierra jugando la caja `Pasto` y midiendo con la secuencia A/B. No
+debe verse el anillo donde cambia el LOD ni el borde del campo.
 
 ---
 

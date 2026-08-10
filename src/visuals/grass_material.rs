@@ -127,6 +127,9 @@ pub struct GrassExtension {
     #[texture(101)]
     #[sampler(102)]
     pub interaction_map: Option<Handle<Image>>,
+    #[texture(104)]
+    #[sampler(105)]
+    pub card_albedo: Option<Handle<Image>>,
     /// Un registro por brizna del nivel que ya no hornea. **No es opcional
     /// aunque el nivel no lo use**: el macro no pasa por `Option`.
     #[storage(103, read_only)]

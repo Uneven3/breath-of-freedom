@@ -1105,6 +1105,122 @@ de la técnica real.
 ### Técnica 1: mezclar los tres assets (2026-08-10, "suficientemente bien
 por ahora")
 
+**Siguiente incremento — laboratorio `Card mesh` (abierto, 2026-08-10).** Antes
+de tocar de nuevo la pradera se construye una caja de prueba aislada: una escena
+nueva, terreno plano propio, sin pradera rodante, y sólo unas pocas referencias
+LOD0/hoja y LOD1/púa junto a variantes explícitas de carta. El laboratorio es
+presentación desechable, marcada al salir de escena. No modifica la selección
+de LOD, densidad, buffers ni shader de la pradera. Es un flag exclusivo
+—apagado incluso en Mundo—, con heightmap plano
+propio. Sus mallas se crean una vez y se comparten entre reentradas. Las
+referencias se nombran hoja y púa, no por anillo. Tests canario exigen que la
+caja no cree `GrassChunk` ni que Pasto cree el laboratorio. Criterio de salida:
+checkpoint jugado que elija una dirección visual o descarte la carta; recién
+entonces se planea un cambio de la pradera y se vuelve a medir.
+
+**Ajuste de laboratorio (2026-08-10, abierto).** El primer checkpoint mostró
+dos errores del propio banco, no de la técnica: sus láminas proyectaban sombras
+y la textura de la carta estaba invertida verticalmente. Se corrigen sólo en
+`Card mesh`; la pradera sigue intocada hasta que el usuario elija una silueta.
+La imagen `T_GrassCard_Albedo.png` tiene alfa binaria, pero su RGB oculto es
+negro; el laboratorio estaba además anulando la textura, por lo que no servía
+para juzgar una carta dibujada. No se cambia el material ni el shader de
+producción.
+El checkpoint posterior siguió viéndolas negras: queda prohibido inferir color
+desde el handle. Antes de otro cambio se inspecciona la entidad/material que
+llega al render y la orientación de sus normales bajo la luz real.
+
+**Aislamiento de lectura (2026-08-10, abierto).** La inspección confirmó que
+las nueve entidades del banco sí usan `FoliageCommon`, verde y doble cara, pero
+ese material es PBR: no proyectar sombras no impide que luz, normales y
+exposición lo oscurezcan. Para decidir sólo la silueta, el laboratorio ahora
+clona ese material una vez, lo deja verde/opaco/doble cara y lo marca `unlit`;
+referencias y cartas comparten esa copia. No se muta el handle canónico (también
+usado por el bosque) ni se afirma que este banco valide el aspecto final de
+producción. Canarios cubren asociación de las nueve entidades al material del
+lab y winding coherente con sus normales. El checkpoint pendiente es verlo
+verde al girar; recién después se compara silueta y triángulos.
+
+**Carta de mata amplia (2026-08-10, abierto).** Se descartaron la carta cruzada
+y la mata de tres láminas: más paneles sólo devolvían los triángulos visibles,
+no más lectura de pasto. El banco ahora deja una única carta amplia de 2 tris,
+un quad UV completo de 4,8 × 4,8 m, para que una ilustración de mata larga tape
+mucha pantalla sin pagar más geometría. Su albedo propio
+`T_GrassCardLab_Albedo.png` representa hojas largas superpuestas, raíz continua
+y huecos grandes; es `unlit`, doble cara y `Mask(0.4)`, mientras hoja y púa
+siguen opacas. Es una excepción de laboratorio para poder juzgar el coste y la
+lectura de alpha: `Mask` ejecuta el fragment shader sobre todo el rectángulo y
+no valida todavía el baseline de producción sin alpha. Canarios fijan 2 tris,
+4 vértices, UVs completos, los dos materiales separados y 7 especímenes sin
+sombras. El checkpoint debe mirar la carta de frente, al girar y al alejarse:
+sin negro/halo/shimmer, raíz al suelo y textura que se lea como pasto antes de
+llevar cualquier decisión a la pradera.
+
+**Paleta de la carta (2026-08-10, abierto).** La ilustración inicial era más
+oliva/amarilla que las briznas. El primer recolor apuntó al gradiente real de
+la pradera, pero era el objetivo incorrecto para este banco: sus referencias
+LOD0/LOD1 usan la copia `unlit` opaca de `FoliageCommon`, `#529438`. El RGB de
+la carta queda anclado a ese verde y conserva el relieve de la ilustración sólo
+como claro/oscuro; su alpha quedó idéntico byte a byte. Así la caja responde
+honestamente *"¿la carta se lee junto a estas briznas?"*. No valida todavía
+producción: allí intervienen el gradiente lineal, variación por brizna,
+iluminación, niebla y transmisión de la pradera real.
+
+**Recorte de base y separación (2026-08-10, abierto).** Se modifica sólo el
+alpha de la carta. El primer intento extendió cuatro raíces hacia filas sin
+arte RGB y reveló bloques verdes; se descarta. La máscara vuelve a su silueta
+base y se le tallan únicamente tres entrantes anchos y asimétricos desde el
+borde inferior existente hacia arriba. No se pinta alpha nuevo: RGB queda
+idéntico y `alpha_nuevo ≤ alpha_base` píxel a píxel. La mata puede flotar un
+poco, por decisión del checkpoint, pero la línea horizontal se rompe sin
+rectángulos ni microdientes. Esto no ahorra el coste del rectángulo alpha ni
+compensa cobertura de pradera: es únicamente el checkpoint de lectura de la
+carta.
+
+**Adopción de la carta ilustrada en Pasto (2026-08-10, abierto).** Aprobada la
+lectura del banco, la imagen pasa a `T_GrassMeadowCard_Albedo.png`; el banco la
+carga como consumidor, nunca al revés. **No** se llevó su quad ECS de 4,8 m a
+la pradera: habría roto el batching de `GrassChunk`, los registros de 16 B y la
+transición por brizna. La producción conserva su malla índice instanciada de
+dos triángulos, tamaño, anillos y draws; sólo las briznas que `blade_is_card`
+ya seleccionaba muestrean la ilustración en `grass.wgsl`.
+
+La imagen no reemplaza la luz de la pradera: su RGB aporta variación de
+luminosidad normalizada y el shader conserva degradado, tinte determinista,
+luz, niebla y transmisión. Su alpha reemplaza la silueta procedural. Color y
+prepass llaman a la misma muestra; el prepass descarta bajo 0,5, el mismo cutoff
+con que `AlphaToCoverage` cae a `Mask` sin MSAA. El checkpoint jugado rechazó el
+fallback heredado que bajo 5 px volvía la carta un rectángulo sólido. Se retira:
+el alpha de la ilustración manda a toda distancia. Esto puede reabrir shimmer o
+puntos de cielo subpíxel; es un riesgo explícito de checkpoint, no una razón
+para esconder la silueta aprobada detrás de un bloque.
+
+La huella/densidad queda **provisional**: `CARD_SILHOUETTE_AREA = 0,583` es la
+calibración de la carta procedural, no una afirmación sobre el PNG. La máscara
+visible de la fuente a alpha ≥0,4 es 35,63% del rectángulo, pero su área efectiva
+depende de la distancia y del filtrado alpha. Antes de tocar la escalera se mide
+`grass-view=medir` por anillo y distancia; bajar o subir densidad sin esa tabla
+sería una regresión disfrazada de reducción de triángulos. El PNG aún no tiene
+mips: es deuda explícita del pipeline, a vigilar por shimmer durante el
+checkpoint jugado. La captura técnica válida conserva 5 draws (3 de pradera);
+no se declara una mejora de ms ni de triángulos hasta comparar A/B repetible.
+
+**Carta más ancha, menos instancias vivas (2026-08-10, abierto).** Por pedido
+del checkpoint se ensancha `CARD_WIDTH` de 0,25 a **0,30 m** (+20%). No hay una
+segunda perilla de densidad: `footprint_m = ancho × 0,583` alimenta
+`minimum_density`, así que donde una brizna ya es Card la ley pide 0,25/0,30 =
+**16,7% menos**. AABB, uniform de media anchura y la variación ±30% derivan de
+la misma constante. Es una primera escala moderada: 0,35 m ampliaría 40% el
+salto duro púa→carta antes de medirlo.
+
+No confundir “menos cartas vivas lejos” con “menos triángulos enviados”: la
+malla índice del anillo exterior se dimensiona por su borde interior, que aún
+usa púas, y manda 2 tris por registro incluso cuando el shader colapsa una
+brizna fuera de alcance. El criterio de este paso es la lectura en 35–65 m y
+el coste de fragmentos; bajar el conteo de triángulos requiere otro cambio de
+representación, no falsear el presupuesto. La huella alpha del PNG sigue
+provisional y exige `grass-view=medir` antes de dar esta densidad por calibrada.
+
 **Varianza de ancho por carta.** El diagnóstico de siempre: la carta mira
 siempre a cámara y por eso muestra *siempre* su ancho completo, mientras que
 una púa real tiene orientación fija en el mundo y casi siempre se ve de

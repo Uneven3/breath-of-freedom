@@ -24,6 +24,14 @@ pub use bof_simulation::world::{
 
 pub struct WorldPlugin;
 
+/// Presentation state that other render-facing systems consume in the same
+/// frame. Keeping this boundary explicit prevents consumers from observing the
+/// previous frame's light while the clock has already advanced.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WorldPresentationSet {
+    Lighting,
+}
+
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         // El gemelo de simulación lo instala `SimulationPlugin`, no esto: Bevy
@@ -63,7 +71,7 @@ impl Plugin for WorldPlugin {
         app.add_systems(
             Update,
             (
-                day_night::apply_sun,
+                day_night::apply_sun.in_set(WorldPresentationSet::Lighting),
                 day_night::place_sky_discs,
                 day_night::apply_cascade_config,
                 day_night::apply_shadow_map_size,

@@ -31,7 +31,7 @@ impl PerfProfile {
 
     pub const fn msaa_label(self) -> &'static str {
         match self {
-            Self::Desktop => "off",
+            Self::Desktop => "2x",
             Self::Mobile => "4x",
         }
     }
@@ -366,7 +366,7 @@ impl Default for PerfToggles {
             grass_growth_step: 0,
             grass_debug_step: 0,
             render_scale_step: 0,
-            msaa_step: 0,
+            msaa_step: 2,
         }
     }
 }

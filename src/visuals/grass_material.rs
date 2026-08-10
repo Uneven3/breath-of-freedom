@@ -67,6 +67,9 @@ pub struct GrassUniform {
     pub blade_waist: f32,
     /// `x` = registros por chunk de este nivel, `y` = su forma (`BladeShape`).
     pub record_layout: UVec4,
+    /// Radiancia de sol y ambiente ya escaladas (`w` sin usar): la brizna no llama a `apply_pbr_lighting`.
+    pub sun_color: Vec4,
+    pub ambient_color: Vec4,
     /// La paleta de diagnóstico, un color por anillo.
     pub ring_colors: [Vec4; crate::visuals::grass_debug::PALETTE_SLOTS],
 }
@@ -110,6 +113,8 @@ impl Default for GrassUniform {
             blade_lean: 0.0,
             blade_waist: 0.0,
             record_layout: UVec4::ZERO,
+            sun_color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            ambient_color: Vec4::new(0.2, 0.2, 0.2, 1.0),
             ring_colors: [Vec4::ONE; crate::visuals::grass_debug::PALETTE_SLOTS],
         }
     }
@@ -134,6 +139,16 @@ impl MaterialExtension for GrassExtension {
     }
 
     fn fragment_shader() -> ShaderRef {
+        "shaders/grass.wgsl".into()
+    }
+
+    // El prepass default transforma un atributo de posición horneado; esta
+    // brizna no tiene uno. Detalle en `grass.wgsl` (`PREPASS_PIPELINE`).
+    fn prepass_vertex_shader() -> ShaderRef {
+        "shaders/grass.wgsl".into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
         "shaders/grass.wgsl".into()
     }
 }

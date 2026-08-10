@@ -1042,7 +1042,133 @@ Tres cosas, y conviene no mezclarlas:
 sacar el código de la carta, se apagó su uso — todo blade que hubiera sido
 carta ahora es púa engordada (`spike_growth_scale`, 1,0×→3,0×), por pedido
 explícito de comparar las dos sin perder ninguna. `true` vuelve a lo de antes
-sin tocar nada más. Falta jugarlo.
+sin tocar nada más.
+
+**Reactivadas con `AlphaToCoverage` (2026-08-09, jugado):** el usuario decidió
+volver a probar pese al diagnóstico —*"siempre muestra su ancho completo"*,
+arriba— porque los árboles van a necesitar billboards de todos modos. El
+recorte de silueta dejó el `discard` puro por uno que sólo descarta lejos del
+borde y difumina ~1 px alrededor, que `AlphaMode::AlphaToCoverage` (con MSAA
+2x, ya default) convierte en cobertura de muestras en vez de un salto binario.
+**Jugado: "funciona", pero el anillo lejano sigue leyéndose distinto** — el
+borde suave no tocó la causa real (mirar siempre a cámara), tal como se
+sospechaba. Se acepta por ahora — con menos triángulos que antes, no es la
+misma cuenta que perdía la sesión pasada. Detalle de rendimiento en
+`AHORA.md` → *Cierre del 2026-08-09*.
+
+### El agujero pasados los 64 m: empujado, no cerrado (2026-08-09)
+
+El plan de siempre había sido *"ahí después va la niebla"* (§*El billboard no
+era el color: era el suelo pelado*, 2026-08-07). Se probó —niebla empujada a
+40-80 m, tope 70%— y jugado no funcionó: una niebla puesta a propósito para
+esconder algo se nota como eso, no como profundidad (investigación de cómo la
+usa BOTW: reserva la opacidad real a escenas autoradas, no a tapar bordes de
+LOD). La niebla volvió a lo gradual (`camera/mod.rs`).
+
+Segundo intento: el último nivel pasó de **64 a 128 m** (`chunk_m` 32→64 con
+él, misma proporción que los otros dos). `MEADOW_VIEW_TRIANGLES` subió de 4 a
+5 millones para admitirlo. **Jugado y no alcanzó:** *"sigo viendo el corte,
+pero más lejos."* Correr el número más lejos mueve el síntoma sin tocar la
+causa — **no seguir por ahí**; si se retoma, hace falta una técnica distinta
+(vestir el terreno con otra cosa que no sea brizna, o una transición que no
+dependa de un alcance). Aparcado a pedido del usuario para pasar a optimizar.
+
+### Los anillos como arquitectura, confirmados (2026-08-09/10)
+
+El usuario venía quejándose de los anillos desde el 2026-08-08 sin que
+ninguna captura lo mostrara con claridad. Pedido explícito: *"ejecuta el
+juego y te saco una foto, porque eso está clarísimo con la herramienta de
+colores"* — `grass-view=medir` (color plano por anillo, hecho a propósito
+para contar píxeles) mostró tres bandas con borde nítido y horizontal,
+prácticamente un círculo alrededor de la cámara.
+
+**Contra la tabla de BOTW observado** (arriba, *Lo que se observa en BOTW*):
+su LOD también cambia con la distancia a cámara —brota, cambia de forma,
+converge de color— así que geométricamente también tiene que tener algún
+límite centrado en la cámara; no hay forma de que un LOD screen-space-driven
+no lo tenga. La lectura, sin fuente oficial: BOTW no evita el círculo, lo
+**disimula** (ruido, densidad decreciente, color convergiendo al terreno).
+Un dato de la misma tabla reencuadra la queja del billboard: *"a media
+distancia aparece una estera repetida... se delata por una línea horizontal
+en la base"* — el card mesh de BOTW también se nota, así que "se lee
+distinto" puede no ser un bug nuestro sin resolver, sino la misma limitación
+de la técnica real.
+
+**Plan acordado, tres técnicas en orden, checkpoint entre cada una:**
+1. Mezclar los tres assets (2 tris / 1 tri / card mesh) para que el card mesh
+   se vea igual al pasto de 1 triángulo.
+2. Ruido perturbando la distancia de cada anillo — ataca el círculo en sí.
+3. Sesgo de LOD por posición en pantalla (más barato en los bordes de cámara)
+   — más caro/riesgoso (puede hacer que una brizna cambie de forma al girar
+   la cámara, no al caminar), al final a propósito.
+
+### Técnica 1: mezclar los tres assets (2026-08-10, "suficientemente bien
+por ahora")
+
+**Varianza de ancho por carta.** El diagnóstico de siempre: la carta mira
+siempre a cámara y por eso muestra *siempre* su ancho completo, mientras que
+una púa real tiene orientación fija en el mundo y casi siempre se ve de
+perfil. No se tocó el eje (`camera_right`): girar la carta reintroduce el
+hueco de cobertura que el billboard existe para evitar. En cambio, ancho por
+brizna (`hash_position(record.xy, 3u)`, ±30% centrado en 1.0 — no desplaza la
+media, no toca la ley de densidad). Efecto real pero sutil en captura: rompe
+el empedrado uniforme, no lo resuelve solo.
+
+**Bug propio, encontrado y arreglado en el camino: puntos de cielo en el
+anillo lejano.** Reportado por el usuario jugando, confirmado con F7. Causa:
+`card_silhouette` mete ~6 dientes a lo ancho de la carta; cuando la carta
+entera mide un par de píxeles en pantalla, cada píxel ya cruza varios
+dientes y su valor puntual cae cerca de algún borde **casi siempre** — no es
+que la banda de antialiasing sea ancha, es que el patrón entero se volvió
+ruido de muestreo. `AlphaToCoverage` convierte ese ruido en cobertura
+fraccional de MSAA, y lo que se cuela por el hueco es el cielo. Dos
+intentos:
+- Acotar `card_aa_width` (`CARD_AA_MAX`) — no alcanzó solo, queda como
+  defensa de segunda línea.
+- **El real:** apagar el recorte dentado por completo bajo
+  `CARD_SILHOUETTE_MIN_PIXELS` (ancho de la carta en píxeles), y dibujar un
+  bloque sólido — la misma lógica que ya usa la escalera hoja→púa→carta.
+  Primer valor (16 px) estaba mal calculado: una carta recién nacida
+  (`card_from_m`, ~35-65 m con el reparto por brizna) ya mide 5-9 px, por
+  debajo de 16 — apagaba el dentado **siempre**, no sólo lejos, y volvió las
+  cartas un bloque liso reportado por el usuario (*"se nota mucho la
+  diferencia entre el cardmesh y el pasto generado"*). Corregido a 5 px
+  (`326/5 ≈ 65 m` con el cálculo de `card_from_m`) — recupera el dentado en
+  el rango donde las cartas realmente viven.
+
+**Los dientes nunca se habían recalibrado contra el ancho actual de la
+carta.** Con 7 y 5 columnas sobre `CARD_WIDTH = 0,25 m` (bajó de 0,5 el
+2026-08-08 y estos números quedaron como estaban — advertido en el propio
+código), cada diente medía 3,6 y 5 cm — **más angosto que una brizna real**
+(`BLADE_WIDTH` = 5,7 cm). Un diente más chico que una brizna no puede leer
+como "unas briznas juntas": es detalle de sub-píxel garantizado. Bajado a
+**3 y 2** columnas (coprimos, igual que antes) — 8,3 y 12,5 cm por diente,
+más anchos que una brizna.
+
+**Cambiar el conteo de dientes cambia la integral, no sólo el ancho —
+medido, e intentado remedir sin éxito.** El propio código ya avisaba: *"si
+cambiás estos números, actualizá `CARD_SILHOUETTE_AREA`"*. Con el valor viejo
+(0,583) tras bajar los dientes, la cobertura de la banda 45-64 m
+(`grass-view=6`, mirador `0,20,0` mirando `0,-0.2,0.98`) cayó a **46,7%**.
+Dos pasadas de la inversión de Poisson que usa `shot_stats::estimate_density`
+(`a = −ln(1−C)/λ`) llevaron el valor a 0,583 → 0,122 → 0,098, con la banda
+midiendo **91,9%** — pero **rompió `every_distance_gets_the_density_it_demands`
+/ `the_living_density_is_the_one_the_law_asks_for`**: a 50 m la escalera
+(`grass_tiles::reach_ladder`) sólo entrega 10/m² cuando la ley con esa área
+pide 13,2/m². Medir una banda de pantalla no prueba que la ley se cumpla en
+*todas* las distancias — el test sí las mide todas, y el `cargo test` de
+cierre de sesión lo agarró. Una lectura de código durante el intento —que la
+escalera reparte una capacidad fija y sólo "redistribuye" en vez de faltar—
+quedó **refutada** por el propio test. Revertido a 0,583 para no dejar un
+test roto: **la carta queda rala con los dientes nuevos**, deuda declarada,
+no resuelta esta sesión. Antes de reintentar: entender por qué la escalera
+no alcanza a 50 m con una demanda mayor, no sólo remedir una banda distinta.
+
+**Estado:** el usuario lo dio por suficiente por ahora, sin cerrar la
+técnica del todo — quedó pendiente ver si el card mesh sigue leyéndose
+distinto jugando (no sólo en captura estática), y la densidad de la carta
+sigue rala (ver arriba). Técnica 2 (ruido en el límite del anillo) y 3
+(sesgo por pantalla) quedan para la próxima sesión.
 
 ### Detrás, y sólo después
 

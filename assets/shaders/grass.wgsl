@@ -16,29 +16,46 @@
 //   uv1.x  hash de la brizna, con el *lado* del quad en el signo
 //   uv1.y  altura de la brizna en metros
 //
-// El prepass sigue usando el vertex shader por defecto. Hoy no hay prepass
-// activo, pero desde que este vértice mueve la posición (viento), el día que se
-// active hay que declarar `prepass_vertex_shader` con el mismo desplazamiento o
-// la profundidad no va a coincidir con lo que se ve.
+// **El prepass tiene su propio vertex y fragment, no el default de Bevy**
+// (2026-08-09): éste vértice reconstruye la brizna desde `blade_records`, así
+// que el vertex de prepass default —que sólo transforma un atributo de
+// posición horneado— no puede reproducir la misma geometría, y sin eso la
+// profundidad no coincidiría con lo que el pase principal dibuja. Ambos
+// caminos llaman a `build_blade`, para que no puedan divergir con el tiempo.
+// Y el fragment de prepass default tampoco alcanza: no conoce el recorte de
+// silueta procedural de la carta (`card_silhouette`), que no es un canal de
+// alfa de textura — sin recortarlo ahí, el prepass escribiría profundidad
+// para el cuadrado entero de cada carta en vez de su silueta, y algo detrás
+// del hueco recortado se perdería por early-Z contra una silueta que el pase
+// principal nunca dibuja.
+//
+// `NormalPrepass` va siempre junto a `DepthPrepass` (`camera/mod.rs`): con
+// sólo depth, Bevy bindea un material bind group **vacío** para materiales
+// opacos (`is_depth_only_opaque_prepass`, bevy_pbr 0.19
+// `prepass/mod.rs:381`) — y el vertex necesita `blade_records`, que vive en
+// ese bind group, para reconstruir la brizna. Sin `NormalPrepass` el prepass
+// no puede funcionar, no es una opción de calidad.
 
+// `mesh_functions`, `view` y `position_world_to_clip` afuera del `#ifdef`:
+// tanto el vertex principal como el de prepass reconstruyen la brizna
+// (`build_blade`, más abajo) y los necesitan los dos. Antes vivían sólo en la
+// rama `#else` porque el prepass no tenía vertex propio — el día que lo tuvo,
+// habría faltado el import.
 #import bevy_pbr::{
     pbr_types,
     pbr_functions::alpha_discard,
     pbr_fragment::pbr_input_from_standard_material,
+    mesh_functions,
+    mesh_view_bindings::view,
+    view_transformations::position_world_to_clip,
 }
 
 #ifdef PREPASS_PIPELINE
-#import bevy_pbr::{
-    prepass_io::{VertexOutput, FragmentOutput},
-    pbr_deferred_functions::deferred_output,
-}
+#import bevy_pbr::prepass_io::{VertexOutput, FragmentOutput}
 #else
 #import bevy_pbr::{
     forward_io::{Vertex, VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
-    mesh_functions,
-    mesh_view_bindings::view,
-    view_transformations::position_world_to_clip,
 }
 #endif
 
@@ -75,6 +92,11 @@ struct GrassUniform {
     /// depende de cuántos `f32` los precedan, que es donde un campo agregado al
     /// final corre en silencio todo lo que viene después.
     record_layout: vec4<u32>,
+    /// Radiancia del sol, ya escalada por iluminancia. `w` sin usar. Mirror de
+    /// `GrassUniform::sun_color` en `grass_material.rs` — mismo orden, mismo tipo.
+    sun_color: vec4<f32>,
+    /// Lo mismo para la ambiente. `w` sin usar.
+    ambient_color: vec4<f32>,
     ring_colors: array<vec4<f32>, 8>,
 }
 
@@ -221,6 +243,24 @@ const CARD_BASE_FILL: f32 = 0.28;
 /// masa, no su ancho, y recortar puntas la baja. Subir el piso de los dientes
 /// devuelve altura sin devolver el borde plano: 97,4% *(a, 2026-08-07)*.
 const CARD_TIP_MIN: f32 = 0.75;
+/// Techo del ancho de antialiasing del recorte (ver su uso en `fragment`). El
+/// rango completo de `card_silhouette` en `card_distance` mide `1 −
+/// CARD_BASE_FILL ≈ 0,72`; un techo bien por debajo de eso garantiza que
+/// quede un núcleo sólido en el centro de la carta aunque `fwidth` explote a
+/// distancia. Valor a ojo, para jugarlo — no midió una banda como
+/// `CARD_TIP_MIN`.
+const CARD_AA_MAX: f32 = 0.12;
+/// Ancho mínimo de la carta en píxeles para dibujar su silueta dentada. Por
+/// debajo, se pierde el detalle y se dibuja un bloque sólido — ver
+/// `resolve_silhouette` en `fragment`.
+///
+/// **16 estaba mal — apagaba el dentado siempre, no sólo lejos.** Una carta
+/// recién nacida (umbral `card_from_m`, ~35-65 m con el reparto por brizna)
+/// ya mide 5-9 px, por debajo de 16: nunca llegaba a dibujar un diente. El
+/// valor tiene que caer bien por debajo de dónde una carta nace, no por
+/// encima — 5 px dice "todavía faltan más de 60-70 m para este umbral"
+/// (`326/5 ≈ 65 m` con el cálculo de `card_from_m`). A ojo, para jugarlo.
+const CARD_SILHOUETTE_MIN_PIXELS: f32 = 5.0;
 
 /// La silueta de la carta: qué altura tiene la masa de pasto en esta columna.
 ///
@@ -251,11 +291,17 @@ fn card_silhouette(u: f32, phase: f32) -> f32 {
     // predecía 99%, y ese hueco es justamente la correlación que Poisson supone
     // que no existe.
     //
-    // El período de cada capa, en briznas por carta. Una carta mide 0,5 m y una
-    // brizna 5,5 cm, así que nueve entran justas; siete y cinco dejan que las dos
-    // capas se crucen sin repetir el mismo diente.
-    let a = card_teeth(u, 7.0, phase);
-    let b = card_teeth(u, 5.0, 0.37 + phase * 1.7);
+    // El período de cada capa, en dientes por carta. **Recalibrado 2026-08-10
+    // (era 7 y 5).** La carta bajó a 0,25 m el 2026-08-08 y estos números
+    // nunca se movieron con ella: con 7 dientes, cada uno medía 3,6 cm —
+    // *más angosto que una brizna real* (`BLADE_WIDTH` = 5,7 cm) — así que
+    // ninguna pantalla a distancia de juego podía resolverlos como "unas
+    // briznas juntas"; sólo podía leerlos como ruido. Tres y dos, coprimos
+    // igual que antes, dan dientes de 8,3 y 12,5 cm — más anchos que una
+    // brizna, lo mínimo para que la silueta lea como un grupo de puntas y no
+    // como textura de sub-píxel.
+    let a = card_teeth(u, 3.0, phase);
+    let b = card_teeth(u, 2.0, 0.37 + phase * 1.7);
     // El piso: abajo la masa está llena. Sin esto la carta se abre hasta la
     // tierra y deja pasar el suelo entre las puntas.
     return max(max(a, b), CARD_BASE_FILL);
@@ -656,18 +702,29 @@ fn blade_vertex(shape: u32, corner: u32, height: f32, world_xz: vec2<f32>, spike
 
 const TAU: f32 = 6.2831853;
 
-#ifndef PREPASS_PIPELINE
-@vertex
-fn vertex(vertex: GrassVertex) -> VertexOutput {
-    var out: VertexOutput;
+/// Lo que la brizna necesita para ir a cualquiera de los dos `VertexOutput`
+/// posibles (principal o prepass) — ver la nota de arriba del porqué hay dos
+/// caminos.
+struct BuiltBlade {
+    world_position: vec4<f32>,
+    world_normal: vec3<f32>,
+    uv: vec2<f32>,
+    uv_b: vec2<f32>,
+}
 
+/// La reconstrucción entera de una brizna: qué registro le toca, qué forma
+/// tiene a esta distancia, viento y colapso por crecimiento. Un solo lugar
+/// para las dos etapas que la necesitan (principal y prepass), para que no
+/// puedan divergir — sería exactamente la clase de bug que un desfasaje de
+/// profundidad no avisa solo.
+fn build_blade(instance_index: u32, address: vec2<f32>) -> BuiltBlade {
     // **Nada de esto viene de la malla salvo una dirección**: qué brizna del
     // chunk y qué esquina de ella. Todo lo demás sale de un registro de 16 bytes
     // que el chunk tiene en el buffer, ubicado por el `MeshTag` —su casillero
     // dentro del nivel, con stride fijo—.
-    let slot = mesh_functions::get_tag(vertex.instance_index);
-    let blade = u32(vertex.address.x);
-    let corner = u32(vertex.address.y);
+    let slot = mesh_functions::get_tag(instance_index);
+    let blade = u32(address.x);
+    let corner = u32(address.y);
     let record = blade_records[slot * grass_data.record_layout.x + blade].base_and_shape;
 
     // `uv1.y` llevaba dos números en uno y el registro los sigue llevando: el
@@ -696,8 +753,8 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
         record.y + built.offset.z,
         1.0,
     );
-    out.uv = vec2<f32>(record.z, height_factor);
-    out.uv_b = vec2<f32>(side * blade_hash, record.w);
+    var uv = vec2<f32>(record.z, height_factor);
+    var uv_b = vec2<f32>(side * blade_hash, record.w);
 
     // **La carta se abre acá, y sólo tan lejos como corresponda.** Sus cuatro
     // vértices vienen horneados en el mismo punto —el centro de la base— y se
@@ -721,9 +778,23 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
         // propio alcance — ver `card_growth_scale`. En el umbral vale 1.0, así
         // que el salto de hoja a carta sigue midiendo lo mismo que antes.
         let growth = card_growth_scale(distance_to_focus, card_distance_for(blade_height), blade_reach);
+        // **Varianza de ancho por carta (técnica 1 de 3, `NORTE.md`/discusión
+        // 2026-08-09).** El diagnóstico de siempre seguía sin resolverse: la
+        // carta mira siempre a cámara y por eso muestra **siempre** su ancho
+        // completo, mientras que una púa real tiene orientación fija en el mundo
+        // y la mayoría de las veces se ve de perfil. No se toca el eje (`side *
+        // camera_right`): girar la carta reintroduce el hueco de cobertura que el
+        // billboard existe para evitar (comentario de arriba). En cambio se
+        // reparte el **ancho** por brizna — mismo billboard, distinta huella —
+        // que aproxima la variedad que una población de púas mostraría sin
+        // arriesgar una carta de canto. Rango ±30% **centrado en 1.0**: no
+        // desplaza la media, así que `footprint_m()` y la ley de densidad de
+        // `minimum_density` siguen valiendo sin tocarlas.
+        let width_seed = hash_position(record.xy, 3u);
+        let width_scale = mix(0.7, 1.3, width_seed);
         world_position = vec4<f32>(
             world_position.xyz
-                + camera_right * (side * grass_data.card_half_width * growth)
+                + camera_right * (side * grass_data.card_half_width * growth * width_scale)
                 + vec3<f32>(0.0, height_factor * blade_height * growth, 0.0),
             world_position.w,
         );
@@ -765,11 +836,6 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
         blade_growth(world_position.xz, blade_reach),
     );
 
-    out.world_position = world_position;
-    // Clip space, no world space: la posición que sale del vertex shader es la
-    // que el rasterizador proyecta.
-    out.position = position_world_to_clip(world_position.xyz);
-    out.world_normal = blade_normal(side, world_position.xz);
     // **La carta cambia lo que lleva en `uv_b.x`**: en vez del hash con el lado
     // en el signo, el lado a secas. Interpolado a lo ancho da −1 en un borde y
     // +1 en el otro, que es la coordenada que la silueta necesita y que de otro
@@ -779,16 +845,70 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // El hash ya hizo su trabajo acá arriba, así que no se pierde nada más que la
     // vista `brizna` sobre las cartas, que pasa a ser un degradado a lo ancho.
     if as_card {
-        out.uv_b = vec2<f32>(side, out.uv_b.y);
+        uv_b = vec2<f32>(side, uv_b.y);
     }
+
+    var out: BuiltBlade;
+    out.world_position = world_position;
+    out.world_normal = blade_normal(side, world_position.xz);
+    out.uv = uv;
+    out.uv_b = uv_b;
+    return out;
+}
+
+#ifndef PREPASS_PIPELINE
+@vertex
+fn vertex(vertex: GrassVertex) -> VertexOutput {
+    var out: VertexOutput;
+    let built = build_blade(vertex.instance_index, vertex.address);
+    out.world_position = built.world_position;
+    // Clip space, no world space: la posición que sale del vertex shader es la
+    // que el rasterizador proyecta.
+    out.position = position_world_to_clip(built.world_position.xyz);
+    out.world_normal = built.world_normal;
+    out.uv = built.uv;
+    out.uv_b = built.uv_b;
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = vertex.instance_index;
 #endif
-
     return out;
 }
 #endif
 
+/// El vértice que el prepass lee. **`address` en `location(1)`, no `(2)`**: en
+/// `prepass_io::Vertex` (bevy_pbr 0.19) el hueco que en el principal reserva
+/// `normal`@1 no existe hasta location(3) y detrás de
+/// `NORMAL_PREPASS_OR_DEFERRED_PREPASS`, así que UV0 —donde viaja
+/// `address`— cae un lugar antes. Verificado contra
+/// `prepass/mod.rs::PrepassPipeline::specialize`, que arma el layout real:
+/// `ATTRIBUTE_UV_0.at_shader_location(1)`. Copiar el struct principal tal
+/// cual no compila.
+#ifdef PREPASS_PIPELINE
+struct PrepassGrassVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+    @location(1) address: vec2<f32>,
+}
+
+@vertex
+fn vertex(vertex: PrepassGrassVertex) -> VertexOutput {
+    var out: VertexOutput;
+    let built = build_blade(vertex.instance_index, vertex.address);
+    out.position = position_world_to_clip(built.world_position.xyz);
+    out.world_position = built.world_position;
+    out.uv = built.uv;
+    out.uv_b = built.uv_b;
+#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
+    out.world_normal = built.world_normal;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+    return out;
+}
+#endif
+
+#ifndef PREPASS_PIPELINE
 @fragment
 fn fragment(
     vertex_output: VertexOutput,
@@ -799,24 +919,57 @@ fn fragment(
     // en control de flujo no uniforme no está definida.
     let metres_per_pixel = length(fwidth(in.world_position.xz));
 
-    // **El recorte de la carta, antes que nada.** Va arriba de todo y no junto al
-    // `alpha_discard` del final por una razón concreta: las vistas de diagnóstico
-    // salen antes del PBR, así que un descarte puesto abajo dejaría a `medir`
-    // contando la carta entera —el rectángulo que ya no se dibuja— y el medidor
-    // informaría una cobertura que la imagen no tiene. El instrumento tiene que
-    // ver lo mismo que la pantalla.
-    // La fase sale de `fract(uv1.y)` —la altura de la carta, idéntica en sus
-    // cuatro vértices— por el mismo camino que el tinte por brizna: es el único
-    // identificador que el vértice ya carga.
-    // Y sólo se recorta la que **hoy** es carta: la misma brizna, más cerca de su
-    // umbral, es una hoja y no lleva silueta que recortar.
-    if blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y))
-        && blade_height_factor(in.uv)
-            > card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0)) {
-        discard;
+    // **El recorte de la carta, antes que nada — mismo motivo que arriba.** La
+    // distancia a la silueta y su ancho en pantalla también salen de un `fwidth`,
+    // así que también viajan afuera de cualquier branch. Calculados para toda
+    // brizna, no sólo cartas: es el mismo precio que ya paga `metres_per_pixel`.
+    let card_height = blade_height_factor(in.uv);
+    let card_silhouette_edge = card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0));
+    let card_distance = card_height - card_silhouette_edge;
+    // Acotado y no sólo `max`: sostiene un núcleo sólido en el centro de la
+    // carta aunque `fwidth` crezca — defensa de segunda línea. La primera es
+    // `resolve_silhouette`, más abajo: a esta distancia el problema real no es
+    // el ancho de la banda, es que el patrón entero (7 y 5 dientes) ya no
+    // entra en un par de píxeles.
+    let card_aa_width = clamp(fwidth(card_distance), 1e-5, CARD_AA_MAX);
+
+    // **Puntos de cielo en el anillo lejano — reportado y visto en captura el
+    // 2026-08-10.** `card_silhouette` mete ~6 dientes a lo ancho de la carta;
+    // cuando la carta entera mide un par de píxeles, cada píxel ya cruza
+    // varios dientes y su valor puntual (un sample, no un promedio del
+    // patrón) cae close al borde de alguno **casi siempre** — no es que la
+    // banda de antialiasing se agrande, es que el patrón se volvió ruido de
+    // muestreo. `AlphaToCoverage` convierte ese ruido en cobertura fraccional
+    // de MSAA, y lo que se cuela por el hueco es el cielo. Acotar
+    // `card_aa_width` (arriba) no alcanza: casi todo píxel ya "está cerca de
+    // un borde" aunque la banda sea angosta. La solución es la misma que ya
+    // usa la escalera hoja/púa/carta: apagar el detalle que la pantalla no
+    // puede resolver, no perseguirlo con más antialiasing.
+    let card_width_px = (grass_data.card_half_width * 2.0) / max(metres_per_pixel, 1e-6);
+    let resolve_silhouette = card_width_px >= CARD_SILHOUETTE_MIN_PIXELS;
+
+    // **Descarta lejos del borde, difumina cerca.** Con `AlphaToCoverage` un
+    // alfa fraccional se convierte en cobertura de muestras MSAA en vez de en
+    // transparencia real — pero sólo sirve si el borde en sí no es un salto de
+    // 0 a 1. El `discard` se queda para el grueso de lo recortado (barato, y
+    // las vistas `medir`/`subpixel` de abajo siguen viendo lo mismo que la
+    // pantalla ahí); sólo la banda de ~1 píxel alrededor del borde pasa a
+    // alfa suave. Esa banda es la única parte que `medir`/`subpixel` miden
+    // distinto de lo que se dibuja — error acotado a un píxel de silueta.
+    //
+    // Y sólo se recorta la que **hoy** es carta y se resuelve en pantalla: la
+    // misma brizna, más cerca de su umbral, es una hoja y no lleva silueta que
+    // recortar; y lejos de `resolve_silhouette`, la carta se dibuja como
+    // bloque sólido — pierde los dientes, pero deja de ser un colador.
+    var card_alpha = 1.0;
+    let is_card_blade = blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y));
+    if is_card_blade && resolve_silhouette {
+        if card_distance > card_aa_width {
+            discard;
+        }
+        card_alpha = clamp(0.5 - card_distance / card_aa_width, 0.0, 1.0);
     }
 
-#ifndef PREPASS_PIPELINE
     // **Sub-píxel**: en bandas planas y exactas, no en una rampa.
     //
     // Una rampa continua se mira; una banda se **cuenta**. La pregunta que esta
@@ -873,7 +1026,6 @@ fn fragment(
         );
         return measured;
     }
-#endif
 
     // El PBR entero primero: sin esto el pasto sale plano, sin luz, sin sombras
     // y sin niebla, que es exactamente lo que `ExtendedMaterial` existe para
@@ -963,15 +1115,21 @@ fn fragment(
         colour.a,
     );
 
-    pbr_input.material.base_color = colour;
+    pbr_input.material.base_color = vec4<f32>(colour.rgb, colour.a * card_alpha);
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-#ifdef PREPASS_PIPELINE
-    return deferred_output(in, pbr_input);
-#else
     var out: FragmentOutput;
-    out.color = apply_pbr_lighting(pbr_input);
+    // **Experimento 2026-08-09**: no `apply_pbr_lighting`. Ese pipeline evalúa
+    // luces clusterizadas (point/spot) y sombra por fragmento — carísimo en un
+    // frame fill-bound donde el pasto es el 98% de los píxeles, y ninguna luz
+    // puntual dinámica ilumina la pradera hoy (no hay ninguna en el juego). Una
+    // sola difusa direccional + ambiente plano, con los mismos `sun_color` /
+    // `ambient_color` que ya sigue el ciclo día/noche. Si se mide que no ahorra
+    // lo suficiente, esto vuelve a `apply_pbr_lighting(pbr_input)`.
+    let n_dot_l = max(dot(pbr_input.N, normalize(grass_data.sun_direction)), 0.0);
+    let lit = grass_data.ambient_color.rgb + n_dot_l * grass_data.sun_color.rgb;
+    out.color = vec4<f32>(pbr_input.material.base_color.rgb * lit, pbr_input.material.base_color.a);
 
     // Transmisión a contraluz: la luz atraviesa la hoja. Es lo que separa "hay
     // pasto" de "hay un campo vivo", y sólo aparece cuando el sol está detrás
@@ -988,5 +1146,39 @@ fn fragment(
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
-#endif
 }
+#endif
+
+/// El fragment del prepass: sólo el recorte de silueta de carta y, si hace
+/// falta, la normal — nada de color, tinte ni PBR. Es la mitad barata a
+/// propósito: correr el resto acá otra vez pagaría en el prepass el mismo
+/// costo que el prepass existe para evitarle al pase principal.
+///
+/// **`AlphaToCoverage` con MSAA prendido no dispara el `MAY_DISCARD` del
+/// prepass default** (`alpha_mode_pipeline_key` en `material.rs` de
+/// bevy_pbr: con MSAA ≠ `Off` cae a `BLEND_ALPHA_TO_COVERAGE`, no
+/// `MAY_DISCARD`) — y aunque lo disparara, ese camino lee `base_color` de
+/// una textura, no la silueta procedural de acá. Sin este fragment propio,
+/// el prepass escribiría profundidad para el cuadrado entero de cada carta
+/// en vez de su silueta recortada.
+#ifdef PREPASS_PIPELINE
+@fragment
+fn fragment(in: VertexOutput) -> FragmentOutput {
+    // Mismo cálculo que el pase principal (ver ahí el porqué); acá sólo
+    // interesa el corte binario, no la banda de antialiasing de ~1 píxel —
+    // para profundidad no hay nada que suavizar.
+    let card_height = blade_height_factor(in.uv);
+    let card_silhouette_edge = card_silhouette(in.uv_b.x, fract(fract(in.uv_b.y) * 91.0));
+    let card_distance = card_height - card_silhouette_edge;
+    let is_card_blade = blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y));
+    if is_card_blade && card_distance > 0.0 {
+        discard;
+    }
+
+    var out: FragmentOutput;
+#ifdef NORMAL_PREPASS
+    out.normal = vec4<f32>(normalize(in.world_normal) * 0.5 + vec3<f32>(0.5), 1.0);
+#endif
+    return out;
+}
+#endif

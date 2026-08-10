@@ -77,12 +77,82 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
   `Schedule::initialize` el grafo ya no resuelve nombres. Revertila después —
   crea otra variante en el build compartido.
 
-## Foco inmediato (2026-08-09)
+## Cierre del 2026-08-09 — optimización de la pradera, y una alerta para la próxima sesión
 
-Al retomar: **empezar a optimizar la pradera** — pedido explícito al cerrar,
-*"el feeling recién se está logrando"*. Primer paso: `BOF_BENCH=grass cargo
-run`; el último número conocido (12,94 ms de 15,29) es de antes de los tres
-niveles y ya no vale.
+**Objetivo:** acercar la pradera al target de `NORTE.md` (900p30), pedido
+explícito comparando contra BOTW. Antes de tocar código: `NotShadowCaster`/
+`NotShadowReceiver` en `grass.rs` **ya estaban** desde semanas atrás — no hubo
+que redescubrirlos.
+
+**Hecho y jugado, en orden:**
+1. **Iluminación barata.** El fragment llamaba a `apply_pbr_lighting` —PBR
+   completo, luces clusterizadas y sombra— para el 98% de los píxeles del
+   cuadro. Reemplazado por difusa direccional + ambiente plano
+   (`sun_color`/`ambient_color`, nuevos en `GrassUniform`, alimentados desde
+   la luz real). **Baseline GPU 10,53 → 7,11 ms (−32%)**, escala con densidad
+   (costo por fragmento, no offset fijo). De paso, bug real no introducido
+   hoy: `track_meadow_focus` buscaba el sol sin desambiguar `Sun` de
+   `MoonLight` (los dos llevan `DirectionalLight`) — `sun_direction` estuvo
+   **congelado desde siempre**. Arreglado con el filtro que ya usa
+   `day_night::apply_sun`. **Deuda aceptada:** sin `apply_pbr_lighting`,
+   ninguna luz puntual ilumina el pasto — hoy no hay ninguna, así que no
+   cuesta nada todavía.
+2. **La "V"** (shimmer sólo en movimiento, invisible en captura quieta) se
+   diagnosticó como aliasing de geometría sub-píxel con MSAA apagado —
+   preexistente, no del cambio de luz. Confirmado jugando: MSAA 2x/4x la
+   elimina.
+3. **Ancho de brizna** 5,5→5,7 cm en el anillo 0: `minimum_density` pide
+   densidad inversamente proporcional al ancho, así que bajó sola, misma
+   cobertura al 95%. **−3%**, chico pero real; jugado no se nota. La
+   densidad del anillo 0 (332/m²) queda **aceptada, no a revisar** —
+   *"esa densidad es la que produce el buen feeling"*.
+4. **Cartas reactivadas** (`CARDS_ENABLED = true`) con `AlphaMode::AlphaToCoverage`
+   en vez de `Mask`, y **MSAA 2x pasó a ser el default real** (`PerfToggles::default`
+   y `BenchmarkStep::baseline`, no sólo `profile_msaa` — ese último sólo fija
+   el valor inicial de spawn, `apply_msaa` lo pisa en el primer frame). El
+   recorte de silueta dejó el `discard` puro por uno que sólo descarta lejos
+   del borde y difumina ~1 px alrededor. Decisión del usuario pese al
+   diagnóstico de que el billboard nunca fue un problema de borde duro —
+   porque los árboles van a necesitar billboards de todos modos. **Jugado:
+   "funciona", pero el anillo lejano sigue leyéndose distinto** — el
+   diagnóstico viejo (la carta siempre muestra su ancho completo, a diferencia
+   de una brizna real) sigue sin resolverse; se acepta por ahora, con menos
+   triángulos que antes (la ley de densidad pide ~4× menos cartas que púas
+   para la misma cobertura). Baseline GPU quedó en **~8,16 ms** (sube contra
+   el 7,01 más liviano, a cambio de la V arreglada).
+
+**Depth pre-pass: implementado y andando (2026-08-10), retomado tras el
+reinicio.** La arquitectura ya estaba confirmada (`DepthPrepass` +
+`NormalPrepass`, ver abajo); esta sesión, antes de tocar código, se instaló
+`vulkan-validation-layers` (no estaba — Bevy en dev la pide sola si existe, y
+sin ella un pipeline mal armado puede no dar un error limpio). Se verificó
+además, leyendo `bevy_render::occlusion_culling` (no meshlets — la nota vieja
+de "diferido, la Polaris 11 no los soporta" hablaba de otra cosa), que
+`OcclusionCulling` de Bevy **exige `DepthPrepass`** para objetos enteros
+(no sólo píxeles) — el prerequisito real para cuando entren montañas/piedras.
+Implementación: `prepass_vertex_shader`/`prepass_fragment_shader` propios en
+`grass.wgsl` (comparten la reconstrucción de la brizna, `build_blade`, con el
+vertex principal — nunca pueden divergir), `address`en `location(1)` del
+struct de prepass y no `(2)` (confirmado contra el código fuente de Bevy, no
+supuesto). Encontrado y arreglado en el camino: un resto muerto de
+`deferred_output()` en el fragment que habría fallado al compilar apenas se
+activara `prepass_fragment_shader()`. Probado con `cargo build`, luego
+`BOF_SHOT`/`BOF_BENCH` con timeout duro antes de involucrar al usuario — sin
+cuelgue, sobrevivió el barrido de 11 pasos incluyendo `msaa off`/`msaa 4x`
+(reconstrucción de pipeline).
+
+**Medido: el prepass cuesta, no ahorra, en la pradera sola.** A/B en la misma
+sesión, mismo `BOF_BENCH=grass`: GPU baseline 9,14 ms sin prepass → 9,99 ms
+con. Bevy ya ordena los draws opacos de cerca a lejos, así que el early-Z que
+el prepass ofrece ya estaba mayormente cobrado; el vertex de prepass no es
+gratis (reconstruye la brizna entera una segunda vez). **Decisión explícita
+del usuario: se deja igual.** Es infraestructura para el `OcclusionCulling`
+que viene con las montañas/piedras, no una optimización de hoy — pagar el
+costo ahora evita repetir esta sesión entera cuando lleguen.
+
+**Lo que sigue sin construirse:** resolución dinámica — sabemos que ahorra
+~3 ms (render-scale 50%) pero hoy es sólo una perilla manual, no un sistema
+que se ajuste solo. Occlusion culling depende del mismo prepass de arriba.
 
 ## Estado (2026-08-04)
 
@@ -246,17 +316,59 @@ no cambió nada jugado), era la técnica. `CARDS_ENABLED = false` en `grass.rs`
 saca la carta de la simulación sin sacarla del código; `true` vuelve a lo de
 antes. Detalle en `BOTWGrass.md` → *Tres experimentos del 2026-08-09*.
 
-**La niebla, empujada con techo a propósito (2026-08-09):** llegaba casi
-invisible (~3%) al corte de los 64 m; ahora 40-80 m, tope 70% — *"un poco
-mejor"*, jugado. **No seguir subiéndola**: el arco alcanza 120 m y BOTW se apoya
-en vistas largas — más niebla deja de ser atmósfera y pasa a límite de dibujado.
-Si molesta, vestir el terreno más allá de los 64 m es el arreglo pendiente, no
-otra vuelta de perilla.
+**La niebla, revertida (2026-08-09):** el intento de esa misma mañana —empujarla
+a 40-80 m, tope 70%, para tapar el corte de los 64 m— no funcionó jugado: *"ayer
+intentamos tapar con niebla cosas que no estaban bien, y no funcionó"*.
+Investigación sobre cómo la usa BOTW (fuentes de análisis técnico por reverse
+engineering, no oficiales): reserva la niebla opaca para escenas autoradas
+(tormentas de arena, el bosque Korok) y usa un velo apenas perceptible en el
+resto, atado al arco de vista, nunca a un borde de LOD puntual. Vuelta a
+**45-240 m, tope 30%** — gradual, desacoplada del borde de la pradera.
 
-**Abierto:** optimizar (Foco inmediato, arriba); vestir el terreno más allá de
-los 64 m (arriba); y **los anillos como arquitectura**, que siguen sin
-convencerlo —dicho tres veces el 2026-08-08— aunque con la carta fuera de la
-simulación hoy son dos formas activas, no tres.
+**El agujero en el suelo, empujado pero no cerrado (2026-08-09, jugado):** el
+último nivel llegaba a 64 m y de ahí al horizonte era tierra pelada — anotado
+desde el 2026-08-07 con el plan de taparlo con niebla, plan que se probó y no
+funcionó. En vez de otra perilla de niebla, el último anillo pasó de **64 a
+128 m** (`chunk_m` 32→64 con él). El techo de cordura de la pradera
+(`MEADOW_VIEW_TRIANGLES`, guardrail no objetivo) subió de 4 a 5 millones para
+admitirlo. Jugado: *"sigo viendo el corte, pero más lejos."* Movió el síntoma,
+no lo resolvió — **no seguir empujando el mismo alcance como respuesta**; si
+se retoma, es otra técnica, no un número más grande.
+
+**Corte de sesión (2026-08-09): pasa a optimizar, con el corte todavía
+abierto.** Pedido explícito del usuario — *"no tiene sentido seguir [con el
+pasto] porque hay que hablar de rendimiento, y ahora es donde se pone difícil
+la cosa"*. El agujero lejano queda **aparcado, no cerrado**; retomarlo es
+trabajo de imagen, posterior a esta fase.
+
+**Los anillos, confirmados como el problema de fondo (2026-08-09/10), con un
+plan de tres técnicas en orden.** Una captura con `grass-view=medir` (pedida
+por el usuario, *"eso está clarísimo con la herramienta de colores"*) mostró
+tres bandas de color planas con borde nítido y horizontal — la corona de cada
+`Ring` es geométricamente un círculo alrededor de la cámara, no una
+percepción. Comparado contra la tabla de BOTW observado (`BOTWGrass.md`): el
+LOD de BOTW también es screen-space-driven (por definición, un círculo
+también), pero lo disimula; nosotros no. Plan acordado, en orden, con
+checkpoint del usuario entre técnica y técnica:
+1. **Mezclar los tres assets** (2 tris / 1 tri / card mesh) para que el card
+   mesh se vea igual al pasto de 1 triángulo — en curso, ver abajo.
+2. Ruido perturbando la distancia de cada anillo, para romper el círculo.
+3. Sesgo de LOD por posición en pantalla (bordes de cámara), más caro/riesgoso
+   — al final de la lista a propósito.
+
+**Técnica 1, "suficientemente bien por ahora" (2026-08-10):** detalle
+completo en `BOTWGrass.md` → *Técnica 1: mezclar los tres assets*. Resumen:
+varianza de ancho por carta (±30%, media 1.0), un bug propio encontrado y
+arreglado (el fix de un artefacto de cielo colándose por las cartas apagó el
+recorte dentado siempre, no sólo lejos — recalibrado), y los dientes de la
+silueta recalibrados (7/5 columnas → 3/2, eran más angostos que una brizna
+real). **La densidad replantada, intentada y revertida:** subir la cobertura
+medida (46,7% → 91,9% en la banda 45-64 m) rompía
+`every_distance_gets_the_density_it_demands` — la escalera compartida
+(`grass_tiles::reach_ladder`) no llega a 50 m con esa área. `CARD_SILHOUETTE_AREA`
+queda en su valor viejo (0,583); **la carta queda rala con los dientes
+nuevos**, deuda declarada, no resuelta. Técnica 2 y 3 quedan para la próxima
+sesión.
 
 ## La suite de medición (2026-08-06)
 

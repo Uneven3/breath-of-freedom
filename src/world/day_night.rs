@@ -23,13 +23,15 @@ fn casts_shadows(illuminance: f32) -> bool {
 /// Sun tilt off the east-west arc, so shadows never collapse to a line.
 const SUN_ARC_TILT: f32 = 0.35;
 
-const SUN_NOON_LUX: f32 = 10_000.0;
+/// Visible past this module: `visuals::grass` normalizes the sun's live
+/// illuminance against this same reference instead of inventing its own scale.
+pub(crate) const SUN_NOON_LUX: f32 = 10_000.0;
 // Stylized rather than physical moonlight: night must remain navigable without
 // flattening the much stronger daylight bands.
 const MOON_LUX: f32 = 400.0;
 // Ambient stays low on purpose: it fills shadowed faces, and too much of it
 // flattens the form and material response until every surface merges.
-const AMBIENT_DAY: f32 = 90.0;
+pub(crate) const AMBIENT_DAY: f32 = 90.0;
 const AMBIENT_NIGHT: f32 = 40.0;
 
 const SUN_NOON_COLOR: Color = Color::srgb(1.0, 0.98, 0.92);
@@ -71,8 +73,13 @@ pub struct Sun;
 
 /// Presentation-only directional moonlight. Keeping it separate from the sun
 /// lets both fade across the horizon without rotating one light by 180 degrees.
+///
+/// `pub(crate)`, not `pub(super)`: both this and `Sun` carry `DirectionalLight`
+/// and spawn together in every scene (`world::mod`), so any other module that
+/// queries by `DirectionalLight` alone needs this to disambiguate — see the
+/// `Without<MoonLight>` fix in `visuals::grass::track_meadow_focus`.
 #[derive(Component)]
-pub(super) struct MoonLight;
+pub(crate) struct MoonLight;
 
 /// Marker for the visible sun disc (unlit sphere on the sun's arc).
 #[derive(Component)]

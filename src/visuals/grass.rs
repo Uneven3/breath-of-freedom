@@ -33,10 +33,13 @@ fn width_in_pixels(width_m: f32, distance_m: f32, scale: f32) -> f32 {
     width_m / (distance_m.max(0.1) * scale).max(1e-6)
 }
 
-/// Experimento 2026-08-09, detalle en `BOTWGrass.md` → *Por dónde retomar*:
-/// saca la carta de la simulación sin sacarla del código. `true` vuelve a lo
-/// de antes.
-const CARDS_ENABLED: bool = false;
+/// Apagada y reencendida el 2026-08-09, detalle en `BOTWGrass.md`. La primera
+/// vez el problema no era el tamaño ni el borde: era que la carta siempre
+/// muestra su ancho completo por mirar a cámara, cosa que una brizna real no
+/// hace. Vuelve con `AlphaMode::AlphaToCoverage` en vez de `Mask` — border
+/// antialiaseado — más porque los árboles van a necesitar billboards de
+/// todos modos que porque esto resuelva aquel diagnóstico.
+const CARDS_ENABLED: bool = true;
 
 /// Primitiva para esta distancia, elegida por tamaño en pantalla y no por un
 /// radio atado a una resolución. Los umbrales visuales viven en `BOTWGrass.md`.
@@ -121,8 +124,8 @@ const RINGS: [Ring; 3] = [
         chunk_m: 16.0,
     },
     Ring {
-        reach_m: 64.0,
-        chunk_m: 32.0,
+        reach_m: 128.0,
+        chunk_m: 64.0,
     },
 ];
 
@@ -383,7 +386,13 @@ const FILL_IN_ONE_FRAME: bool = true;
 
 /// Blade shape. Wide enough at the base to cover ground, tapered at the tip so
 /// it reads as a leaf rather than a strip of paper.
-pub(crate) const BLADE_WIDTH: f32 = 0.055;
+///
+/// **+2mm el 2026-08-09, experimento de overdraw**: `minimum_density` pide
+/// densidad inversamente proporcional a este ancho, así que una brizna más
+/// gorda ya pide menos briznas sola, por la misma ley — no hace falta bajar
+/// la densidad aparte. Menos briznas solapadas para la misma cobertura es
+/// menos overdraw, que es lo que cuesta en un frame fill-bound.
+pub(crate) const BLADE_WIDTH: f32 = 0.057;
 /// A qué fracción de la altura está la parte más ancha. Baja y no en el medio:
 /// una hoja ensancha rápido y afina largo, y el rombo simétrico lee como
 /// diamante.
@@ -406,6 +415,7 @@ const CARD_WIDTH: f32 = 0.25;
 /// tocar esto deja las cartas ralas. La red es medir — con la fracción mal, la
 /// banda de 45-64 m no llega al 99% en `grass-view=medir`, que es como se
 /// encontró que hacía falta.
+/// Dientes bajados a 3/2 (2026-08-10), esto sin tocar — `BOTWGrass.md` §1.
 const CARD_SILHOUETTE_AREA: f32 = 0.583;
 /// Blade height range in metres. Knee to hip on a 1,8 m capsule.
 ///
@@ -446,7 +456,7 @@ struct ChunkKey {
 /// La grilla viva: qué chunks existen ahora y lo que cada nivel tiene en la GPU.
 ///
 /// **Un material por nivel**: cada uno lleva su stride y su forma, y el de las
-/// cartas además `AlphaMode::Mask`. No cuesta draws — es lo que los junta.
+/// cartas además `AlphaMode::AlphaToCoverage`. No cuesta draws — es lo que los junta.
 #[derive(Resource)]
 pub(super) struct GrassField {
     materials: [Handle<GrassMaterial>; RINGS.len()],
@@ -668,11 +678,11 @@ pub(super) fn init_meadow_material(
         let mut material = grass_material();
         material.extension.blade_records = records[ring].buffer.clone();
         if shape_for_ring(ring, reference_scale(), REFERENCE_REACH).faces_camera() {
-            // El umbral no importa —el shader ya descartó con `discard` y lo que
-            // queda sale opaco—; lo que compra es que Bevy no trate el draw como
-            // opaco. Sólo las cartas recortan silueta, y el `discard` cuesta el
-            // early-Z del draw que lo usa.
-            material.base.alpha_mode = AlphaMode::Mask(0.5);
+            // Recomendado por Bevy para foliage: borde antialiaseado por
+            // cobertura de MSAA en vez de un corte binario, sin el costo de
+            // ordenar que tiene `Blend`. Necesita MSAA prendido — si no,
+            // Bevy la hace caer a comportarse como `Mask` sola.
+            material.base.alpha_mode = AlphaMode::AlphaToCoverage;
         }
         materials.add(material)
     });
@@ -1000,12 +1010,29 @@ pub(super) fn roll_meadow_grid(
 /// Un material por nivel significa **tres** escrituras de uniform por frame, no
 /// una por chunk. Casi el mismo valor: lo que los separa es el modo de alfa y el
 /// `record_stride`.
+#[expect(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    reason = "a rendering-driving system reads camera, window, sun and ambient plus its own state"
+)]
 pub(super) fn track_meadow_focus(
     field: Res<GrassField>,
     mut materials: ResMut<Assets<GrassMaterial>>,
     camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
-    sun: Option<Single<&GlobalTransform, With<DirectionalLight>>>,
+    // Sol y luna llevan los dos `DirectionalLight` y coexisten en toda escena:
+    // sin desambiguar, `Single` ve "más de una" y `Option` lo traga como
+    // `None` en silencio. Por esto `sun_direction` quedó congelado siempre.
+    sun: Option<
+        Single<
+            (&GlobalTransform, &DirectionalLight),
+            (
+                With<crate::world::day_night::Sun>,
+                Without<crate::world::day_night::MoonLight>,
+            ),
+        >,
+    >,
+    ambient: Res<GlobalAmbientLight>,
     perf: Res<crate::perf::PerfToggles>,
     time: Res<Time>,
 ) {
@@ -1050,7 +1077,8 @@ pub(super) fn track_meadow_focus(
         let (camera, _) = **camera;
         meadow_uniform(
             camera,
-            sun.as_deref().map(|sun| &**sun),
+            sun.as_ref().map(|sun| **sun),
+            &ambient,
             &perf,
             &time,
             scale,
@@ -1063,7 +1091,7 @@ pub(super) fn track_meadow_focus(
             }
             material.extension.grass_data.record_layout = layouts[ring];
             material.base.alpha_mode = if shape_for_ring(ring, scale, reach_scale).faces_camera() {
-                AlphaMode::Mask(0.5)
+                AlphaMode::AlphaToCoverage
             } else {
                 AlphaMode::Opaque
             };
@@ -1075,7 +1103,8 @@ pub(super) fn track_meadow_focus(
 /// del sistema para que no haya forma de escribir uno y olvidar el otro.
 fn meadow_uniform(
     camera: &GlobalTransform,
-    sun: Option<&GlobalTransform>,
+    sun: Option<(&GlobalTransform, &DirectionalLight)>,
+    ambient: &GlobalAmbientLight,
     perf: &crate::perf::PerfToggles,
     time: &Time,
     screen_scale: f32,
@@ -1113,11 +1142,24 @@ fn meadow_uniform(
     // state anywhere, which is why a field of a hundred thousand blades costs
     // one uniform write a frame.
     data.time = time.elapsed_secs_wrapped();
-    // Backlit transmission needs to know where the sun is; reading the light's
-    // own transform rather than a copy keeps day/night driving it for free.
-    if let Some(sun) = sun {
-        data.sun_direction = sun.back().as_vec3();
+    // Both the backlit transmission and the fragment's own diffuse (no
+    // `apply_pbr_lighting`, ver `grass.wgsl`) need this; normalized against
+    // `day_night`'s own noon reference so it fades at night, not just at dusk.
+    if let Some((sun_transform, light)) = sun {
+        data.sun_direction = sun_transform.back().as_vec3();
+        let linear = LinearRgba::from(light.color);
+        let strength = (light.illuminance / crate::world::day_night::SUN_NOON_LUX).clamp(0.0, 1.0);
+        data.sun_color = Vec4::new(linear.red, linear.green, linear.blue, 1.0) * strength;
     }
+    let ambient_linear = LinearRgba::from(ambient.color);
+    let ambient_strength =
+        (ambient.brightness / crate::world::day_night::AMBIENT_DAY).clamp(0.0, 1.0);
+    data.ambient_color = Vec4::new(
+        ambient_linear.red,
+        ambient_linear.green,
+        ambient_linear.blue,
+        1.0,
+    ) * ambient_strength;
     uniform
 }
 

@@ -71,7 +71,7 @@ fn apply_configured_knobs(toggles: &mut PerfToggles, raw: &str) {
 
 pub const fn profile_msaa(profile: PerfProfile) -> Msaa {
     match profile {
-        PerfProfile::Desktop => Msaa::Off,
+        PerfProfile::Desktop => Msaa::Sample2,
         PerfProfile::Mobile => Msaa::Sample4,
     }
 }
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn profiles_map_to_the_validated_msaa_modes() {
-        assert_eq!(profile_msaa(PerfProfile::Desktop), Msaa::Off);
+        assert_eq!(profile_msaa(PerfProfile::Desktop), Msaa::Sample2);
         assert_eq!(profile_msaa(PerfProfile::Mobile), Msaa::Sample4);
     }
 

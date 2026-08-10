@@ -73,7 +73,7 @@ impl BenchmarkStep {
             grass_density_step: 0,
             grass_reach_step: 0,
             render_scale_step: 0,
-            msaa_step: 0,
+            msaa_step: step::MSAA_2X,
         }
     }
 }
@@ -97,7 +97,10 @@ mod step {
     /// `GRASS_REACH_STEPS`: 75% y 50% del alcance de los anillos.
     pub const REACH_75: usize = 1;
     pub const REACH_50: usize = 2;
-    /// `MSAA_STEPS`: 4x y 2x.
+    /// `MSAA_STEPS`: apagado, 4x y 2x. 2x es el baseline desde el 2026-08-09
+    /// (arregla el shimmer sub-píxel medido jugando — "la V"), así que la fila
+    /// que antes medía "subir a 2x" ahora mide lo contrario: apagarlo.
+    pub const MSAA_OFF: usize = 0;
     pub const MSAA_4X: usize = 1;
     pub const MSAA_2X: usize = 2;
     /// `RENDER_SCALE_STEPS`: 75% y 50% de los píxeles.
@@ -288,8 +291,8 @@ const GENERAL_STEPS: [BenchmarkStep; 11] = [
 /// 4. **Píxeles contra geometría** — la escala de render, misma geometría y
 ///    menos fragmentos. Contra los pasos de densidad decide fill-bound o
 ///    vertex-bound, que es la pregunta que `BOTWGrass.md` viene arrastrando.
-/// 5. **El parpadeo** — MSAA 4x y 2x. Este paso no se juzga por el número: se
-///    juzga mirando. El número dice lo que costaría el arreglo.
+/// 5. **El parpadeo** — 2x ya es el baseline (arregla la V, jugado); "msaa 4x"
+///    mide subir más y "msaa off" mide lo que cuesta el arreglo que ya está.
 const GRASS_STEPS: [BenchmarkStep; 11] = [
     BenchmarkStep::baseline("baseline"),
     BenchmarkStep {
@@ -325,8 +328,8 @@ const GRASS_STEPS: [BenchmarkStep; 11] = [
         ..BenchmarkStep::baseline("msaa 4x")
     },
     BenchmarkStep {
-        msaa_step: step::MSAA_2X,
-        ..BenchmarkStep::baseline("msaa 2x")
+        msaa_step: step::MSAA_OFF,
+        ..BenchmarkStep::baseline("msaa off")
     },
     BenchmarkStep::baseline("baseline repeat"),
 ];

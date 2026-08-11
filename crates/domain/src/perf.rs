@@ -142,6 +142,10 @@ pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 ///   Da la cobertura del campo entero —sumando los cuatro— y la de cada anillo
 ///   por separado, que es la pregunta que ningún medidor anterior contestaba.
 ///
+/// `medir-forma` conserva ese camino plano pero clasifica hoja, púa y carta en
+/// la misma franja de imagen; sirve para calibrar una representación contra la
+/// otra sin inventar una segunda cámara o campo.
+///
 /// El índice viaja al shader; el significado de cada uno vive en
 /// `visuals::grass_debug`, que es presentación (§7). Que sean **seis** no es
 /// casual: la escalera de perillas se cierra en 60 pasos y un largo que no
@@ -152,7 +156,7 @@ pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 /// del pasto en móvil y **no aparece en ningún conteo de triángulos**; los
 /// motores grandes lo exponen como *quad overdraw* justamente por eso. Acá se
 /// pinta por brizna: rojo la que ya no se resuelve, verde la que sí.
-pub const GRASS_DEBUG_STEPS: [&str; 7] = [
+pub const GRASS_DEBUG_STEPS: [&str; 8] = [
     "off",
     "anillo",
     "chunk",
@@ -160,6 +164,7 @@ pub const GRASS_DEBUG_STEPS: [&str; 7] = [
     "crecimiento",
     "subpixel",
     "medir",
+    "medir-forma",
 ];
 
 /// Fraction of the window the camera actually renders, for the resolution

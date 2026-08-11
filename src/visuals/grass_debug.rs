@@ -100,6 +100,19 @@ pub(crate) fn subpixel_legend() -> Vec<SubpixelBand> {
     .collect()
 }
 
+/// Categorías planas para comparar las representaciones que coexisten en una
+/// misma franja de la imagen. Los colores son slots existentes de la paleta:
+/// no agrega otra tabla que el analizador pueda desincronizar.
+pub(crate) fn shape_measure_legend() -> Vec<SubpixelBand> {
+    [("hoja", 0usize), ("púa", 1), ("carta", 2)]
+        .into_iter()
+        .map(|(name, slot)| SubpixelBand {
+            name: name.to_string(),
+            color: slot_srgb(slot),
+        })
+        .collect()
+}
+
 /// Anuncia la vista puesta y qué es cada color. Un color sin leyenda no es un
 /// diagnóstico: es una imagen bonita.
 pub(crate) fn announce_grass_debug_view(
@@ -148,10 +161,13 @@ pub(crate) enum GrassDebugView {
     Subpixel,
     /// Plano y exacto, un color por anillo. Para contar píxeles.
     Measure,
+    /// Plano y exacto, un color por forma. Para comparar púa y carta donde
+    /// coexisten, sin que el anillo o la iluminación confundan la medición.
+    ShapeMeasure,
 }
 
 impl GrassDebugView {
-    pub(crate) const ALL: [GrassDebugView; 7] = [
+    pub(crate) const ALL: [GrassDebugView; 8] = [
         GrassDebugView::Off,
         GrassDebugView::Ring,
         GrassDebugView::Chunk,
@@ -159,6 +175,7 @@ impl GrassDebugView {
         GrassDebugView::Growth,
         GrassDebugView::Subpixel,
         GrassDebugView::Measure,
+        GrassDebugView::ShapeMeasure,
     ];
 
     pub(crate) fn from_step(step: usize) -> Self {
@@ -175,6 +192,7 @@ impl GrassDebugView {
             GrassDebugView::Growth => 4,
             GrassDebugView::Subpixel => 5,
             GrassDebugView::Measure => 6,
+            GrassDebugView::ShapeMeasure => 7,
         }
     }
 
@@ -182,7 +200,10 @@ impl GrassDebugView {
     /// consume `camera::apply_flat_measure_view`, que con esto puesto apaga el
     /// tonemapping y el dithering.
     pub(crate) fn is_flat(self) -> bool {
-        matches!(self, GrassDebugView::Measure | GrassDebugView::Subpixel)
+        matches!(
+            self,
+            GrassDebugView::Measure | GrassDebugView::ShapeMeasure | GrassDebugView::Subpixel
+        )
     }
 }
 
@@ -222,6 +243,24 @@ mod tests {
                 "el color del anillo {slot} no vuelve entero de lineal a sRGB"
             );
         }
+    }
+
+    #[test]
+    fn shape_measurement_has_exact_categories_and_a_shader_path() {
+        let shapes = shape_measure_legend();
+        assert_eq!(
+            shapes
+                .iter()
+                .map(|shape| shape.name.as_str())
+                .collect::<Vec<_>>(),
+            ["hoja", "púa", "carta"]
+        );
+        assert_eq!(shapes[0].color, slot_srgb(0));
+        assert_eq!(shapes[1].color, slot_srgb(1));
+        assert_eq!(shapes[2].color, slot_srgb(2));
+        let wgsl = include_str!("../../assets/shaders/grass.wgsl");
+        assert!(wgsl.contains("const DEBUG_SHAPE_MEASURE: u32 = 7u;"));
+        assert!(wgsl.contains("shape == SHAPE_CARD"));
     }
 
     /// Dos anillos del mismo color son indistinguibles en la foto y en el conteo.

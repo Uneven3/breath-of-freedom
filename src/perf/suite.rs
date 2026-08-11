@@ -227,13 +227,13 @@ impl BenchSuite {
 const FOREST_VANTAGE: Vec3 = Vec3::new(-6.2, 4.7, -3.2);
 const FOREST_FACING: Vec3 = Vec3::new(-0.78, -0.02, 0.63);
 
-/// El de la pradera es otra cosa y por eso es otro punto: **altura de ojo y
-/// mirada casi horizontal**. Es el caso que el pasto tiene que sobrevivir —
-/// mirando al horizonte se ven los tres anillos a la vez, el traspaso entre
-/// ellos y el overdraw en el peor ángulo, que es el rasante. Mirando hacia
-/// abajo se ve un anillo y la mitad del sistema queda fuera del cuadro.
-const MEADOW_VANTAGE: Vec3 = Vec3::new(0.0, 1.6, 0.0);
-const MEADOW_FACING: Vec3 = Vec3::new(0.0, -0.08, 1.0);
+/// El mirador de pradera es una pose F7 de Orbit, no un ojo rasante inventado:
+/// reproducir lo que ve el jugador manda sobre fabricar el peor ángulo. La
+/// captura del 2026-08-11 dejó `y=4,32 m` y pitch −0,278; con ella la suite y
+/// el checkpoint visual miran el mismo relevo de LOD que se juzga jugando.
+/// El caso rasante sigue disponible por `BOF_SHOT_POSE`, pero no es baseline.
+const MEADOW_VANTAGE: Vec3 = Vec3::new(4.549_856, 4.315_583, -36.233_036);
+const MEADOW_FACING: Vec3 = Vec3::new(-0.297_623_28, -0.277_781_96, -0.913_377_05);
 
 /// La matriz general: qué le cuesta el frame al juego entero.
 const GENERAL_STEPS: [BenchmarkStep; 11] = [

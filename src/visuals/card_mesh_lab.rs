@@ -85,7 +85,13 @@ fn configure_lab_material(material: &mut StandardMaterial) {
 fn meadow_card_material(asset_server: &AssetServer) -> StandardMaterial {
     let mut material = StandardMaterial {
         base_color: Color::WHITE,
-        base_color_texture: Some(asset_server.load("textures/props/T_GrassMeadowCard_Albedo.png")),
+        // Variante de evaluación no destructiva: la producción conserva la
+        // textura anterior hasta que el checkpoint del laboratorio apruebe que
+        // esta base continua, oscura y con cortes inferiores se integra con las
+        // púas.
+        base_color_texture: Some(
+            asset_server.load("textures/props/T_GrassMeadowCard_v3_Albedo.png"),
+        ),
         ..default()
     };
     configure_meadow_card_material(&mut material);

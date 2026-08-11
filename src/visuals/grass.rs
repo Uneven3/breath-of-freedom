@@ -22,6 +22,24 @@ struct Ring {
     chunk_m: f32,
 }
 
+/// Selector de una máscara candidata exclusivamente para una corrida de
+/// medición. La configuración normal nunca lo escribe: la pradera de juego
+/// sigue usando el asset base hasta que el checkpoint apruebe una calibración.
+const CARD_CANDIDATE_ENV: &str = "BOF_GRASS_CARD_CANDIDATE";
+const CARD_ALBEDO_BASE: &str = "textures/props/T_GrassMeadowCard_Albedo.png";
+const CARD_ALBEDO_V3: &str = "textures/props/T_GrassMeadowCard_v3_Albedo.png";
+
+fn card_albedo_path(candidate: Option<&str>) -> &'static str {
+    match candidate {
+        Some("v3") => CARD_ALBEDO_V3,
+        Some(other) => {
+            warn!("[grass] ignorando {CARD_CANDIDATE_ENV}={other:?}; candidatos: v3");
+            CARD_ALBEDO_BASE
+        }
+        None => CARD_ALBEDO_BASE,
+    }
+}
+
 /// Metros cubiertos por un píxel y por metro de distancia, derivados de FOV y
 /// viewport para que el LOD siga a la pantalla.
 fn metres_per_pixel_at_one_metre(fov_y: f32, viewport_height: f32) -> f32 {
@@ -136,7 +154,7 @@ const SUBMITTED_TRIANGLES_PER_BLADE: usize = 2;
 /// Cuántos píxeles de ancho tiene que medir una brizna para merecer cada forma.
 ///
 /// En píxeles y no en metros, que es el punto entero de esta escalera. Con el
-/// viewport de escritorio caen en ~24 m y ~47 m; a 900p, en ~20 y ~40. Nadie los
+/// viewport de escritorio caen en ~24 m y ~36 m; a 900p, en ~20 y ~30. Nadie los
 /// mueve: los mueve la pantalla.
 const LEAF_MIN_PIXELS: f32 = 3.0;
 const SPIKE_MIN_PIXELS: f32 = 1.5;
@@ -674,7 +692,8 @@ pub(super) fn init_meadow_material(
     // Una sola textura compartida por los tres materiales: no agrega batches y
     // cubre las briznas del anillo lejano que, por distancia individual, aún
     // están construidas como hoja o púa.
-    let card_albedo = asset_server.load("textures/props/T_GrassMeadowCard_Albedo.png");
+    let candidate = std::env::var(CARD_CANDIDATE_ENV).ok();
+    let card_albedo = asset_server.load(card_albedo_path(candidate.as_deref()));
     let materials = std::array::from_fn(|ring| {
         let mut material = grass_material();
         material.extension.blade_records = records[ring].buffer.clone();
@@ -1293,6 +1312,12 @@ struct ChunkPlanting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_card_candidate_never_changes_the_shipped_asset_without_an_explicit_name() {
+        assert_eq!(card_albedo_path(None), CARD_ALBEDO_BASE);
+        assert_eq!(card_albedo_path(Some("v3")), CARD_ALBEDO_V3);
+    }
 
     /// Un chunk de prueba: dos baldosas por lado y un tramo de la secuencia,
     /// para que cada test nombre sólo lo que le importa.

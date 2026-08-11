@@ -1280,11 +1280,59 @@ test roto: **la carta queda rala con los dientes nuevos**, deuda declarada,
 no resuelta esta sesión. Antes de reintentar: entender por qué la escalera
 no alcanza a 50 m con una demanda mayor, no sólo remedir una banda distinta.
 
-**Estado:** el usuario lo dio por suficiente por ahora, sin cerrar la
-técnica del todo — quedó pendiente ver si el card mesh sigue leyéndose
-distinto jugando (no sólo en captura estática), y la densidad de la carta
-sigue rala (ver arriba). Técnica 2 (ruido en el límite del anillo) y 3
-(sesgo por pantalla) quedan para la próxima sesión.
+**Estado:** el usuario lo dio por suficiente por ahora, sin cerrar la técnica
+del todo — quedó pendiente ver si el card mesh sigue leyéndose distinto jugando
+(no sólo en captura estática), y la densidad de la carta sigue rala (ver arriba).
+La Técnica 2 ya no es ruido en el límite: el diagnóstico posterior la reemplaza
+por el relevo por grupos de abajo.
+
+### Técnica 2: el relevo por grupos (2026-08-11, abierto)
+
+El intento de adelantar la carta, bajar su escala inicial, deformar el borde y
+entregar cada brizna a púa o carta fue retirado. Jugado, la carta cercana se
+leyó como una nueva textura de suelo y la línea persistió. También se retiró el
+relevo hoja→púa: ese tramo se había aceptado antes y no es el problema abierto.
+El baseline vuelve a 24/40/128 m, 12/16/64 m por chunk, carta desde 1,5 px y
+dos triángulos enviados por brizna. La pose canónica queda en la F7 real,
+`(4,55, 4,32, −36,23)` mirando `(-.298, -.278, -.913)`.
+
+El diagnóstico es más preciso: una púa es una brizna, pero una carta pretende
+representar **varias**. El dither actual las trataba como equivalentes 1:1; por
+eso podía romper el círculo, nunca igualar masa, cobertura o silueta. Cambiar
+otra vez ancho, distancia o ruido sólo movería esa diferencia.
+
+Antes de tocar densidad, `grass-view=medir` se amplía como A/B reproducible:
+misma pose, viewport, MSAA, luz, niebla y franja plana; compara cobertura con
+alpha aplicado, luminancia y huecos de púa y carta. Área de PNG o captura normal
+no bastan. Si la F7 no permite perfilar por relieve, el resultado se declara
+omitido y la medición usa un parche plano controlado. La carta v3 aprobada en
+`Card mesh` se conserva sólo como candidata: `CARD_SILHOUETTE_AREA` sigue siendo
+la constante de la silueta procedural y cualquier recalibración cambia junto
+con `minimum_density` y `reach_ladder`.
+
+**Primer A/B (2026-08-11):** la vista nueva `medir-forma` usa el paso 7 de
+`grass-view`; clasifica hoja/púa/carta en la misma captura plana y respeta el
+alpha de `AlphaToCoverage`. Desde la F7 canónica (1920×1072, MSAA 2x; perfil de
+suelo válido), el asset base dio carta **58,4%** y cobertura total **67,8%** en
+45–64 m. `BOF_GRASS_CARD_CANDIDATE=v3` cambia sólo esa corrida, no el juego:
+la candidata da **65,5%** y **73,8%**. Eso valida que v3 aporta más masa, pero
+no prueba equivalencia ni autoriza tocar una constante de densidad: aún queda
+calibrar la curva y el relevo de dueño.
+
+Después, el relevo necesita una identidad de grupo en mundo, independiente de
+chunk, cámara y anillo. Cada grupo tendrá sus púas estables y una carta
+representante; en la banda, un dueño por `group_id` muestra **todas** las púas o
+su carta, nunca una carta contra una sola púa. La granularidad se ata a la
+huella calibrada de la carta, no a una baldosa completa de 2 m, para no crear
+manchas. Canarios cobrarán estabilidad al caminar, complementariedad de dueño,
+cobertura de chunks y presupuesto. El debug pinta dueño de grupo y el
+checkpoint jugado decide si se integra.
+
+**Corte de sesión.** El prototipo no se empieza todavía: se cerró esta sesión
+con baseline y medición porque faltan herramientas para juzgarlo. Antes de
+modificar el campo, construir visualización de dueño/huella de grupo y una tabla
+de cobertura completa por distancia; sin ellas, ajustar radios, alpha o ruido
+vuelve a confundir una diferencia de representación con un número mal elegido.
 
 ### Detrás, y sólo después
 

@@ -336,6 +336,7 @@ const DEBUG_BLADE: u32 = 3u;
 const DEBUG_GROWTH: u32 = 4u;
 const DEBUG_SUBPIXEL: u32 = 5u;
 const DEBUG_MEASURE: u32 = 6u;
+const DEBUG_SHAPE_MEASURE: u32 = 7u;
 
 /// Cuántos píxeles de ancho tiene que medir una brizna para que valga lo que
 /// cuesta.
@@ -411,7 +412,7 @@ fn debug_colour(
     metres_per_pixel: f32,
 ) -> vec3<f32> {
     let view = grass_data.debug_view;
-    if view == DEBUG_OFF || view == DEBUG_MEASURE {
+    if view == DEBUG_OFF || view == DEBUG_MEASURE || view == DEBUG_SHAPE_MEASURE {
         return base;
     }
     let slot = ring_slot();
@@ -915,6 +916,22 @@ fn fragment(
         measured.color = vec4<f32>(
             grass_data.ring_colors[ring_slot()].rgb,
             1.0,
+        );
+        return measured;
+    }
+
+    // Mismo camino plano que `medir`, pero la categoría es la forma que esta
+    // brizna ya construyó. La alpha de una carta se conserva para que
+    // AlphaToCoverage cuente su huella real, no el rectángulo de su textura.
+    if grass_data.debug_view == DEBUG_SHAPE_MEASURE {
+        let shape = blade_shape_at(
+            length(in.world_position.xz - grass_data.focus_xz),
+            fract(in.uv_b.y),
+        );
+        var measured: FragmentOutput;
+        measured.color = vec4<f32>(
+            grass_data.ring_colors[shape].rgb,
+            select(1.0, card_alpha, shape == SHAPE_CARD),
         );
         return measured;
     }

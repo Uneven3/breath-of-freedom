@@ -478,6 +478,13 @@ fn shot_categories(perf: &crate::perf::PerfToggles) -> Vec<Category> {
                 color: band.color,
             })
             .collect(),
+        "medir-forma" => crate::visuals::grass_debug::shape_measure_legend()
+            .into_iter()
+            .map(|shape| Category {
+                name: shape.name,
+                color: shape.color,
+            })
+            .collect(),
         _ => crate::visuals::grass_debug::ring_legend(perf)
             .into_iter()
             .map(|ring| Category {

@@ -382,6 +382,38 @@ el checkpoint jugado de la carta texturizada en producción (no del
 laboratorio) no se cerró formalmente. Técnica 2 y 3 de los anillos esperan
 ese cierre — asumen la carta actual como base.
 
+**Técnica 2, experimento retirado y siguiente dirección (2026-08-11,
+abierto).** Adelantar la carta, bajar su escala inicial y perturbar el relevo
+no quitaron la línea: la carta cercana se leyó como otra textura de suelo. Se
+retiraron del runtime esos cambios, incluido el relevo hoja→púa que reabría un
+tramo aceptado jugando. El baseline vuelve a 24/40/128 m, 12/16/64 m por chunk,
+umbral de carta de 1,5 px y dos triángulos enviados por brizna. La pose F7 real
+(`y=4,32`, pitch −0,278) **sí** queda como mirador canónico.
+
+La carta v3 aprobada en `Card mesh` queda como candidata de laboratorio, no en
+producción. Su primera medición de huella está abajo; todavía falta la curva que
+permita recalibrar densidad y escalera juntas. La siguiente técnica requiere una
+identidad de **grupo** estable en mundo: una carta reemplaza las púas de su
+propia huella, no una púa 1:1. Sus tests deberán cobrar estabilidad, dueño
+complementario, cobertura de chunks y presupuesto; el checkpoint jugado decide
+la integración.
+
+**Medición por forma, lista (2026-08-11).** `grass-view=7` (`medir-forma`)
+pinta hoja/púa/carta con colores planos y conserva el alpha de la carta, por lo
+que `shot_stats` cuenta su cobertura efectiva. F7 canónica, 1920×1072, MSAA 2x
+y perfil de suelo plano: asset base, carta 58,4% y total 67,8% en 45–64 m;
+candidata v3 (`BOF_GRASS_CARD_CANDIDATE=v3`, sólo la corrida), **65,5%** y
+**73,8%**. La mejora no autoriza cambiar `CARD_SILHOUETTE_AREA`: falta medir la
+curva completa y recalibrar densidad/escalera juntas. El siguiente paso sigue
+siendo el prototipo de grupos, no mover otra vez el alcance.
+
+**Corte de sesión (2026-08-11).** No se prototiparon grupos: el usuario pidió
+parar tras dejar baseline, evidencia y candidata reproducibles. Hacen falta
+herramientas antes de intentar el feeling final: visualización de dueños y
+huellas de grupo, una tabla de cobertura por distancia completa y un banco que
+compare púa/card sin confundir asset, densidad ni cámara. No seguir ajustando
+radios, alpha o ruido como sustituto de esas herramientas.
+
 **De paso, sin relación con el pasto:** `day_night.rs` ganó
 `shadow_casters()` para que sólo una luz direccional (sol o luna, nunca las
 dos) castee sombra cerca del horizonte — barrido minuto a minuto en test.

@@ -12,6 +12,8 @@ pub(crate) const MOBILE_MATERIALS: usize = 64;
 pub(crate) struct SceneInventory {
     pub visible_meshes: u32,
     pub triangles: usize,
+    /// Lower-bound estimate of visible `(mesh, material)` batches, not render
+    /// world draw calls. Kept as a guardrail; every presentation labels it `~`.
     pub draws: usize,
     pub materials: usize,
     pub ranged_culled: u32,
@@ -111,7 +113,7 @@ pub(crate) fn warn_scene_budget(
     let grade = scene_budget_grade(&scene);
     match budget_transition(warning.0, grade) {
         BudgetTransition::Exceeded(grade) => warn!(
-            "[budget/mobile] scene {}: tris={}/{} draws={}/{} mats={}/{} — reduce visible detail, lots, or material variants",
+            "[budget/mobile] scene {}: tris={}/{} draws~={}/{} mats={}/{} — reduce visible detail, lots, or material variants",
             grade.label(),
             scene.triangles,
             MOBILE_TRIANGLES,
@@ -122,7 +124,7 @@ pub(crate) fn warn_scene_budget(
         ),
         BudgetTransition::Recovered(grade) => {
             info!(
-                "[budget/mobile] scene recovered to {}: tris={} draws={} mats={}",
+                "[budget/mobile] scene recovered to {}: tris={} draws~={} mats={}",
                 grade.label(),
                 scene.triangles,
                 scene.draws,
@@ -245,7 +247,12 @@ mod tests {
     ///
     /// Y el número que de verdad manda hoy no es éste: la pradera es
     /// *fill-bound*, y lo que se paga son los píxeles. El conteo es guardrail.
-    const MEADOW_VIEW_TRIANGLES: usize = 2_000_000;
+    /// **Subido de 2 a 4 millones el 2026-08-08**, y de **4 a 5 millones el
+    /// 2026-08-09 al vestir el terreno hasta los 128 m** (era 64 m, el borde
+    /// donde el pasto se cortaba y dejaba ver tierra pelada) — misma deuda
+    /// declarada: *"olvidémonos del techo por ahora, optimizamos cuando
+    /// logremos el feeling correcto"*. Optimizar es lo que sigue.
+    const MEADOW_VIEW_TRIANGLES: usize = 5_000_000;
 
     #[test]
     fn the_meadow_neighbourhood_fits_its_own_per_view_budget() {

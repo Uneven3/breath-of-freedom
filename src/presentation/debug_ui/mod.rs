@@ -19,7 +19,8 @@ use crate::debug::channel::{
 };
 use crate::input::ModalInputFocusRequest;
 use crate::perf::{
-    Benchmark, BenchmarkRequest, FlythroughRequest, PerfKnob, PerfKnobToggle, PerfToggles,
+    Benchmark, BenchmarkRequest, Flythrough, FlythroughRequest, PerfKnob, PerfKnobToggle,
+    PerfToggles,
 };
 use crate::visuals::terrain_material::{
     TerrainDebugState, TerrainDebugView, TerrainDebugViewRequest,
@@ -133,10 +134,16 @@ fn hub_is_open(state: Res<DebugUiState>) -> bool {
 /// The one key. Everything else lives inside the panel.
 fn toggle_hub(
     keys: Res<ButtonInput<KeyCode>>,
+    benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
     mut state: ResMut<DebugUiState>,
     root: Single<Entity, With<DebugUiRoot>>,
     mut focus: MessageWriter<ModalInputFocusRequest>,
 ) {
+    if benchmark.is_running() || flythrough.is_running() {
+        set_open(&mut state, false, *root, &mut focus);
+        return;
+    }
     if !keys.just_pressed(KeyCode::F1) {
         return;
     }

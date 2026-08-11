@@ -31,7 +31,7 @@ impl PerfProfile {
 
     pub const fn msaa_label(self) -> &'static str {
         match self {
-            Self::Desktop => "off",
+            Self::Desktop => "2x",
             Self::Mobile => "4x",
         }
     }
@@ -54,7 +54,7 @@ pub const SHADOW_CASTER_STEPS: [Option<f32>; 4] = [Some(60.0), Some(120.0), Some
 /// follows them. Too large spends texels on ground that reads flat anyway.
 /// Only the distance is tunable at runtime; changing the cascade *count* live
 /// desynchronises Bevy's per-cascade visibility bookkeeping and panics.
-pub const SHADOW_DISTANCE_STEPS: [f32; 5] = [65.0, 100.0, 140.0, 200.0, 40.0];
+pub(crate) const SHADOW_DISTANCE_STEPS: [f32; 5] = [65.0, 100.0, 140.0, 200.0, 40.0];
 
 /// Shadow map edge, in texels. Shadow cost inside dense foliage is fill-bound,
 /// not vertex-bound, so this is the most direct lever on it.
@@ -63,19 +63,32 @@ pub const SHADOW_MAP_STEPS: [usize; 3] = [2048, 1024, 512];
 /// Meadow density in blades per m². Index 0 is what the field ships at, so a
 /// fresh launch measures the real game.
 ///
-/// This is half of the pair that separates *fill-bound* from *vertex-bound*
-/// (`BOTWGrass.md` → Presupuesto): if GPU time tracks this dial, the meadow is
-/// paying for the pixels it covers, and density is the cheapest lever in the
-/// system. It lives here rather than in `visuals::grass` because a dial outside
-/// [`PerfKnob`] cannot enter the A/B matrix — no warmup, no settle window, no
-/// parked camera, no drift check — and what it produces is an impression, not a
-/// measurement.
+/// Diez puntos permiten medir la curva; cero mide el costo total sin extrapolar.
+/// Los valores históricos 64, 30, 12 y 0 se conservan para comparar corridas.
+pub const GRASS_DENSITY_STEPS: [f32; 10] =
+    [40.0, 80.0, 64.0, 52.0, 44.0, 30.0, 20.0, 12.0, 6.0, 0.0];
+
+/// Qué anillos de la pradera se plantan: todos, o uno solo.
 ///
-/// El último paso es **cero**, y existe por una pregunta que el barrido no podía
-/// contestar: cuánto cuesta la pradera *entera*. Con el paso más ralo en 10/m²
-/// lo más que se sabía era la pendiente de la curva, y extrapolar a cero es una
-/// estimación, no una medición. Un paso en cero la convierte en resta.
-pub const GRASS_DENSITY_STEPS: [f32; 5] = [40.0, 64.0, 30.0, 12.0, 0.0];
+/// Aísla la cobertura aportada por cada nivel, no solo quién gana el depth test.
+/// Índice 0 = todos e índice `k+1` = solo el anillo `k`; un test ata el largo al
+/// número de niveles para que la herramienta no ofrezca anillos inexistentes.
+pub const GRASS_RINGS_STEPS: [&str; 4] = ["todos", "solo 0", "solo 1", "solo 2"];
+
+/// Cuántos metros tarda **una** brizna en encogerse hasta desaparecer al llegar
+/// a su propio alcance.
+///
+/// **Es la única perilla que existe para un problema que sólo se ve en
+/// movimiento**, y por eso es una perilla y no una constante: no hay captura que
+/// muestre el crecimiento, el artefacto *es* el movimiento.
+///
+/// **Era `(rampa, dispersión)` y desde el 2026-08-08 la dispersión no existe.**
+/// Repartía los umbrales de briznas distintas para que no crecieran todas juntas;
+/// ahora cada brizna tiene el suyo por construcción —sale del índice que ocupa en
+/// su baldosa— así que el segundo número ya no hacía nada y el hub lo seguía
+/// mostrando. Una perilla que no mueve nada es la misma clase de mentira que un
+/// "solo 3" sobre tres niveles.
+pub const GRASS_GROWTH_STEPS: [f32; 5] = [6.0, 3.0, 1.5, 0.8, 0.4];
 
 /// Scale applied to every ring's reach, for the sweep that separates *how much
 /// grass is near the camera* from *how far the field goes*.
@@ -129,6 +142,10 @@ pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 ///   Da la cobertura del campo entero —sumando los cuatro— y la de cada anillo
 ///   por separado, que es la pregunta que ningún medidor anterior contestaba.
 ///
+/// `medir-forma` conserva ese camino plano pero clasifica hoja, púa y carta en
+/// la misma franja de imagen; sirve para calibrar una representación contra la
+/// otra sin inventar una segunda cámara o campo.
+///
 /// El índice viaja al shader; el significado de cada uno vive en
 /// `visuals::grass_debug`, que es presentación (§7). Que sean **seis** no es
 /// casual: la escalera de perillas se cierra en 60 pasos y un largo que no
@@ -139,7 +156,7 @@ pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 /// del pasto en móvil y **no aparece en ningún conteo de triángulos**; los
 /// motores grandes lo exponen como *quad overdraw* justamente por eso. Acá se
 /// pinta por brizna: rojo la que ya no se resuelve, verde la que sí.
-pub const GRASS_DEBUG_STEPS: [&str; 7] = [
+pub const GRASS_DEBUG_STEPS: [&str; 8] = [
     "off",
     "anillo",
     "chunk",
@@ -147,6 +164,7 @@ pub const GRASS_DEBUG_STEPS: [&str; 7] = [
     "crecimiento",
     "subpixel",
     "medir",
+    "medir-forma",
 ];
 
 /// Fraction of the window the camera actually renders, for the resolution
@@ -175,13 +193,15 @@ pub enum PerfKnob {
     TreeDetail,
     GrassDensity,
     GrassReach,
+    GrassRings,
+    GrassGrowth,
     GrassDebug,
     RenderScale,
     Msaa,
 }
 
 impl PerfKnob {
-    pub const ALL: [PerfKnob; 17] = [
+    pub const ALL: [PerfKnob; 19] = [
         PerfKnob::Vsync,
         PerfKnob::Forest,
         PerfKnob::Wireframe,
@@ -196,10 +216,42 @@ impl PerfKnob {
         PerfKnob::TreeDetail,
         PerfKnob::GrassDensity,
         PerfKnob::GrassReach,
+        PerfKnob::GrassRings,
+        PerfKnob::GrassGrowth,
         PerfKnob::GrassDebug,
         PerfKnob::RenderScale,
         PerfKnob::Msaa,
     ];
+
+    /// Cuántos pasos tiene la escalera de esta perilla.
+    ///
+    /// Existe para poder **barrerla entera** sin que quien barre conozca su
+    /// tabla: una corrida que recorre una perilla escribiendo un número por paso
+    /// es lo que convierte una medición en una curva. Las booleanas son dos
+    /// pasos, que es lo que `set_knob_step` ya entiende por apagado y encendido.
+    pub fn steps(self) -> usize {
+        match self {
+            PerfKnob::Vsync
+            | PerfKnob::Forest
+            | PerfKnob::Wireframe
+            | PerfKnob::Overdraw
+            | PerfKnob::SunShadows
+            | PerfKnob::MoonShadows
+            | PerfKnob::LeafShadows
+            | PerfKnob::TreeDetail => 2,
+            PerfKnob::Cull => CULL_STEPS.len(),
+            PerfKnob::ShadowRange => SHADOW_CASTER_STEPS.len(),
+            PerfKnob::ShadowDistance => SHADOW_DISTANCE_STEPS.len(),
+            PerfKnob::ShadowMap => SHADOW_MAP_STEPS.len(),
+            PerfKnob::GrassDensity => GRASS_DENSITY_STEPS.len(),
+            PerfKnob::GrassReach => GRASS_REACH_STEPS.len(),
+            PerfKnob::GrassRings => GRASS_RINGS_STEPS.len(),
+            PerfKnob::GrassGrowth => GRASS_GROWTH_STEPS.len(),
+            PerfKnob::GrassDebug => GRASS_DEBUG_STEPS.len(),
+            PerfKnob::RenderScale => RENDER_SCALE_STEPS.len(),
+            PerfKnob::Msaa => MSAA_STEPS.len(),
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -217,6 +269,8 @@ impl PerfKnob {
             PerfKnob::TreeDetail => "tree-detail",
             PerfKnob::GrassDensity => "grass-density",
             PerfKnob::GrassReach => "grass-reach",
+            PerfKnob::GrassRings => "grass-rings",
+            PerfKnob::GrassGrowth => "grass-growth",
             PerfKnob::GrassDebug => "grass-view",
             PerfKnob::RenderScale => "render-scale",
             PerfKnob::Msaa => "msaa",
@@ -275,6 +329,13 @@ pub struct PerfToggles {
     /// Indexes [`GRASS_REACH_STEPS`]. Like the density step, changing it
     /// re-bakes every chunk, so the A/B settle window matters.
     pub grass_reach_step: usize,
+    /// Indexes [`GRASS_RINGS_STEPS`]. Como las dos de arriba, cambia qué se
+    /// hornea y no sólo qué se pinta: la grilla se tira entera.
+    pub grass_rings_step: usize,
+    /// Indexes [`GRASS_GROWTH_STEPS`]. **No re-hornea nada**: la rampa viaja en
+    /// el uniform, así que se puede barrer caminando y
+    /// comparar sin que la pradera se reconstruya debajo.
+    pub grass_growth_step: usize,
     /// Indexes [`GRASS_DEBUG_STEPS`]. Cambia lo que el shader pinta, no lo que
     /// dibuja: ni un triángulo de diferencia, para que mirar y medir sean el
     /// mismo campo.
@@ -306,9 +367,11 @@ impl Default for PerfToggles {
             tree_detail: false,
             grass_density_step: 0,
             grass_reach_step: 0,
+            grass_rings_step: 0,
+            grass_growth_step: 0,
             grass_debug_step: 0,
             render_scale_step: 0,
-            msaa_step: 0,
+            msaa_step: 2,
         }
     }
 }
@@ -373,6 +436,27 @@ impl PerfToggles {
             .unwrap_or(GRASS_REACH_STEPS[0])
     }
 
+    /// Qué anillo se planta solo, si hay uno. `None` es el campo entero.
+    ///
+    /// Devuelve el número del anillo y no el índice del paso: quien planta
+    /// razona en anillos, y hacerle restar uno es la clase de traducción que
+    /// termina en un off-by-one silencioso.
+    pub fn grass_only_ring(&self) -> Option<usize> {
+        (self.grass_rings_step % GRASS_RINGS_STEPS.len()).checked_sub(1)
+    }
+
+    /// La rampa del crecimiento, en metros.
+    pub fn grass_growth(&self) -> f32 {
+        GRASS_GROWTH_STEPS
+            .get(self.grass_growth_step)
+            .copied()
+            .unwrap_or(GRASS_GROWTH_STEPS[0])
+    }
+
+    pub fn grass_rings_label(&self) -> &'static str {
+        GRASS_RINGS_STEPS[self.grass_rings_step % GRASS_RINGS_STEPS.len()]
+    }
+
     /// Qué vista de diagnóstico tiene puesta la pradera, como índice de
     /// [`GRASS_DEBUG_STEPS`]. Cero es el juego.
     pub fn grass_debug_step(&self) -> usize {
@@ -426,11 +510,16 @@ impl PerfToggles {
             PerfKnob::LeafShadows => self.leaf_shadows = !self.leaf_shadows,
             PerfKnob::TreeDetail => self.tree_detail = !self.tree_detail,
             PerfKnob::GrassDensity => {
-                self.grass_density_step =
-                    (self.grass_density_step + 1) % GRASS_DENSITY_STEPS.len()
+                self.grass_density_step = (self.grass_density_step + 1) % GRASS_DENSITY_STEPS.len()
             }
             PerfKnob::GrassReach => {
                 self.grass_reach_step = (self.grass_reach_step + 1) % GRASS_REACH_STEPS.len()
+            }
+            PerfKnob::GrassRings => {
+                self.grass_rings_step = (self.grass_rings_step + 1) % GRASS_RINGS_STEPS.len()
+            }
+            PerfKnob::GrassGrowth => {
+                self.grass_growth_step = (self.grass_growth_step + 1) % GRASS_GROWTH_STEPS.len()
             }
             PerfKnob::GrassDebug => {
                 self.grass_debug_step = (self.grass_debug_step + 1) % GRASS_DEBUG_STEPS.len()
@@ -479,6 +568,8 @@ impl PerfToggles {
             PerfKnob::ShadowMap => self.shadow_map_step = step % SHADOW_MAP_STEPS.len(),
             PerfKnob::GrassDensity => self.grass_density_step = step % GRASS_DENSITY_STEPS.len(),
             PerfKnob::GrassReach => self.grass_reach_step = step % GRASS_REACH_STEPS.len(),
+            PerfKnob::GrassRings => self.grass_rings_step = step % GRASS_RINGS_STEPS.len(),
+            PerfKnob::GrassGrowth => self.grass_growth_step = step % GRASS_GROWTH_STEPS.len(),
             PerfKnob::GrassDebug => self.grass_debug_step = step % GRASS_DEBUG_STEPS.len(),
             PerfKnob::RenderScale => self.render_scale_step = step % RENDER_SCALE_STEPS.len(),
             PerfKnob::Msaa => self.msaa_step = step % MSAA_STEPS.len(),
@@ -520,6 +611,10 @@ impl PerfToggles {
             PerfKnob::TreeDetail => on_off(self.tree_detail),
             PerfKnob::GrassDensity => format!("{:.0}/m2", self.grass_density()),
             PerfKnob::GrassReach => format!("{:.0}%", self.grass_reach_scale() * 100.0),
+            PerfKnob::GrassRings => self.grass_rings_label().to_string(),
+            PerfKnob::GrassGrowth => {
+                format!("{:.1}m", self.grass_growth())
+            }
             PerfKnob::GrassDebug => self.grass_debug_label().to_string(),
             PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),
             PerfKnob::Msaa => match self.msaa_samples() {
@@ -555,6 +650,39 @@ fn on_off(value: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `steps()` es el largo de la escalera, y quien barre una perilla confía en
+    /// eso sin conocer su tabla. Corto de un paso, el barrido se saltaría una
+    /// configuración en silencio; largo de uno, repetiría la primera creyendo
+    /// que es otra — y una curva con una fila repetida se lee como una meseta.
+    #[test]
+    fn every_knob_ladder_closes_exactly_at_its_own_length() {
+        for knob in PerfKnob::ALL {
+            let mut toggles = PerfToggles::default();
+            let mut seen = Vec::new();
+            for step in 0..knob.steps() {
+                toggles.set_knob_step(knob, step);
+                let value = toggles.knob_value(knob);
+                assert!(
+                    !seen.contains(&value),
+                    "{}: el paso {step} repite el valor '{value}'",
+                    knob.label()
+                );
+                seen.push(value);
+            }
+            // Un paso más allá del final no puede descubrir nada: las
+            // escalonadas dan la vuelta por módulo y las booleanas se quedan en
+            // encendido. Si apareciera un valor nuevo, `steps()` estaría corto y
+            // el barrido se saltaría una configuración.
+            toggles.set_knob_step(knob, knob.steps());
+            let after = toggles.knob_value(knob);
+            assert!(
+                seen.contains(&after),
+                "{}: pasado el final aparece '{after}', que la escalera no recorrió",
+                knob.label()
+            );
+        }
+    }
 
     #[test]
     fn defaults_reproduce_the_shipped_build() {
@@ -609,12 +737,10 @@ mod tests {
             toggles.step_selected();
             assert_ne!(toggles.knob_text(*knob), baseline, "{}", knob.label());
 
-            // ...and the cycle must close, so an A/B can be repeated exactly.
-            // 420 = lcm(2 bool, 4 cull, 4 shadow-range, 5 shadow-dist, 3
-            // shadow-map, 5 grass-density, 7 grass-view). Se ajusta cuando una
-            // escalera cambia de largo: el número está para que la vuelta
-            // cierre, no para limitar cuántos pasos puede tener una perilla.
-            for _ in 1..420 {
+            // ...and its own cycle must close, so an A/B can be repeated
+            // exactly. No usamos un m.c.m. mágico: agregar una vista o un dial
+            // no puede volver roja esta prueba por aritmética ajena al dial.
+            for _ in 1..knob.steps() {
                 toggles.step_selected();
             }
             assert_eq!(toggles.knob_text(*knob), baseline, "{}", knob.label());

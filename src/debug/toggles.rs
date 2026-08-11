@@ -14,6 +14,7 @@ use super::channel::{
     DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle, HudSectionToggle,
 };
 use super::snapshot::HudVisibility;
+use crate::perf::{Benchmark, Flythrough};
 use crate::world::day_night::TimeOfDayRequest;
 use bof_domain::enemies::BokoboSpawnRequest;
 use bof_domain::mounts::HorseSpawnRequest;
@@ -30,10 +31,18 @@ pub(super) fn apply_initial_toggles(
 
 pub(super) fn apply_channel_toggles(
     mut requests: MessageReader<DebugChannelToggle>,
+    benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
     mut config: ResMut<DebugConfig>,
     mut trace: ResMut<CastTrace>,
     mut store: ResMut<GizmoConfigStore>,
 ) {
+    if benchmark.is_running() || flythrough.is_running() {
+        if requests.read().next().is_some() {
+            warn!("[debug] ignoring channel change while a measurement runs");
+        }
+        return;
+    }
     for DebugChannelToggle(channel) in requests.read().copied() {
         let now = match channel {
             DebugChannel::Colliders => {
@@ -78,11 +87,19 @@ pub(super) fn apply_channel_toggles(
 
 pub(super) fn apply_debug_actions(
     mut requests: MessageReader<DebugActionRequest>,
+    benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
     mut time_of_day: MessageWriter<TimeOfDayRequest>,
     mut probe: MessageWriter<bof_domain::movement::probe_data::ProbeToggleRequest>,
     mut bokobos: MessageWriter<BokoboSpawnRequest>,
     mut horse: MessageWriter<HorseSpawnRequest>,
 ) {
+    if benchmark.is_running() || flythrough.is_running() {
+        if requests.read().next().is_some() {
+            warn!("[debug] ignoring world change while a measurement runs");
+        }
+        return;
+    }
     for DebugActionRequest(action) in requests.read().copied() {
         match action {
             // Each owning module holds the entity and its request type; debug
@@ -112,8 +129,16 @@ pub(super) fn apply_debug_actions(
 /// [`HudVisibility`]; presentation just asks (§7).
 pub(super) fn apply_hud_section_toggles(
     mut requests: MessageReader<HudSectionToggle>,
+    benchmark: Res<Benchmark>,
+    flythrough: Res<Flythrough>,
     mut visibility: ResMut<HudVisibility>,
 ) {
+    if benchmark.is_running() || flythrough.is_running() {
+        if requests.read().next().is_some() {
+            warn!("[debug] ignoring HUD change while a measurement runs");
+        }
+        return;
+    }
     for HudSectionToggle(section) in requests.read().copied() {
         let now = visibility.toggle(section);
         info!(

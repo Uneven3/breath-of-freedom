@@ -86,6 +86,22 @@ fn source_files() -> Vec<(String, String)> {
     files
 }
 
+/// Every production crate. Most app-only laws intentionally use `source_files`;
+/// repository-wide laws such as §15 must not stop at the presentation crate.
+fn all_source_files() -> Vec<(String, String)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for source in [
+        root.join("src"),
+        root.join("crates/domain/src"),
+        root.join("crates/simulation/src"),
+    ] {
+        collect(&source, &mut files);
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
 fn collect(directory: &Path, files: &mut Vec<(String, String)>) {
     let entries = fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("no se puede leer {}: {error}", directory.display()));
@@ -241,7 +257,7 @@ fn only_the_input_module_reads_hardware() {
 /// que `[lints.rust] unsafe_code = "forbid"` lo cobre en el build (fase 3).
 #[test]
 fn the_project_has_no_unsafe_code() {
-    let offenders: Vec<String> = source_files()
+    let offenders: Vec<String> = all_source_files()
         .into_iter()
         .filter(|(_, contents)| has_unsafe(contents))
         .map(|(path, _)| path)
@@ -513,7 +529,7 @@ fn no_file_is_mostly_commentary() {
     // de comentario ya lo pasan y no hay nada que arreglar.
     const MINIMUM_LINES: usize = 100;
 
-    let offenders: Vec<String> = source_files()
+    let offenders: Vec<String> = all_source_files()
         .into_iter()
         .filter_map(|(path, contents)| {
             let lines: Vec<&str> = contents
@@ -525,9 +541,11 @@ fn no_file_is_mostly_commentary() {
                 return None;
             }
             let commented = lines.iter().filter(|line| line.starts_with("//")).count();
-            let percent = commented * 100 / lines.len();
-            (percent > CEILING_PERCENT)
-                .then(|| format!("{path} {percent}% ({commented}/{})", lines.len()))
+            let over = commented * 100 > CEILING_PERCENT * lines.len();
+            over.then(|| {
+                let percent = commented as f64 * 100.0 / lines.len() as f64;
+                format!("{path} {percent:.2}% ({commented}/{})", lines.len())
+            })
         })
         .collect();
 

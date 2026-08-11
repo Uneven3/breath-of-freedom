@@ -32,7 +32,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bof_simulation::SimulationPlugin;
 
-fn main() {
+fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SimulationPlugin)
@@ -52,5 +52,18 @@ fn main() {
             editor::EditorPlugin,
             scene::ScenePlugin,
         ))
-        .run();
+        .run()
+}
+
+#[cfg(test)]
+mod entrypoint_tests {
+    use super::*;
+
+    /// Returning `()` silently turns every `AppExit::Error` emitted by an
+    /// automation into process exit code 0. The return type is the bridge to
+    /// Rust's `Termination` implementation for `AppExit`.
+    #[test]
+    fn the_entrypoint_propagates_the_apps_exit_status() {
+        let _: fn() -> AppExit = main;
+    }
 }

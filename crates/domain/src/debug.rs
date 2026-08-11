@@ -1,7 +1,7 @@
 //! What debug reports, as pure data (§6, §19).
 //!
-//! One snapshot, two sinks: [`super::hud`] renders it to the screen and
-//! [`super::console`] writes it to the log. Producers fill their own section
+//! One snapshot, two sinks: the app HUD renders it to the screen and its console
+//! sink writes it to the log. Producers fill their own section
 //! and never format for a particular sink — that is the whole point of the
 //! split. The console is the channel that carries hard data out of a playtest;
 //! the HUD is what the player reads while judging feeling. Both must show the

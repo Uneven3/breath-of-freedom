@@ -4,6 +4,7 @@
 //! orientation published by Input, with a landing dip and collision spring arm.
 
 use avian3d::prelude::*;
+use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 
@@ -45,8 +46,15 @@ const SPRING_PROBE_RADIUS: f32 = 0.2;
 /// Fade out the player model if the camera is closer than this to prevent clipping.
 const FIRST_PERSON_THRESHOLD: f32 = 0.8;
 
-// A light atmospheric veil, not weather: the playable course stays fully
-// readable and only distant geometry eases into the sky color.
+// Steepened to 40/80/0.7 on 2026-08-09 to paper over the meadow's own 64 m
+// LOD edge reading as a hole in the ground — played, and it didn't work: a
+// density wall parked on top of the camera reads as "fog placed on purpose
+// to hide something," not depth. BOTW reserves real opacity for authored
+// setpieces (sandstorms, Korok forest fog) and uses a barely-there veil for
+// everything else, tied to the view arc rather than to any one LOD edge.
+// Reverted 2026-08-09: gradual again, decoupled from the meadow edge. The
+// hole itself stays open as its own debt — dressing terrain past 64 m, not
+// another turn of this knob (see AHORA.md).
 const FOG_START_METERS: f32 = 45.0;
 const FOG_END_METERS: f32 = 240.0;
 const FOG_MAX_ALPHA: f32 = 0.3;
@@ -104,6 +112,14 @@ fn spawn_camera(
         Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
         soft_distance_fog(atmosphere_color(time_of_day.hours)),
         crate::perf::data::profile_msaa(perf.profile),
+        // Ambos juntos, no sólo `DepthPrepass`: con sólo depth, Bevy bindea un
+        // material bind group **vacío** para materiales opacos
+        // (`is_depth_only_opaque_prepass`, bevy_pbr 0.19 prepass/mod.rs), y el
+        // vertex de la pradera necesita `blade_records` —que vive en ese bind
+        // group— para reconstruir la brizna. `NormalPrepass` fuerza el bind
+        // group completo. Ver `visuals::grass_material` y `BOTWGrass.md`.
+        DepthPrepass,
+        NormalPrepass,
     ));
 }
 
@@ -436,15 +452,24 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// Distant and gradual (2026-08-09, reverted): clear right next to the
+    /// player, ramping past the camera's own view arc rather than resolving
+    /// on top of any one LOD edge, and never a fully opaque wall.
     #[test]
-    fn distance_fog_is_a_distant_translucent_veil() {
+    fn distance_fog_stays_clear_up_close_and_never_fully_opaque() {
         let fog = soft_distance_fog(Color::srgb(0.4, 0.6, 0.8));
 
         let FogFalloff::Linear { start, end } = fog.falloff else {
             panic!("soft atmosphere must use the predictable linear falloff");
         };
         assert!(start >= 40.0, "near gameplay must remain completely clear");
-        assert!(end - start >= 150.0, "fog transition must stay gradual");
-        assert!(fog.color.to_srgba().alpha <= 0.3);
+        assert!(
+            end - start >= 100.0,
+            "the ramp must stay gradual, not a wall"
+        );
+        assert!(
+            fog.color.to_srgba().alpha < 1.0,
+            "a veil, however strong, must stay translucent"
+        );
     }
 }

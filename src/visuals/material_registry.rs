@@ -38,7 +38,7 @@
 use bevy::asset::{AssetId, UntypedAssetId};
 use bevy::camera::visibility::ViewVisibility;
 use bevy::pbr::{ExtendedMaterial, Material, MaterialExtension, MaterialPlugin, MeshMaterial3d};
-use bevy::platform::collections::HashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh3d;
 use bevy::render::render_resource::{AsBindGroup, Face};
@@ -133,6 +133,15 @@ pub(crate) struct SubjectTally {
     /// aparato; un triángulo barato de dibujar puede ser caro de tener. Es
     /// también el número que decide si conviene instancing o vertex pulling,
     /// que hasta ahora se discutía con aritmética de servilleta.
+    ///
+    /// **Por malla única, no por entidad**, y la diferencia dejó de ser teórica
+    /// el 2026-08-07: desde que un nivel de la pradera usa una malla índice
+    /// compartida por todos sus chunks, sumar por entidad la contaba una vez por
+    /// chunk — diez copias de algo que existe una vez, y el ahorro entero del
+    /// Paso 2 invisible. Si sujetos distintos comparten la malla, los bytes van
+    /// a `OTHER`: son una sola reserva y dársela a uno según el orden del query
+    /// sería inventar propiedad. Los triángulos sí van por entidad: ésos se
+    /// dibujan tantas veces como instancias haya.
     pub vertex_bytes: usize,
 }
 
@@ -147,11 +156,21 @@ pub(crate) struct SceneCensus {
     /// quedarse corta, y por eso se compara contra el conteo sin material.
     accounted_meshes: u32,
     subjects: [SubjectTally; BUCKETS],
-    /// Bevy batchea por `(malla, material)`, así que un lote distinto es un
-    /// draw. Untyped para que todos los tipos sumen en el mismo conjunto.
+    /// Lower bound of visible batches by `(mesh, material)`. The renderer may
+    /// split one of these further by pipeline, draw function, allocator slab,
+    /// lightmap or disabled batching, none of which exists in the main world.
+    /// Untyped so every material type contributes to the same estimate.
     batches: HashSet<(AssetId<Mesh>, UntypedAssetId)>,
-    subject_batches: [HashSet<(AssetId<Mesh>, UntypedAssetId)>; BUCKETS],
+    /// Attribution of those estimated batches. Cross-subject sharing belongs
+    /// to `OTHER`, for the same order-independent reason as resident bytes.
+    batch_owners: HashMap<(AssetId<Mesh>, UntypedAssetId), usize>,
     materials: HashSet<UntypedAssetId>,
+    /// Las mallas cuyos bytes ya se contaron este frame. Una malla compartida por
+    /// varias entidades ocupa la GPU una vez.
+    /// Which subject currently owns each unique mesh's resident bytes. A mesh
+    /// shared across subjects is moved to `OTHER`: crediting whichever query
+    /// happened to see it first made attribution depend on system order.
+    counted_meshes: HashMap<AssetId<Mesh>, usize>,
 }
 
 impl SceneCensus {
@@ -159,10 +178,9 @@ impl SceneCensus {
         self.accounted_meshes = 0;
         self.subjects = [SubjectTally::default(); BUCKETS];
         self.batches.clear();
-        for set in &mut self.subject_batches {
-            set.clear();
-        }
+        self.batch_owners.clear();
         self.materials.clear();
+        self.counted_meshes.clear();
     }
 
     fn record(
@@ -174,21 +192,39 @@ impl SceneCensus {
     ) {
         let bucket = subject.map_or(OTHER, Subject::index);
         self.accounted_meshes += 1;
-        self.batches.insert((mesh, material));
+        let batch = (mesh, material);
+        self.batches.insert(batch);
         self.materials.insert(material);
-        self.subject_batches[bucket].insert((mesh, material));
+        match self.batch_owners.get_mut(&batch) {
+            None => {
+                self.batch_owners.insert(batch, bucket);
+            }
+            Some(owner) if *owner != bucket => *owner = OTHER,
+            Some(_) => {}
+        }
         let tally = &mut self.subjects[bucket];
         tally.meshes += 1;
         tally.triangles += cost.triangles;
-        tally.vertex_bytes += cost.vertex_bytes;
+        match self.counted_meshes.get_mut(&mesh) {
+            None => {
+                self.counted_meshes.insert(mesh, bucket);
+                self.subjects[bucket].vertex_bytes += cost.vertex_bytes;
+            }
+            Some(owner) if *owner != bucket && *owner != OTHER => {
+                self.subjects[*owner].vertex_bytes -= cost.vertex_bytes;
+                self.subjects[OTHER].vertex_bytes += cost.vertex_bytes;
+                *owner = OTHER;
+            }
+            Some(_) => {}
+        }
     }
 
     /// Los draws no se pueden sumar mientras se cuenta —son la cardinalidad de
     /// un conjunto, no un acumulador— así que se cierran acá.
     pub(crate) fn tallies(&self) -> [SubjectTally; BUCKETS] {
         let mut out = self.subjects;
-        for (bucket, tally) in out.iter_mut().enumerate() {
-            tally.draws = self.subject_batches[bucket].len();
+        for owner in self.batch_owners.values() {
+            out[*owner].draws += 1;
         }
         out
     }
@@ -406,12 +442,11 @@ mod tests {
         assert_eq!(census.accounted_meshes(), 4);
     }
 
-    /// Un draw es un `(malla, material)` distinto, así que dos entidades que
-    /// comparten los dos batchean juntas y valen **uno**. Contarlo como
-    /// acumulador —que es lo natural cuando se cuenta por sujeto— daría el
-    /// número de entidades disfrazado de draws.
+    /// The main-world estimate collapses equal `(mesh, material)` pairs. It is
+    /// deliberately a lower bound, not proof that the render world emitted one
+    /// draw: pipeline, lightmap and batching state can still split it.
     #[test]
-    fn sharing_a_mesh_and_a_material_is_one_draw_not_two() {
+    fn sharing_a_mesh_and_a_material_is_one_estimated_batch_not_two() {
         let census = census_with(&[
             (Some(Subject::Forest), 1, 10, 100),
             (Some(Subject::Forest), 1, 10, 100),
@@ -420,6 +455,29 @@ mod tests {
         assert_eq!(census.tallies()[Subject::Forest.index()].draws, 2);
         assert_eq!(census.draws(), 2);
         assert_eq!(census.materials(), 2);
+    }
+
+    /// Resident bytes belong to the allocation, not to the first subject a
+    /// query happens to visit. Cross-subject sharing is reported as unowned so
+    /// reordering material systems cannot move memory between meadow/forest.
+    #[test]
+    fn a_mesh_shared_by_subjects_has_deterministic_memory_ownership() {
+        for entries in [
+            [
+                (Some(Subject::Meadow), 1, 10, 300),
+                (Some(Subject::Forest), 1, 10, 300),
+            ],
+            [
+                (Some(Subject::Forest), 1, 10, 300),
+                (Some(Subject::Meadow), 1, 10, 300),
+            ],
+        ] {
+            let tallies = census_with(&entries).tallies();
+            assert_eq!(tallies[Subject::Meadow.index()].vertex_bytes, 0);
+            assert_eq!(tallies[Subject::Forest.index()].vertex_bytes, 0);
+            assert_eq!(tallies[OTHER].vertex_bytes, 300);
+            assert_eq!(tallies[OTHER].draws, 1);
+        }
     }
 
     /// Los sujetos reparten el total sin perder ni duplicar: si el reparto no

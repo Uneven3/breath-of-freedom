@@ -25,12 +25,12 @@ use crate::physics::GameLayer;
 /// `cos(60°) = 0.5` matches `GroundService`'s `max_slope_angle_deg = 60`.
 /// Shared with `services::ground` (the downward grounded probe) as the single
 /// 60° slope source of truth.
-pub const FLOOR_MIN_UP_DOT: f32 = 0.5;
+pub(crate) const FLOOR_MIN_UP_DOT: f32 = 0.5;
 /// A surface counts as wall if it is nearly vertical (`|n.y|` small).
 const WALL_MAX_UP_DOT: f32 = 0.2;
 
 /// Step `from` toward `to` by at most `delta`.
-pub fn move_toward(from: f32, to: f32, delta: f32) -> f32 {
+pub(crate) fn move_toward(from: f32, to: f32, delta: f32) -> f32 {
     if (to - from).abs() <= delta {
         to
     } else {
@@ -40,7 +40,12 @@ pub fn move_toward(from: f32, to: f32, delta: f32) -> f32 {
 
 /// Slerp the body's yaw toward its planar move direction. Movement is planar,
 /// so we rotate purely about Y (cheaper and stable vs a full `looking_to`).
-pub fn apply_locomotion_rotation(transform: &mut Transform, move_dir: Vec2, dt: f32, speed: f32) {
+pub(crate) fn apply_locomotion_rotation(
+    transform: &mut Transform,
+    move_dir: Vec2,
+    dt: f32,
+    speed: f32,
+) {
     if move_dir.length_squared() <= 0.01 {
         return;
     }
@@ -56,7 +61,7 @@ pub fn apply_locomotion_rotation(transform: &mut Transform, move_dir: Vec2, dt: 
 /// colliders. Updates `transform.translation`, classifies wall contacts into
 /// `contact`, and returns the post-slide ("projected") velocity to store for next
 /// frame.
-pub fn body_move_and_slide(
+pub(crate) fn body_move_and_slide(
     mas: &MoveAndSlide,
     entity: Entity,
     collider: &Collider,
@@ -129,7 +134,7 @@ const GROUND_SNAP_EPSILON: f32 = 0.02;
 /// finds the obstacle's top within `GROUND_SNAP_DISTANCE` and auto-climbs it,
 /// which reads as "sliding uphill" on approach and produces a jerky handoff
 /// into motors (like Stairs) that expect to own that climb themselves.
-pub fn snap_to_ground(
+pub(crate) fn snap_to_ground(
     mas: &MoveAndSlide,
     collider: &Collider,
     transform: &mut Transform,
@@ -168,7 +173,7 @@ pub fn snap_to_ground(
 /// style). Sweeping the raw horizontal vector into an incline instead makes
 /// `move_and_slide` re-project it every tick, taxing speed by `sin²(slope)`
 /// per tick — the "stuck at the foot of the ramp" crawl.
-pub fn align_with_floor(planar: Vec3, floor_normal: Vec3) -> Vec3 {
+pub(crate) fn align_with_floor(planar: Vec3, floor_normal: Vec3) -> Vec3 {
     let speed = planar.length();
     if speed <= f32::EPSILON {
         return planar;
@@ -181,7 +186,7 @@ pub fn align_with_floor(planar: Vec3, floor_normal: Vec3) -> Vec3 {
 }
 
 /// Advance one actor through a flat-ground locomotion mode.
-pub struct GroundDriveStep<'a> {
+pub(crate) struct GroundDriveStep<'a> {
     pub entity: Entity,
     pub collider: &'a Collider,
     pub transform: &'a mut Transform,
@@ -196,7 +201,7 @@ pub struct GroundDriveStep<'a> {
     pub face_move: bool,
 }
 
-pub fn ground_drive_step(
+pub(crate) fn ground_drive_step(
     mut step: GroundDriveStep,
     active: LocomotionState,
     mas: &MoveAndSlide,
@@ -333,12 +338,12 @@ pub use bof_domain::movement::motor_state::KinematicArc;
 
 /// Keep the climb/wall-jump cap this far below a detected ledge lip, forcing a
 /// Mantle instead of letting the body float over the edge.
-pub const LEDGE_TOP_OFFSET: f32 = 0.33;
+pub(crate) const LEDGE_TOP_OFFSET: f32 = 0.33;
 
 /// Soft ceiling shared by Climb and WallJump: cap upward motion just below the
 /// ledge lip (`lip_height` > 0 means the down-cast found the ledge top).
 /// Returns true while the body is pinned at the cap.
-pub fn clip_below_ledge_lip(
+pub(crate) fn clip_below_ledge_lip(
     transform: &mut Transform,
     v: &mut Vec3,
     lip_height: f32,
@@ -367,7 +372,7 @@ pub fn clip_below_ledge_lip(
 /// Wall normal used to launch off a climbed wall (WallJump / EdgeLeap): prefer
 /// the sensed climb normal, fall back to the last wall contact, then to the
 /// body's back.
-pub fn launch_normal(
+pub(crate) fn launch_normal(
     climb_normal: Option<Vec3>,
     contact: &BodyContact,
     transform: &Transform,

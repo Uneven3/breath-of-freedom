@@ -43,8 +43,8 @@ const PROBE_STANDING_CENTER_Y: f32 = 1.125;
 const PROBE_SPAWN_POSITION: Vec3 = Vec3::new(0.0, PROBE_STANDING_CENTER_Y, -3.0);
 
 /// Spawns or despawns the traversal probe at its authored start. Driven by
-/// [`ProbeToggleRequest`]: `movement` owns the probe entity, so it owns the
-/// message and consumes it, rather than reading a debug-layer type.
+/// [`bof_domain::movement::probe_data::ProbeToggleRequest`]: `movement` owns
+/// the probe entity and consumes the message instead of reading a debug type.
 pub fn toggle_spawn(
     mut commands: Commands,
     mut requests: MessageReader<super::probe_data::ProbeToggleRequest>,

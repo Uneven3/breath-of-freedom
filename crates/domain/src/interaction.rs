@@ -49,7 +49,9 @@ pub struct InteractionRequest {
     pub kind: InteractionKind,
 }
 
-/// Picks the nearest candidate within its own range.
+/// Picks the nearest candidate within its own range. Exact distance ties use
+/// world position and finally entity order, so query iteration cannot change
+/// the result.
 ///
 /// Extracted because the same filter + `min_by(distance_squared)` had been
 /// copied into `mounts::lifecycle` and `inventory::pickup`; a third contextual
@@ -61,9 +63,13 @@ pub fn nearest_candidate<T>(
 ) -> Option<(Entity, T)> {
     candidates
         .filter(|(_, position, data)| position.distance(origin) <= reach(data))
-        .min_by(|(_, left, _), (_, right, _)| {
+        .min_by(|(left_entity, left, _), (right_entity, right, _)| {
             left.distance_squared(origin)
                 .total_cmp(&right.distance_squared(origin))
+                .then_with(|| left.x.total_cmp(&right.x))
+                .then_with(|| left.y.total_cmp(&right.y))
+                .then_with(|| left.z.total_cmp(&right.z))
+                .then_with(|| left_entity.cmp(right_entity))
         })
         .map(|(entity, _, data)| (entity, data))
 }
@@ -115,5 +121,21 @@ mod tests {
             *range
         });
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn exact_distance_ties_do_not_depend_on_candidate_iteration_order() {
+        let lower = Entity::from_raw_u32(10).unwrap();
+        let higher = Entity::from_raw_u32(20).unwrap();
+        let choose = |candidates: [(Entity, Vec3, ()); 2]| {
+            nearest_candidate(Vec3::ZERO, candidates.into_iter(), |_| 5.0)
+                .map(|(entity, ())| entity)
+                .unwrap()
+        };
+        let first = (lower, Vec3::X, ());
+        let second = (higher, Vec3::NEG_X, ());
+
+        assert_eq!(choose([first, second]), higher);
+        assert_eq!(choose([second, first]), higher);
     }
 }

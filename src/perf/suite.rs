@@ -73,7 +73,7 @@ impl BenchmarkStep {
             grass_density_step: 0,
             grass_reach_step: 0,
             render_scale_step: 0,
-            msaa_step: 0,
+            msaa_step: step::MSAA_2X,
         }
     }
 }
@@ -86,14 +86,21 @@ mod step {
     /// `GRASS_DENSITY_STEPS`: 64, 30, 12 y 0 briznas/m². El 30 se conserva
     /// aunque la escalera se haya reescalado, porque es el paso que el usuario
     /// juzgó por ojo ("sigue siendo poco") y con el que va a comparar.
-    pub const GRASS_DENSE: usize = 1;
-    pub const GRASS_SPARSE: usize = 2;
-    pub const GRASS_SPARSEST: usize = 3;
-    pub const GRASS_OFF: usize = 4;
+    /// Corridos el 2026-08-07 cuando la escalera pasó de cinco pasos a diez para
+    /// el barrido del Paso 0 (`BOTWGrass.md`). Los cuatro valores son los
+    /// mismos; lo que cambió es dónde caen, que es exactamente lo que el test de
+    /// abajo existe para no dejar pasar en silencio.
+    pub const GRASS_DENSE: usize = 2;
+    pub const GRASS_SPARSE: usize = 5;
+    pub const GRASS_SPARSEST: usize = 7;
+    pub const GRASS_OFF: usize = 9;
     /// `GRASS_REACH_STEPS`: 75% y 50% del alcance de los anillos.
     pub const REACH_75: usize = 1;
     pub const REACH_50: usize = 2;
-    /// `MSAA_STEPS`: 4x y 2x.
+    /// `MSAA_STEPS`: apagado, 4x y 2x. 2x es el baseline desde el 2026-08-09
+    /// (arregla el shimmer sub-píxel medido jugando — "la V"), así que la fila
+    /// que antes medía "subir a 2x" ahora mide lo contrario: apagarlo.
+    pub const MSAA_OFF: usize = 0;
     pub const MSAA_4X: usize = 1;
     pub const MSAA_2X: usize = 2;
     /// `RENDER_SCALE_STEPS`: 75% y 50% de los píxeles.
@@ -176,7 +183,7 @@ impl BenchSuite {
     ///
     /// Una por suite y no una global, porque el mirador del bosque no sirve
     /// para medir pasto: desde ahí la pradera es un cuarto de la pantalla y
-    /// cualquier delta suyo queda enterrado. Ver [`VANTAGES`].
+    /// cualquier delta suyo queda enterrado. Ver la sección `VANTAGES`.
     pub const fn vantage(self) -> (Vec3, Vec3) {
         match self {
             BenchSuite::General | BenchSuite::Shadows => (FOREST_VANTAGE, FOREST_FACING),
@@ -220,13 +227,13 @@ impl BenchSuite {
 const FOREST_VANTAGE: Vec3 = Vec3::new(-6.2, 4.7, -3.2);
 const FOREST_FACING: Vec3 = Vec3::new(-0.78, -0.02, 0.63);
 
-/// El de la pradera es otra cosa y por eso es otro punto: **altura de ojo y
-/// mirada casi horizontal**. Es el caso que el pasto tiene que sobrevivir —
-/// mirando al horizonte se ven los tres anillos a la vez, el traspaso entre
-/// ellos y el overdraw en el peor ángulo, que es el rasante. Mirando hacia
-/// abajo se ve un anillo y la mitad del sistema queda fuera del cuadro.
-const MEADOW_VANTAGE: Vec3 = Vec3::new(0.0, 1.6, 0.0);
-const MEADOW_FACING: Vec3 = Vec3::new(0.0, -0.08, 1.0);
+/// El mirador de pradera es una pose F7 de Orbit, no un ojo rasante inventado:
+/// reproducir lo que ve el jugador manda sobre fabricar el peor ángulo. La
+/// captura del 2026-08-11 dejó `y=4,32 m` y pitch −0,278; con ella la suite y
+/// el checkpoint visual miran el mismo relevo de LOD que se juzga jugando.
+/// El caso rasante sigue disponible por `BOF_SHOT_POSE`, pero no es baseline.
+const MEADOW_VANTAGE: Vec3 = Vec3::new(4.549_856, 4.315_583, -36.233_036);
+const MEADOW_FACING: Vec3 = Vec3::new(-0.297_623_28, -0.277_781_96, -0.913_377_05);
 
 /// La matriz general: qué le cuesta el frame al juego entero.
 const GENERAL_STEPS: [BenchmarkStep; 11] = [
@@ -284,8 +291,8 @@ const GENERAL_STEPS: [BenchmarkStep; 11] = [
 /// 4. **Píxeles contra geometría** — la escala de render, misma geometría y
 ///    menos fragmentos. Contra los pasos de densidad decide fill-bound o
 ///    vertex-bound, que es la pregunta que `BOTWGrass.md` viene arrastrando.
-/// 5. **El parpadeo** — MSAA 4x y 2x. Este paso no se juzga por el número: se
-///    juzga mirando. El número dice lo que costaría el arreglo.
+/// 5. **El parpadeo** — 2x ya es el baseline (arregla la V, jugado); "msaa 4x"
+///    mide subir más y "msaa off" mide lo que cuesta el arreglo que ya está.
 const GRASS_STEPS: [BenchmarkStep; 11] = [
     BenchmarkStep::baseline("baseline"),
     BenchmarkStep {
@@ -321,8 +328,8 @@ const GRASS_STEPS: [BenchmarkStep; 11] = [
         ..BenchmarkStep::baseline("msaa 4x")
     },
     BenchmarkStep {
-        msaa_step: step::MSAA_2X,
-        ..BenchmarkStep::baseline("msaa 2x")
+        msaa_step: step::MSAA_OFF,
+        ..BenchmarkStep::baseline("msaa off")
     },
     BenchmarkStep::baseline("baseline repeat"),
 ];

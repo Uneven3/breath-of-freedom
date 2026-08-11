@@ -40,6 +40,9 @@ const WARMUP_SECS: f32 = 0.5;
 const MAX_SECS_PER_STEP: f32 = WARMUP_SECS + SETTLE_SECS + MEASURE_SECS;
 /// Slack on top, to tolerate long frames without stranding the toggles.
 const RUN_SLACK_SECS: f32 = 15.0;
+/// Time a manually selected suite gives its scene to finish spawning before the
+/// runner parks the camera and starts warming pipelines.
+pub(super) const SCENE_SETTLE_SECS: f32 = 2.0;
 
 /// Movement past this (metres from the anchor) invalidates the step.
 const STILLNESS_TOLERANCE: f32 = 0.75;
@@ -111,6 +114,21 @@ impl RunContext {
             broken_assets: 0,
         }
     }
+
+    fn unusable_reason(&self) -> Option<&'static str> {
+        if self.broken_assets > 0 {
+            return Some("assets failed to load");
+        }
+        let Some(framing) = self.framing else {
+            return Some("the vantage framing was not sampled");
+        };
+        let subject = self.suite.vantage_subject();
+        (framing
+            .share_of(subject)
+            .min(framing.triangle_share_of(subject))
+            < SUBJECT_FLOOR)
+            .then_some("the vantage does not contain its subject")
+    }
 }
 
 /// Por debajo de esta fracción de las mallas visibles, un tema no está medido:
@@ -137,6 +155,7 @@ pub struct StepResult {
     pub frame_max: f64,
     pub gpu_mean: f64,
     pub samples: usize,
+    pub gpu_samples: usize,
     pub invalid: bool,
 }
 
@@ -177,13 +196,20 @@ pub struct FinishedRun {
 
 #[derive(Resource, Default)]
 pub struct Benchmark {
+    pub(super) pending: Option<PendingRun>,
     pub run: Option<RunState>,
     pub finished: Option<FinishedRun>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct PendingRun {
+    request: BenchmarkRequest,
+    elapsed: f32,
+}
+
 impl Benchmark {
     pub fn is_running(&self) -> bool {
-        self.run.is_some()
+        self.pending.is_some() || self.run.is_some()
     }
 
     /// The pose the camera holds for the duration, so presentation can park it
@@ -200,6 +226,14 @@ impl Benchmark {
 
     /// Progress text: which step, and how far into it.
     pub fn status(&self) -> Option<String> {
+        if let Some(pending) = self.pending {
+            let phase = if pending.elapsed == 0.0 {
+                "entrando a su escena"
+            } else {
+                "asentando escena"
+            };
+            return Some(format!("{} · {phase}", pending.request.suite.label()));
+        }
         let run = self.run.as_ref()?;
         let steps = run.suite.steps();
         let step = steps.get(run.index)?;
@@ -263,31 +297,91 @@ impl BenchmarkRequest {
 pub(super) fn start_requested_runs(
     mut requests: MessageReader<BenchmarkRequest>,
     mut benchmark: ResMut<Benchmark>,
+    flythrough: Res<super::Flythrough>,
     mut toggles: ResMut<PerfToggles>,
     time: Res<Time<Real>>,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
     terrain_debug: Res<crate::visuals::terrain_material::TerrainDebugState>,
     scene: Res<State<crate::scene::AppState>>,
+    mut next_scene: ResMut<NextState<crate::scene::AppState>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
 ) {
-    let Some(request) = requests.read().copied().next() else {
+    let incoming = requests.read().copied().next();
+    if incoming.is_some() && benchmark.is_running() {
+        if benchmark.run.is_some() {
+            finalize_benchmark(
+                &mut benchmark,
+                &mut toggles,
+                time.elapsed_secs(),
+                FinishReason::Aborted("cancelled by operator"),
+            );
+        } else {
+            reject_benchmark(&mut benchmark, time.elapsed_secs(), "cancelled by operator");
+        }
         return;
-    };
-    if benchmark.is_running() {
-        finalize_benchmark(
+    }
+    if incoming.is_some() && flythrough.is_running() {
+        warn!("[bench] cannot start — a flythrough is already running");
+        reject_benchmark(
             &mut benchmark,
-            &mut toggles,
             time.elapsed_secs(),
-            FinishReason::Aborted("cancelled by operator"),
+            "flythrough is already running",
         );
         return;
     }
+
+    let request = if let Some(request) = incoming {
+        if request.vantage == VantageMode::Canonical {
+            let wanted = crate::scene::AppState::Scene(request.suite.scene());
+            if *scene.get() != wanted {
+                benchmark.finished = None;
+                benchmark.pending = Some(PendingRun {
+                    request,
+                    elapsed: 0.0,
+                });
+                next_scene.set(wanted);
+                info!(
+                    "[bench] entering suite '{}' scene before measuring",
+                    request.suite.label()
+                );
+                return;
+            }
+        }
+        request
+    } else {
+        let Some(pending) = benchmark.pending.as_mut() else {
+            return;
+        };
+        let wanted = crate::scene::AppState::Scene(pending.request.suite.scene());
+        if *scene.get() != wanted {
+            pending.elapsed = 0.0;
+            next_scene.set(wanted);
+            return;
+        }
+        pending.elapsed += time.delta_secs();
+        if pending.elapsed < SCENE_SETTLE_SECS {
+            return;
+        }
+        let request = pending.request;
+        benchmark.pending = None;
+        request
+    };
     let Some(camera) = camera else {
         warn!("[bench] cannot start — camera missing or ambiguous");
+        reject_benchmark(
+            &mut benchmark,
+            time.elapsed_secs(),
+            "camera missing or ambiguous",
+        );
         return;
     };
     if terrain_debug.view() != crate::visuals::terrain_material::TerrainDebugView::Off {
         warn!("[bench] cannot start — switch the terrain view back to Arte first");
+        reject_benchmark(
+            &mut benchmark,
+            time.elapsed_secs(),
+            "terrain diagnostic view is active",
+        );
         return;
     }
     let pose = match request.vantage {
@@ -322,6 +416,17 @@ pub(super) fn start_requested_runs(
         SETTLE_SECS,
         MEASURE_SECS
     );
+}
+
+fn reject_benchmark(benchmark: &mut Benchmark, at: f32, reason: &'static str) {
+    benchmark.pending = None;
+    benchmark.run = None;
+    benchmark.finished = Some(FinishedRun {
+        at,
+        valid: 0,
+        total: 0,
+        aborted: Some(reason),
+    });
 }
 
 fn apply_step(toggles: &mut PerfToggles, step: &BenchmarkStep) {
@@ -363,7 +468,11 @@ fn finalize_benchmark(
     let aborted = match reason {
         FinishReason::Completed => {
             report(&run.results, run.vantage, &run.context);
-            None
+            let unusable = run.context.unusable_reason();
+            if let Some(reason) = unusable {
+                error!("[bench] corrida terminada pero no utilizable: {reason}");
+            }
+            unusable
         }
         FinishReason::Aborted(reason) => {
             warn!("[bench] aborted: {reason} — render configuration restored");
@@ -463,10 +572,12 @@ pub(super) fn advance_benchmark(
         let frame_ms = diagnostics
             .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
             .and_then(|d| d.value());
-        if let Some(frame_ms) = frame_ms {
+        if let Some(frame_ms) = frame_ms.filter(|value| value.is_finite() && *value > 0.0) {
             run.current.frame_ms.push(frame_ms);
             let (_, gpu_ms) = super::gpu_pass_costs(&diagnostics);
-            run.current.gpu_ms.push(gpu_ms);
+            if let Some(gpu_ms) = gpu_ms {
+                run.current.gpu_ms.push(gpu_ms);
+            }
         }
     }
 
@@ -520,6 +631,7 @@ fn summarise(name: &'static str, samples: &StepSamples) -> StepResult {
         frame_max: samples.frame_ms.iter().copied().fold(0.0, f64::max),
         gpu_mean: mean(&samples.gpu_ms),
         samples: count,
+        gpu_samples: samples.gpu_ms.len(),
         invalid: samples.invalid || count == 0,
     }
 }
@@ -555,7 +667,7 @@ fn report_framing(context: &RunContext) {
             continue;
         }
         parts.push(format!(
-            "{}={:.0}%/{:.0}% ({} draws)",
+            "{}={:.0}%/{:.0}% ({} draws~)",
             subject.label(),
             framing.share_of(subject) * 100.0,
             framing.triangle_share_of(subject) * 100.0,
@@ -563,7 +675,7 @@ fn report_framing(context: &RunContext) {
         ));
     }
     info!(
-        "[bench] en cuadro (mallas%/triángulos%): {} · total {} mallas, {} draws",
+        "[bench] en cuadro (mallas%/triángulos%): {} · total {} mallas, {} draws~",
         parts.join(" "),
         framing.visible_meshes,
         framing.draws,
@@ -657,18 +769,24 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>, context: &RunCo
             };
         // El delta de GPU es la columna que sobrevive cuando la presentación
         // clava el frame, que es la mitad de las corridas en esta máquina.
-        let gpu_delta = match delta_against(baseline.map(|base| base.gpu_mean), result.gpu_mean) {
+        let gpu_baseline = baseline
+            .filter(|base| base.gpu_samples > 0)
+            .map(|base| base.gpu_mean);
+        let gpu_delta = match (result.gpu_samples > 0)
+            .then(|| delta_against(gpu_baseline, result.gpu_mean))
+            .flatten()
+        {
             Some(delta) => format!("{delta:+8.2}"),
             None => format!("{:>8}", "n/a"),
         };
+        let gpu = if result.gpu_samples > 0 {
+            format!("{:>9.2}", result.gpu_mean)
+        } else {
+            format!("{:>9}", "n/a")
+        };
         info!(
-            "[bench] {:<20} {:>9.2} {:>9.2} {:>9.2} {frame_delta} {:>9.2} {gpu_delta} {:>6}",
-            result.name,
-            result.frame_mean,
-            result.frame_min,
-            result.frame_max,
-            result.gpu_mean,
-            result.samples
+            "[bench] {:<20} {:>9.2} {:>9.2} {:>9.2} {frame_delta} {gpu} {gpu_delta} {:>6}",
+            result.name, result.frame_mean, result.frame_min, result.frame_max, result.samples
         );
     }
     if baseline.is_none() {
@@ -679,8 +797,9 @@ fn report(results: &[StepResult], vantage: Option<(Vec3, Vec3)>, context: &RunCo
         && !last.invalid
     {
         let drift = last.frame_mean - first.frame_mean;
+        let noise_floor = drift.abs();
         info!(
-            "[bench] deriva entre los dos baselines: {drift:+.2} ms — todo delta de frame menor que esto es ruido",
+            "[bench] deriva entre los dos baselines: {drift:+.2} ms — todo delta de frame menor que {noise_floor:.2} ms es ruido",
         );
     }
     warn_if_presentation_capped(results);
@@ -749,7 +868,10 @@ fn presentation_capped(results: &[StepResult]) -> bool {
         }
         (low <= high).then_some(high - low)
     };
-    let valid: Vec<&StepResult> = results.iter().filter(|step| !step.invalid).collect();
+    let valid: Vec<&StepResult> = results
+        .iter()
+        .filter(|step| !step.invalid && step.gpu_samples > 0)
+        .collect();
     if valid.len() < 3 {
         return false;
     }
@@ -875,6 +997,31 @@ mod tests {
     }
 
     #[test]
+    fn completed_timings_with_broken_assets_still_fail_as_evidence() {
+        let restore = PerfToggles::default();
+        let mut benchmark = Benchmark {
+            run: Some(RunState {
+                restore,
+                results: vec![result(8.0, 6.0)],
+                context: RunContext {
+                    broken_assets: 1,
+                    ..default()
+                },
+                ..default()
+            }),
+            ..default()
+        };
+        let mut active = restore;
+
+        finalize_benchmark(&mut benchmark, &mut active, 12.0, FinishReason::Completed);
+
+        assert_eq!(
+            benchmark.finished.as_ref().and_then(|run| run.aborted),
+            Some("assets failed to load")
+        );
+    }
+
+    #[test]
     fn losing_the_camera_aborts_instead_of_stranding_the_run() {
         let restore = PerfToggles {
             vsync: true,
@@ -919,6 +1066,7 @@ mod tests {
             frame_max: frame_mean,
             gpu_mean,
             samples: 240,
+            gpu_samples: 240,
             invalid: false,
         }
     }
@@ -986,6 +1134,82 @@ mod tests {
         let empty = summarise("empty", &StepSamples::default());
         assert!(empty.invalid);
         assert_eq!(empty.samples, 0);
+    }
+
+    #[test]
+    fn missing_gpu_diagnostics_are_unavailable_not_a_zero_cost() {
+        let cpu_only = summarise(
+            "cpu-only",
+            &StepSamples {
+                frame_ms: vec![16.0, 16.5],
+                ..default()
+            },
+        );
+
+        assert!(!cpu_only.invalid);
+        assert_eq!(cpu_only.gpu_samples, 0);
+        assert!(!presentation_capped(&[
+            cpu_only,
+            result(16.0, 2.0),
+            result(16.0, 8.0),
+        ]));
+    }
+
+    #[test]
+    fn a_rejected_start_is_visible_to_the_automation_driver() {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .init_state::<crate::scene::AppState>()
+            .init_resource::<Benchmark>()
+            .init_resource::<crate::perf::Flythrough>()
+            .init_resource::<PerfToggles>()
+            .init_resource::<crate::visuals::terrain_material::TerrainDebugState>()
+            .init_resource::<Time<Real>>()
+            .add_message::<BenchmarkRequest>()
+            .add_systems(Update, start_requested_runs);
+        app.world_mut().write_message(BenchmarkRequest::new(
+            BenchSuite::General,
+            VantageMode::Here,
+        ));
+
+        app.update();
+
+        let benchmark = app.world().resource::<Benchmark>();
+        let finished = benchmark.finished.as_ref().expect("rejection must finish");
+        assert_eq!(finished.aborted, Some("camera missing or ambiguous"));
+        assert!(!benchmark.is_running());
+    }
+
+    #[test]
+    fn a_canonical_run_enters_its_declared_scene_before_measuring() {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .init_state::<crate::scene::AppState>()
+            .init_resource::<Benchmark>()
+            .init_resource::<crate::perf::Flythrough>()
+            .init_resource::<PerfToggles>()
+            .init_resource::<crate::visuals::terrain_material::TerrainDebugState>()
+            .init_resource::<Time<Real>>()
+            .add_message::<BenchmarkRequest>()
+            .add_systems(Update, start_requested_runs);
+        app.world_mut().write_message(BenchmarkRequest::new(
+            BenchSuite::Grass,
+            VantageMode::Canonical,
+        ));
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world()
+                .resource::<State<crate::scene::AppState>>()
+                .get(),
+            crate::scene::AppState::Scene(crate::scene::SceneId::Grass)
+        );
+        let benchmark = app.world().resource::<Benchmark>();
+        assert!(benchmark.pending.is_some());
+        assert!(benchmark.run.is_none());
+        assert!(benchmark.finished.is_none());
     }
 
     #[test]

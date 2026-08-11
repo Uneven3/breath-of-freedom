@@ -27,13 +27,9 @@ Código que viole estas leyes no se implementa ni mergea.
 - **§13** `[lints]` en `deny` + `cargo fmt` y Clippy antes de terminar; `#[allow]`
   solo con justificación puntual.
 - **§14** Un plugin por sistema, carpeta propia en su crate.
-- **§15** Comentarios solo para invariantes/restricciones/workarounds. Nunca el
-  *qué*. **Techo: 30% de las líneas de un archivo**, `//`, `///` y `//!` juntos,
-  y ningún bloque más largo que el ítem que documenta. Un test lo cobra. La ley
-  existía sin límite y no alcanzó: el 2026-08-06 `grass.rs` llegó a **46%** —
-  637 líneas de comentario sobre 1371— con cada bloque defendible por separado.
-  El rationale largo va a `docs/`, que es donde se puede leer sin scrollear el
-  código que explica.
+- **§15** Comentarios sólo para invariantes/restricciones/workarounds, nunca el
+  *qué*. Techo testeado: 30% por archivo, contando `//`, `///` y `//!`; ningún
+  bloque más largo que su ítem. El rationale largo va a `docs/`.
 - **§16** ~300 líneas es señal de dividir, no bloqueo.
 - **§17** Dependencia nueva en `Cargo.toml` requiere OK humano previo.
 - **§18** Sin allocations en el hot path de `FixedUpdate`.
@@ -187,7 +183,7 @@ vida con `SceneScoped` y `scene` decide cuándo nacen.
 
 | Módulo | Posee | Frontera |
 |---|---|---|
-| `input` (app) | bindings, foco modal, cursor | Nadie lee hardware salvo él (deuda C2: 13 archivos, congelada por `tests/architecture.rs`); simulación no *puede*: no declara `bevy_input` |
+| `input` (app) | bindings, foco modal, cursor | Nadie lee hardware salvo él (deuda C2: 12 archivos, congelada por `tests/architecture.rs`); simulación no *puede*: no declara `bevy_input` |
 | `scene` (app) | `AppState`, tabla `SCENES`, `SceneBuild`, ciclo de vida | Decide *qué existe y cuándo*; simulación declara `SceneScoped` y esto lo bindea a `DespawnOnExit` |
 | `editor` | Autoría in-engine: pinceles de relieve, pintura semántica, historial, persistencia | Decide *dónde y cuándo*; el **cómo** cambia el dato es de `world` |
 | `asset_pipeline` | Manifiesto build-time, `MaterialPalette`, `SpatialCatalog`, `schema.rs` | Única autoridad espacial de lo authored; SoT compartida con `build.rs` |
@@ -197,10 +193,6 @@ vida con `SceneScoped` y `scene` decide cuándo nacen.
 | `debug` | `DebugSnapshot` (datos puros) + trace por tick | Un snapshot, dos sinks: HUD y consola. Nadie más formatea |
 | `perf` | Perillas de benchmark, costo GPU por pase | Solo escribe sus perillas; cada dueño las aplica a lo suyo |
 
-La tabla sólo lista lo que tiene una frontera **particular**. El resto sigue la
-regla general —posee su dato, lo publica por mensaje, nadie más lo escribe— y no
-necesita fila: `movement` (Intents, motores, facts), `combat`, `health` (único
-que resta HP), `enemies` (escribe sólo sus propios Intents), `mounts` (todo
-cambio físico vía ActorLink), `projectiles`, `interaction`, `time_control`,
-`player` y `proposal`. Lo que venga (crafteo, swim, clima, NPCs, multiplayer)
-se diseña al tocar, como consumidor aditivo.
+Lo no listado sigue la regla general: posee su dato, lo publica por mensaje y
+nadie más lo escribe. Sistemas futuros se diseñan al tocar, como consumidores
+aditivos.

@@ -57,6 +57,7 @@ pub enum SceneId {
     Traversal,
     Combat,
     Grass,
+    CardMesh,
     Sandbox,
     World,
 }
@@ -82,6 +83,8 @@ pub struct Contents {
     pub forest: bool,
     /// The grass meadow.
     pub meadow: bool,
+    /// The isolated grass-card comparison lab.
+    pub card_mesh_lab: bool,
     /// The graybox enemy pair.
     pub enemies: bool,
     /// A rideable horse.
@@ -97,6 +100,7 @@ impl Contents {
         pickups: false,
         forest: false,
         meadow: false,
+        card_mesh_lab: false,
         enemies: false,
         horse: false,
     };
@@ -147,6 +151,16 @@ pub const SCENES: &[SceneDef] = &[
         },
     },
     SceneDef {
+        id: SceneId::CardMesh,
+        label: "Card mesh",
+        hint: "cartas y referencias de pasto — comparar siluetas aisladas",
+        terrain_file: "assets/game/world/card_mesh.ron",
+        contents: Contents {
+            card_mesh_lab: true,
+            ..Contents::NONE
+        },
+    },
+    SceneDef {
         id: SceneId::Sandbox,
         label: "Terreno",
         hint: "lienzo limpio: relieve, cuerpo y luz — esculpir y medir",
@@ -165,6 +179,7 @@ pub const SCENES: &[SceneDef] = &[
             pickups: true,
             forest: true,
             meadow: true,
+            card_mesh_lab: false,
             enemies: true,
             horse: true,
         },
@@ -172,10 +187,11 @@ pub const SCENES: &[SceneDef] = &[
 ];
 
 impl SceneId {
-    pub const ALL: [SceneId; 5] = [
+    pub const ALL: [SceneId; 6] = [
         SceneId::Traversal,
         SceneId::Combat,
         SceneId::Grass,
+        SceneId::CardMesh,
         SceneId::Sandbox,
         SceneId::World,
     ];
@@ -203,8 +219,9 @@ impl SceneId {
             SceneId::Traversal => &SCENES[0],
             SceneId::Combat => &SCENES[1],
             SceneId::Grass => &SCENES[2],
-            SceneId::Sandbox => &SCENES[3],
-            SceneId::World => &SCENES[4],
+            SceneId::CardMesh => &SCENES[3],
+            SceneId::Sandbox => &SCENES[4],
+            SceneId::World => &SCENES[5],
         }
     }
 }
@@ -402,6 +419,7 @@ mod tests {
                 || grass.targets
                 || grass.pickups
                 || grass.forest
+                || grass.card_mesh_lab
                 || grass.enemies
                 || grass.horse),
             "the grass box must carry nothing else"
@@ -409,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn the_world_scene_gathers_every_piece() {
+    fn the_world_scene_gathers_every_shipping_piece() {
         // The other end of the table: whatever a box proves out has somewhere to
         // land. A piece that exists but no scene ever builds is dead weight.
         let world = SceneId::World.def().contents;
@@ -421,9 +439,45 @@ mod tests {
                 && world.forest
                 && world.meadow
                 && world.enemies
-                && world.horse,
+                && world.horse
+                && !world.card_mesh_lab,
             "the world scene should gather every piece"
         );
+    }
+
+    #[test]
+    fn the_card_mesh_lab_is_exclusive() {
+        let lab = SceneId::CardMesh.def().contents;
+        assert!(lab.card_mesh_lab, "the lab must declare itself");
+        assert!(
+            !(lab.course
+                || lab.stairs
+                || lab.targets
+                || lab.pickups
+                || lab.forest
+                || lab.meadow
+                || lab.enemies
+                || lab.horse),
+            "the lab must not carry game content"
+        );
+    }
+
+    #[test]
+    fn the_card_mesh_lab_has_a_real_flat_heightmap() {
+        let text = include_str!("../../assets/game/world/card_mesh.ron");
+        let mut terrain = bof_simulation::world::Terrain::flat_for_test();
+        terrain.apply_ron(text).expect("the card-mesh level loads");
+        for point in [
+            Vec2::new(-120.0, -120.0),
+            Vec2::ZERO,
+            Vec2::new(120.0, 120.0),
+        ] {
+            assert_eq!(
+                terrain.height_at(point),
+                0.0,
+                "the lab ground must stay flat"
+            );
+        }
     }
 
     #[test]
@@ -438,6 +492,7 @@ mod tests {
                 || contents.pickups
                 || contents.forest
                 || contents.meadow
+                || contents.card_mesh_lab
                 || contents.enemies
                 || contents.horse),
             "the sandbox must stay bare"

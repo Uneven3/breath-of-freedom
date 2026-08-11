@@ -6,7 +6,7 @@
 //!
 //! - [`player`] — the player's collision-matched capsule, bow, interpolation.
 //! - [`enemy`] — enemy capsules + awareness tint.
-//! - [`grass`] — the decorative meadow: authored tufts swaying in a wind field.
+//! - [`grass`] — the procedural meadow: GPU records swaying in a wind field.
 //! - [`horse`] — horse graybox capsule.
 //! - [`probe`] — the TraversalProbe dummy's capsule.
 //! - [`vfx`] — transient effects (swing arc placeholder).
@@ -17,6 +17,7 @@ use material_registry::InstrumentedMaterialAppExt;
 
 mod arrows;
 pub mod budget;
+mod card_mesh_lab;
 pub mod catalog;
 mod diagnostic;
 pub mod enemy;
@@ -26,6 +27,8 @@ pub(crate) mod grass;
 mod grass_cover;
 pub(crate) mod grass_debug;
 pub mod grass_material;
+mod grass_records;
+mod grass_tiles;
 pub mod horse;
 pub(crate) mod material_registry;
 pub mod player;
@@ -39,7 +42,7 @@ pub use catalog::{AppearanceBinding, AppearanceKey, TreeSilhouette, VisualCatalo
 pub use player::PlayerVisual;
 
 /// Exponential decay rate for visual smoothing, fed to
-/// [`StableInterpolate::smooth_nudge`](bevy::math::StableInterpolate::smooth_nudge).
+/// [`StableInterpolate::smooth_nudge`].
 ///
 /// It is a *rate*, not a per-frame fraction. The previous form —
 /// `(RATE * dt).clamp(0.0, 1.0)` as a lerp factor — was frame-rate dependent
@@ -69,6 +72,7 @@ impl Plugin for VisualsPlugin {
         // cápsulas y a todo lo demás en el inventario y en la vista de overdraw.
         app.add_instrumented_material::<StandardMaterial>();
         app.init_resource::<VisualCatalog>();
+        app.init_resource::<grass::MeadowRecordMemory>();
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content
         // (`crate::scene`), so they are built on entry and die on exit.
@@ -80,6 +84,7 @@ impl Plugin for VisualsPlugin {
                 forest::build_tree_proxy_assets,
                 arrows::init_assets,
                 grass::init_meadow_material,
+                card_mesh_lab::build_card_mesh_lab_assets,
             ),
         );
         for id in crate::scene::SceneId::ALL {
@@ -88,6 +93,12 @@ impl Plugin for VisualsPlugin {
                 grass::reset_meadow.run_if(crate::scene::scene_has(|c| c.meadow)),
             );
         }
+        app.add_systems(
+            OnEnter(crate::scene::AppState::Scene(
+                crate::scene::SceneId::CardMesh,
+            )),
+            card_mesh_lab::spawn_card_mesh_lab,
+        );
         app.add_systems(
             Update,
             (
@@ -122,11 +133,15 @@ impl Plugin for VisualsPlugin {
                 // walks a blade — the chunks are baked meshes.
                 (
                     grass::roll_meadow_grid,
+                    // Después de rodar: sube lo que el rodado dejó escrito.
+                    grass::upload_meadow_records,
                     grass::track_meadow_focus,
-                    grass::announce_grass_debug_view,
+                    grass_debug::announce_grass_debug_view,
                 )
                     .chain()
                     .run_if(crate::scene::scene_has(|c| c.meadow)),
+                card_mesh_lab::face_card_meshes
+                    .run_if(crate::scene::scene_has(|c| c.card_mesh_lab)),
                 terrain::sync_terrain_visual,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),

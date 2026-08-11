@@ -11,6 +11,8 @@
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh3d;
 
+use crate::visuals::material_registry::mesh_triangles;
+
 /// A single mesh over this many triangles gets a warning. Sized for graybox: a
 /// primitive proxy is hundreds of triangles, so thousands means a detailed
 /// model slipped in where a placeholder belongs.
@@ -50,11 +52,7 @@ pub(super) fn warn_on_heavy_meshes(
         };
         commands.entity(entity).try_insert(TriangleChecked);
 
-        let triangles = match mesh.indices() {
-            Some(indices) => indices.len() / 3,
-            // Non-indexed meshes list every vertex per triangle.
-            None => mesh.count_vertices() / 3,
-        };
+        let triangles = mesh_triangles(mesh);
         if triangles > TRIANGLE_WARN {
             let who = name.map(Name::as_str).unwrap_or("<unnamed mesh>");
             warn!(
@@ -69,6 +67,7 @@ pub(super) fn warn_on_heavy_meshes(
 mod tests {
     use super::*;
     use bevy::asset::RenderAssetUsages;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::render::mesh::Indices;
     use bevy::render::mesh::PrimitiveTopology;
 
@@ -87,10 +86,9 @@ mod tests {
     fn triangle_count_reads_indexed_meshes() {
         // The watchdog's whole job hinges on this arithmetic being right.
         let mesh = mesh_with_triangles(6265); // a real CommonTree primitive
-        let triangles = mesh.indices().unwrap().len() / 3;
-        assert_eq!(triangles, 6265);
+        assert_eq!(mesh_triangles(&mesh), 6265);
         assert!(
-            triangles > TRIANGLE_WARN,
+            mesh_triangles(&mesh) > TRIANGLE_WARN,
             "such a mesh must trip the warning"
         );
     }
@@ -99,6 +97,53 @@ mod tests {
     fn a_graybox_primitive_stays_under_budget() {
         // A cylinder + cone proxy is a few hundred triangles.
         let proxy = mesh_with_triangles(320);
-        assert!(proxy.indices().unwrap().len() / 3 <= TRIANGLE_WARN);
+        assert!(mesh_triangles(&proxy) <= TRIANGLE_WARN);
+    }
+
+    /// Estos tres tests, a diferencia de los dos de arriba, corren
+    /// `warn_on_heavy_meshes` de verdad: un bug en la lógica de producción
+    /// (usar siempre `count_vertices()`, invertir la comparación, no
+    /// exceptuar `BakedByDesign`, o reprocesar una malla ya chequeada) tiene
+    /// que poder tumbarlos.
+    #[test]
+    fn the_watchdog_marks_a_loaded_heavy_mesh_as_checked() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        let handle = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(mesh_with_triangles(6265));
+        let entity = world.spawn((Mesh3d(handle), Name::new("test-mesh"))).id();
+
+        world.run_system_once(warn_on_heavy_meshes).unwrap();
+
+        assert!(world.get::<TriangleChecked>(entity).is_some());
+    }
+
+    #[test]
+    fn the_watchdog_skips_meshes_baked_by_design() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        let handle = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(mesh_with_triangles(6265));
+        let entity = world.spawn((Mesh3d(handle), BakedByDesign)).id();
+
+        world.run_system_once(warn_on_heavy_meshes).unwrap();
+
+        assert!(world.get::<TriangleChecked>(entity).is_none());
+    }
+
+    #[test]
+    fn the_watchdog_leaves_an_unloaded_mesh_unmarked_to_retry_later() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        // A handle whose asset was never inserted models the frame gap
+        // between spawning `Mesh3d` and the asset finishing its load.
+        let handle: Handle<Mesh> = Handle::default();
+        let entity = world.spawn(Mesh3d(handle)).id();
+
+        world.run_system_once(warn_on_heavy_meshes).unwrap();
+
+        assert!(world.get::<TriangleChecked>(entity).is_none());
     }
 }

@@ -20,16 +20,29 @@ fn casts_shadows(illuminance: f32) -> bool {
     illuminance >= SHADOW_CASTING_LUX
 }
 
+/// Pick one directional shadow owner. Around the horizon both stylized lights
+/// intentionally overlap, but rendering two cascade sets there doubles the
+/// largest shadow cost and produces competing shadow directions.
+fn shadow_casters(palette: &LightingPalette) -> (bool, bool) {
+    if palette.sun_illuminance >= palette.moon_illuminance {
+        (casts_shadows(palette.sun_illuminance), false)
+    } else {
+        (false, casts_shadows(palette.moon_illuminance))
+    }
+}
+
 /// Sun tilt off the east-west arc, so shadows never collapse to a line.
 const SUN_ARC_TILT: f32 = 0.35;
 
-const SUN_NOON_LUX: f32 = 10_000.0;
+/// Visible past this module: `visuals::grass` normalizes the sun's live
+/// illuminance against this same reference instead of inventing its own scale.
+pub(crate) const SUN_NOON_LUX: f32 = 10_000.0;
 // Stylized rather than physical moonlight: night must remain navigable without
 // flattening the much stronger daylight bands.
 const MOON_LUX: f32 = 400.0;
 // Ambient stays low on purpose: it fills shadowed faces, and too much of it
 // flattens the form and material response until every surface merges.
-const AMBIENT_DAY: f32 = 90.0;
+pub(crate) const AMBIENT_DAY: f32 = 90.0;
 const AMBIENT_NIGHT: f32 = 40.0;
 
 const SUN_NOON_COLOR: Color = Color::srgb(1.0, 0.98, 0.92);
@@ -71,8 +84,13 @@ pub struct Sun;
 
 /// Presentation-only directional moonlight. Keeping it separate from the sun
 /// lets both fade across the horizon without rotating one light by 180 degrees.
+///
+/// `pub(crate)`, not `pub(super)`: both this and `Sun` carry `DirectionalLight`
+/// and spawn together in every scene (`world::mod`), so any other module that
+/// queries by `DirectionalLight` alone needs this to disambiguate — see the
+/// `Without<MoonLight>` fix in `visuals::grass::track_meadow_focus`.
 #[derive(Component)]
-pub(super) struct MoonLight;
+pub(crate) struct MoonLight;
 
 /// Marker for the visible sun disc (unlit sphere on the sun's arc).
 #[derive(Component)]
@@ -210,20 +228,21 @@ pub(super) fn apply_sun(
     let to_moon = Vec3::new(-to_sun.x, -to_sun.y, SUN_ARC_TILT).normalize();
     let elevation = to_sun.y;
     let palette = lighting_palette(tod.hours, elevation);
+    let (sun_casts_shadows, moon_casts_shadows) = shadow_casters(&palette);
 
     if let Some(sun) = sun {
         let (mut transform, mut light) = sun.into_inner();
         transform.look_to(-to_sun, Vec3::Y);
         light.illuminance = palette.sun_illuminance;
         light.color = palette.sun_color;
-        light.shadow_maps_enabled = perf.sun_shadows && casts_shadows(palette.sun_illuminance);
+        light.shadow_maps_enabled = perf.sun_shadows && sun_casts_shadows;
     }
     if let Some(moon) = moon {
         let (mut transform, mut light) = moon.into_inner();
         transform.look_to(-to_moon, Vec3::Y);
         light.illuminance = palette.moon_illuminance;
         light.color = MOON_COLOR;
-        light.shadow_maps_enabled = perf.moon_shadows && casts_shadows(palette.moon_illuminance);
+        light.shadow_maps_enabled = perf.moon_shadows && moon_casts_shadows;
     }
 
     ambient.brightness = palette.ambient_brightness;
@@ -369,24 +388,23 @@ mod tests {
         assert_eq!(parse_cascade_count("five"), Err("an integer from 1 to 4"));
     }
 
-    /// The light below the horizon contributes nothing, so it must not render
-    /// cascades. Bevy gates shadow maps on `shadow_maps_enabled` alone, so this
-    /// is the only thing standing between the frame and eight cascade passes
-    /// when only four can ever be seen.
+    /// The stylized horizon blend makes both lights visible for a short time,
+    /// but only the dominant one may own cascades. This sweep protects the
+    /// transition, not just the obvious noon and midnight samples.
     #[test]
-    fn only_the_light_above_the_horizon_casts_shadows() {
+    fn at_most_one_directional_light_casts_shadows_throughout_the_day() {
+        for minute in 0..24 * 60 {
+            let hours = minute as f32 / 60.0;
+            let palette = lighting_palette(hours, sun_direction(hours).y);
+            let (sun, moon) = shadow_casters(&palette);
+            assert!(!(sun && moon), "two shadow owners at {hours:05.2}h");
+        }
+
         for (hours, sun_expected, moon_expected) in [(12.0_f32, true, false), (0.0, false, true)] {
             let palette = lighting_palette(hours, sun_direction(hours).y);
-            assert_eq!(
-                casts_shadows(palette.sun_illuminance),
-                sun_expected,
-                "sun at {hours:05.2}h"
-            );
-            assert_eq!(
-                casts_shadows(palette.moon_illuminance),
-                moon_expected,
-                "moon at {hours:05.2}h"
-            );
+            let (sun, moon) = shadow_casters(&palette);
+            assert_eq!(sun, sun_expected, "sun at {hours:05.2}h");
+            assert_eq!(moon, moon_expected, "moon at {hours:05.2}h");
         }
     }
 
@@ -395,12 +413,18 @@ mod tests {
     #[test]
     fn the_benchmark_knob_can_veto_a_lit_light() {
         let noon = lighting_palette(12.0, sun_direction(12.0).y);
+        let midnight = lighting_palette(0.0, sun_direction(0.0).y);
         let veto = PerfToggles {
             sun_shadows: false,
+            moon_shadows: false,
             ..default()
         };
-        assert!(casts_shadows(noon.sun_illuminance));
-        assert!(!(veto.sun_shadows && casts_shadows(noon.sun_illuminance)));
+        let (sun_casts_shadows, _) = shadow_casters(&noon);
+        let (_, moon_casts_shadows) = shadow_casters(&midnight);
+        assert!(sun_casts_shadows);
+        assert!(moon_casts_shadows);
+        assert!(!(veto.sun_shadows && sun_casts_shadows));
+        assert!(!(veto.moon_shadows && moon_casts_shadows));
     }
 
     #[test]

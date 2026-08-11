@@ -25,7 +25,7 @@ use bof_domain::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFa
 use bof_domain::movement::intents::Intents;
 use bof_domain::movement::probe_data::TraversalProbe;
 use bof_domain::movement::stamina::Stamina;
-use bof_domain::movement::state::LocomotionState;
+use bof_domain::movement::state::{LocomotionEnabled, LocomotionState};
 use bof_domain::movement::{BodyVelocity, Player};
 
 // Each section has its own focused producer (§1): a system reads exactly the
@@ -42,10 +42,13 @@ type VitalsReport<'a> = (
 );
 
 pub(super) fn collect_vitals(
-    player: Single<VitalsReport, With<Player>>,
+    player: Query<VitalsReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (stamina, hp, inventory, weapon) = *player;
+    let Ok((stamina, hp, inventory, weapon)) = player.single() else {
+        snapshot.clear(SectionId::Vitals);
+        return;
+    };
     let weapon_status = match weapon {
         Some(durability) => format!(
             "{} {}/{}",
@@ -87,13 +90,21 @@ type LocomotionReport<'a> = (
     &'a GroundFacts,
     &'a FacingSource,
     &'a Intents,
+    Has<LocomotionEnabled>,
 );
 
 pub(super) fn collect_locomotion(
-    player: Single<LocomotionReport, With<Player>>,
+    player: Query<LocomotionReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (state, vel, ground, facing, intents) = *player;
+    let Ok((state, vel, ground, facing, intents, enabled)) = player.single() else {
+        snapshot.clear(SectionId::Locomotion);
+        return;
+    };
+    if !enabled {
+        snapshot.set(SectionId::Locomotion, vec![Field::new("status", "paused")]);
+        return;
+    }
     let v = vel.0;
     let facing = match facing {
         FacingSource::Free => "free".to_owned(),
@@ -130,10 +141,13 @@ type ContactReport<'a> = (
 );
 
 pub(super) fn collect_contact(
-    player: Single<ContactReport, With<Player>>,
+    player: Query<ContactReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (contact, stairs, ladder, ledge) = *player;
+    let Ok((contact, stairs, ladder, ledge)) = player.single() else {
+        snapshot.clear(SectionId::Contact);
+        return;
+    };
     let n = ledge.climb_normal.unwrap_or(Vec3::ZERO);
     snapshot.set(
         SectionId::Contact,
@@ -158,10 +172,13 @@ pub(super) fn collect_contact(
 type CombatReport<'a> = (&'a CombatState, &'a DrawStrength);
 
 pub(super) fn collect_combat(
-    player: Single<CombatReport, With<Player>>,
+    player: Query<CombatReport, With<Player>>,
     mut snapshot: ResMut<DebugSnapshot>,
 ) {
-    let (combat, draw) = *player;
+    let Ok((combat, draw)) = player.single() else {
+        snapshot.clear(SectionId::Combat);
+        return;
+    };
     snapshot.set(
         SectionId::Combat,
         vec![
@@ -233,10 +250,11 @@ pub(super) fn collect_mount(
 type AnySceneMesh<'a> = (&'a ViewVisibility, &'a Mesh3d);
 
 /// Static scene inventory — the numbers a mobile budget is actually spent on,
-/// distinct from the frame cost in `perf`. `draws` counts distinct
-/// `(mesh, material)` pairs among visible entities: Bevy batches by exactly
-/// that, so it approximates the draw-call count without a private wgpu hook and
-/// drops the moment shared handles let the batcher instance. All fields are
+/// distinct from the frame cost in `perf`. `draws` is a **lower-bound estimate**
+/// of distinct `(mesh, material)` pairs among visible entities. The render
+/// world can split those pairs further by pipeline, lightmap, allocator slab or
+/// disabled batching; without render-world instrumentation this is not a draw
+/// call counter. All fields are
 /// volatile — they drift as the camera moves, so change-triggered console output
 /// ignores them.
 ///
@@ -259,6 +277,10 @@ pub(super) fn collect_scene(
     // The diagnostic replaces StandardMaterial handles, so its temporary
     // render representation is not a valid production budget sample.
     if perf.overdraw || diagnostic.overdraw_material_override {
+        if *inventory != SceneInventory::default() {
+            *inventory = SceneInventory::default();
+        }
+        snapshot.clear(SectionId::Scene);
         return;
     }
     // **Triángulos y mallas visibles se cuentan acá y sólo acá**: un `Mesh3d` lo
@@ -312,7 +334,7 @@ pub(super) fn collect_scene(
     let mut fields = vec![
         Field::volatile("meshes", scene.visible_meshes.to_string()),
         Field::volatile("tris", kilo(scene.triangles)),
-        Field::volatile("draws", scene.draws.to_string()),
+        Field::volatile("draws~", scene.draws.to_string()),
         Field::volatile("mats", scene.materials.to_string()),
         Field::volatile("budget", scene_budget_grade(&scene).label()),
         Field::volatile(
@@ -388,11 +410,7 @@ pub(super) fn collect_perf(
     ];
 
     let (passes, gpu_ms) = gpu_pass_costs(&diagnostics);
-    if passes.is_empty() {
-        // An adapter without timestamp queries must say so; a zero here would
-        // read as "the GPU is free" and send the whole A/B down a false trail.
-        fields.push(Field::volatile("gpu", "unavailable"));
-    } else {
+    if let Some(gpu_ms) = gpu_ms {
         fields.push(Field::volatile("gpu", format!("{gpu_ms:.2}ms")));
         for pass in passes.iter().take(4) {
             fields.push(Field::volatile(
@@ -400,6 +418,10 @@ pub(super) fn collect_perf(
                 format!("{:.2}ms", pass.millis),
             ));
         }
+    } else {
+        // An adapter without timestamp queries must say so; a zero here would
+        // read as "the GPU is free" and send the whole A/B down a false trail.
+        fields.push(Field::volatile("gpu", "unavailable"));
     }
 
     for knob in PerfKnob::ALL {
@@ -433,7 +455,16 @@ pub(super) fn collect_toggles(
 
 #[cfg(test)]
 mod tests {
-    use super::{format_clock, kilo};
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::{Vec3, World};
+
+    use super::{DebugSnapshot, Field, SectionId, collect_locomotion, format_clock, kilo};
+    use bof_domain::movement::BodyVelocity;
+    use bof_domain::movement::Player;
+    use bof_domain::movement::facing::FacingSource;
+    use bof_domain::movement::facts::GroundFacts;
+    use bof_domain::movement::intents::Intents;
+    use bof_domain::movement::state::LocomotionState;
 
     #[test]
     fn kilo_keeps_small_counts_exact_and_abbreviates_large_ones() {
@@ -447,5 +478,52 @@ mod tests {
     fn clock_keeps_two_digit_hours_and_minutes() {
         assert_eq!(format_clock(8.5, 1.0), "08:30");
         assert_eq!(format_clock(18.25, 4.0), "18:15 x4");
+    }
+
+    #[test]
+    fn disabled_player_locomotion_is_reported_as_paused_not_as_stale_facts() {
+        let mut world = World::new();
+        world.init_resource::<DebugSnapshot>();
+        world.spawn((
+            Player,
+            LocomotionState::Walk,
+            BodyVelocity(Vec3::X * 4.0),
+            GroundFacts {
+                grounded: true,
+                ..Default::default()
+            },
+            FacingSource::default(),
+            Intents::default(),
+        ));
+
+        world.run_system_once(collect_locomotion).unwrap();
+
+        assert_eq!(
+            world
+                .resource::<DebugSnapshot>()
+                .line(SectionId::Locomotion)
+                .as_deref(),
+            Some("locomotion: status=paused")
+        );
+    }
+
+    #[test]
+    fn absent_player_clears_the_previous_locomotion_report() {
+        let mut world = World::new();
+        let mut snapshot = DebugSnapshot::default();
+        snapshot.set(
+            SectionId::Locomotion,
+            vec![Field::new("state", "stale walk")],
+        );
+        world.insert_resource(snapshot);
+
+        world.run_system_once(collect_locomotion).unwrap();
+
+        assert!(
+            world
+                .resource::<DebugSnapshot>()
+                .get(SectionId::Locomotion)
+                .is_none()
+        );
     }
 }

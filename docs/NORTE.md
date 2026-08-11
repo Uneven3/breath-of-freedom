@@ -85,7 +85,8 @@ visión — lo táctico vive en `AHORA.md`, las reglas en `ARCHITECTURE.md`.)
 ## Mecánicas (orden de prioridad)
 
 1. **Movimiento** — traversal físico gateado por stamina. ✅ base jugable
-2. **Cámara** — orbital tercera persona, modo apuntado. ✅ (lock-on pendiente)
+2. **Cámara** — orbital tercera persona, apuntado y lock-on. ✅ base
+   implementada; checkpoint final del lock-on pendiente.
 3. **Combate** — melee con peso ✅, arco ✅, sigilo ✅ (bonus ×4), durabilidad
    de armas e inventario base ✅. Escudo/parry ⏳.
 4. **Monturas** — ✅ horse base (montar, carga, inmunidad de dueño). El

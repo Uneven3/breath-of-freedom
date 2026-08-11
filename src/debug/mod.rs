@@ -9,7 +9,7 @@
 //! [`snapshot::DebugSnapshot`] of pure data, then [`hud`] renders it to screen
 //! and [`console`] writes it to the log. Neither sink formats anything itself.
 //!
-//! [`trace`] stays separate: it is a per-fixed-tick event stream (transitions,
+//! [`mod@trace`] stays separate: it is a per-fixed-tick event stream (transitions,
 //! flips, casts), not a snapshot of the present, so it goes straight to the
 //! log without passing through the snapshot.
 //!

@@ -16,29 +16,45 @@
 //   uv1.x  hash de la brizna, con el *lado* del quad en el signo
 //   uv1.y  altura de la brizna en metros
 //
-// El prepass sigue usando el vertex shader por defecto. Hoy no hay prepass
-// activo, pero desde que este vértice mueve la posición (viento), el día que se
-// active hay que declarar `prepass_vertex_shader` con el mismo desplazamiento o
-// la profundidad no va a coincidir con lo que se ve.
+// **El prepass tiene su propio vertex y fragment, no el default de Bevy**
+// (2026-08-09): éste vértice reconstruye la brizna desde `blade_records`, así
+// que el vertex de prepass default —que sólo transforma un atributo de
+// posición horneado— no puede reproducir la misma geometría, y sin eso la
+// profundidad no coincidiría con lo que el pase principal dibuja. Ambos
+// caminos llaman a `build_blade`, para que no puedan divergir con el tiempo.
+// Y el fragment de prepass default tampoco alcanza: no conoce la máscara alpha
+// de la carta — sin recortarlo ahí, el prepass escribiría profundidad
+// para el cuadrado entero de cada carta en vez de su silueta, y algo detrás
+// del hueco recortado se perdería por early-Z contra una silueta que el pase
+// principal nunca dibuja.
+//
+// `NormalPrepass` va siempre junto a `DepthPrepass` (`camera/mod.rs`): con
+// sólo depth, Bevy bindea un material bind group **vacío** para materiales
+// opacos (`is_depth_only_opaque_prepass`, bevy_pbr 0.19
+// `prepass/mod.rs:381`) — y el vertex necesita `blade_records`, que vive en
+// ese bind group, para reconstruir la brizna. Sin `NormalPrepass` el prepass
+// no puede funcionar, no es una opción de calidad.
 
+// `mesh_functions`, `view` y `position_world_to_clip` afuera del `#ifdef`:
+// tanto el vertex principal como el de prepass reconstruyen la brizna
+// (`build_blade`, más abajo) y los necesitan los dos. Antes vivían sólo en la
+// rama `#else` porque el prepass no tenía vertex propio — el día que lo tuvo,
+// habría faltado el import.
 #import bevy_pbr::{
     pbr_types,
     pbr_functions::alpha_discard,
     pbr_fragment::pbr_input_from_standard_material,
+    mesh_functions,
+    mesh_view_bindings::view,
+    view_transformations::position_world_to_clip,
 }
 
 #ifdef PREPASS_PIPELINE
-#import bevy_pbr::{
-    prepass_io::{VertexOutput, FragmentOutput},
-    pbr_deferred_functions::deferred_output,
-}
+#import bevy_pbr::prepass_io::{VertexOutput, FragmentOutput}
 #else
 #import bevy_pbr::{
     forward_io::{Vertex, VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
-    mesh_functions,
-    mesh_view_bindings::view,
-    view_transformations::position_world_to_clip,
 }
 #endif
 
@@ -50,14 +66,14 @@ struct GrassUniform {
     time: f32,
     focus_xz: vec2<f32>,
     growth_ramp: f32,
-    growth_spread: f32,
+    spike_from_m: f32,
     growth_sink: f32,
     wind_dir: vec2<f32>,
     wind_strength: f32,
     wind_speed: f32,
     tint_variation: f32,
     gradient_bias: f32,
-    growth_start: f32,
+    card_from_m: f32,
     debug_view: u32,
     blade_width: f32,
     ring_reaches_a: vec4<f32>,
@@ -67,6 +83,19 @@ struct GrassUniform {
     ring_cards_a: vec4<f32>,
     ring_cards_b: vec4<f32>,
     card_half_width: f32,
+    blade_root_sink: f32,
+    blade_lean: f32,
+    blade_waist: f32,
+    /// `x` = registros por chunk, `y` = forma. **En un `vec4` y no como dos
+    /// escalares sueltos**: así su alineación es la del bloque de 16 bytes y no
+    /// depende de cuántos `f32` los precedan, que es donde un campo agregado al
+    /// final corre en silencio todo lo que viene después.
+    record_layout: vec4<u32>,
+    /// Radiancia del sol, ya escalada por iluminancia. `w` sin usar. Mirror de
+    /// `GrassUniform::sun_color` en `grass_material.rs` — mismo orden, mismo tipo.
+    sun_color: vec4<f32>,
+    /// Lo mismo para la ambiente. `w` sin usar.
+    ambient_color: vec4<f32>,
     ring_colors: array<vec4<f32>, 8>,
 }
 
@@ -79,11 +108,146 @@ var interaction_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
 var interaction_sampler: sampler;
 
+@group(#{MATERIAL_BIND_GROUP}) @binding(104)
+var card_albedo: texture_2d<f32>;
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(105)
+var card_albedo_sampler: sampler;
+
 /// Altura normalizada del vértice a lo largo de la brizna: 0 en la raíz, 1 en
 /// la punta. Una sola definición, porque el viento, el degradado y el aplastado
 /// del Paso 9 multiplican todos por exactamente esto.
 fn blade_height_factor(uv: vec2<f32>) -> f32 {
     return clamp(uv.y, 0.0, 1.0);
+}
+
+/// UV de la carta de mata. La malla índice sólo transporta lado y altura; no
+/// puede usar UV0 porque allí viaja la dirección `(brizna, esquina)` que ubica
+/// el registro en el `ShaderBuffer`.
+fn card_uv(in: VertexOutput) -> vec2<f32> {
+    return vec2<f32>(in.uv_b.x * 0.5 + 0.5, 1.0 - blade_height_factor(in.uv));
+}
+
+/// La misma muestra resuelve detalle, alpha y prepass. Las derivadas se calculan
+/// antes de cualquier branch no uniforme en el caller; así el pase de color y
+/// profundidad no pueden divergir en el borde de la textura.
+fn sample_card_albedo(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    return textureSampleGrad(card_albedo, card_albedo_sampler, uv, dx, dy);
+}
+
+/// Si **esta brizna**, a esta distancia, se dibuja como carta.
+///
+/// La forma la decide la distancia y no el nivel: desde que la brizna pertenece
+/// al mundo, las de índice bajo —las del nivel de cartas— están vivas también a
+/// tres metros, y ahí un billboard de medio metro gira con la cámara y se ve
+/// (reportado jugando el 2026-08-08). Más cerca del umbral, la misma brizna se
+/// construye como hoja: no desaparece, cambia de forma.
+///
+/// **El salto es duro a propósito.** El umbral es donde la brizna mide un píxel
+/// y medio (`card_from_m`), así que ahí el cambio no se ve; interpolar el ancho
+/// en cambio sí se veía — la carta angosta queda rectangular y con el tope
+/// plano, que es una tira, no una brizna.
+///
+/// El vertex mide la distancia a la base y el fragment a su propio punto, así
+/// que una brizna justo en el umbral puede construirse de una forma y recortarse
+/// con la otra. Son 1,5 píxeles a esa distancia: menos que el error de cualquier
+/// varying que se agregara para evitarlo.
+///
+/// **Y el umbral es de cada brizna, no del campo.** Con uno solo, todas las
+/// cartas se abren sobre el mismo círculo y lo que se ve es un **anillo de
+/// matojos que sigue al jugador** — encontrado mirando una captura el
+/// 2026-08-08. Repartido, el cambio de forma ocurre en una banda de treinta
+/// metros y deja de haber una línea.
+///
+/// La semilla es la **altura de la brizna**, que es idéntica en sus cuatro
+/// vértices y llega igual al fragment (`fract(uv1.y)`): sin ella los dos lados
+/// elegirían umbrales distintos para la misma brizna. Es el mismo identificador
+/// que usa la vista `brizna`, por la misma razón.
+fn card_distance_for(blade_seed: f32) -> f32 {
+    return grass_data.card_from_m * (0.7 + 0.6 * fract(blade_seed * 91.0));
+}
+
+fn blade_is_card(distance: f32, blade_seed: f32) -> bool {
+    return ring_is_card() && distance >= card_distance_for(blade_seed);
+}
+
+/// Cuánto crece una primitiva **dentro de su propia banda**, del umbral en el
+/// que nace hasta su propio alcance. Compartida por la carta y la púa — ver
+/// `CARD_GROWTH_MIN`/`MAX` y `SPIKE_GROWTH_MIN`/`MAX`.
+///
+/// **No toca el salto que ya existe.** En el umbral vale el mínimo, así que el
+/// cambio de forma sigue siendo del mismo tamaño que hoy — interpolar *eso* ya
+/// se probó una vez para la carta y se veía como una tira, no una brizna
+/// (`BOTWGrass.md`). Lo que crece es sólo lo que pasa *después*: a igual
+/// densidad, una primitiva más lejana representa más masa de pasto que una
+/// recién nacida, y hoy las dos miden lo mismo sin que la perspectiva ni el
+/// raleo de densidad lo compensen.
+fn growth_scale(distance: f32, threshold: f32, blade_reach: f32, min_scale: f32, max_scale: f32) -> f32 {
+    let span = max(blade_reach - threshold, 1e-3);
+    let t = clamp((distance - threshold) / span, 0.0, 1.0);
+    return mix(min_scale, max_scale, t);
+}
+
+/// Candidato a explicar por qué se sigue notando la banda de cartas
+/// (`BOTWGrass.md` → *Por dónde retomar*). **Sin medir**, valor a ojo para
+/// jugarlo; si hace falta, se sweepea como perilla igual que `grass-growth`.
+const CARD_GROWTH_MIN: f32 = 1.0;
+const CARD_GROWTH_MAX: f32 = 1.6;
+
+fn card_growth_scale(distance: f32, threshold: f32, blade_reach: f32) -> f32 {
+    return growth_scale(distance, threshold, blade_reach, CARD_GROWTH_MIN, CARD_GROWTH_MAX);
+}
+
+/// La otra mitad del experimento: engordar la púa en vez de reemplazarla por
+/// una carta, para comparar las dos sin sacar ninguna (jugando, 2026-08-09).
+/// No toca la carta ni la hoja — sólo el ancho de la púa, y sólo lejos de su
+/// propio nacimiento. **Sin medir**, valor a ojo.
+const SPIKE_GROWTH_MIN: f32 = 1.0;
+const SPIKE_GROWTH_MAX: f32 = 3.0;
+
+fn spike_growth_scale(distance: f32, threshold: f32, blade_reach: f32) -> f32 {
+    return growth_scale(distance, threshold, blade_reach, SPIKE_GROWTH_MIN, SPIKE_GROWTH_MAX);
+}
+
+/// Desde dónde una brizna pierde la cintura, repartido por brizna igual que
+/// `card_distance_for` — con otra semilla, para que el cambio de forma no
+/// vuelva a ser un círculo.
+fn spike_distance_for(blade_seed: f32) -> f32 {
+    return grass_data.spike_from_m * (0.75 + 0.5 * fract(blade_seed * 57.0));
+}
+
+/// La forma con la que se construye **esta** brizna, a esta distancia.
+///
+/// Las tres salen del mismo criterio que la escalera de LOD ya usaba —cuántos
+/// píxeles mide de ancho— pero aplicado por brizna. El nivel sólo aporta cuántos
+/// triángulos tiene reservados en su malla, y todos reservan dos: la púa deja el
+/// segundo degenerado (sus esquinas 2 y 3 caen en la punta) y no paga fragmentos.
+///
+/// Sin esto, una brizna de un nivel de púas que hoy está cerca se construía como
+/// hoja pero sólo tenía un triángulo indexado: **media hoja**, que es *"pastos
+/// chicos que se renderizan incluso cerca"* (jugando, 2026-08-08).
+///
+/// El umbral de la púa también va repartido por brizna, con otra semilla que el
+/// de la carta: con uno solo, el cambio de forma vuelve a ser un círculo.
+fn blade_shape_at(distance: f32, blade_seed: f32) -> u32 {
+    if blade_is_card(distance, blade_seed) {
+        return SHAPE_CARD;
+    }
+    let spike_at = spike_distance_for(blade_seed);
+    return select(SHAPE_LEAF, SHAPE_SPIKE, distance >= spike_at);
+}
+
+/// Si esta primitiva se abre mirando a la cámara.
+///
+/// **Se lo pregunta al material, no a una tabla.** Cada nivel tiene el suyo, y
+/// `record_layout.y` ya lleva su forma: buscarla otra vez recorriendo los
+/// alcances era reconstruir un dato que el draw ya tenía, y bastaba con que esa
+/// tabla llegara distinta al GPU para que la carta **no se abriera** — sus cuatro
+/// vértices se hornean en el mismo punto y es este `if` el que los separa. Lo que
+/// se veía entonces era el nivel lejano entero ausente, sin un solo error y con
+/// resultado distinto en cada corrida (2026-08-07).
+fn ring_is_card() -> bool {
+    return grass_data.record_layout.y == SHAPE_CARD;
 }
 
 /// Cuánto de su altura conserva una brizna a esta distancia de la cámara.
@@ -93,106 +257,27 @@ fn blade_height_factor(uv: vec2<f32>) -> f32 {
 /// de dibujo — o sea sin apagar el early-Z, que en un GPU tile-based es tirar la
 /// ventaja principal del chip (ley 3 de `BOTWGrass.md`).
 ///
-/// La banda es del borde de **su** anillo, no del anillo más lejano: los
-/// anillos internos también ruedan, y sin banda propia sus chunks nacían
-/// enteros y de una. `ring_reach` viaja por vértice justamente para esto.
-///
-/// **Y son dos números, no uno, porque son dos fenómenos distintos.** Hasta el
-/// 2026-08-06 una sola constante gobernaba las dos cosas y por eso no había
-/// forma de arreglar el crecimiento: acortarla las acortaba a las dos.
-///
-/// - `growth_ramp` es lo que tarda **una** brizna en pasar de nada a entera.
-///   Corta. Una brizna sola creciendo es imperceptible; lo que se percibe es
-///   *que todas crezcan juntas*.
-/// - `growth_spread` es en cuántos metros se reparten los **umbrales** de las
-///   distintas briznas, corridos por su hash. Largo. Esto es lo que convierte
-///   una ola que avanza con el jugador en un raleo gradual hacia el borde: a
-///   cada distancia sobrevive una fracción distinta del anillo, y lo que el ojo
-///   lee es densidad que baja con la distancia, que es lo que hace un campo de
-///   verdad.
-///
-/// Con la rampa corta metida dentro de una dispersión larga, en ningún momento
-/// hay una franja donde todo esté creciendo a la vez — que era exactamente el
-/// artefacto reportado jugando.
-/// El borde **interno** del anillo al que pertenece esta brizna: el alcance más
-/// grande que sea menor que el suyo.
-///
-/// Es lo que hace que la ley 1/d sea continua entre anillos. Anclada en un punto
-/// global, cada anillo entrega menos de lo que le toca en su mitad interna y
-/// deja un escalón — el artefacto que sobrevivió a toda la sesión del
-/// 2026-08-06. Anclada acá, la densidad superviviente es `C/d` en todas partes y
-/// el anillo pasa a decidir sólo el tamaño de chunk.
-fn ring_reaches() -> array<f32, 8> {
-    return array<f32, 8>(
-        grass_data.ring_reaches_a.x, grass_data.ring_reaches_a.y,
-        grass_data.ring_reaches_a.z, grass_data.ring_reaches_a.w,
-        grass_data.ring_reaches_b.x, grass_data.ring_reaches_b.y,
-        grass_data.ring_reaches_b.z, grass_data.ring_reaches_b.w,
-    );
-}
-
-/// Si el anillo de esta primitiva la abre mirando a la cámara.
-///
-/// Por anillo y no por shader def: los anillos comparten material —uno solo para
-/// toda la pradera, que es lo que evita duplicar los draws— así que la forma no
-/// puede ser una variante de pipeline.
-fn ring_is_card(reach: f32) -> bool {
-    var flags = array<f32, 8>(
-        grass_data.ring_cards_a.x, grass_data.ring_cards_a.y,
-        grass_data.ring_cards_a.z, grass_data.ring_cards_a.w,
-        grass_data.ring_cards_b.x, grass_data.ring_cards_b.y,
-        grass_data.ring_cards_b.z, grass_data.ring_cards_b.w,
-    );
-    var reaches = ring_reaches();
-    for (var i = 0; i < 8; i = i + 1) {
-        if abs(reaches[i] - reach) < 0.5 {
-            return flags[i] > 0.5;
-        }
-    }
-    return false;
-}
-
-fn ring_inner(reach: f32) -> f32 {
-    var reaches = ring_reaches();
-    var inner = 0.0;
-    for (var i = 0; i < 8; i = i + 1) {
-        if reaches[i] < reach && reaches[i] > inner {
-            inner = reaches[i];
-        }
-    }
-    return inner;
-}
-
-fn blade_growth(world_xz: vec2<f32>, ring_reach: f32, blade_hash: f32) -> f32 {
+/// **El umbral es de la brizna y viene en su registro.** Desde que la brizna
+/// pertenece al mundo, su alcance sale del índice que ocupa en su baldosa, así
+/// que acá no queda ley que aplicar ni hash que consultar: sólo una rampa de
+/// `growth_ramp` metros antes de su propio final. La ley `1/d` se sigue
+/// cumpliendo —de ahí salió la escalera de alcances— pero por construcción.
+fn blade_growth(world_xz: vec2<f32>, blade_reach: f32) -> f32 {
     let distance = length(world_xz - grass_data.focus_xz);
-    // Dos umbrales, y la brizna muere en el primero que llegue.
-    //
-    // El de la **ley**: `start / (1 - hash)` reparte los umbrales de modo que la
-    // fracción sobreviviente a distancia `d` sea exactamente `start / d` — la ley
-    // 1/d que deriva `BOTWGrass.md`, continua en vez de concentrada al borde.
-    //
-    // El del **borde**: la ley sola deja ~25% de las briznas vivas al llegar al
-    // alcance del anillo, y ahí se cortan de golpe. Medido: la escalera se movía
-    // de los 10-16 m al borde exacto. Esta banda las apaga antes de llegar.
-    //
-    // Hashes distintos a propósito: con el mismo, las que la ley perdona son
-    // justo las que el borde mata primero, y el reparto se vuelve un escalón
-    // otra vez.
-    let edge_hash = fract(blade_hash * 7.1234 + 0.371);
-    let inner = ring_inner(ring_reach);
-    let anchor = max(inner, grass_data.growth_start);
-    let by_law = anchor / max(1.0 - blade_hash, 1e-4);
-    let by_edge = ring_reach - grass_data.growth_spread * edge_hash;
-    let ends = min(by_law, by_edge);
-    let starts = ends - grass_data.growth_ramp;
-    // **Y acá NO va un borde interno**, aunque los anillos se pisen. Probado y
-    // medido el 2026-08-07: recortar cada anillo por adentro deja un pozo en
-    // cada frontera, porque el anillo de afuera nace donde el de adentro muere y
-    // son **dos juegos de briznas distintos** — no hay forma de que una releve a
-    // la otra. La banda de solapamiento es lo que hoy tapa esa costura. Lo que
-    // la reemplaza es la reescritura de praderas anidadas de `BOTWGrass.md`, no
-    // un recorte. El `inner` se sigue usando arriba, para anclar la ley.
-    return 1.0 - smoothstep(starts, ends, distance);
+    // **La corona de este nivel empieza acá.** Más cerca, la misma brizna la
+    // dibuja el nivel de adentro: no desaparece, la dibuja otro. Por eso el corte
+    // puede ser duro sin que se vea nada — es un relevo, no una frontera. Un
+    // nivel que dibujara desde los pies del jugador tendría, aislado, briznas por
+    // toda la pantalla, que es como se leyó jugando el 2026-08-08.
+    if distance < f32(grass_data.record_layout.w) {
+        return 0.0;
+    }
+    // Un solo umbral, y es de esta brizna: el índice que ocupa en su baldosa ya
+    // decidió hasta dónde llega, así que acá no hay ley que repartir ni hash que
+    // consultar. Nada nace del lado de adentro tampoco — una brizna existe desde
+    // los pies del jugador hasta su propio final, y por eso no hay frontera que
+    // cruzar.
+    return 1.0 - smoothstep(blade_reach - grass_data.growth_ramp, blade_reach, distance);
 }
 
 /// Ruido barato y determinista, para la ráfaga.
@@ -251,6 +336,7 @@ const DEBUG_BLADE: u32 = 3u;
 const DEBUG_GROWTH: u32 = 4u;
 const DEBUG_SUBPIXEL: u32 = 5u;
 const DEBUG_MEASURE: u32 = 6u;
+const DEBUG_SHAPE_MEASURE: u32 = 7u;
 
 /// Cuántos píxeles de ancho tiene que medir una brizna para que valga lo que
 /// cuesta.
@@ -271,20 +357,14 @@ const SUBPIXEL_GREEN: f32 = 2.0;
 /// campo.
 const DEBUG_TINT: f32 = 0.72;
 
-/// El anillo de esta brizna, como índice de la paleta.
+/// El nivel de este draw, como índice de la paleta.
 ///
-/// Sale del alcance que ya viaja empaquetado en `uv1.y`, así que **ninguna de
-/// estas vistas cuesta un byte por vértice ni obliga a rehornear la pradera**.
-/// Ése es el motivo por el que se pueden encender jugando: lo que cambia es lo
-/// que el shader pinta, no lo que se dibuja.
-fn ring_slot(reach: f32) -> u32 {
-    var reaches = ring_reaches();
-    for (var i = 0u; i < 8u; i = i + 1u) {
-        if abs(reaches[i] - reach) < 0.5 {
-            return i;
-        }
-    }
-    return 7u; // El casillero de "ninguno", que en la paleta es el gris.
+/// **Lo dice el material, no una tabla.** Salía de buscar el alcance del vértice
+/// entre los de los anillos, y desde que cada brizna lleva **su propio** alcance
+/// esa búsqueda no encuentra nada: las vistas pintarían todo del gris de
+/// "ninguno" y el medidor contaría cero por nivel. El draw ya sabe cuál es.
+fn ring_slot() -> u32 {
+    return grass_data.record_layout.z;
 }
 
 fn ring_chunk_m(slot: u32) -> f32 {
@@ -326,16 +406,16 @@ fn pastel(seed: vec2<f32>, whiten: f32) -> vec3<f32> {
 fn debug_colour(
     base: vec3<f32>,
     world_xz: vec2<f32>,
-    ring_reach: f32,
+    blade_reach: f32,
     blade_hash: f32,
     blade_height: f32,
     metres_per_pixel: f32,
 ) -> vec3<f32> {
     let view = grass_data.debug_view;
-    if view == DEBUG_OFF || view == DEBUG_MEASURE {
+    if view == DEBUG_OFF || view == DEBUG_MEASURE || view == DEBUG_SHAPE_MEASURE {
         return base;
     }
-    let slot = ring_slot(ring_reach);
+    let slot = ring_slot();
     var tint = vec3<f32>(1.0);
     if view == DEBUG_RING {
         tint = grass_data.ring_colors[slot].rgb;
@@ -363,7 +443,7 @@ fn debug_colour(
     } else if view == DEBUG_GROWTH {
         // Dos entradas de la paleta y no dos colores nuevos: el shader no
         // inventa colores, los recibe.
-        let grown = blade_growth(world_xz, ring_reach, blade_hash);
+        let grown = blade_growth(world_xz, blade_reach);
         tint = mix(
             grass_data.ring_colors[0].rgb,
             grass_data.ring_colors[3].rgb,
@@ -388,40 +468,265 @@ fn blade_normal(side: f32, world_xz: vec2<f32>) -> vec3<f32> {
     return normalize(vec3<f32>(0.0, 1.0, 0.0) + across * side * 0.18);
 }
 
-#ifndef PREPASS_PIPELINE
-@vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
-    var out: VertexOutput;
+/// El vértice que este material lee, declarado acá y no importado.
+///
+/// **Una dirección y una posición que nadie lee.** Lo único que este shader
+/// necesita de la malla es *cuál brizna del chunk* y *cuál esquina de ella* es
+/// este vértice, y eso viaja en `UV_0` — ver `ring_index_mesh` en
+/// `grass_records.rs`, que explica por qué no puede salir de `vertex_index`.
+///
+/// **Y lleva sólo los atributos que la malla índice tiene.** Ésa es la trampa de
+/// escribirlo a mano: en el de Bevy cada campo vive dentro de su `#ifdef` y el
+/// struct se encoge solo hasta calzar con la malla. Acá no hay nada que lo
+/// encoja, así que declarar un atributo de más —`normal`, en el location 1— pide
+/// a la etapa anterior un `Float32x3` que nadie provee, y el pipeline no
+/// compila. wgpu lo dice con el número de location, que es lo único que hizo
+/// esto barato de encontrar.
+struct GrassVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+    /// `x` = qué brizna del chunk, `y` = qué esquina de la brizna.
+    @location(2) address: vec2<f32>,
+}
 
-    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
-    var world_position = mesh_functions::mesh_position_local_to_world(
-        world_from_local,
-        vec4<f32>(vertex.position, 1.0),
+/// Un registro por primitiva: dónde nace y qué forma tiene.
+///
+/// **16 bytes contra los 136 que pesa una hoja horneada** (cuatro vértices de 28
+/// B más seis índices de 4). Es el canje del Paso 2 de `BOTWGrass.md`: la brizna
+/// deja de ser geometría y pasa a ser un dato, y la malla se convierte en un
+/// índice que todos los chunks del nivel comparten.
+/// `xy` es la base en XZ de mundo, `z` la altura del terreno debajo, y `w` el
+/// alcance del anillo en la parte entera con la altura de la brizna en la
+/// fracción — el mismo empaquetado que viajaba en `uv1.y`. **El orden vive acá y
+/// en `blade_record` de `grass.rs`, y en ningún otro lado.**
+struct BladeRecord {
+    base_and_shape: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(103)
+var<storage, read> blade_records: array<BladeRecord>;
+
+/// Las tres formas, en el orden de `BladeShape` de `grass.rs`.
+const SHAPE_LEAF: u32 = 0u;
+const SHAPE_SPIKE: u32 = 1u;
+const SHAPE_CARD: u32 = 2u;
+
+/// El hash de una brizna a partir de dónde está parada.
+///
+/// **De la posición y no del índice del registro**, y no es un detalle: los
+/// casilleros se reasignan cuando la grilla rueda, así que un hash atado al
+/// casillero cambiaría el umbral de crecimiento de una brizna mientras el
+/// jugador camina — que es el artefacto que todo este sistema evita.
+///
+/// `salt` da varios números independientes de la misma posición: la orientación
+/// y la inclinación salen de acá en vez de viajar en el registro, que es lo que
+/// lo mantiene en 16 bytes.
+///
+/// **Mezcla de enteros, no `fract(sin(...))`.** El truco del seno se degrada
+/// justamente donde este campo vive: con coordenadas de mundo de hasta ±160 m el
+/// argumento llega a los diez mil, y en `f32` el seno de eso pierde tantos bits
+/// que el resultado se agrupa en unos pocos valores. Medido *(a, 2026-08-07)*: el
+/// umbral de crecimiento sale de este hash, y con el seno la banda de 45-64 m
+/// caía al 44,8% donde debía dar 96%.
+fn hash_position(world_xz: vec2<f32>, salt: u32) -> f32 {
+    // A milímetros, que es más fino que cualquier separación entre briznas y
+    // entra de sobra en un i32 para un mundo de 320 m.
+    let q = vec2<i32>(floor(world_xz * 1000.0));
+    var h = bitcast<u32>(q.x) * 0x9e3779b9u
+        ^ bitcast<u32>(q.y) * 0x85ebca6bu
+        ^ (salt + 1u) * 0xc2b2ae35u;
+    // Wang hash: cinco operaciones enteras y una avalancha decente.
+    h = (h ^ 61u) ^ (h >> 16u);
+    h = h + (h << 3u);
+    h = h ^ (h >> 4u);
+    h = h * 0x27d4eb2du;
+    h = h ^ (h >> 15u);
+    return f32(h & 0x00ffffffu) / f32(0x01000000u);
+}
+
+/// La geometría de una brizna, construida en el vertex shader.
+///
+/// **Esto es lo que antes se horneaba.** Los cuatro (o tres) vértices salen de un
+/// registro de 16 bytes más dos hashes de su posición; lo que la malla aporta es
+/// sólo cuál de ellos es éste. La forma es la misma que tenía
+/// `build_chunk_mesh`: la hoja termina en punta por los dos lados y lleva una
+/// fila de vértices en la cintura, que es lo que le permite arquearse.
+struct BladeVertex {
+    offset: vec3<f32>,
+    along: f32,
+    side: f32,
+}
+
+fn blade_vertex(shape: u32, corner: u32, height: f32, world_xz: vec2<f32>, spike_width_scale: f32) -> BladeVertex {
+    // **Inicializados, no dados por cero.** WGSL no promete que un `var` sin
+    // inicializar valga cero, y las esquinas de la base no escriben `along`: una
+    // altura basura ahí manda el vértice a cualquier parte, que es un triángulo
+    // gigante cruzando el campo.
+    var out: BladeVertex;
+    out.offset = vec3<f32>(0.0, 0.0, 0.0);
+    out.along = 0.0;
+    out.side = -1.0;
+    if shape == SHAPE_CARD {
+        // La carta nace entera en el centro de la base; el shader la abre más
+        // abajo, contra el eje derecho de la cámara.
+        //
+        // **Las esquinas van en filas, no en ciclo**, y eso lo manda la malla
+        // índice: sus dos triángulos son `(0,1,2)` y `(1,3,2)`, que es la
+        // triangulación de una tira —abajo-izq, abajo-der, arriba-izq,
+        // arriba-der—. Numeradas en ciclo, el segundo triángulo no contiene al
+        // vértice 0 y **media carta no se dibuja**: medido *(a)*, la banda de
+        // 45-64 m se cayó de 97,4% a 45,0% sin que la forma se viera rota.
+        out.offset = vec3<f32>(0.0, 0.0, 0.0);
+        out.side = select(-1.0, 1.0, (corner & 1u) == 1u);
+        out.along = select(0.0, 1.0, corner >= 2u);
+        return out;
+    }
+
+    let yaw = hash_position(world_xz, 1u) * TAU;
+    let across = vec2<f32>(cos(yaw), sin(yaw)) * (grass_data.blade_width * 0.5);
+    // La inclinación va contra la perpendicular del ancho, para que las briznas
+    // no se caigan todas para el mismo lado.
+    let lean_amount = (hash_position(world_xz, 2u) - 0.5) * 2.0 * grass_data.blade_lean;
+    let lean = vec2<f32>(-sin(yaw), cos(yaw)) * lean_amount;
+    let tip = vec3<f32>(lean.x, height, lean.y);
+
+    if shape == SHAPE_SPIKE {
+        // Un triángulo: dos esquinas en la base y una punta. **El ancho crece
+        // con la distancia** (`spike_growth_scale`), para comparar contra la
+        // carta sin sacarla — la punta no escala, sólo la base, así que la
+        // silueta sigue terminando afilada y no se engorda como un poste.
+        let spike_across = across * spike_width_scale;
+        if corner == 0u {
+            out.offset = vec3<f32>(-spike_across.x, 0.0, -spike_across.y);
+            out.side = -1.0;
+        } else if corner == 1u {
+            out.offset = vec3<f32>(spike_across.x, 0.0, spike_across.y);
+            out.side = 1.0;
+        } else {
+            out.offset = tip;
+            out.along = 1.0;
+            out.side = 1.0;
+        }
+        return out;
+    }
+
+    // La hoja: raíz hundida, dos vértices de cintura y punta.
+    let waist = tip * grass_data.blade_waist;
+    if corner == 0u {
+        out.offset = vec3<f32>(0.0, -grass_data.blade_root_sink, 0.0);
+        out.side = -1.0;
+    } else if corner == 1u {
+        out.offset = vec3<f32>(waist.x - across.x, waist.y, waist.z - across.y);
+        out.along = grass_data.blade_waist;
+        out.side = -1.0;
+    } else if corner == 2u {
+        out.offset = vec3<f32>(waist.x + across.x, waist.y, waist.z + across.y);
+        out.along = grass_data.blade_waist;
+        out.side = 1.0;
+    } else {
+        out.offset = tip;
+        out.along = 1.0;
+        out.side = 1.0;
+    }
+    return out;
+}
+
+const TAU: f32 = 6.2831853;
+
+/// Lo que la brizna necesita para ir a cualquiera de los dos `VertexOutput`
+/// posibles (principal o prepass) — ver la nota de arriba del porqué hay dos
+/// caminos.
+struct BuiltBlade {
+    world_position: vec4<f32>,
+    world_normal: vec3<f32>,
+    uv: vec2<f32>,
+    uv_b: vec2<f32>,
+}
+
+/// La reconstrucción entera de una brizna: qué registro le toca, qué forma
+/// tiene a esta distancia, viento y colapso por crecimiento. Un solo lugar
+/// para las dos etapas que la necesitan (principal y prepass), para que no
+/// puedan divergir — sería exactamente la clase de bug que un desfasaje de
+/// profundidad no avisa solo.
+fn build_blade(instance_index: u32, address: vec2<f32>) -> BuiltBlade {
+    // **Nada de esto viene de la malla salvo una dirección**: qué brizna del
+    // chunk y qué esquina de ella. Todo lo demás sale de un registro de 16 bytes
+    // que el chunk tiene en el buffer, ubicado por el `MeshTag` —su casillero
+    // dentro del nivel, con stride fijo—.
+    let slot = mesh_functions::get_tag(instance_index);
+    let blade = u32(address.x);
+    let corner = u32(address.y);
+    let record = blade_records[slot * grass_data.record_layout.x + blade].base_and_shape;
+
+    // `uv1.y` llevaba dos números en uno y el registro los sigue llevando: el
+    // alcance del anillo en metros enteros y la altura de la brizna en la
+    // fracción.
+    let blade_reach = floor(record.w);
+    let blade_height = fract(record.w);
+    let blade_hash = hash_position(record.xy, 0u);
+
+    // **La forma sale de la distancia, no del nivel.** Una brizna del nivel de
+    // cartas que hoy está cerca se construye como hoja: con la del nivel
+    // quedaría un billboard de medio metro girando a tres metros de la cámara.
+    let distance_to_focus = length(record.xy - grass_data.focus_xz);
+    let shape = blade_shape_at(distance_to_focus, blade_height);
+    let as_card = shape == SHAPE_CARD;
+    // Sólo importa cuando `shape == SHAPE_SPIKE`; para hoja y carta el valor
+    // no se usa, así que calcularlo siempre es más barato que un branch más.
+    let spike_width_scale = spike_growth_scale(distance_to_focus, spike_distance_for(blade_height), blade_reach);
+    let built = blade_vertex(shape, corner, blade_height, record.xy, spike_width_scale);
+    let side = built.side;
+    let height_factor = built.along;
+    // `record.z` es la altura del terreno: lo que `uv0.x` llevaba por vértice.
+    var world_position = vec4<f32>(
+        record.x + built.offset.x,
+        record.z + built.offset.y,
+        record.y + built.offset.z,
+        1.0,
     );
+    var uv = vec2<f32>(record.z, height_factor);
+    var uv_b = vec2<f32>(side * blade_hash, record.w);
 
-    let height_factor = blade_height_factor(vertex.uv);
-    let blade_hash = abs(vertex.uv_b.x);
-    let side = sign(vertex.uv_b.x);
-    // `uv1.y` lleva dos números en uno: el alcance del anillo en metros enteros
-    // y la altura de la brizna en la fracción.
-    let ring_reach = floor(vertex.uv_b.y);
-    let blade_height = fract(vertex.uv_b.y);
-
-    // **La carta se abre acá.** Sus cuatro vértices vienen horneados en el mismo
-    // punto —el centro de la base— y se separan contra el eje derecho de la
-    // cámara, así que siempre da la cara. Una carta representa la masa de
-    // decenas de briznas: si quedara de canto dejaría un hueco de ese tamaño, y
-    // por eso ésta sí gira mientras la brizna cercana no.
+    // **La carta se abre acá, y sólo tan lejos como corresponda.** Sus cuatro
+    // vértices vienen horneados en el mismo punto —el centro de la base— y se
+    // separan contra el eje derecho de la cámara, así que siempre da la cara.
+    // Una carta representa la masa de decenas de briznas: si quedara de canto
+    // dejaría un hueco de ese tamaño.
+    //
+    // **Lo que se interpola es el ancho, no si gira.** Desde que la brizna
+    // pertenece al mundo, las de índice bajo —las del nivel de cartas— están
+    // vivas también a tres metros, y ahí una carta de medio metro girando con la
+    // cámara se ve (reportado jugando el 2026-08-08). Angosta no: una brizna de
+    // 5,5 cm que gira es indistinguible de una que no, así que no hace falta un
+    // segundo camino de construcción ni un triángulo más.
     //
     // El eje derecho sale de la fila 0 de la matriz de vista, que es la que
     // lleva el `right` de la cámara en espacio de mundo, aplanado a horizontal
     // para que la carta se quede parada en vez de inclinarse con el cabeceo.
-    if ring_is_card(ring_reach) {
+    if as_card {
         let camera_right = normalize(vec3<f32>(view.view_from_world[0].x, 0.0, view.view_from_world[2].x));
+        // Crece dentro de su propia banda, del umbral en el que nace hasta su
+        // propio alcance — ver `card_growth_scale`. En el umbral vale 1.0, así
+        // que el salto de hoja a carta sigue midiendo lo mismo que antes.
+        let growth = card_growth_scale(distance_to_focus, card_distance_for(blade_height), blade_reach);
+        // **Varianza de ancho por carta (técnica 1 de 3, `NORTE.md`/discusión
+        // 2026-08-09).** El diagnóstico de siempre seguía sin resolverse: la
+        // carta mira siempre a cámara y por eso muestra **siempre** su ancho
+        // completo, mientras que una púa real tiene orientación fija en el mundo
+        // y la mayoría de las veces se ve de perfil. No se toca el eje (`side *
+        // camera_right`): girar la carta reintroduce el hueco de cobertura que el
+        // billboard existe para evitar (comentario de arriba). En cambio se
+        // reparte el **ancho** por brizna — mismo billboard, distinta huella —
+        // que aproxima la variedad que una población de púas mostraría sin
+        // arriesgar una carta de canto. Rango ±30% **centrado en 1.0**: no
+        // desplaza la media, así que `footprint_m()` y la ley de densidad de
+        // `minimum_density` siguen valiendo sin tocarlas.
+        let width_seed = hash_position(record.xy, 3u);
+        let width_scale = mix(0.7, 1.3, width_seed);
         world_position = vec4<f32>(
             world_position.xyz
-                + camera_right * (side * grass_data.card_half_width)
-                + vec3<f32>(0.0, height_factor * blade_height, 0.0),
+                + camera_right * (side * grass_data.card_half_width * growth * width_scale)
+                + vec3<f32>(0.0, height_factor * blade_height * growth, 0.0),
             world_position.w,
         );
     }
@@ -453,28 +758,88 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     // sistema quería desde el principio: la brizna **brota del suelo** en vez de
     // aparecer aplastada sobre él. Emerge cuando el crecimiento pasa de
     // `sink / (altura + sink)`, o sea alrededor de un quinto de la rampa.
-    let ground_y = vertex.uv.x;
+    // La altura del terreno sale del registro, que es donde vive desde que el
+    // vértice dejó de llevarla.
+    let ground_y = record.z;
     world_position.y = mix(
         ground_y - grass_data.growth_sink,
         world_position.y,
-        blade_growth(world_position.xz, ring_reach, blade_hash),
+        blade_growth(world_position.xz, blade_reach),
     );
 
+    // **La carta cambia lo que lleva en `uv_b.x`**: en vez del hash con el lado
+    // en el signo, el lado a secas. Interpolado a lo ancho da −1 en un borde y
+    // +1 en el otro, que es la coordenada que la silueta necesita y que de otro
+    // modo no existiría — el hash es un número distinto por primitiva, así que
+    // no se puede normalizar en el fragment sin mandarlo aparte.
+    //
+    // El hash ya hizo su trabajo acá arriba, así que no se pierde nada más que la
+    // vista `brizna` sobre las cartas, que pasa a ser un degradado a lo ancho.
+    if as_card {
+        uv_b = vec2<f32>(side, uv_b.y);
+    }
+
+    var out: BuiltBlade;
     out.world_position = world_position;
+    out.world_normal = blade_normal(side, world_position.xz);
+    out.uv = uv;
+    out.uv_b = uv_b;
+    return out;
+}
+
+#ifndef PREPASS_PIPELINE
+@vertex
+fn vertex(vertex: GrassVertex) -> VertexOutput {
+    var out: VertexOutput;
+    let built = build_blade(vertex.instance_index, vertex.address);
+    out.world_position = built.world_position;
     // Clip space, no world space: la posición que sale del vertex shader es la
     // que el rasterizador proyecta.
-    out.position = position_world_to_clip(world_position.xyz);
-    out.world_normal = blade_normal(side, world_position.xz);
-    out.uv = vertex.uv;
-    out.uv_b = vertex.uv_b;
+    out.position = position_world_to_clip(built.world_position.xyz);
+    out.world_normal = built.world_normal;
+    out.uv = built.uv;
+    out.uv_b = built.uv_b;
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = vertex.instance_index;
 #endif
-
     return out;
 }
 #endif
 
+/// El vértice que el prepass lee. **`address` en `location(1)`, no `(2)`**: en
+/// `prepass_io::Vertex` (bevy_pbr 0.19) el hueco que en el principal reserva
+/// `normal`@1 no existe hasta location(3) y detrás de
+/// `NORMAL_PREPASS_OR_DEFERRED_PREPASS`, así que UV0 —donde viaja
+/// `address`— cae un lugar antes. Verificado contra
+/// `prepass/mod.rs::PrepassPipeline::specialize`, que arma el layout real:
+/// `ATTRIBUTE_UV_0.at_shader_location(1)`. Copiar el struct principal tal
+/// cual no compila.
+#ifdef PREPASS_PIPELINE
+struct PrepassGrassVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+    @location(1) address: vec2<f32>,
+}
+
+@vertex
+fn vertex(vertex: PrepassGrassVertex) -> VertexOutput {
+    var out: VertexOutput;
+    let built = build_blade(vertex.instance_index, vertex.address);
+    out.position = position_world_to_clip(built.world_position.xyz);
+    out.world_position = built.world_position;
+    out.uv = built.uv;
+    out.uv_b = built.uv_b;
+#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
+    out.world_normal = built.world_normal;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+    return out;
+}
+#endif
+
+#ifndef PREPASS_PIPELINE
 @fragment
 fn fragment(
     vertex_output: VertexOutput,
@@ -485,22 +850,47 @@ fn fragment(
     // en control de flujo no uniforme no está definida.
     let metres_per_pixel = length(fwidth(in.world_position.xz));
 
-#ifndef PREPASS_PIPELINE
+    // **El recorte de la carta, antes que nada — mismo motivo que arriba.**
+    // Las derivadas van afuera del branch de la carta, para que `textureSampleGrad`
+    // siga siendo válida y color/profundidad evalúen el mismo texel.
+    let card_texture_uv = card_uv(in);
+    let card_texture_dx = dpdx(card_texture_uv);
+    let card_texture_dy = dpdy(card_texture_uv);
+
+    var card_alpha = 1.0;
+    let is_card_blade = blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y));
+    if is_card_blade {
+        card_alpha = sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy).a;
+    }
+
     // **Sub-píxel**: en bandas planas y exactas, no en una rampa.
     //
     // Una rampa continua se mira; una banda se **cuenta**. La pregunta que esta
     // vista existe para contestar —a qué distancia una brizna deja de resolverse—
     // se contestaba comparando colores a ojo, que es justo lo que esta sesión
-    // vino a sacar del medio. Con tres bandas exactas, `shot_stats.py` dice qué
+    // vino a sacar del medio. Con tres bandas exactas, `perf::shot_stats` dice qué
     // fracción del pasto está por debajo de un píxel.
     if grass_data.debug_view == DEBUG_SUBPIXEL {
         // El ancho es el de **esta** primitiva, no el de una brizna. Una carta
         // mide 0,5 m contra los 5,5 cm de una brizna: medirlas con la misma vara
         // las reportaba nueve veces más finas de lo que son, que es exactamente
         // la clase de error que esta vista existe para cazar.
+        //
+        // **Y una púa lejos no mide lo mismo que una cerca**, desde que
+        // `spike_growth_scale` la engorda con la distancia (experimento
+        // 2026-08-09): sin esto, la vista subestimaría cuántos píxeles mide una
+        // púa crecida y reportaría desperdicio de cuarteto que ya no existe.
+        let subpixel_distance = length(in.world_position.xz - grass_data.focus_xz);
+        let subpixel_seed = fract(in.uv_b.y);
         var width = grass_data.blade_width;
-        if ring_is_card(floor(in.uv_b.y)) {
+        if blade_is_card(subpixel_distance, subpixel_seed) {
             width = grass_data.card_half_width * 2.0;
+        } else if subpixel_distance >= spike_distance_for(subpixel_seed) {
+            width *= spike_growth_scale(
+                subpixel_distance,
+                spike_distance_for(subpixel_seed),
+                floor(in.uv_b.y),
+            );
         }
         let pixels_wide = width / max(metres_per_pixel, 1e-6);
         var band = 0u;
@@ -524,12 +914,27 @@ fn fragment(
     if grass_data.debug_view == DEBUG_MEASURE {
         var measured: FragmentOutput;
         measured.color = vec4<f32>(
-            grass_data.ring_colors[ring_slot(floor(in.uv_b.y))].rgb,
+            grass_data.ring_colors[ring_slot()].rgb,
             1.0,
         );
         return measured;
     }
-#endif
+
+    // Mismo camino plano que `medir`, pero la categoría es la forma que esta
+    // brizna ya construyó. La alpha de una carta se conserva para que
+    // AlphaToCoverage cuente su huella real, no el rectángulo de su textura.
+    if grass_data.debug_view == DEBUG_SHAPE_MEASURE {
+        let shape = blade_shape_at(
+            length(in.world_position.xz - grass_data.focus_xz),
+            fract(in.uv_b.y),
+        );
+        var measured: FragmentOutput;
+        measured.color = vec4<f32>(
+            grass_data.ring_colors[shape].rgb,
+            select(1.0, card_alpha, shape == SHAPE_CARD),
+        );
+        return measured;
+    }
 
     // El PBR entero primero: sin esto el pasto sale plano, sin luz, sin sombras
     // y sin niebla, que es exactamente lo que `ExtendedMaterial` existe para
@@ -619,15 +1024,31 @@ fn fragment(
         colour.a,
     );
 
-    pbr_input.material.base_color = colour;
+    // La ilustración aporta la lectura de hojas superpuestas, no una segunda
+    // iluminación. Conservamos el degradado, tinte por brizna y transmisión
+    // de la pradera, y aplicamos sólo su variación de luminosidad normalizada
+    // contra el promedio visible del asset (#529338, luma lineal 0,231).
+    if is_card_blade {
+        let card_rgb = sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy).rgb;
+        let tone = clamp(dot(card_rgb, vec3<f32>(0.2126, 0.7152, 0.0722)) / 0.231, 0.72, 1.28);
+        colour = vec4<f32>(colour.rgb * tone, colour.a);
+    }
+
+    pbr_input.material.base_color = vec4<f32>(colour.rgb, colour.a * card_alpha);
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-#ifdef PREPASS_PIPELINE
-    return deferred_output(in, pbr_input);
-#else
     var out: FragmentOutput;
-    out.color = apply_pbr_lighting(pbr_input);
+    // **Experimento 2026-08-09**: no `apply_pbr_lighting`. Ese pipeline evalúa
+    // luces clusterizadas (point/spot) y sombra por fragmento — carísimo en un
+    // frame fill-bound donde el pasto es el 98% de los píxeles, y ninguna luz
+    // puntual dinámica ilumina la pradera hoy (no hay ninguna en el juego). Una
+    // sola difusa direccional + ambiente plano, con los mismos `sun_color` /
+    // `ambient_color` que ya sigue el ciclo día/noche. Si se mide que no ahorra
+    // lo suficiente, esto vuelve a `apply_pbr_lighting(pbr_input)`.
+    let n_dot_l = max(dot(pbr_input.N, normalize(grass_data.sun_direction)), 0.0);
+    let lit = grass_data.ambient_color.rgb + n_dot_l * grass_data.sun_color.rgb;
+    out.color = vec4<f32>(pbr_input.material.base_color.rgb * lit, pbr_input.material.base_color.a);
 
     // Transmisión a contraluz: la luz atraviesa la hoja. Es lo que separa "hay
     // pasto" de "hay un campo vivo", y sólo aparece cuando el sol está detrás
@@ -644,5 +1065,38 @@ fn fragment(
 
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
-#endif
 }
+#endif
+
+/// El fragment del prepass: sólo el recorte de silueta de carta y, si hace
+/// falta, la normal — nada de color, tinte ni PBR. Es la mitad barata a
+/// propósito: correr el resto acá otra vez pagaría en el prepass el mismo
+/// costo que el prepass existe para evitarle al pase principal.
+///
+/// **`AlphaToCoverage` con MSAA prendido no dispara el `MAY_DISCARD` del
+/// prepass default** (`alpha_mode_pipeline_key` en `material.rs` de
+/// bevy_pbr: con MSAA ≠ `Off` cae a `BLEND_ALPHA_TO_COVERAGE`, no
+/// `MAY_DISCARD`) — y aunque lo disparara, ese camino lee `base_color` de
+/// una textura, no la silueta procedural de acá. Sin este fragment propio,
+/// el prepass escribiría profundidad para el cuadrado entero de cada carta
+/// en vez de su silueta recortada.
+#ifdef PREPASS_PIPELINE
+@fragment
+fn fragment(in: VertexOutput) -> FragmentOutput {
+    let is_card_blade = blade_is_card(length(in.world_position.xz - grass_data.focus_xz), fract(in.uv_b.y));
+    if is_card_blade {
+        let card_texture_uv = card_uv(in);
+        let card_texture_dx = dpdx(card_texture_uv);
+        let card_texture_dy = dpdy(card_texture_uv);
+        if sample_card_albedo(card_texture_uv, card_texture_dx, card_texture_dy).a < 0.5 {
+            discard;
+        }
+    }
+
+    var out: FragmentOutput;
+#ifdef NORMAL_PREPASS
+    out.normal = vec4<f32>(normalize(in.world_normal) * 0.5 + vec3<f32>(0.5), 1.0);
+#endif
+    return out;
+}
+#endif

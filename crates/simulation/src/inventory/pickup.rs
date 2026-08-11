@@ -10,7 +10,7 @@ use bevy_ecs::prelude::*;
 use bevy_transform::components::Transform;
 
 use bof_domain::interaction::{InteractionKind, InteractionRequest};
-use bof_domain::movement::Player;
+use bof_domain::movement::{ActorId, Player};
 
 use super::data::{EquipRequestMessage, Inventory, ItemKind, PickupMode, WorldItem};
 
@@ -20,28 +20,40 @@ const AUTO_PICKUP_RANGE: f32 = 1.2;
 /// this tick, no input required. Still scoped to `Player` for graybox; the
 /// interact path is actor-generic now, this one is the remaining holdout.
 pub fn auto_collect(
-    mut actors: Query<(&Transform, &mut Inventory), With<Player>>,
+    mut actors: Query<(&ActorId, &Transform, &mut Inventory), With<Player>>,
     items: Query<(Entity, &Transform, &WorldItem)>,
     mut commands: Commands,
 ) {
-    for (actor_transform, mut inventory) in &mut actors {
-        for (item_entity, item_transform, item) in &items {
-            if item.mode != PickupMode::Auto {
-                continue;
-            }
-            if item_transform
-                .translation
-                .distance(actor_transform.translation)
-                > AUTO_PICKUP_RANGE
-            {
-                continue;
-            }
-            if inventory
+    for (item_entity, item_transform, item) in &items {
+        if item.mode != PickupMode::Auto {
+            continue;
+        }
+        if item.is_claimed() {
+            continue;
+        }
+        let winner = actors
+            .iter_mut()
+            .filter_map(|(actor_id, actor_transform, inventory)| {
+                let distance_squared = item_transform
+                    .translation
+                    .distance_squared(actor_transform.translation);
+                (distance_squared <= AUTO_PICKUP_RANGE * AUTO_PICKUP_RANGE).then_some((
+                    distance_squared,
+                    *actor_id,
+                    inventory,
+                ))
+            })
+            .min_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+        if let Some((_, _, mut inventory)) = winner
+            && inventory
                 .try_add(item.stack.kind, item.stack.quantity)
                 .is_ok()
-            {
-                commands.entity(item_entity).despawn();
-            }
+        {
+            commands.entity(item_entity).despawn();
         }
     }
 }
@@ -54,7 +66,7 @@ pub fn auto_collect(
 pub fn read_interact_pickups(
     mut interactions: MessageReader<InteractionRequest>,
     mut actors: Query<&mut Inventory>,
-    items: Query<&WorldItem>,
+    mut items: Query<&mut WorldItem>,
     mut commands: Commands,
     mut equip: MessageWriter<EquipRequestMessage>,
 ) {
@@ -67,9 +79,12 @@ pub fn read_interact_pickups(
         else {
             continue;
         };
-        let Ok(world_item) = items.get(item_entity) else {
+        let Ok(mut world_item) = items.get_mut(item_entity) else {
             continue;
         };
+        if world_item.is_claimed() {
+            continue;
+        }
         match world_item.stack.kind {
             ItemKind::Weapon(item) => {
                 equip.write(EquipRequestMessage {
@@ -79,7 +94,8 @@ pub fn read_interact_pickups(
                 });
             }
             kind @ (ItemKind::Material(_) | ItemKind::Food { .. }) => {
-                if inventory.try_add(kind, world_item.stack.quantity).is_ok() {
+                if inventory.try_add(kind, world_item.stack.quantity).is_ok() && world_item.claim()
+                {
                     commands.entity(item_entity).despawn();
                 }
             }
@@ -108,36 +124,35 @@ mod tests {
     fn auto_collect_picks_up_in_range_auto_items_and_ignores_interact_items() {
         let mut world = World::new();
         let player = world
-            .spawn((Player, Transform::default(), Inventory::default()))
+            .spawn((
+                Player,
+                ActorId::PLAYER,
+                Transform::default(),
+                Inventory::default(),
+            ))
             .id();
         let auto_item = world
             .spawn((
                 Transform::from_xyz(0.5, 0.0, 0.0),
-                WorldItem {
-                    stack: material_stack(),
-                    mode: PickupMode::Auto,
-                },
+                WorldItem::new(material_stack(), PickupMode::Auto),
             ))
             .id();
         let far_item = world
             .spawn((
                 Transform::from_xyz(10.0, 0.0, 0.0),
-                WorldItem {
-                    stack: material_stack(),
-                    mode: PickupMode::Auto,
-                },
+                WorldItem::new(material_stack(), PickupMode::Auto),
             ))
             .id();
         let interact_item = world
             .spawn((
                 Transform::from_xyz(0.2, 0.0, 0.0),
-                WorldItem {
-                    stack: ItemStack {
+                WorldItem::new(
+                    ItemStack {
                         kind: ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB),
                         quantity: 1,
                     },
-                    mode: PickupMode::Interact,
-                },
+                    PickupMode::Interact,
+                ),
             ))
             .id();
 
@@ -166,6 +181,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn one_auto_pickup_is_claimed_once_by_the_nearest_player() {
+        let mut world = World::new();
+        let farther = world
+            .spawn((
+                Player,
+                ActorId::authored(12),
+                Transform::from_xyz(0.8, 0.0, 0.0),
+                Inventory::default(),
+            ))
+            .id();
+        let nearer = world
+            .spawn((
+                Player,
+                ActorId::authored(11),
+                Transform::from_xyz(0.2, 0.0, 0.0),
+                Inventory::default(),
+            ))
+            .id();
+        let item = world
+            .spawn((
+                Transform::default(),
+                WorldItem::new(material_stack(), PickupMode::Auto),
+            ))
+            .id();
+
+        world.run_system_once(auto_collect).unwrap();
+
+        assert!(world.get_entity(item).is_err());
+        assert_eq!(
+            world
+                .entity(nearer)
+                .get::<Inventory>()
+                .unwrap()
+                .iter()
+                .map(|stack| stack.quantity)
+                .sum::<u32>(),
+            1
+        );
+        assert_eq!(
+            world
+                .entity(farther)
+                .get::<Inventory>()
+                .unwrap()
+                .iter()
+                .map(|stack| stack.quantity)
+                .sum::<u32>(),
+            0,
+            "deferred despawn must not let a second actor duplicate the pickup"
+        );
+    }
+
     /// Input is no longer this system's concern: `interaction` resolves the
     /// press and this only applies the decision. The "one press, one
     /// interaction" and "consumed exactly once" invariants moved with it and
@@ -182,13 +249,13 @@ mod tests {
         let weapon_item = world
             .spawn((
                 Transform::from_xyz(0.5, 0.0, 0.0),
-                WorldItem {
-                    stack: ItemStack {
+                WorldItem::new(
+                    ItemStack {
                         kind: ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB),
                         quantity: 1,
                     },
-                    mode: PickupMode::Interact,
-                },
+                    PickupMode::Interact,
+                ),
             ))
             .id();
         world.write_message(InteractionRequest {
@@ -252,13 +319,13 @@ mod tests {
             ))
             .id();
         let pickup = world
-            .spawn(WorldItem {
-                stack: ItemStack {
+            .spawn(WorldItem::new(
+                ItemStack {
                     kind: ItemKind::Weapon(WeaponItem::LOOTABLE_CLUB),
                     quantity: 1,
                 },
-                mode: PickupMode::Interact,
-            })
+                PickupMode::Interact,
+            ))
             .id();
         world.write_message(InteractionRequest {
             actor: player,
@@ -287,6 +354,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn one_interact_pickup_cannot_be_claimed_by_two_actors() {
+        let mut world = World::new();
+        world.init_resource::<Messages<EquipRequestMessage>>();
+        world.init_resource::<Messages<InteractionRequest>>();
+        let first = world.spawn(Inventory::default()).id();
+        let second = world.spawn(Inventory::default()).id();
+        let item = world
+            .spawn(WorldItem::new(material_stack(), PickupMode::Interact))
+            .id();
+        for actor in [first, second] {
+            world.write_message(InteractionRequest {
+                actor,
+                target: Some(item),
+                kind: InteractionKind::Pickup,
+            });
+        }
+
+        world.run_system_once(read_interact_pickups).unwrap();
+
+        assert!(world.get_entity(item).is_err());
+        let total = [first, second]
+            .into_iter()
+            .map(|actor| {
+                world
+                    .entity(actor)
+                    .get::<Inventory>()
+                    .unwrap()
+                    .iter()
+                    .map(|stack| stack.quantity)
+                    .sum::<u32>()
+            })
+            .sum::<u32>();
+        assert_eq!(total, 1, "a world item has exactly one owner after commit");
+    }
+
     /// A decision aimed at another domain must not be acted on here.
     #[test]
     fn a_mount_interaction_is_ignored_by_pickup() {
@@ -300,10 +403,7 @@ mod tests {
         let item = world
             .spawn((
                 Transform::from_xyz(0.5, 0.0, 0.0),
-                WorldItem {
-                    stack: material_stack(),
-                    mode: PickupMode::Interact,
-                },
+                WorldItem::new(material_stack(), PickupMode::Interact),
             ))
             .id();
         world.write_message(InteractionRequest {

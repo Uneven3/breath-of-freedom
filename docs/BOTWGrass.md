@@ -797,7 +797,7 @@ son. Verificadas contra las fuentes de Bevy 0.19:
 4. **El AABB hay que ponerlo a mano.** Bevy lo calcula de las posiciones de la
    malla, y la malla índice no las va a tener. Sin un `Aabb` por chunk el
    culling de Bevy trabaja sobre un volumen falso.
-5. **`grass.rs` ya tiene 1.605 líneas** contra el "~300 es señal de dividir" de
+5. **`grass.rs` ya tiene ~1.860 líneas** contra el "~300 es señal de dividir" de
    §16. Este paso agrega un subsistema entero: la división del módulo entra en su
    alcance, no se descubre después.
 
@@ -930,7 +930,7 @@ once válidos; las cuatro afirmaciones sobre Bevy las verifiqué a mano.
 | Paso 0 bloquea 2 y 3 | "bloquea a todo lo demás" |
 | El gate del Paso 3 incluye el bug rango↔ley | "falló por la densidad, no por el diseño" |
 | El solapamiento sale de la tabla de desperdicio | listado como desperdicio puro, contra lo que el propio doc mide |
-| Dividir `grass.rs` entra en el Paso 2 | 1.605 líneas contra el "~300" de §16 |
+| Dividir `grass.rs` entra en el Paso 2 | ~1.860 líneas contra el "~300" de §16 |
 | El spike verifica, no sólo mide | §21: se estaba planeando sobre una combinación no verificada |
 
 ## El fine tuning, y con qué números empieza (2026-08-08)

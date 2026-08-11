@@ -356,19 +356,37 @@ checkpoint del usuario entre técnica y técnica:
 3. Sesgo de LOD por posición en pantalla (bordes de cámara), más caro/riesgoso
    — al final de la lista a propósito.
 
-**Técnica 1, "suficientemente bien por ahora" (2026-08-10):** detalle
-completo en `BOTWGrass.md` → *Técnica 1: mezclar los tres assets*. Resumen:
-varianza de ancho por carta (±30%, media 1.0), un bug propio encontrado y
-arreglado (el fix de un artefacto de cielo colándose por las cartas apagó el
-recorte dentado siempre, no sólo lejos — recalibrado), y los dientes de la
-silueta recalibrados (7/5 columnas → 3/2, eran más angostos que una brizna
-real). **La densidad replantada, intentada y revertida:** subir la cobertura
-medida (46,7% → 91,9% en la banda 45-64 m) rompía
-`every_distance_gets_the_density_it_demands` — la escalera compartida
-(`grass_tiles::reach_ladder`) no llega a 50 m con esa área. `CARD_SILHOUETTE_AREA`
-queda en su valor viejo (0,583); **la carta queda rala con los dientes
-nuevos**, deuda declarada, no resuelta. Técnica 2 y 3 quedan para la próxima
-sesión.
+**Técnica 1, primer intento con dientes procedurales (2026-08-09), superado
+el mismo arco por un segundo incremento (2026-08-10) — auditoría de
+consistencia en `AUDIT_GRASS_2026-08-11.md`.** El primer intento
+(recorte dentado 7/5→3/2 columnas, `CARD_SILHOUETTE_AREA` sin recalibrar) fue
+un paso intermedio, no el estado final: en la misma sesión del 2026-08-10 se
+retiró por completo y **ya no existe en el código** (`grass.rs:1450-1481`
+tiene un test que falla si el WGSL vuelve a traer ese mecanismo). Lo
+reemplazó una carta **texturizada**: laboratorio aislado `card_mesh_lab.rs`
+(escena exclusiva, no toca la pradera de producción) para aprobar
+`T_GrassMeadowCard_Albedo.png`, adoptada después en `grass.wgsl` — fragment y
+prepass muestrean la misma textura, alpha reemplaza la silueta procedural
+(discard bajo 0,5), RGB sólo aporta variación de luminosidad. `CARD_WIDTH`
+subió 0,25→0,30 m por pedido del checkpoint (16,7% menos densidad de carta
+vía `footprint_m`). Detalle completo, con todos los pasos intermedios y sus
+checkpoints, en `BOTWGrass.md` → *Técnica 1: mezclar los tres assets*.
+
+**Sigue abierto, no cerrado:** `CARD_SILHOUETTE_AREA` (0,583) es la
+calibración de la carta *procedural* vieja, no una medición del PNG —
+`grass-view=medir` por anillo/distancia queda pendiente antes de tocar la
+escalera de densidad. El PNG no tiene mips todavía (riesgo de shimmer/moiré
+en las cartas lejanas — vigilar jugando). Y **todas** las secciones de
+`BOTWGrass.md` sobre este incremento están marcadas `(abierto, 2026-08-10)`:
+el checkpoint jugado de la carta texturizada en producción (no del
+laboratorio) no se cerró formalmente. Técnica 2 y 3 de los anillos esperan
+ese cierre — asumen la carta actual como base.
+
+**De paso, sin relación con el pasto:** `day_night.rs` ganó
+`shadow_casters()` para que sólo una luz direccional (sol o luna, nunca las
+dos) castee sombra cerca del horizonte — barrido minuto a minuto en test.
+Detalle en `MVPS.md`; alimenta `grass_data.sun_color`/`sun_direction` pero es
+un fix de iluminación general, no de la pradera.
 
 ## La suite de medición (2026-08-06)
 
@@ -472,7 +490,7 @@ queda más legible.
 
 ## Deudas anotadas (pagar cuando el gameplay las pida)
 
-- **`perf/shot.rs` va por 983 líneas** (§16). Hace tres cosas: la máquina de la
+- **`perf/shot.rs` va por ~1.000 líneas** (§16). Hace tres cosas: la máquina de la
   captura, la leyenda que se escribe al lado, y el barrido de perillas. El corte
   natural es sacar el barrido, que ya casi no toca a las otras dos.
 - **Paleta/IDs Rust↔WGSL sin unificar, y `terrain_material.rs` sin dividir**

@@ -54,7 +54,7 @@ pub const SHADOW_CASTER_STEPS: [Option<f32>; 4] = [Some(60.0), Some(120.0), Some
 /// follows them. Too large spends texels on ground that reads flat anyway.
 /// Only the distance is tunable at runtime; changing the cascade *count* live
 /// desynchronises Bevy's per-cascade visibility bookkeeping and panics.
-pub const SHADOW_DISTANCE_STEPS: [f32; 5] = [65.0, 100.0, 140.0, 200.0, 40.0];
+pub(crate) const SHADOW_DISTANCE_STEPS: [f32; 5] = [65.0, 100.0, 140.0, 200.0, 40.0];
 
 /// Shadow map edge, in texels. Shadow cost inside dense foliage is fill-bound,
 /// not vertex-bound, so this is the most direct lever on it.

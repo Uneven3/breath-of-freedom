@@ -24,8 +24,8 @@
 //!
 //! Each scene owns **its own heightmap**, so sculpting the combat box cannot
 //! disturb the traversal course, and the world scene keeps the real terrain. The
-//! editor is not a scene: **F5 sculpts wherever you are** and `Ctrl+S` writes to
-//! the current scene's file.
+//! editor is not a scene: **F5 sculpts in any scene that declares terrain
+//! authoring** and `Ctrl+S` writes to that scene's file.
 
 pub mod menu;
 
@@ -106,6 +106,37 @@ impl Contents {
     };
 }
 
+/// Development tools a scene deliberately hosts.
+///
+/// This stays separate from [`Contents`]: `meadow` says that the runtime grass
+/// renderer exists; `grass_lab` says that its live renderer controls belong in
+/// this scene. A shipping world can contain a meadow without becoming a tuning
+/// bench by accident.
+#[derive(Debug, Clone, Copy)]
+pub struct Authoring {
+    /// F5 may mutate this scene's `TerrainFile`.
+    pub terrain_editing: bool,
+    /// The scene is a controlled vantage for the live grass-renderer lab.
+    pub grass_lab: bool,
+}
+
+impl Authoring {
+    const NONE: Self = Self {
+        terrain_editing: false,
+        grass_lab: false,
+    };
+
+    const TERRAIN: Self = Self {
+        terrain_editing: true,
+        grass_lab: false,
+    };
+
+    const GRASS_LAB: Self = Self {
+        terrain_editing: true,
+        grass_lab: true,
+    };
+}
+
 /// One row per scene. **This table is the level list.**
 pub struct SceneDef {
     pub id: SceneId,
@@ -114,6 +145,7 @@ pub struct SceneDef {
     /// The scene's own heightmap. Sculpting one scene never touches another.
     pub terrain_file: &'static str,
     pub contents: Contents,
+    pub authoring: Authoring,
 }
 
 pub const SCENES: &[SceneDef] = &[
@@ -127,6 +159,7 @@ pub const SCENES: &[SceneDef] = &[
             stairs: true,
             ..Contents::NONE
         },
+        authoring: Authoring::TERRAIN,
     },
     SceneDef {
         id: SceneId::Combat,
@@ -139,16 +172,18 @@ pub const SCENES: &[SceneDef] = &[
             enemies: true,
             ..Contents::NONE
         },
+        authoring: Authoring::TERRAIN,
     },
     SceneDef {
         id: SceneId::Grass,
         label: "Pasto",
-        hint: "solo la pradera — para trabajar el pasto sin nada que lo tape",
+        hint: "laboratorio de pradera — ajustar el pasto sin nada que lo tape",
         terrain_file: "assets/game/world/grass.ron",
         contents: Contents {
             meadow: true,
             ..Contents::NONE
         },
+        authoring: Authoring::GRASS_LAB,
     },
     SceneDef {
         id: SceneId::CardMesh,
@@ -159,13 +194,18 @@ pub const SCENES: &[SceneDef] = &[
             card_mesh_lab: true,
             ..Contents::NONE
         },
+        authoring: Authoring::NONE,
     },
     SceneDef {
         id: SceneId::Sandbox,
         label: "Terreno",
-        hint: "lienzo limpio: relieve, cuerpo y luz — esculpir y medir",
+        hint: "World Lab: relieve y biomas — pintar cobertura y medir",
         terrain_file: "assets/game/world/sandbox.ron",
-        contents: Contents::NONE,
+        contents: Contents {
+            meadow: true,
+            ..Contents::NONE
+        },
+        authoring: Authoring::TERRAIN,
     },
     SceneDef {
         id: SceneId::World,
@@ -183,6 +223,7 @@ pub const SCENES: &[SceneDef] = &[
             enemies: true,
             horse: true,
         },
+        authoring: Authoring::TERRAIN,
     },
 ];
 
@@ -255,6 +296,16 @@ pub enum SceneBuild {
 /// Run condition: the current scene declares this piece of content.
 pub fn scene_has(wants: fn(&Contents) -> bool) -> impl Fn(Res<State<AppState>>) -> bool {
     move |state: Res<State<AppState>>| current_scene(&state).is_some_and(|def| wants(&def.contents))
+}
+
+/// Run condition: the current scene deliberately hosts this authoring tool.
+///
+/// Tools stay scene-agnostic. The table decides where each can operate, so a
+/// new controlled test scene is data rather than another `SceneId` branch.
+pub fn scene_allows(wants: fn(&Authoring) -> bool) -> impl Fn(Res<State<AppState>>) -> bool {
+    move |state: Res<State<AppState>>| {
+        current_scene(&state).is_some_and(|def| wants(&def.authoring))
+    }
 }
 
 /// Lee `BOF_SCENE`. Un nombre que no existe **no arranca en el menú en
@@ -481,9 +532,9 @@ mod tests {
     }
 
     #[test]
-    fn the_sandbox_stays_empty() {
-        // It doubles as the measurement case: anything spawned in it can hide
-        // the terrain's own cost.
+    fn the_sandbox_is_authoring_clean_but_previews_meadow() {
+        // It stays free of authored gameplay content, but World Lab needs the
+        // meadow renderer present so painting coverage can be judged in place.
         let contents = SceneId::Sandbox.def().contents;
         assert!(
             !(contents.course
@@ -491,11 +542,38 @@ mod tests {
                 || contents.targets
                 || contents.pickups
                 || contents.forest
-                || contents.meadow
                 || contents.card_mesh_lab
                 || contents.enemies
                 || contents.horse),
-            "the sandbox must stay bare"
+            "the sandbox must contain no authored gameplay content"
+        );
+        assert!(contents.meadow, "World Lab must preview painted coverage");
+    }
+
+    #[test]
+    fn authoring_is_declared_independently_from_scene_content() {
+        let grass = SceneId::Grass.def().authoring;
+        assert!(grass.terrain_editing, "the grass map must be paintable");
+        assert!(grass.grass_lab, "the grass box is the renderer vantage");
+
+        let terrain = SceneId::Sandbox.def().authoring;
+        assert!(terrain.terrain_editing, "the terrain map must be paintable");
+        assert!(
+            !terrain.grass_lab,
+            "terrain is a biome canvas, not the controlled grass benchmark"
+        );
+
+        let world = SceneId::World.def().authoring;
+        assert!(world.terrain_editing, "the shipping map remains authorable");
+        assert!(
+            !world.grass_lab,
+            "runtime content must not accidentally enable renderer tuning"
+        );
+
+        let card_mesh = SceneId::CardMesh.def().authoring;
+        assert!(
+            !card_mesh.terrain_editing && !card_mesh.grass_lab,
+            "the isolated card reference owns neither map authoring nor grass tuning"
         );
     }
 

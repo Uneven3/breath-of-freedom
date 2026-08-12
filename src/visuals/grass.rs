@@ -661,6 +661,31 @@ fn cell_centre(cell: IVec2, chunk_m: f32) -> Vec2 {
     (cell.as_vec2() + Vec2::splat(0.5)) * chunk_m
 }
 
+/// A grass renderer chunk only exists if authored grass reaches its footprint.
+/// The cells remain the source of truth; this is merely a coarse culling query
+/// over the chunk grid that cameras roll through.
+fn grass_chunk_has_growth(
+    cell: IVec2,
+    ring: usize,
+    terrain: Option<&crate::world::Terrain>,
+) -> bool {
+    let chunk_m = RINGS[ring].chunk_m;
+    let centre = cell_centre(cell, chunk_m);
+    let half = Vec2::splat(chunk_m * 0.5);
+    let Some(terrain) = terrain else {
+        return false;
+    };
+    terrain.contains_kind_in_rect(
+        centre - half,
+        centre + half,
+        crate::world::TerrainKind::ShortGrass,
+    ) || terrain.contains_kind_in_rect(
+        centre - half,
+        centre + half,
+        crate::world::TerrainKind::TallGrass,
+    )
+}
+
 /// Scene entry: start from an empty grid.
 ///
 /// The chunks themselves are `DespawnOnExit`, so leaving a scene already killed
@@ -835,6 +860,24 @@ pub(super) fn roll_meadow_grid(
     let Some(camera) = camera else {
         return;
     };
+
+    // Painting semantic terrain changes which chunks exist. The first vertical
+    // slice deliberately re-bakes the *visible meadow*, not the entire map:
+    // correctness is immediate in the World Lab and camera rolling keeps the
+    // work bounded. A later dirty-rectangle event can narrow this to just the
+    // stroke's chunks without changing the world-space ownership below.
+    if terrain.changed().next().is_some() {
+        for entity in field.live.values() {
+            commands.entity(*entity).despawn();
+        }
+        field.live.clear();
+        for ring in &mut field.records {
+            ring.reset();
+        }
+    }
+
+    let terrain = terrain.primary();
+
     let focus = camera.translation().xz();
     let density = perf.grass_density();
     let reach_scale = perf.grass_reach_scale();
@@ -892,6 +935,7 @@ pub(super) fn roll_meadow_grid(
         .flat_map(|(ring, _)| {
             ring_cells(ring, focus, reach_scale)
                 .into_iter()
+                .filter(move |cell| grass_chunk_has_growth(*cell, ring, terrain))
                 .map(move |cell| ChunkKey { ring, cell })
         })
         .collect();
@@ -905,6 +949,7 @@ pub(super) fn roll_meadow_grid(
         .flat_map(|(ring, _)| {
             ring_cells_with_slack(ring, focus, KEEP_SLACK_M, reach_scale)
                 .into_iter()
+                .filter(move |cell| grass_chunk_has_growth(*cell, ring, terrain))
                 .map(move |cell| ChunkKey { ring, cell })
         })
         .collect();
@@ -955,7 +1000,7 @@ pub(super) fn roll_meadow_grid(
                 blades: ranges.get(key.ring).cloned().unwrap_or(0..0),
                 ladder: std::sync::Arc::clone(&ladder),
             },
-            Some(&terrain),
+            terrain,
         );
         let slot = field.records[key.ring].slot_for(key.cell);
         field.records[key.ring].write(slot, &planting.records);
@@ -1243,7 +1288,7 @@ struct ChunkSpec {
 ///
 /// **Las filtradas no se saltan: se emiten con altura cero.** El casillero es un
 /// rango de stride fijo, así que saltear una correría de lugar a las siguientes.
-fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> ChunkPlanting {
+fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&crate::world::Terrain>) -> ChunkPlanting {
     let ChunkSpec {
         centre,
         chunk_m,
@@ -1266,10 +1311,10 @@ fn build_chunk_records(spec: &ChunkSpec, terrain: Option<&TerrainAccess>) -> Chu
             for index in blades.clone() {
                 let blade = grass_tiles::blade_in_tile(tile, index);
                 let xz = blade.xz;
-                let ground = terrain.and_then(|t| t.height_at(xz)).unwrap_or(0.0);
-                let slope = terrain.and_then(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
+                let ground = terrain.map(|t| t.height_at(xz)).unwrap_or(0.0);
+                let slope = terrain.map(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
                 let kind = terrain
-                    .and_then(|t| t.kind_at(xz))
+                    .map(|t| t.kind_at(xz))
                     .unwrap_or(crate::world::TerrainKind::Soil);
                 let cover = grass_cover::coverage(kind, slope);
                 let height = (BLADE_HEIGHT_MIN

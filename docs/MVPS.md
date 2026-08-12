@@ -58,24 +58,24 @@ cercano y no el shader.
 
 ## MVP 1 — Pintar significa algo
 
-Hoy se puede pintar `TallGrass` en el editor y no crece pasto: la pradera es un
-cuadrado fijo de 25×25 m centrado en una constante, y el bosque es un scatter
-procedural. La semántica se pinta, se guarda, se recarga, se ve en el
-diagnóstico — y ningún sistema de vegetación la mira.
+`Soil` es tierra desnuda; `ShortGrass` y `TallGrass` son la cobertura vegetal.
+La pradera debe aparecer donde esas celdas se pintan, y el bosque sigue siendo
+un scatter procedural hasta su propio corte de autoría.
 
 **Qué se construye**
 
-- `Terrain::cells_of_kind(kind)` en `terrain/query.rs`.
-- `visuals::grass` genera sus chunks donde hay `TallGrass` pintado, en vez de
-  sobre `MEADOW_CENTER`, y reconstruye **sólo los chunks tocados** al repintar.
+- `Terrain::contains_kind_in_rect(kind)` en `terrain/query.rs`.
+- `visuals::grass` genera sus chunks donde hay `ShortGrass` o `TallGrass`
+  pintado, en vez de sobre un campo fijo. El primer corte reconstruye el
+  vecindario visible; queda acotarlo a los chunks tocados al repintar.
 
 *(`MAP_EDITOR.md` Paso 1.)*
 
 **Criterio de aceptación**
 
-Pintar una franja de pasto largo cruzando una colina y verla crecer siguiendo el
-relieve, sin reiniciar, con el conteo de triángulos del hub moviéndose con lo
-pintado.
+Pintar una franja de pasto corto/largo cruzando una colina y verla crecer
+siguiendo el relieve, sin reiniciar, con el conteo de triángulos del hub
+moviéndose con lo pintado.
 
 **Por qué acá:** es el incremento más barato que convierte al editor en una
 herramienta que *hace* algo, y es prerrequisito honesto del MVP 6 — no tiene

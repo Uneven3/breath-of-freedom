@@ -33,6 +33,50 @@ Las tres capas de autoría, en el orden en que se componen:
 Primero se le da forma a la colina, después se dice que la colina es roca,
 después se ponen las rocas encima. `src/editor/` es la casa de las tres.
 
+## Dirección: World Lab, no editor genérico (2026-08-11)
+
+El producto que se está construyendo es un **World Lab dentro de BOF**: abre un
+mapa sin HUD ni objetivo de juego, lo mira con cámara de autoría, lo edita y
+puede empezar un playtest desde ese mismo dato. No se intenta hacer un editor
+general de Bevy ni competir con Blender.
+
+El reparto deliberado es:
+
+- **Blender** autora modelos, rigs, materiales y skyboxes; el pipeline los
+  importa como assets del juego.
+- **El `TerrainFile` RON** es el mapa canónico: relieve, significado del suelo,
+  instancias, volúmenes y puntos. Nunca guarda rutas de modelos ni materiales.
+- **El World Lab** escribe ese RON y lo previsualiza con el renderer, física y
+  catálogos reales de BOF. `Play from here` debe usar el mismo archivo, no una
+  exportación distinta.
+- **BSN** sigue componiendo la presentación de un `PropKind` (malla, collider e
+  hijos), pero no sustituye al mapa.
+
+Herramientas comunitarias pueden ahorrar viewport, gizmos o UX, pero no son la
+fuente de verdad: no conocen que una celda `ShortGrass` o `TallGrass` planta
+vegetación ni que un `PropKind` participa en traversal, fuego o navegación. La
+siguiente prueba vertical no es una nueva interfaz: en la escena **Pasto**,
+pintar cobertura debe hacer aparecer y actualizar la pradera; después vienen
+las instancias persistentes. Un feature que no ayuda a autorar y recorrer una
+primera zona low-poly jugable se posterga.
+
+### Las escenas declaran herramientas, no las herramientas escenas
+
+`SceneDef::authoring` es el contrato que evita que el World Lab se convierta en
+un `match SceneId` dentro de cada herramienta. Cada herramienta recibe los
+recursos de la escena activa y pregunta sólo por su capacidad:
+
+| Capacidad | Dueño | Escenas iniciales |
+|---|---|---|
+| `terrain_editing` | editor F5 | Traversal, Combate, Pasto, Terreno, Mundo |
+| `grass_lab` | futuro laboratorio de renderer | Pasto |
+
+`Terreno` sigue siendo el lienzo de relieve y biomas. `Pasto` es el encuadre
+controlado para juzgar los anillos, las cartas y el coste sin geometría ajena.
+Que Mundo contenga una pradera no le concede `grass_lab`: contenido y
+herramientas de desarrollo son datos distintos. Los presets del renderer se
+guardarán aparte del `TerrainFile`.
+
 ---
 
 ## Lo que la herramienta hace hoy
@@ -40,7 +84,7 @@ después se ponen las rocas encima. `src/editor/` es la casa de las tres.
 | Capa | Con qué | Dónde termina el dato |
 |---|---|---|
 | **Relieve** | Seis brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`), radio con la rueda, fuerza con Shift+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 128×128 celdas |
-| **Semántica** | Un brush que pinta `TerrainKind` (Soil, Rock, TallGrass, Sand) | `kinds: Vec<TerrainKind>` sobre las celdas, run-length en el archivo |
+| **Semántica** | Un brush que pinta `TerrainKind` (Soil, ShortGrass, TallGrass, Rock, Sand) | `kinds: Vec<TerrainKind>` sobre las celdas, run-length en el archivo |
 | **Persistencia** | `Ctrl+S` / `Ctrl+L`, escritura atómica (temporal + `rename`) | Un `.ron` por escena (`assets/game/world/*.ron`) |
 | **Deshacer** | Una entrada por trazo, hasta 32, cubriendo las dos capas | Snapshots en memoria (~2,7 MB de historial) |
 | **Verificación** | `TerrainDebugView` en el hub F1: Tipo, Escalable, Inflamable, Cortable | — |
@@ -128,16 +172,13 @@ ninguno de los cuales es el editor:
 O sea que un mapa nuevo no se puede hacer sin tocar código, que es exactamente
 lo que una herramienta de autoría existe para evitar.
 
-### 2. Se puede pintar `TallGrass` y no aparece pasto
+### 2. La cobertura vegetal todavía no diferencia su densidad
 
-La semántica ya se pinta, se guarda, se recarga y se ve en el diagnóstico. Pero
-sus únicos consumidores son el color del terreno y `GroundFacts::surface` (para
-el sonido de pisada y las propiedades de traversal). **La vegetación no la
-mira**: la pradera es un cuadrado fijo de 25×25 m centrado en una constante
-(`MEADOW_CENTER`, `visuals/grass.rs`), y el bosque es el scatter de arriba.
-
-Es la brecha más barata de cerrar y la que más va a cambiar la sensación de que
-la herramienta *hace* algo: pintar pasto y que crezca pasto.
+`Soil` es tierra desnuda; `ShortGrass` y `TallGrass` son los únicos tipos que
+hacen que existan chunks de pradera. El primer corte reconstruye ese vecindario
+visible al pintar, no el mapa entero. Falta que sus perfiles de altura/densidad
+sean distintos y que la invalidación se limite al rectángulo del trazo; el
+bosque sigue siendo el scatter de arriba.
 
 ### 3. No hay volúmenes ni puntos
 
@@ -178,19 +219,18 @@ opcional. También es donde vive la deuda C1 (~130 allocations por tick en
 
 **El más barato, y el que hace que pintar signifique algo.**
 
-- **Lógica.** `visuals::grass` deja de leer una constante y pasa a leer el
-  terreno: los chunks de pradera se generan donde `TerrainKind::TallGrass` está
-  pintado, y su densidad sale de los anillos de `BOTWGrass.md`. Lo mismo abre la
-  puerta para que el bosque se siembre por semántica en vez de por scatter fijo.
-- **Código a crear:** una consulta `Terrain::cells_of_kind(kind) -> impl
-  Iterator<Item = (usize, usize)>` en `terrain/query.rs`, y el cambio en
-  `build_field` para recorrerla en vez de `FIELD_CHUNKS`.
-- **Cuidado con el costo:** repintar debe reconstruir **sólo los chunks
-  tocados**, no la pradera entera; la pradera ya está partida en chunks, así que
-  el dato para hacerlo existe.
-- **Validación.** Pintar una franja de pasto largo cruzando una colina y verla
-  crecer siguiendo el relieve, sin reiniciar. Y el conteo de triángulos del hub
-  moviéndose con lo pintado.
+- **Lógica.** `visuals::grass` lee el terreno: los chunks de pradera se generan
+  sólo donde `TerrainKind::{ShortGrass, TallGrass}` está pintado, y su densidad
+  sale de los anillos de `BOTWGrass.md`. Lo mismo abre la puerta para que el
+  bosque se siembre por semántica en vez de por scatter fijo.
+- **Hecho en el primer corte:** `Terrain::contains_kind_in_rect` culea chunks
+  enteros contra esas celdas y un cambio de semántica reconstruye el vecindario
+  visible. No hay campo fijo ni una regeneración del mapa entero.
+- **Pendiente de costo:** llevar al editor una región sucia para reconstruir
+  **sólo los chunks tocados**, no todo el vecindario visible.
+- **Validación.** Pintar una franja de pasto corto/largo cruzando una colina y
+  verla crecer siguiendo el relieve, sin reiniciar. Y el conteo de triángulos
+  del hub moviéndose con lo pintado.
 
 ### Paso 2: La capa de instancias
 

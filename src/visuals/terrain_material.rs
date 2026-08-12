@@ -1,6 +1,6 @@
 //! One layered material for every semantic terrain kind.
 //!
-//! The four source PNGs are ordinary, independently replaceable assets. At
+//! The source PNGs are ordinary, independently replaceable assets. At
 //! runtime they are packed into one `texture_2d_array`, keeping the terrain a
 //! single mesh/material/draw family while final art replaces today's solid
 //! colours without changing code.
@@ -63,18 +63,22 @@ pub(crate) struct TerrainLegendEntry {
     pub color: Color,
 }
 
-const KIND_LEGEND: [TerrainLegendEntry; 4] = [
+const KIND_LEGEND: [TerrainLegendEntry; 5] = [
     TerrainLegendEntry {
         label: "Tierra / camino",
         color: Color::srgb_u8(121, 81, 58),
     },
     TerrainLegendEntry {
-        label: "Roca",
-        color: Color::srgb_u8(125, 130, 140),
+        label: "Pasto corto",
+        color: Color::srgb_u8(117, 150, 69),
     },
     TerrainLegendEntry {
         label: "Pasto largo",
         color: Color::srgb_u8(79, 155, 69),
+    },
+    TerrainLegendEntry {
+        label: "Roca",
+        color: Color::srgb_u8(125, 130, 140),
     },
     TerrainLegendEntry {
         label: "Arena",
@@ -503,6 +507,9 @@ pub(super) const fn texture_layer(kind: TerrainKind) -> u8 {
         TerrainKind::Rock => 1,
         TerrainKind::TallGrass => 2,
         TerrainKind::Sand => 3,
+        // Appended to preserve the four layers every existing terrain mesh and
+        // material already encode. Palette order belongs to `TerrainKind::ALL`.
+        TerrainKind::ShortGrass => 4,
     }
 }
 
@@ -537,9 +544,11 @@ mod tests {
 
     #[test]
     fn every_kind_maps_to_one_stable_array_layer() {
-        for (expected, kind) in TerrainKind::ALL.into_iter().enumerate() {
-            assert_eq!(usize::from(texture_layer(kind)), expected);
-        }
+        assert_eq!(texture_layer(TerrainKind::Soil), 0);
+        assert_eq!(texture_layer(TerrainKind::Rock), 1);
+        assert_eq!(texture_layer(TerrainKind::TallGrass), 2);
+        assert_eq!(texture_layer(TerrainKind::Sand), 3);
+        assert_eq!(texture_layer(TerrainKind::ShortGrass), 4);
         assert_eq!(TerrainKind::ALL.len(), TERRAIN_TEXTURES.len());
     }
 
@@ -554,11 +563,11 @@ mod tests {
     }
 
     #[test]
-    fn fallback_is_a_four_layer_rgba_array() {
+    fn fallback_is_a_five_layer_rgba_array() {
         let image = fallback_array();
         assert_eq!(image.width(), 1);
         assert_eq!(image.height(), 1);
-        assert_eq!(image.texture_descriptor.size.depth_or_array_layers, 4);
-        assert_eq!(image.data.as_ref().map(Vec::len), Some(16));
+        assert_eq!(image.texture_descriptor.size.depth_or_array_layers, 5);
+        assert_eq!(image.data.as_ref().map(Vec::len), Some(20));
     }
 }

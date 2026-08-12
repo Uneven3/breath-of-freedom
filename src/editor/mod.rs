@@ -1,7 +1,8 @@
 //! In-engine authoring tools. First up: the terrain sculpt brushes; future tools
 //! (semantic paint, instance placement) join here.
 //!
-//! Dev-only, gated behind **F5**. While active the tool holds modal input focus,
+//! Dev-only, gated behind **F5** in scenes that declare terrain authoring. While
+//! active the tool holds modal input focus,
 //! which by itself frees and shows the cursor, stops the camera, and suppresses
 //! gameplay input — so the mouse becomes a brush without any per-system gating.
 //!
@@ -28,7 +29,7 @@ use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 
 use crate::input::ModalInputFocusRequest;
-use crate::scene::AppState;
+use crate::scene::{AppState, scene_allows};
 use crate::world::{TerrainAccess, TerrainKind};
 use brush::BrushKind;
 use history::SculptHistory;
@@ -154,9 +155,10 @@ impl Plugin for EditorPlugin {
                 hud::update_hud,
             )
                 .chain()
-                // No sculpting from the menu: there is no terrain to bite, and
-                // the menu owns the cursor.
-                .run_if(not(in_state(AppState::MainMenu))),
+                // The map tool does not name scenes: the scene table declares
+                // where a TerrainFile may be authored. The menu consequently
+                // cannot sculpt either, because it declares no capabilities.
+                .run_if(scene_allows(|tools| tools.terrain_editing)),
         );
         for id in crate::scene::SceneId::ALL {
             app.add_systems(OnExit(AppState::Scene(id)), leave_sculpting);

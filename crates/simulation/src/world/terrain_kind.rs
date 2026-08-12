@@ -22,6 +22,9 @@ pub enum TerrainKind {
     /// Bare earth. The default: an unpainted level is all soil.
     #[default]
     Soil,
+    /// Low ground cover. It gives the world its ordinary grass texture, but is
+    /// neither the cuttable fuel nor the visual wall of [`Self::TallGrass`].
+    ShortGrass,
     /// Exposed stone. Nothing grows on it and nothing burns.
     Rock,
     /// Waist-high grass — the cover that hides you and the fuel that spreads
@@ -51,8 +54,8 @@ static KINDS: &[KindProps] = &[
         cuttable: false,
     },
     KindProps {
-        label: "Roca",
-        surface: SurfaceKind::Stone,
+        label: "Pasto corto",
+        surface: SurfaceKind::Grass,
         flammable: false,
         cuttable: false,
     },
@@ -61,6 +64,12 @@ static KINDS: &[KindProps] = &[
         surface: SurfaceKind::Grass,
         flammable: true,
         cuttable: true,
+    },
+    KindProps {
+        label: "Roca",
+        surface: SurfaceKind::Stone,
+        flammable: false,
+        cuttable: false,
     },
     KindProps {
         label: "Arena",
@@ -72,19 +81,21 @@ static KINDS: &[KindProps] = &[
 
 impl TerrainKind {
     /// Every kind, in the order the editor offers them.
-    pub const ALL: [TerrainKind; 4] = [
+    pub const ALL: [TerrainKind; 5] = [
         TerrainKind::Soil,
-        TerrainKind::Rock,
+        TerrainKind::ShortGrass,
         TerrainKind::TallGrass,
+        TerrainKind::Rock,
         TerrainKind::Sand,
     ];
 
     pub fn props(self) -> &'static KindProps {
         match self {
             TerrainKind::Soil => &KINDS[0],
-            TerrainKind::Rock => &KINDS[1],
+            TerrainKind::ShortGrass => &KINDS[1],
             TerrainKind::TallGrass => &KINDS[2],
-            TerrainKind::Sand => &KINDS[3],
+            TerrainKind::Rock => &KINDS[3],
+            TerrainKind::Sand => &KINDS[4],
         }
     }
 
@@ -135,13 +146,13 @@ mod tests {
     }
 
     #[test]
-    fn the_table_is_what_makes_a_kind_mean_something() {
-        // Pins the intent of the layer rather than the values: tall grass is the
-        // kind that burns and cuts, rock is the kind that does neither. If these
-        // ever swap, the map author's mental model is broken and no other test
-        // would notice.
+    fn grass_cover_and_tall_grass_are_not_the_same_authored_meaning() {
+        // Tall grass is fuel and cuttable cover; short grass is ordinary ground
+        // cover. Sharing footstep audio is fine — their gameplay contract is not.
         assert!(TerrainKind::TallGrass.flammable());
         assert!(TerrainKind::TallGrass.cuttable());
+        assert!(!TerrainKind::ShortGrass.flammable());
+        assert!(!TerrainKind::ShortGrass.cuttable());
         assert!(!TerrainKind::Rock.flammable());
         assert!(!TerrainKind::Rock.cuttable());
     }
@@ -154,19 +165,9 @@ mod tests {
     }
 
     #[test]
-    fn each_kind_is_distinguishable_underfoot() {
-        // The layer is only authorable if the author can tell what they painted
-        // by walking on it. Two kinds mapping to one surface are invisible to the
-        // only consumer that exists today.
-        for kind in TerrainKind::ALL {
-            let twins: Vec<TerrainKind> = TerrainKind::ALL
-                .into_iter()
-                .filter(|other| *other != kind && other.surface() == kind.surface())
-                .collect();
-            assert!(
-                twins.is_empty(),
-                "{kind:?} sounds exactly like {twins:?} underfoot"
-            );
-        }
+    fn bare_soil_is_the_neutral_default_not_grass_cover() {
+        assert_eq!(TerrainKind::Soil.surface(), SurfaceKind::Dirt);
+        assert_eq!(TerrainKind::ShortGrass.surface(), SurfaceKind::Grass);
+        assert_eq!(TerrainKind::TallGrass.surface(), SurfaceKind::Grass);
     }
 }

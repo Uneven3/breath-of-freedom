@@ -236,17 +236,17 @@ paga. Ver Paso 4.
 
 ## Aritmética de referencia *(tipo b)*
 
-Cuatro capas de suelo, según cómo se guarden:
+Cinco capas semánticas de terreno, según cómo se guarden:
 
 | forma | memoria GPU |
 |---|---|
-| Cuatro suelos, albedo 512² RGBA8, **sin mips** (lo que corre hoy) | 4,2 MB |
-| Cuatro suelos, albedo 512² RGBA8, con mips | 5,6 MB |
-| **Cuatro suelos, albedo 512² a 4 bpp con mips (objetivo runtime)** | **0,7 MB** |
+| Cinco capas, albedo 512² RGBA8, **sin mips** (lo que corre hoy) | 5,2 MB |
+| Cinco capas, albedo 512² RGBA8, con mips | 7,0 MB |
+| **Cinco capas, albedo 512² a 4 bpp con mips (objetivo runtime)** | **0,8 MB** |
 
 512² a 4 bpp son 128 KB por capa; la cadena de mips suma un tercio. La
-compresión no es una optimización para después: es la diferencia entre 0,7 y
-5,6 MB, y no se retrofitea barato. Y los mips **no son opcionales** aunque
+compresión no es una optimización para después: es la diferencia entre 0,8 y
+7,0 MB, y no se retrofitea barato. Y los mips **no son opcionales** aunque
 cuesten un tercio más de memoria: compran accesos coherentes, que es el recurso
 escaso (ley 5).
 
@@ -286,6 +286,7 @@ tecla global nueva. **Implementado** (`visuals/terrain_material.rs`, uniform
 | Vista | Color | Significado |
 |---|---|---|
 | `Kind` | café | `TerrainKind::Soil` / camino de tierra |
+| `Kind` | verde claro | `TerrainKind::ShortGrass` |
 | `Kind` | gris | `TerrainKind::Rock` |
 | `Kind` | verde | `TerrainKind::TallGrass` |
 | `Kind` | ocre | `TerrainKind::Sand` |
@@ -350,13 +351,15 @@ crea una semántica nueva.
 - **Lógica.** `TerrainKind` → archivo de textura como fuente única, `build.rs`
   fallando si falta o si no mide lo que debe, y el terreno con
   `ExtendedMaterial<StandardMaterial, TerrainExtension>` muestreando el array.
-- **Estado.** **Hecho.** Cuatro capas 512² RGB, validadas en build, con
-  fallback de color sólido de 1×1 mientras el arte no está.
+- **Estado.** Cinco capas 512² RGB, validadas en build, con fallback de color
+  sólido de 1×1 mientras el arte no está. `ShortGrass` conserva una capa propia
+  pero comparte temporalmente la fuente de `TallGrass`: falta autorar su albedo
+  512² RGB en vez de intentar colar el antiguo `T_GroundGrass` 1024² RGBA.
 - **Lo que enseñó.** El riesgo técnico que este paso existía para despejar
   —¿corre `ExtendedMaterial` con `texture_2d_array`?— está despejado en
   escritorio. En el target sigue sin probarse.
 
-### Paso 2: Los cuatro suelos, con el índice en el vértice
+### Paso 2: Las capas semánticas, con el índice en el vértice
 
 - **Lógica.** El índice de `TerrainKind` se hornea como atributo de vértice
   junto con la semántica de traversal; el shader muestrea la capa. Bordes duros

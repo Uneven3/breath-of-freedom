@@ -213,6 +213,15 @@ decide cómo se ve (el patrón que ya funciona con `TreeKind` → `VisualCatalog
 Orden de las capas de autoría, que es también el orden en que se construyen:
 **relieve (hecho) → semántica (hecha) → instancias (siguiente)**.
 
+**Dirección (2026-08-11): World Lab dentro de BOF.** Es el modo que permite ver
+y editar el mapa con renderer, física y catálogos reales antes de jugarlo;
+Blender sigue siendo autor de assets. El RON semántico es canónico y BSN sólo
+compone `kind` → presentación. La primera validación vertical pasa a la escena
+**Pasto**, que declara el laboratorio de pradera: `Soil` es tierra desnuda y pintar `ShortGrass` o
+`TallGrass` debe plantar cobertura en vivo; luego el editor podrá guardar
+instancias y volúmenes. Detalle y límites en
+`MAP_EDITOR.md`.
+
 Ubicación tras el corte en crates: dato en
 `crates/simulation/src/world/terrain.rs`, malla en `src/visuals/terrain.rs`,
 autoría en `src/editor/` (`brush` + `paint` + `history` + `persist` + `hud`), y
@@ -243,10 +252,11 @@ espacio de mundo**, así cambiar `CELLS` o `WORLD_SIZE` no huerfaniza los nivele
 
 ### Semántica por celda (2026-07-26, jugada y validada)
 
-Se pinta **un significado**, no atributos sueltos: `TerrainKind {Soil, Rock,
-TallGrass, Sand}` y una tabla `KINDS` de la que salen `surface`, `flammable` y
-`cuttable` (decisión del usuario — así una celda no puede ser piedra inflamable,
-y cambiar qué significa "pasto largo" es una fila, no repintar los niveles).
+Se pinta **un significado**, no atributos sueltos: `TerrainKind {Soil,
+ShortGrass, TallGrass, Rock, Sand}` y una tabla `KINDS` de la que salen
+`surface`, `flammable` y `cuttable` (decisión del usuario — así una celda no
+puede ser piedra inflamable, y cambiar qué significa "pasto largo" es una fila,
+no repintar los niveles).
 **Agua no entra acá**: una laguna necesita altura de superficie, no es propiedad
 de una celda.
 

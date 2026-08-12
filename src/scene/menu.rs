@@ -80,16 +80,21 @@ fn spawn_menu(mut commands: Commands) {
                 let digit = digit_key(index)
                     .map(|_| format!("{}  ", index + 1))
                     .unwrap_or_default();
+                let lab = if def.authoring.grass_lab {
+                    "  [Grass Lab]"
+                } else {
+                    ""
+                };
                 spawn_row(
                     screen,
                     MenuChoice::Enter(def.id),
-                    &format!("{digit}{}", def.label),
+                    &format!("{digit}{}{lab}", def.label),
                     def.hint,
                 );
             }
             spawn_row(screen, MenuChoice::Quit, "Salir", "cierra el juego");
             screen.spawn((
-                Text::new("F10 vuelve acá · F5 esculpe el terreno de la escena en la que estés"),
+                Text::new("F10 vuelve acá · F5 edita las escenas que declaran edición de terreno"),
                 body_font(13.0),
                 TextColor(TEXT_MUTED),
                 Node {

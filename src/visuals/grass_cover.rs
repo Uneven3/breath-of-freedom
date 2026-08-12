@@ -29,10 +29,8 @@ pub(super) const STEEP_SCALE: f32 = 0.65;
 /// authored.
 pub(super) const fn kind_bears_grass(kind: TerrainKind) -> bool {
     match kind {
-        // Soil is the world's default cell, and a default of bare dirt is the
-        // failure this whole system exists to avoid.
-        TerrainKind::Soil | TerrainKind::TallGrass => true,
-        TerrainKind::Rock | TerrainKind::Sand => false,
+        TerrainKind::ShortGrass | TerrainKind::TallGrass => true,
+        TerrainKind::Soil | TerrainKind::Rock | TerrainKind::Sand => false,
     }
 }
 
@@ -72,9 +70,12 @@ mod tests {
 
     #[test]
     fn coverage_falls_off_between_the_steep_and_the_maximum_slope() {
-        assert_eq!(coverage(TerrainKind::Soil, 0.0), 1.0);
-        assert_eq!(coverage(TerrainKind::Soil, STEEP_SLOPE_DEG), 1.0);
-        assert_eq!(coverage(TerrainKind::Soil, MAX_SLOPE_DEG), STEEP_SCALE);
+        assert_eq!(coverage(TerrainKind::ShortGrass, 0.0), 1.0);
+        assert_eq!(coverage(TerrainKind::ShortGrass, STEEP_SLOPE_DEG), 1.0);
+        assert_eq!(
+            coverage(TerrainKind::ShortGrass, MAX_SLOPE_DEG),
+            STEEP_SCALE
+        );
         assert_eq!(coverage(TerrainKind::Soil, MAX_SLOPE_DEG + 0.1), 0.0);
     }
 

@@ -37,6 +37,27 @@ impl Terrain {
         self.kind(row, col)
     }
 
+    /// Whether a world-space rectangle contains at least one cell of `kind`.
+    ///
+    /// Consumers use this to decide whether a coarse presentation chunk is
+    /// worth creating at all. The rectangle is intentionally conservative at
+    /// cell borders: spawning one extra chunk is harmless; missing the cell an
+    /// author painted would make their world look like it ignored them.
+    pub fn contains_kind_in_rect(&self, a: Vec2, b: Vec2, kind: TerrainKind) -> bool {
+        let min = a.min(b);
+        let max = a.max(b);
+        let (first_row, first_col) = self.cell_at(min);
+        let (last_row, last_col) = self.cell_at(max);
+        for row in first_row..=last_row {
+            for col in first_col..=last_col {
+                if self.kind(row, col) == kind {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// The cell containing a world XZ, clamped to the grid.
     pub(super) fn cell_at(&self, xz: Vec2) -> (usize, usize) {
         let cells = self.cells();
@@ -96,5 +117,32 @@ impl Terrain {
         let dx = (h_east - h0) / step;
         let dz = (h_north - h0) / step;
         (dx * dx + dz * dz).sqrt().atan().to_degrees()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rectangle_query_finds_authored_kind_without_leaking_outside_it() {
+        let mut terrain = Terrain::flat_for_test();
+        assert!(!terrain.contains_kind_in_rect(
+            Vec2::splat(-20.0),
+            Vec2::splat(20.0),
+            TerrainKind::ShortGrass
+        ));
+
+        assert!(terrain.paint_area(Vec2::ZERO, 10.0, TerrainKind::ShortGrass));
+        assert!(terrain.contains_kind_in_rect(
+            Vec2::splat(-20.0),
+            Vec2::splat(20.0),
+            TerrainKind::ShortGrass
+        ));
+        assert!(!terrain.contains_kind_in_rect(
+            Vec2::new(80.0, 80.0),
+            Vec2::new(100.0, 100.0),
+            TerrainKind::ShortGrass
+        ));
     }
 }

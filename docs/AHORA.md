@@ -275,6 +275,177 @@ revisado. Esta ronda se quedó con lo artesanal (`presentation/debug_ui/`,
 ~1250 líneas) porque el problema era de organización, no de widgets — migrar
 motor de por medio es la tarea aparte.
 
+**Spike de Feathers (2026-08-12), un solo botón.** Antes de comprometer la
+migración completa, un subagente sin contexto revisó el plan y encontró algo
+que lo invalidaba tal cual estaba: los widgets de Feathers son
+`SceneComponent` — sólo se pueden spawnear con `spawn_scene`/`apply_scene`,
+nunca con el `commands.spawn(...).with_children(...)` que usa todo el
+proyecto hoy (confirmado leyendo la doc de `bevy_scene` — "spawning them
+using `World::spawn` will log an error"). También encontró que prender la
+feature `bevy_feathers` es a nivel de workspace compartido con otros juegos
+(`beyblade-hitmontop`, `naipes-bevy`, etc.) — aceptado explícitamente por el
+usuario, no es un bloqueo. Y que `presentation::theme` tiene **5**
+consumidores, no 3: además de `grass_lab`/`debug_ui` están `inventory_ui`,
+`editor::hud` y `scene::menu` — el menú principal. Nada de `theme.rs` se
+toca en este spike.
+
+Con eso confirmado, se migró **un solo botón** (`CloseButton` del header de
+F1) a `bevy_feathers`: `row.spawn(CloseButton).apply_scene(bsn! { @FeathersButton
+Children [ (Text("Cerrar (F1)") ThemedText) ] })`, sin tocar el resto del
+árbol armado a mano alrededor. Compiló a la primera contra el ejemplo real
+que trae el propio crate (`examples/ui/widgets/feathers_counter.rs`, vendido
+junto al código fuente). `FeathersPlugins` + `UiTheme(create_dark_theme())`
+agregados en `main.rs`. `cargo fmt`/`clippy`/tests, los tres, en verde.
+
+**Prueba el patrón, no reemplaza nada todavía:** confirma que un widget de
+Feathers SÍ puede vivir como hijo de un árbol no-BSN vía `apply_scene` sobre
+una entidad recién spawneada — la pregunta abierta más grande del plan
+original. **Jugado (2026-08-12): el botón se ve bien, pero el primer intento no
+cerraba nada al clickear.** Causa real, no hipótesis: `bevy_ui_widgets::Button`
+—el widget "headless" que usa Feathers— no llena el `Interaction` clásico
+que `handle_clicks` leía por query. Arreglado enganchando el cierre como
+observer de `Activate` directo en el `bsn!` del botón (`on(|_activate:
+On<Activate>, ...| { super::set_open(...) })`), no desde `handle_clicks` —
+ese sistema ya no conoce `CloseButton`, que se borró por no tener más
+lectores. **Confirmado jugando de nuevo: cierra.** Esto ya no es hipótesis:
+cualquier botón que se migre después necesita el mismo patrón (`on(...)`
+inline), no la query de `Interaction` que usa el resto del hub hoy —
+mezclar los dos estilos en el mismo sistema (`handle_clicks`) no es viable,
+va a haber que decidir, botón por botón migrado, quién lo detecta.
+
+Spike cerrado y validado de punta a punta (visual + click, jugado dos
+veces).
+
+## Migración completa de `debug_ui` a Feathers (2026-08-12)
+
+Con el spike probado, se migró **todo** `presentation/debug_ui/` de una vez
+(`view.rs` + `hud_menu.rs`; `theme.rs`, `grass_lab.rs` y otros juegos del
+workspace siguen fuera de alcance) — pedido explícito del usuario, con la
+skill `iterate-safely` (plan → subagente sin contexto → triage → ejecutar) y
+sin checkpoint jugado intermedio porque el usuario salió: la validación fue
+toda automática más una autoverificación visual mía.
+
+**El subagente de plan encontró dos bugs reales antes de escribir código,
+los dos confirmados compilando (no leyendo docs):**
+1. `apply_scene` pisa el `Node` entero de la entidad — un botón migrado sin
+   recomponer su `Node` dentro del mismo `bsn!` pierde ancho, gaps y
+   `justify_content`. Se arregla poniendo `Node {...}` junto a
+   `@FeathersButton` en el mismo bloque (mezcla de campos, no reemplazo).
+2. Los marcadores de texto que viven dentro de `Children[...]` (`KnobText`,
+   `ChannelText`, `TerrainViewText`, `SectionStateText`) necesitan
+   `Clone + Default`, y los enums que envuelven (`PerfKnob`, `DebugChannel`,
+   `SectionId`) también — agregado en los tres (`crates/domain/src/perf.rs`,
+   `crates/domain/src/debug.rs`, `src/debug/channel.rs`), con un comentario
+   explicando que el valor por default nunca sobrevive al spawn, sólo
+   satisface al macro.
+
+Un segundo subagente (nueva instancia — el primero no se pudo continuar por
+un error mío al invocarlo) verificó compilando de verdad, con un arnés
+headless propio: composición de `Node` campo a campo, interpolación
+`{expr}` de un marcador con datos dentro de `Children`, captura correcta
+por iteración en un loop, y que `on(nombre_de_función)` con una función con
+nombre (no sólo closures inline) resuelve `On<Activate>::entity` como la
+entidad del botón mismo — el mecanismo del que depende toda la migración.
+
+**Patrón final, un observer por *tipo* de botón** (no por instancia): cada
+`FeathersButton` lleva `on(activate_x)`, y `activate_x` lee
+`On<Activate>::entity` con una `Query<&XButton>` para saber cuál de las N
+instancias se clickeó — reemplaza la query centralizada de
+`Interaction` que tenía `handle_clicks`/`handle_hud_menu_clicks`, ambas
+**eliminadas enteras** porque no les quedó ningún botón que detectar. De
+paso, `BenchmarkText` salió: marcador muerto, ningún sistema lo leía.
+
+**Autoverificación visual mía, no sólo `cargo test`.** El primer subagente
+ya había avisado que clippy/tests no iban a notar un `Node` roto — cierto:
+todo pasaba en verde con el bug #1 sin arreglar. Agregué un hack temporal
+(`BOF_DEBUG_UI_OPEN`, forzaba `DebugUiState`/`HudMenuState` abiertos al
+arrancar) para sacar capturas con `BOF_SHOT` de las seis pestañas de F1 y
+del menú F2, revisé las imágenes, encontré un **tercer bug real** —texto
+superpuesto en "Canales": `ThemedText` sólo pone color, no tamaño, y sin un
+`TextFont` explícito el default de Feathers es más grande que el `body_font`
+del proyecto y las filas apiladas (label + hint) se pisan— lo arreglé
+agregando `TextFont { font_size: ... }` en los ~15 sitios migrados, y
+repetí la captura para confirmar. El hack se sacó al terminar (`git status`
+limpio).
+
+**Validado:** `cargo fmt` / `cargo clippy --all-targets -D warnings` / los
+tres `cargo test` en verde, más capturas de las seis pestañas de F1 y de F2.
+
+**Cuarto bug real, encontrado jugando (2026-08-12): scrollear la lista de
+una pestaña dejaba de responder a los botones de arriba (cambiar de tab).**
+Se ven normales, no reaccionan al click — descartado que fuera sólo visual
+(pregunté explícitamente). Un subagente armó un repro compilado real
+(picking + scroll + click, con los dos caminos de evento que usa Bevy) y
+**no pudo reproducir una falla de picking** con una jerarquía simplificada
+— buena noticia a medias: dice que el mecanismo no está roto en general,
+pero tampoco explica el síntoma real.
+
+Investigando la jerarquía real encontré la causa: este panel scrolleaba con
+un sistema propio que lee la rueda del mouse directo del sistema operativo
+— el mismo patrón de "dos caminos de input que no se hablan" que ya había
+roto el botón "Cerrar" (`Interaction` vs `Activate`). `DefaultPlugins` **ya
+trae activo** el scroll nativo de Feathers (la feature `bevy_feathers`
+habilita `bevy_ui_widgets` transitivamente, y ese paquete instala su propio
+mecanismo de scroll por rueda — corre sobre el mismo picking que los
+botones), sólo faltaba la marca en la entidad para que lo tomara. Se sacó
+el sistema propio entero y se agregó la marca nativa a `ScrollPanel`.
+
+**Al arreglarlo, el guardrail C2 (`solo input/ lee hardware crudo`)
+encontró una infracción real: mi propio comentario mencionaba el símbolo
+del lector de rueda viejo como texto** — la regla es deliberadamente ciega
+a si el símbolo está en código o en un comentario (así puede probarse con
+texto inventado). Reformulado sin nombrar el símbolo; el guardrail no se
+tocó.
+
+**Jugado: el arreglo no funcionó.** El patrón "dos caminos de input" era el
+diagnóstico equivocado — el picking seguía roto igual con el scroll nativo
+de Feathers. Pregunté qué veía exactamente y su respuesta destrabó todo:
+*"hay una sobreposición de los botones que se subieron por el scroll con
+los botones para cambiar tabs"*. Confirmado buscando: es una limitación
+**del motor**, no de este proyecto — varias issues públicas de Bevy (clip
+rects de `bevy_ui` desincronizados con `ScrollPosition` para el picking,
+trabajo activo en 2025 sobre esto) describen exactamente esta clase de
+bug. El sistema viejo (`Interaction` por polling) resuelve el hit-test por
+otro camino y nunca lo tuvo.
+
+**Salida elegida (pedido explícito): que ninguna pestaña necesite
+scrollear nunca**, en vez de perseguir el bug del motor. "Render" (14
+perillas) y "Pradera" (7) pasaron de lista de una columna a grilla de dos
+(`knob_grid`, ancho 48,5% por fila); "Canales" (7, dos líneas cada una)
+igual. `ScrollPanel` perdió `ScrollArea`/`ScrollPosition`/el scroll en sí
+— ya no hace falta. Casi entra a la primera; probé `Overflow::clip_y()`
+como red de seguridad ("si algún día no entra, que se vea cortado y no
+que rompa clicks en silencio") pero **el propio clip cortaba contenido
+válido** por un problema de timing en su cálculo de altura — confirmado
+sacándolo y viendo aparecer la línea que faltaba. Se sacó también; sin
+scroll, no hay nada que proteger con un clip.
+
+**Confirmado con capturas las seis pestañas de F1** (con el mismo hack
+temporal de antes, revertido al terminar) tras el cambio de grilla: ninguna
+corta contenido. `cargo fmt`/`clippy`/tests en verde. **Jugado y aceptado
+por el usuario** — la migración completa de `debug_ui` a `bevy_feathers`
+queda cerrada por esta sesión.
+
+## Cierre de sesión (2026-08-12)
+
+Resumen de lo construido, en orden: banco hoja/púa/carta de la pradera
+(medir sin jugador), banco de candidatas de carta, triángulos por LOD en
+`BOF_SHOT`, F1 reorganizado en pestañas por categoría, spike y luego
+migración completa de `debug_ui` a `bevy_feathers` (con el bug de
+scroll+picking del motor resuelto por diseño, no parcheado). Herramienta
+nueva de proceso: la skill `iterate-safely` (global, `~/.claude/skills/`)
+— plan propio → crítica de un subagente sin contexto → triage → ejecutar —
+usada en las dos decisiones grandes de hoy (qué migrar primero, cómo
+migrar el resto) y la que encontró los tres bugs reales antes de que
+llegaran a una sesión de juego.
+
+**Deuda para la próxima sesión** (branch `pradera/herramientas-medicion`,
+sigue siendo "construir herramientas"): `grass_lab.rs` (F9) y
+`presentation/theme.rs` quedaron fuera del alcance de la migración a
+Feathers a propósito — `theme.rs` tiene 5 consumidores, dos de ellos UI de
+juego real (`inventory_ui`, `scene::menu`), así que migrarlo es una
+decisión aparte, no una continuación automática.
+
 ## Escenas: cajas de prueba + mundo
 
 **Las escenas son dato** (`scene::SCENES`): etiqueta, **su propio heightmap** y

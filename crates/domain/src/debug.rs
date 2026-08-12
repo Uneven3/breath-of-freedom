@@ -49,8 +49,12 @@ impl Field {
 
 /// Fixed slots, so the report's order never depends on system execution order.
 /// Producers write into their own slot and stay ignorant of each other (§7).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// `Default` exists only so `SectionId` can ride inside a `bsn!` marker
+/// component (`SectionStateText`, `presentation::debug_ui::hud_menu`) — see
+/// the identical note on `PerfKnob` in `perf.rs`. `Perf` is arbitrary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SectionId {
+    #[default]
     Perf,
     Scene,
     Vitals,

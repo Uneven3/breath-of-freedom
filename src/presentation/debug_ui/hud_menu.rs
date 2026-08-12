@@ -10,16 +10,17 @@
 //! from the F1 hub — a docked panel rather than a full-screen dim — so the two
 //! can coexist and it sits beside the overlay it controls.
 
+use bevy::feathers::controls::FeathersButton;
+use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 
 use crate::debug::channel::HudSectionToggle;
 use crate::debug::snapshot::{HudVisibility, SectionId};
 use crate::input::ModalInputFocusRequest;
 use crate::perf::{Benchmark, Flythrough};
 
-use super::style::{
-    BORDER, PANEL, ROW, TEXT_BRIGHT, TEXT_MUTED, body_font, heading_font, row_node, section_title,
-};
+use super::style::{BORDER, PANEL, TEXT_BRIGHT, heading_font, section_title};
 
 #[derive(Resource, Default)]
 pub(super) struct HudMenuState {
@@ -32,7 +33,10 @@ pub(super) struct HudMenuRoot;
 #[derive(Component)]
 pub(super) struct SectionButton(SectionId);
 
-#[derive(Component)]
+// `Clone, Default`: vive dentro de un `bsn!` (etiqueta de un botón de
+// Feathers) — ver la nota en `PerfKnob`/`SectionId` sobre por qué el
+// default nunca sobrevive al spawn.
+#[derive(Component, Clone, Default)]
 pub(super) struct SectionStateText(SectionId);
 
 #[derive(Component)]
@@ -80,21 +84,11 @@ pub(super) fn spawn_hud_menu(mut commands: Commands) {
                         heading_font(),
                         TextColor(TEXT_BRIGHT),
                     ));
-                    row.spawn((
-                        MenuCloseButton,
-                        Button,
-                        Node {
-                            padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(ROW),
-                    ))
-                    .with_child((
-                        Text::new("F2"),
-                        body_font(),
-                        TextColor(TEXT_MUTED),
-                    ));
+                    row.spawn(MenuCloseButton).apply_scene(bsn! {
+                        @FeathersButton
+                        on(activate_menu_close)
+                        Children [ (Text("F2") ThemedText TextFont { font_size: FontSize::Px(15.0) }) ]
+                    });
                 });
             section_title(
                 panel,
@@ -102,26 +96,29 @@ pub(super) fn spawn_hud_menu(mut commands: Commands) {
                 "Qué contextos dibuja el overlay en pantalla. El log guarda todo igual.",
             );
             for section in SectionId::ALL {
-                panel
-                    .spawn((
-                        SectionButton(section),
-                        Button,
-                        row_node(),
-                        BackgroundColor(ROW),
-                    ))
-                    .with_children(|row| {
-                        row.spawn((
-                            Text::new(section.title()),
-                            body_font(),
-                            TextColor(TEXT_BRIGHT),
-                        ));
-                        row.spawn((
-                            SectionStateText(section),
-                            Text::new("—"),
-                            body_font(),
-                            TextColor(TEXT_MUTED),
-                        ));
-                    });
+                let title = section.title();
+                panel.spawn(SectionButton(section)).apply_scene(bsn! {
+                    @FeathersButton
+                    Node {
+                        width: Val::Percent(100.0),
+                        justify_content: JustifyContent::SpaceBetween,
+                        column_gap: Val::Px(12.0),
+                    }
+                    on(activate_section)
+                    Children [
+                        (
+                            Text({title})
+                            ThemedText
+                            TextFont { font_size: FontSize::Px(15.0) }
+                        ),
+                        (
+                            Text("—")
+                            ThemedText
+                            TextFont { font_size: FontSize::Px(15.0) }
+                            SectionStateText({section})
+                        ),
+                    ]
+                });
             }
         });
 }
@@ -163,27 +160,27 @@ fn set_open(
     });
 }
 
-pub(super) fn handle_hud_menu_clicks(
-    mut state: ResMut<HudMenuState>,
-    root: Single<Entity, With<HudMenuRoot>>,
-    sections: Query<(&Interaction, &SectionButton), Changed<Interaction>>,
-    close: Query<&Interaction, (Changed<Interaction>, With<MenuCloseButton>)>,
-    mut focus: MessageWriter<ModalInputFocusRequest>,
+// Un observer por tipo de botón, no por instancia — `bevy_ui_widgets::Button`
+// no llena `Interaction` (hallazgo del spike de F1, ver `AHORA.md`), así que
+// cada `FeathersButton` se engancha con `on(...)` en vez de una query
+// centralizada como la que tenía este archivo hasta el 2026-08-12.
+fn activate_section(
+    activate: On<Activate>,
+    sections: Query<&SectionButton>,
     mut toggle: MessageWriter<HudSectionToggle>,
 ) {
-    if !state.open {
-        return;
+    if let Ok(section) = sections.get(activate.entity) {
+        toggle.write(HudSectionToggle(section.0));
     }
-    let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
+}
 
-    for (interaction, section) in &sections {
-        if pressed(interaction) {
-            toggle.write(HudSectionToggle(section.0));
-        }
-    }
-    if close.iter().any(pressed) {
-        set_open(&mut state, false, *root, &mut focus);
-    }
+fn activate_menu_close(
+    _activate: On<Activate>,
+    mut state: ResMut<HudMenuState>,
+    root: Single<Entity, With<HudMenuRoot>>,
+    mut focus: MessageWriter<ModalInputFocusRequest>,
+) {
+    set_open(&mut state, false, *root, &mut focus);
 }
 
 pub(super) fn sync_hud_menu_visibility(

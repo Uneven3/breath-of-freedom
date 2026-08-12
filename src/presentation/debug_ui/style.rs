@@ -4,9 +4,7 @@
 
 use bevy::prelude::*;
 
-pub(super) use crate::presentation::theme::{
-    ACCENT, ACCENT_DARK, BORDER, PANEL, PANEL_INSET, ROW_OR_SLOT_BG as ROW, TEXT_BRIGHT, TEXT_MUTED,
-};
+pub(super) use crate::presentation::theme::{ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED};
 
 pub(super) fn body_font() -> TextFont {
     crate::presentation::theme::body_font(15.0)
@@ -15,18 +13,6 @@ pub(super) fn body_font() -> TextFont {
 pub(super) fn heading_font() -> TextFont {
     TextFont {
         font_size: FontSize::Px(18.0),
-        ..default()
-    }
-}
-
-pub(super) fn row_node() -> Node {
-    Node {
-        width: Val::Percent(100.0),
-        padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
-        justify_content: JustifyContent::SpaceBetween,
-        align_items: AlignItems::Center,
-        column_gap: Val::Px(12.0),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
         ..default()
     }
 }

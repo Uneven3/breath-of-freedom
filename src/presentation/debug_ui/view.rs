@@ -1,24 +1,107 @@
 //! Panel construction. Rows are built from the channel/knob enums, so a new
 //! debug facility appears here without this file changing.
 
+use bevy::feathers::controls::{ButtonVariant, FeathersButton};
+use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 
 use super::style::{
-    ACCENT, ACCENT_DARK, BORDER, PANEL, PANEL_INSET, ROW, TEXT_BRIGHT, TEXT_MUTED, body_font,
-    heading_font, row_node, section_title,
+    BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font, heading_font, section_title,
 };
 use super::{
-    BenchmarkButton, BenchmarkText, ChannelButton, ChannelText, CloseButton, DebugTab, DebugUiRoot,
-    DebugUiState, FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel, TabButton,
-    TabPane, TerrainViewButton, TerrainViewText,
+    BenchmarkButton, ChannelButton, ChannelText, DebugTab, DebugUiRoot, DebugUiState,
+    FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel, TabButton, TabPane,
+    TerrainViewButton, TerrainViewText,
 };
-use crate::debug::channel::{DebugAction, DebugChannel};
+use crate::debug::channel::{DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle};
+use crate::input::ModalInputFocusRequest;
 use crate::perf::BenchSuite;
 use crate::perf::sequence::{BenchmarkRequest, VantageMode};
-use crate::perf::{PerfKnob, PerfKnobCategory};
-use crate::visuals::terrain_material::TerrainDebugView;
+use crate::perf::{FlythroughRequest, PerfKnob, PerfKnobCategory, PerfKnobToggle};
+use crate::visuals::terrain_material::{TerrainDebugView, TerrainDebugViewRequest};
 
 use super::ActionButton;
+
+/// Un observer por *tipo* de botón, no por instancia: `bevy_ui_widgets::Button`
+/// no llena `Interaction` (hallazgo del spike de `CloseButton`, ver
+/// `AHORA.md`), así que cada `FeathersButton` migrado se engancha acá en vez
+/// de en `handle_clicks`. `On<Activate>::entity` es el botón mismo —
+/// `apply_scene` no reemplaza el marcador que ya llevaba (`KnobButton`,
+/// `ChannelButton`, etc.), lo pisa encima — así que una query por ese
+/// marcador alcanza para saber cuál de las N instancias se clickeó.
+fn activate_knob(
+    activate: On<Activate>,
+    knobs: Query<&KnobButton>,
+    mut writer: MessageWriter<PerfKnobToggle>,
+) {
+    if let Ok(knob) = knobs.get(activate.entity) {
+        writer.write(PerfKnobToggle(knob.0));
+    }
+}
+
+fn activate_channel(
+    activate: On<Activate>,
+    channels: Query<&ChannelButton>,
+    mut writer: MessageWriter<DebugChannelToggle>,
+) {
+    if let Ok(channel) = channels.get(activate.entity) {
+        writer.write(DebugChannelToggle(channel.0));
+    }
+}
+
+fn activate_action(
+    activate: On<Activate>,
+    actions: Query<&ActionButton>,
+    mut writer: MessageWriter<DebugActionRequest>,
+) {
+    if let Ok(action) = actions.get(activate.entity) {
+        writer.write(DebugActionRequest(action.0));
+    }
+}
+
+fn activate_terrain_view(
+    activate: On<Activate>,
+    views: Query<&TerrainViewButton>,
+    mut writer: MessageWriter<TerrainDebugViewRequest>,
+) {
+    if let Ok(view) = views.get(activate.entity) {
+        writer.write(TerrainDebugViewRequest(view.0));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn activate_benchmark(
+    activate: On<Activate>,
+    buttons: Query<&BenchmarkButton>,
+    mut writer: MessageWriter<BenchmarkRequest>,
+    mut state: ResMut<DebugUiState>,
+    root: Single<Entity, With<DebugUiRoot>>,
+    mut focus: MessageWriter<ModalInputFocusRequest>,
+) {
+    if let Ok(button) = buttons.get(activate.entity) {
+        writer.write(button.0);
+        // La corrida mediría el panel junto con la escena; cerrarlo primero.
+        super::set_open(&mut state, false, *root, &mut focus);
+    }
+}
+
+fn activate_flythrough(
+    _activate: On<Activate>,
+    mut writer: MessageWriter<FlythroughRequest>,
+    mut state: ResMut<DebugUiState>,
+    root: Single<Entity, With<DebugUiRoot>>,
+    mut focus: MessageWriter<ModalInputFocusRequest>,
+) {
+    writer.write(FlythroughRequest);
+    super::set_open(&mut state, false, *root, &mut focus);
+}
+
+fn activate_tab(activate: On<Activate>, tabs: Query<&TabButton>, mut state: ResMut<DebugUiState>) {
+    if let Ok(tab) = tabs.get(activate.entity) {
+        state.active_tab = tab.0;
+    }
+}
 
 pub(super) fn spawn_debug_ui(mut commands: Commands) {
     commands
@@ -63,11 +146,17 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
                 panel
                     .spawn((
                         ScrollPanel,
-                        ScrollPosition::default(),
+                        // Sin scroll a propósito (2026-08-12): el picking de
+                        // Bevy no mantiene el clip de scroll en sincronía con
+                        // `ScrollPosition`, y eso rompía el click de las
+                        // pestañas de arriba después de scrollear una lista
+                        // larga — bug del motor, no de este proyecto (ver
+                        // `AHORA.md`). La salida es que nada acá necesite
+                        // scrollear nunca: `clip_y` corta si algo se pasa,
+                        // visible y sin arriesgar picking.
                         Node {
                             flex_direction: FlexDirection::Column,
                             row_gap: Val::Px(8.0),
-                            overflow: Overflow::scroll_y(),
                             ..default()
                         },
                     ))
@@ -96,25 +185,12 @@ fn tab_bar(panel: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for tab in DebugTab::ALL {
-                row.spawn((
-                    TabButton(tab),
-                    Button,
-                    Node {
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(if tab == DebugTab::default() {
-                        ACCENT_DARK
-                    } else {
-                        ROW
-                    }),
-                ))
-                .with_child((
-                    Text::new(tab.label()),
-                    body_font(),
-                    TextColor(TEXT_BRIGHT),
-                ));
+                let label = tab.label();
+                row.spawn(TabButton(tab)).apply_scene(bsn! {
+                    @FeathersButton
+                    on(activate_tab)
+                    Children [ (Text({label}) ThemedText TextFont { font_size: FontSize::Px(15.0) }) ]
+                });
             }
         });
 }
@@ -149,21 +225,13 @@ fn tab_pane(
 pub(super) fn sync_tab_panes(
     mut state: ResMut<DebugUiState>,
     scene: Res<State<crate::scene::AppState>>,
-    mut scroll: Single<&mut ScrollPosition, With<ScrollPanel>>,
     mut panes: Query<(&mut Node, &TabPane)>,
-    mut last_tab: Local<Option<DebugTab>>,
 ) {
     let has_meadow = crate::scene::current_scene(&scene).is_some_and(|def| def.contents.meadow);
     if state.active_tab == DebugTab::Grass && !has_meadow {
         state.active_tab = DebugTab::Render;
     }
     let active = state.active_tab;
-    // Cambiar de pestaña con el scroll a mitad de camino deja la próxima
-    // mostrando su mitad de abajo hasta que alguien mueva la rueda.
-    if *last_tab != Some(active) {
-        scroll.0.y = 0.0;
-        *last_tab = Some(active);
-    }
     for (mut node, pane) in &mut panes {
         let wanted = if pane.0 == active {
             Display::Flex
@@ -181,10 +249,10 @@ pub(super) fn sync_tab_panes(
 pub(super) fn sync_tab_buttons(
     state: Res<DebugUiState>,
     scene: Res<State<crate::scene::AppState>>,
-    mut buttons: Query<(&TabButton, &mut Node, &mut BackgroundColor)>,
+    mut buttons: Query<(&TabButton, &mut Node, &mut ButtonVariant)>,
 ) {
     let has_meadow = crate::scene::current_scene(&scene).is_some_and(|def| def.contents.meadow);
-    for (tab, mut node, mut background) in &mut buttons {
+    for (tab, mut node, mut variant) in &mut buttons {
         let visible = tab.0 != DebugTab::Grass || has_meadow;
         let wanted_display = if visible {
             Display::Flex
@@ -194,13 +262,13 @@ pub(super) fn sync_tab_buttons(
         if node.display != wanted_display {
             node.display = wanted_display;
         }
-        let wanted_bg = if tab.0 == state.active_tab {
-            ACCENT_DARK
+        let wanted_variant = if tab.0 == state.active_tab {
+            ButtonVariant::Primary
         } else {
-            ROW
+            ButtonVariant::Normal
         };
-        if background.0 != wanted_bg {
-            background.0 = wanted_bg;
+        if *variant != wanted_variant {
+            *variant = wanted_variant;
         }
     }
 }
@@ -222,22 +290,19 @@ fn terrain_section(panel: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for view in TerrainDebugView::ALL {
-                row.spawn((
-                    TerrainViewButton(view),
-                    Button,
-                    Node {
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(PANEL_INSET),
-                ))
-                .with_child((
-                    TerrainViewText(view),
-                    Text::new(view.label()),
-                    body_font(),
-                    TextColor(TEXT_BRIGHT),
-                ));
+                let label = view.label();
+                row.spawn(TerrainViewButton(view)).apply_scene(bsn! {
+                    @FeathersButton
+                    on(activate_terrain_view)
+                    Children [
+                        (
+                            Text({label})
+                            ThemedText
+                            TextFont { font_size: FontSize::Px(15.0) }
+                            TerrainViewText({view})
+                        )
+                    ]
+                });
             }
         });
 }
@@ -252,21 +317,22 @@ fn header(panel: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             row.spawn((Text::new("Debug"), heading_font(), TextColor(TEXT_BRIGHT)));
-            row.spawn((
-                CloseButton,
-                Button,
-                Node {
-                    padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(ROW),
-            ))
-            .with_child((
-                Text::new("Cerrar (F1)"),
-                body_font(),
-                TextColor(TEXT_MUTED),
-            ));
+            // Spike (2026-08-12): único botón migrado a bevy_feathers, para
+            // probar el patrón real (`apply_scene` sobre una entidad ya hija
+            // de un árbol armado a mano) antes de comprometer el resto del
+            // hub. Ver `AHORA.md`. `bevy_ui_widgets::Button` no llena
+            // `Interaction` — jugado, el click no cerraba nada hasta que se
+            // enganchó acá, con `on(...)`, en vez de `handle_clicks`.
+            row.spawn(()).apply_scene(bsn! {
+                @FeathersButton
+                on(|_activate: On<Activate>,
+                   mut state: ResMut<DebugUiState>,
+                   root: Single<Entity, With<DebugUiRoot>>,
+                   mut focus: MessageWriter<ModalInputFocusRequest>| {
+                    super::set_open(&mut state, false, *root, &mut focus);
+                })
+                Children [ (Text("Cerrar (F1)") ThemedText TextFont { font_size: FontSize::Px(15.0) }) ]
+            });
         });
 }
 
@@ -303,24 +369,15 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
                 "aquí".to_string(),
             ));
             for (request, label) in buttons {
-                row.spawn((
-                    BenchmarkButton(request),
-                    Button,
+                row.spawn(BenchmarkButton(request)).apply_scene(bsn! {
+                    @FeathersButton
                     Node {
                         flex_grow: 1.0,
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
                         justify_content: JustifyContent::Center,
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(ACCENT_DARK),
-                ))
-                .with_child((
-                    BenchmarkText,
-                    Text::new(label.clone()),
-                    body_font(),
-                    TextColor(TEXT_BRIGHT),
-                ));
+                    }
+                    on(activate_benchmark)
+                    Children [ (Text({label}) ThemedText TextFont { font_size: FontSize::Px(15.0) }) ]
+                });
             }
         });
     section_title(
@@ -330,24 +387,15 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
          por tramo, con grado de presupuesto móvil. Autorá la ruta volando la freecam (F3) y \
          capturando poses con F4.",
     );
-    panel
-        .spawn((
-            FlythroughButton,
-            Button,
-            Node {
-                width: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
-                justify_content: JustifyContent::Center,
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(ACCENT_DARK),
-        ))
-        .with_child((
-            Text::new("Correr flythrough"),
-            body_font(),
-            TextColor(TEXT_BRIGHT),
-        ));
+    panel.spawn(FlythroughButton).apply_scene(bsn! {
+        @FeathersButton
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+        }
+        on(activate_flythrough)
+        Children [ (Text("Correr flythrough") ThemedText TextFont { font_size: FontSize::Px(15.0) }) ]
+    });
     panel.spawn((
         ReadoutText,
         Text::new("—"),
@@ -360,15 +408,22 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
 /// cada lab nuevo (`Pradera`, y el que siga) alargaba esa lista sin decir
 /// dónde hace algo. Ahora cada `PerfKnobCategory` es su propia pestaña —
 /// `render_section`/`grass_section` — y `tab_pane` decide sola cuál se ve.
+/// El picking de `bevy_ui`/`bevy_picking` no mantiene el clip rect de
+/// scroll en sincronía con `ScrollPosition` para efectos de hit-test —
+/// confirmado jugando: scrollear una pestaña larga deja los botones de
+/// arriba (cambiar de tab, fijos, fuera del área que scrollea) sin
+/// responder al click aunque se vean iguales. Es del motor (issues
+/// públicas de Bevy sobre clip rects y scroll en pantallas de picking), no
+/// de este proyecto, y no tiene arreglo chico de nuestro lado. La salida:
+/// que ninguna pestaña necesite scrollear nunca — grilla de dos columnas
+/// en vez de una lista de una fila por perilla, así entra sin cortar.
 fn render_section(panel: &mut ChildSpawnerCommands) {
     section_title(
         panel,
         "Render",
         "Solo presentación. Overdraw respeta el culling del material: 1-2 capas bien, 3-5 medio, 6-9 malo, 10+ crítico si cubre un área grande. La secuencia apaga ambas vistas al medir.",
     );
-    for knob in knobs_in(PerfKnobCategory::Global) {
-        knob_row(panel, knob);
-    }
+    knob_grid(panel, knobs_in(PerfKnobCategory::Global));
 }
 
 fn grass_section(panel: &mut ChildSpawnerCommands) {
@@ -379,9 +434,7 @@ fn grass_section(panel: &mut ChildSpawnerCommands) {
          no). `grass-shape`/`grass-card` son el banco de medición: pisan los controles de \
          Grass Lab (F9) mientras no estén en auto/base.",
     );
-    for knob in knobs_in(PerfKnobCategory::Grass) {
-        knob_row(panel, knob);
-    }
+    knob_grid(panel, knobs_in(PerfKnobCategory::Grass));
 }
 
 fn knobs_in(category: PerfKnobCategory) -> impl Iterator<Item = PerfKnob> {
@@ -390,18 +443,45 @@ fn knobs_in(category: PerfKnobCategory) -> impl Iterator<Item = PerfKnob> {
         .filter(move |knob| knob.category() == category)
 }
 
-fn knob_row(panel: &mut ChildSpawnerCommands, knob: PerfKnob) {
+/// Dos columnas: la mitad de filas que una lista de una sola columna, para
+/// el mismo contenido — ver la nota de `render_section` sobre por qué
+/// importa que esto quepa sin scroll.
+fn knob_grid(panel: &mut ChildSpawnerCommands, knobs: impl Iterator<Item = PerfKnob>) {
     panel
-        .spawn((KnobButton(knob), Button, row_node(), BackgroundColor(ROW)))
-        .with_children(|row| {
-            row.spawn((Text::new(knob.label()), body_font(), TextColor(TEXT_BRIGHT)));
-            row.spawn((
-                KnobText(knob),
-                Text::new("—"),
-                body_font(),
-                TextColor(ACCENT),
-            ));
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|grid| {
+            for knob in knobs {
+                knob_row(grid, knob);
+            }
         });
+}
+
+fn knob_row(panel: &mut ChildSpawnerCommands, knob: PerfKnob) {
+    let label = knob.label();
+    panel.spawn(KnobButton(knob)).apply_scene(bsn! {
+        @FeathersButton
+        Node {
+            width: Val::Percent(48.5),
+            justify_content: JustifyContent::SpaceBetween,
+            column_gap: Val::Px(12.0),
+        }
+        on(activate_knob)
+        Children [
+            (Text({label}) ThemedText TextFont { font_size: FontSize::Px(15.0) }),
+            (
+                Text("—")
+                ThemedText
+                TextFont { font_size: FontSize::Px(15.0) }
+                KnobText({knob})
+            ),
+        ]
+    });
 }
 
 fn channel_section(panel: &mut ChildSpawnerCommands) {
@@ -410,42 +490,51 @@ fn channel_section(panel: &mut ChildSpawnerCommands) {
         "Canales",
         "Algunos cuestan frame time — no los dejes prendidos mientras medís.",
     );
-    for channel in DebugChannel::ALL {
-        panel
-            .spawn((
-                ChannelButton(channel),
-                Button,
-                row_node(),
-                BackgroundColor(ROW),
-            ))
-            .with_children(|row| {
-                row.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                })
-                .with_children(|label| {
-                    label.spawn((
-                        Text::new(channel.label()),
-                        body_font(),
-                        TextColor(TEXT_BRIGHT),
-                    ));
-                    label.spawn((
-                        Text::new(channel.hint()),
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
-                            ..default()
-                        },
-                        TextColor(TEXT_MUTED),
-                    ));
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|grid| {
+            for channel in DebugChannel::ALL {
+                let (label, hint) = (channel.label(), channel.hint());
+                grid.spawn(ChannelButton(channel)).apply_scene(bsn! {
+                    @FeathersButton
+                    Node {
+                        width: Val::Percent(48.5),
+                        justify_content: JustifyContent::SpaceBetween,
+                        column_gap: Val::Px(12.0),
+                    }
+                    on(activate_channel)
+                    Children [
+                        (
+                            Node { flex_direction: FlexDirection::Column }
+                            Children [
+                                (
+                                    Text({label})
+                                    ThemedText
+                                    TextFont { font_size: FontSize::Px(15.0) }
+                                ),
+                                (
+                                    Text({hint})
+                                    ThemedText
+                                    TextFont { font_size: FontSize::Px(12.0) }
+                                ),
+                            ]
+                        ),
+                        (
+                            Text("—")
+                            ThemedText
+                            TextFont { font_size: FontSize::Px(15.0) }
+                            ChannelText({channel})
+                        ),
+                    ]
                 });
-                row.spawn((
-                    ChannelText(channel),
-                    Text::new("—"),
-                    body_font(),
-                    TextColor(ACCENT),
-                ));
-            });
-    }
+            }
+        });
 }
 
 fn action_section(panel: &mut ChildSpawnerCommands) {
@@ -460,21 +549,12 @@ fn action_section(panel: &mut ChildSpawnerCommands) {
         })
         .with_children(|row| {
             for action in DebugAction::ALL {
-                row.spawn((
-                    ActionButton(action),
-                    Button,
-                    Node {
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(PANEL_INSET),
-                ))
-                .with_child((
-                    Text::new(action.label()),
-                    body_font(),
-                    TextColor(TEXT_BRIGHT),
-                ));
+                let label = action.label();
+                row.spawn(ActionButton(action)).apply_scene(bsn! {
+                    @FeathersButton
+                    on(activate_action)
+                    Children [ (Text({label}) ThemedText TextFont { font_size: FontSize::Px(15.0) }) ]
+                });
             }
         });
 }

@@ -198,8 +198,15 @@ pub const GRASS_DEBUG_STEPS: [&str; 8] = [
 pub const RENDER_SCALE_STEPS: [f32; 3] = [1.0, 0.75, 0.5];
 
 /// Which knob the hub acts on.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// `Default` exists only so `PerfKnob` can ride inside a `bsn!` marker
+/// component on a Feathers button's label entity (`KnobText`,
+/// `presentation::debug_ui`) — that macro requires it even when every field
+/// is interpolated, since the derived value is always overwritten before the
+/// entity spawns. `Vsync` is arbitrary, not a meaningful "first" knob.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PerfKnob {
+    #[default]
     Vsync,
     Forest,
     Wireframe,

@@ -35,6 +35,15 @@ use bof_simulation::SimulationPlugin;
 fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins)
+        // Spike (2026-08-12): probar el patrón real de bevy_feathers —
+        // BSN/spawn_scene — sobre un solo botón antes de comprometer el hub
+        // entero. Ver `presentation::debug_ui`. El tema oscuro es explícito
+        // porque el resto del hub ya es oscuro (`presentation::theme`); sin
+        // esto Feathers cae a lo que declare `UiTheme::default`.
+        .add_plugins(bevy::feathers::FeathersPlugins)
+        .insert_resource(bevy::feathers::theme::UiTheme(
+            bevy::feathers::dark_theme::create_dark_theme(),
+        ))
         .add_plugins(SimulationPlugin)
         // Collider-wireframe rendering; starts disabled, toggled with F1
         // (see `debug.rs`).

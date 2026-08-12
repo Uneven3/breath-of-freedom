@@ -12,20 +12,12 @@
 //! overlay is extra UI draw work and holds the pointer, and neither belongs in
 //! the frame times the run is about to record.
 
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::debug::channel::{
-    DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle, DebugConfigView,
-};
+use crate::debug::channel::{DebugAction, DebugChannel, DebugConfigView};
 use crate::input::ModalInputFocusRequest;
-use crate::perf::{
-    Benchmark, BenchmarkRequest, Flythrough, FlythroughRequest, PerfKnob, PerfKnobToggle,
-    PerfToggles,
-};
-use crate::visuals::terrain_material::{
-    TerrainDebugState, TerrainDebugView, TerrainDebugViewRequest,
-};
+use crate::perf::{Benchmark, Flythrough, PerfKnob, PerfToggles};
+use crate::visuals::terrain_material::{TerrainDebugState, TerrainDebugView};
 
 mod hud_menu;
 mod overlay;
@@ -87,20 +79,18 @@ struct TabPane(DebugTab);
 #[derive(Component)]
 struct DebugUiRoot;
 
-/// The panel body. Bevy clips `Overflow::scroll_y` content but never scrolls it
-/// on its own, so without a wheel handler the knobs past the fold were simply
-/// unreachable — the panel looked complete and silently hid half of itself.
+/// The panel body. Deliberately `Overflow::clip_y`, never `scroll_y`
+/// (2026-08-12): Bevy's picking doesn't keep the scroll clip in sync with
+/// `ScrollPosition` for hit-testing, which broke the fixed tab buttons above
+/// it after scrolling a long tab — an engine issue, not fixable from here.
+/// Every tab pane is laid out to fit without scrolling instead; `clip_y`
+/// just makes a future regression visible (cut off) rather than silently
+/// breaking clicks again. Kept as a marker for layout identification only.
 #[derive(Component)]
 struct ScrollPanel;
 
 #[derive(Component)]
-struct CloseButton;
-
-#[derive(Component)]
 struct BenchmarkButton(crate::perf::sequence::BenchmarkRequest);
-
-#[derive(Component)]
-struct BenchmarkText;
 
 #[derive(Component)]
 struct FlythroughButton;
@@ -111,13 +101,17 @@ struct ReadoutText;
 #[derive(Component)]
 struct KnobButton(PerfKnob);
 
-#[derive(Component)]
+// `Clone, Default`: estos viven dentro de un `bsn!` (etiqueta de un botón de
+// Feathers, `presentation::debug_ui::view`), que los exige aunque el valor
+// real llegue interpolado — ver la nota en `PerfKnob`/`DebugChannel` sobre
+// por qué el default nunca sobrevive al spawn.
+#[derive(Component, Clone, Default)]
 struct KnobText(PerfKnob);
 
 #[derive(Component)]
 struct ChannelButton(DebugChannel);
 
-#[derive(Component)]
+#[derive(Component, Clone, Default)]
 struct ChannelText(DebugChannel);
 
 #[derive(Component)]
@@ -126,7 +120,7 @@ struct ActionButton(DebugAction);
 #[derive(Component)]
 struct TerrainViewButton(TerrainDebugView);
 
-#[derive(Component)]
+#[derive(Component, Clone, Default)]
 struct TerrainViewText(TerrainDebugView);
 
 pub struct DebugUiPlugin;
@@ -147,12 +141,10 @@ impl Plugin for DebugUiPlugin {
             Update,
             (
                 toggle_hub,
-                handle_clicks,
                 sync_visibility,
                 view::sync_tab_panes.run_if(hub_is_open),
                 view::sync_tab_buttons.run_if(hub_is_open),
                 sync_labels.run_if(hub_is_open),
-                scroll_panel.run_if(hub_is_open),
                 // Outside the `hub_is_open` gate on purpose: the panel closes
                 // when a run starts, and that is exactly when the overlay has
                 // something to say.
@@ -168,7 +160,6 @@ impl Plugin for DebugUiPlugin {
             Update,
             (
                 hud_menu::toggle_hud_menu,
-                hud_menu::handle_hud_menu_clicks,
                 hud_menu::sync_hud_menu_visibility,
                 hud_menu::sync_hud_menu_labels.run_if(hud_menu::menu_is_open),
             )
@@ -201,6 +192,11 @@ fn toggle_hub(
     set_open(&mut state, wanted, *root, &mut focus);
 }
 
+/// El botón "Cerrar" del header es un `FeathersButton` desde el spike de
+/// bevy_feathers (2026-08-12) y se cierra desde su propio observer de
+/// `Activate` en `view.rs` (que ya puede ver esta función privada, por ser
+/// un módulo hijo) — los widgets de Feathers no llenan `Interaction`, así
+/// que la query vieja de `handle_clicks` nunca hubiera disparado.
 fn set_open(
     state: &mut DebugUiState,
     open: bool,
@@ -216,107 +212,6 @@ fn set_open(
     } else {
         ModalInputFocusRequest::Release(root)
     });
-}
-
-/// Todas las queries de sólo-lectura que `handle_clicks` recorre, en un solo
-/// parámetro.
-///
-/// Bevy deja de reconocer un sistema como tal pasado cierto número de
-/// parámetros de nivel superior; sumar `tabs` lo cruzó. Agrupar es la salida
-/// documentada (ver `ShotReportInputs` en `perf::shot` para el mismo caso).
-#[derive(SystemParam)]
-struct ClickQueries<'w, 's> {
-    close: Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<CloseButton>)>,
-    tabs: Query<'w, 's, (&'static Interaction, &'static TabButton), Changed<Interaction>>,
-    bench: Query<'w, 's, (&'static Interaction, &'static BenchmarkButton), Changed<Interaction>>,
-    flythrough: Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<FlythroughButton>)>,
-    knobs: Query<'w, 's, (&'static Interaction, &'static KnobButton), Changed<Interaction>>,
-    channels: Query<'w, 's, (&'static Interaction, &'static ChannelButton), Changed<Interaction>>,
-    actions: Query<'w, 's, (&'static Interaction, &'static ActionButton), Changed<Interaction>>,
-    terrain_views:
-        Query<'w, 's, (&'static Interaction, &'static TerrainViewButton), Changed<Interaction>>,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn handle_clicks(
-    mut state: ResMut<DebugUiState>,
-    root: Single<Entity, With<DebugUiRoot>>,
-    queries: ClickQueries,
-    mut focus: MessageWriter<ModalInputFocusRequest>,
-    mut knob_writer: MessageWriter<PerfKnobToggle>,
-    mut channel_writer: MessageWriter<DebugChannelToggle>,
-    mut action_writer: MessageWriter<DebugActionRequest>,
-    mut terrain_view_writer: MessageWriter<TerrainDebugViewRequest>,
-    mut bench_writer: MessageWriter<BenchmarkRequest>,
-    mut flythrough_writer: MessageWriter<FlythroughRequest>,
-) {
-    if !state.open {
-        return;
-    }
-    let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
-
-    for (interaction, tab) in &queries.tabs {
-        if pressed(interaction) {
-            state.active_tab = tab.0;
-        }
-    }
-    for (interaction, knob) in &queries.knobs {
-        if pressed(interaction) {
-            knob_writer.write(PerfKnobToggle(knob.0));
-        }
-    }
-    for (interaction, channel) in &queries.channels {
-        if pressed(interaction) {
-            channel_writer.write(DebugChannelToggle(channel.0));
-        }
-    }
-    for (interaction, action) in &queries.actions {
-        if pressed(interaction) {
-            action_writer.write(DebugActionRequest(action.0));
-        }
-    }
-    for (interaction, view) in &queries.terrain_views {
-        if pressed(interaction) {
-            terrain_view_writer.write(TerrainDebugViewRequest(view.0));
-        }
-    }
-    for (interaction, button) in &queries.bench {
-        if pressed(interaction) {
-            bench_writer.write(button.0);
-            // The panel would be measured along with the scene; close it first.
-            set_open(&mut state, false, *root, &mut focus);
-        }
-    }
-    if queries.flythrough.iter().any(pressed) {
-        flythrough_writer.write(FlythroughRequest);
-        // Same reason as the benchmark: the modal must not enter the measurement.
-        set_open(&mut state, false, *root, &mut focus);
-    }
-    if queries.close.iter().any(pressed) {
-        set_open(&mut state, false, *root, &mut focus);
-    }
-}
-
-/// Wheel scrolling for the panel body, clamped to the content that exists.
-fn scroll_panel(
-    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
-    mut panel: Single<(&mut ScrollPosition, &ComputedNode), With<ScrollPanel>>,
-) {
-    const LINE_PX: f32 = 24.0;
-
-    let delta: f32 = wheel
-        .read()
-        .map(|event| match event.unit {
-            bevy::input::mouse::MouseScrollUnit::Line => event.y * LINE_PX,
-            bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
-        })
-        .sum();
-    if delta == 0.0 {
-        return;
-    }
-    let (position, node) = &mut *panel;
-    let overflow = (node.content_size.y - node.size().y).max(0.0);
-    position.0.y = (position.0.y - delta).clamp(0.0, overflow);
 }
 
 fn sync_visibility(state: Res<DebugUiState>, mut root: Single<&mut Node, With<DebugUiRoot>>) {

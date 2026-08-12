@@ -32,8 +32,12 @@ impl DebugConfigView<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// `Default` exists only so `DebugChannel` can ride inside a `bsn!` marker
+/// component (`ChannelText`, `presentation::debug_ui`) — see the identical
+/// note on `PerfKnob` in `perf.rs`. `Colliders` is arbitrary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum DebugChannel {
+    #[default]
     Colliders,
     Casts,
     /// The periodic perf/scene time series ([`console::log_periodic`]).

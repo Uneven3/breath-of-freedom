@@ -1334,6 +1334,37 @@ modificar el campo, construir visualización de dueño/huella de grupo y una tab
 de cobertura completa por distancia; sin ellas, ajustar radios, alpha o ruido
 vuelve a confundir una diferencia de representación con un número mal elegido.
 
+### Grass Lab: contexto propio para el renderer (abierto, 2026-08-12)
+
+El hub F1 conserva su trabajo: diagnóstico global y barridos de rendimiento.
+No es el laboratorio de diseño del LOD. Sus perillas discretas sirven para
+atribuir coste, pero no pueden expresar ni reparar el relevo estructural entre
+representaciones.
+
+La escena **Pasto** declara la capacidad `grass_lab`; **F9 abre ahí, y sólo ahí,
+el contexto modal del renderer**. `GrassRendererSettings` es la única fuente de
+los números de diseño: fronteras y tamaños de anillo, umbrales de forma, ancho,
+altura, inclinación y huella de carta. Su `Default` es el baseline de juego; el
+panel manda solicitudes y el renderer es el único escritor. Horneado, shader,
+leyenda y medición reciben la misma instancia, por lo que una perilla no puede
+mover sólo su texto. Los primeros controles cambian fronteras, umbral de carta y
+ancho; reinician explícitamente al baseline y reconstruyen la grilla. Presets
+RON vendrán separados del `TerrainFile`: cambiar un mapa no modifica una
+configuración de renderer y viceversa.
+
+La primera pantalla no promete oclusión. Por anillo ya distingue: **residente**
+(el chunk que la grilla mantiene), **en frustum** (el veredicto real de
+visibilidad de Bevy) y sus triángulos. Un chunk en frustum puede seguir oculto
+por la profundidad de una montaña: la diferencia prueba que falta un
+experimento de oclusión de chunks, no que ya exista. Falta una vista de
+dueño/huella de grupo y las perillas de esa técnica; ninguna se absorbe en F1
+ni se convierte en valor de producción sin checkpoint jugado y preset medido.
+
+**Estado del corte:** compila y pasa `cargo test --package breath-of-freedom`
+(182 unitarios y 15 canarios de arquitectura). Aún no hay veredicto visual:
+queda abrir Pasto, confirmar que F9 aparece únicamente allí, que cada control
+rebakea el campo con `TallGrass` visible y que el reset vuelve al baseline.
+
 ### Detrás, y sólo después
 
 - **Medir los milisegundos.** Todo lo de hoy son conteos, y la geometría casi se

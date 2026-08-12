@@ -1,0 +1,9 @@
+(
+    // Dato de la caja Pasto, no una excepción del renderer: una sola celda
+    // semántica cubre su terreno plano de 320 m con el tipo de pasto largo.
+    // Cambiar esta muestra es editar el mapa, igual que en Terreno o Mundo.
+    points: 2,
+    extent: 320.0,
+    heights: [0.0, 0.0, 0.0, 0.0],
+    kinds: [(1, TallGrass)],
+)

@@ -66,10 +66,15 @@ pub(super) fn blades_in_tile(density_per_m2: f32) -> u32 {
 /// falta a una distancia, y acá se pregunta hasta qué distancia sigue haciendo
 /// falta la número `j`. De ahí sale que la densidad viva sea la que la ley pide,
 /// sin escalones. Decreciente por construcción, y un test lo cobra.
-pub(super) fn reach_ladder(dial: f32, scale: f32, reach_scale: f32) -> Vec<f32> {
-    let farthest = super::grass::farthest_reach(reach_scale);
+pub(super) fn reach_ladder(
+    dial: f32,
+    scale: f32,
+    reach_scale: f32,
+    settings: &super::grass::GrassRendererSettings,
+) -> Vec<f32> {
+    let farthest = super::grass::farthest_reach(reach_scale, settings);
     let nearest = super::grass::NEAREST_INTEREST_M;
-    let wanted = |distance: f32| super::grass::live_density_at(distance, dial, scale);
+    let wanted = |distance: f32| super::grass::live_density_at(distance, dial, scale, settings);
     let count = blades_in_tile(wanted(nearest)) as usize;
     (0..count)
         .map(|index| {
@@ -110,7 +115,12 @@ mod tests {
     const REACH: f32 = bof_domain::perf::GRASS_REACH_STEPS[0];
 
     fn ladder() -> Vec<f32> {
-        reach_ladder(DIAL, super::super::grass::reference_scale(), REACH)
+        reach_ladder(
+            DIAL,
+            super::super::grass::reference_scale(),
+            REACH,
+            &super::super::grass::GrassRendererSettings::default(),
+        )
     }
 
     /// **La propiedad entera del rediseño.** Si acercarse sólo agrega, el
@@ -160,7 +170,12 @@ mod tests {
         for distance in [3.0_f32, 8.0, 16.0, 30.0, 50.0] {
             let alive = ladder.iter().filter(|reach| **reach >= distance).count();
             let live_density = alive as f32 / TILE_AREA_M2;
-            let wanted = super::super::grass::live_density_at(distance, DIAL, scale);
+            let wanted = super::super::grass::live_density_at(
+                distance,
+                DIAL,
+                scale,
+                &super::super::grass::GrassRendererSettings::default(),
+            );
             assert!(
                 (live_density - wanted).abs() <= 1.0 / TILE_AREA_M2 + wanted * 0.02,
                 "a {distance} m viven {live_density}/m² y la ley pide {wanted}/m²",

@@ -113,6 +113,12 @@ impl ModalInputFocus {
 #[derive(Message, Debug, Clone, Copy)]
 pub struct ScreenshotRequest;
 
+/// F9 reached a dedicated renderer lab, not the global debug hub. Input owns
+/// the hardware binding; presentation decides whether the active scene hosts
+/// that lab and may act on the request.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct GrassLabToggleRequest;
+
 /// Input owns modal focus and validates releases, so presentation layers do
 /// not mutate cursor or gameplay input resources directly.
 #[derive(Message, Debug, Clone, Copy)]
@@ -142,6 +148,7 @@ impl Plugin for InputPlugin {
         app.add_message::<ModalInputFocusRequest>();
         app.add_message::<SetCursorGrab>();
         app.add_message::<ScreenshotRequest>();
+        app.add_message::<GrassLabToggleRequest>();
         app.add_systems(Startup, grab_cursor);
         // Everything the fixed-step simulation reads (actions AND orientation)
         // must resolve in PreUpdate: Bevy runs FixedUpdate *before* Update in
@@ -153,6 +160,7 @@ impl Plugin for InputPlugin {
                 apply_modal_focus_requests,
                 resolve_local_actions,
                 request_screenshot,
+                request_grass_lab_toggle,
                 cursor_control,
                 update_local_orientation,
                 // Last, so an explicit presentation grab request (freecam
@@ -177,6 +185,15 @@ fn request_screenshot(
 ) {
     if keys.just_pressed(KeyCode::F7) {
         requests.write(ScreenshotRequest);
+    }
+}
+
+fn request_grass_lab_toggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut requests: MessageWriter<GrassLabToggleRequest>,
+) {
+    if keys.just_pressed(KeyCode::F9) {
+        requests.write(GrassLabToggleRequest);
     }
 }
 

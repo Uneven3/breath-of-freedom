@@ -176,6 +176,19 @@ del 2026-08-09: *"se ve bien en general"*. Reemplazó un intento que afirmaba
 "0.0 ms CPU" y "60 FPS estables" mientras medía 35-46. **Regla: ningún número
 entra sin salir del medidor.**
 
+**Grass Lab (abierto, 2026-08-12):** `Pasto` es el único contexto de ajuste del
+renderer (`SceneDef::authoring.grass_lab`); F1 sigue siendo diagnóstico global.
+F9 abre su panel modal: muestra por anillo chunks residentes/frustum y sus
+triángulos, y mueve fronteras, umbral de carta y ancho de carta sobre la única
+`GrassRendererSettings` que consumen horneado, shader, leyenda y medición. Cada
+cambio reconstruye la grilla; no hay valores LOD paralelos ni excepciones por
+nombre de escena. El mapa de Pasto declara `TallGrass` en su propio RON: `Soil`
+queda tierra desnuda. Esto permite medir, no arregla el relevo por grupos.
+**Validado sólo en código:** `cargo test --package breath-of-freedom` pasó
+(182 unitarios + 15 de arquitectura); el checkpoint jugado de Pasto —que F9
+abre, que sus controles cambian el campo y que TallGrass se ve— queda pendiente
+para la próxima sesión. Detalle y criterios en `BOTWGrass.md`.
+
 ## Escenas: cajas de prueba + mundo
 
 **Las escenas son dato** (`scene::SCENES`): etiqueta, **su propio heightmap** y

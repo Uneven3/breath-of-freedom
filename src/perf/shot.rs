@@ -314,6 +314,7 @@ pub fn capture_on_request(
     mut requests: MessageReader<crate::input::ScreenshotRequest>,
     inventory: Res<SceneInventory>,
     perf: Res<crate::perf::PerfToggles>,
+    settings: Res<crate::visuals::grass::GrassRendererSettings>,
     camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     terrain: crate::world::TerrainAccess,
@@ -363,11 +364,11 @@ pub fn capture_on_request(
         window.as_deref().map(|w| &**w),
         &terrain,
     );
-    write_legend(&path, &perf, &inventory, camera_pose, &geometry);
+    write_legend(&path, &perf, &settings, &inventory, camera_pose, &geometry);
     commands
         .spawn(Screenshot::primary_window())
         .observe(shot_stats::count_when_captured(stats_plan(
-            &perf, geometry, None,
+            &perf, &settings, geometry, None,
         )))
         .observe(save_to_disk(path));
 }
@@ -379,11 +380,12 @@ pub fn capture_on_request(
 /// Contar con la configuración de *después* sería describir otra foto.
 fn stats_plan(
     perf: &crate::perf::PerfToggles,
+    settings: &crate::visuals::grass::GrassRendererSettings,
     geometry: ShotGeometry,
     sweep_label: Option<String>,
 ) -> shot_stats::StatsPlan {
     shot_stats::StatsPlan {
-        categories: shot_categories(perf),
+        categories: shot_categories(perf, settings),
         view: perf.grass_debug_label().to_string(),
         flat: crate::visuals::grass_debug::GrassDebugView::from_step(perf.grass_debug_step())
             .is_flat(),
@@ -393,8 +395,9 @@ fn stats_plan(
             // Congelado igual que el resto del plan: cuando la captura vuelve de
             // la GPU, las perillas pueden haberse movido.
             let (dial, reach) = (perf.grass_density(), perf.grass_reach_scale());
+            let settings = *settings;
             Box::new(move |distance| {
-                crate::visuals::grass::live_blades_per_m2(distance, dial, reach)
+                crate::visuals::grass::live_blades_per_m2(distance, dial, reach, &settings)
             })
         },
     }
@@ -468,7 +471,10 @@ fn warn_on_broken_assets(broken: &BrokenAssets) {
 ///
 /// Con la vista apagada no hay nada plano que contar, y la lista vacía es lo que
 /// hace que el informe se limite a describir la imagen.
-fn shot_categories(perf: &crate::perf::PerfToggles) -> Vec<Category> {
+fn shot_categories(
+    perf: &crate::perf::PerfToggles,
+    settings: &crate::visuals::grass::GrassRendererSettings,
+) -> Vec<Category> {
     match perf.grass_debug_label() {
         "off" => Vec::new(),
         "subpixel" => crate::visuals::grass_debug::subpixel_legend()
@@ -485,7 +491,7 @@ fn shot_categories(perf: &crate::perf::PerfToggles) -> Vec<Category> {
                 color: shape.color,
             })
             .collect(),
-        _ => crate::visuals::grass_debug::ring_legend(perf)
+        _ => crate::visuals::grass_debug::ring_legend(perf, settings)
             .into_iter()
             .map(|ring| Category {
                 name: format!("anillo {}", ring.slot),
@@ -560,6 +566,7 @@ fn legend_path(path: &std::path::Path) -> PathBuf {
 fn write_legend(
     path: &std::path::Path,
     perf: &crate::perf::PerfToggles,
+    settings: &crate::visuals::grass::GrassRendererSettings,
     inventory: &SceneInventory,
     pose: (Vec3, Vec3),
     geometry: &ShotGeometry,
@@ -573,7 +580,7 @@ fn write_legend(
     // el 2026-08-07 no se escribía, y eso dejaba a la captura del **juego real**
     // —la única que muestra el color que el jugador ve— sin la geometría de
     // cámara, o sea sin eje de distancias.
-    let named = shot_categories(perf);
+    let named = shot_categories(perf, settings);
     let categories = if view == "subpixel" {
         named
             .iter()
@@ -590,7 +597,7 @@ fn write_legend(
     } else {
         named
             .iter()
-            .zip(crate::visuals::grass_debug::ring_legend(perf))
+            .zip(crate::visuals::grass_debug::ring_legend(perf, settings))
             .map(|(category, ring)| LegendCategory {
                 nombre: &category.name,
                 color: category.color,
@@ -705,6 +712,7 @@ pub(super) fn drive_auto_shot(
     time: Res<Time<Real>>,
     inventory: Res<SceneInventory>,
     mut perf: ResMut<crate::perf::PerfToggles>,
+    settings: Res<crate::visuals::grass::GrassRendererSettings>,
     camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     terrain: crate::world::TerrainAccess,
@@ -788,12 +796,13 @@ pub(super) fn drive_auto_shot(
                 window.as_deref().map(|w| &**w),
                 &terrain,
             );
-            write_legend(&path, &perf, &inventory, actual_pose, &geometry);
+            write_legend(&path, &perf, &settings, &inventory, actual_pose, &geometry);
             let sweep_label = shot.sweep.map(|sweep| perf.knob_value(sweep.knob));
             commands
                 .spawn(Screenshot::primary_window())
                 .observe(shot_stats::count_when_captured(stats_plan(
                     &perf,
+                    &settings,
                     geometry,
                     sweep_label,
                 )))
@@ -820,7 +829,7 @@ pub(super) fn drive_auto_shot(
                         shot_stats::sweep_table(
                             sweep.knob.label(),
                             &log.rows,
-                            crate::visuals::grass::BLADE_WIDTH
+                            settings.blade_width_m
                         )
                     );
                 }

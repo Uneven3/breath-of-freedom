@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 pub mod cues;
 pub mod debug_ui;
+mod grass_lab;
 pub mod inventory_ui;
 pub mod juice;
 pub mod theme;
@@ -21,6 +22,7 @@ impl Plugin for PresentationPlugin {
             juice::JuicePlugin,
             inventory_ui::InventoryUiPlugin,
             debug_ui::DebugUiPlugin,
+            grass_lab::GrassLabPlugin,
         ));
     }
 }

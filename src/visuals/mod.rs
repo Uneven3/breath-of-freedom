@@ -73,6 +73,9 @@ impl Plugin for VisualsPlugin {
         app.add_instrumented_material::<StandardMaterial>();
         app.init_resource::<VisualCatalog>();
         app.init_resource::<grass::MeadowRecordMemory>();
+        app.init_resource::<grass::GrassLabStats>();
+        app.init_resource::<grass::GrassRendererSettings>();
+        app.add_message::<grass::GrassLabSettingRequest>();
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content
         // (`crate::scene`), so they are built on entry and die on exit.
@@ -132,10 +135,14 @@ impl Plugin for VisualsPlugin {
                 // camera, and tell the shader where that camera is. Nothing
                 // walks a blade — the chunks are baked meshes.
                 (
+                    grass::apply_grass_lab_settings
+                        .run_if(crate::scene::scene_allows(|tools| tools.grass_lab)),
                     grass::roll_meadow_grid,
                     // Después de rodar: sube lo que el rodado dejó escrito.
                     grass::upload_meadow_records,
                     grass::track_meadow_focus,
+                    grass::collect_grass_lab_stats
+                        .run_if(crate::scene::scene_allows(|tools| tools.grass_lab)),
                     grass_debug::announce_grass_debug_view,
                 )
                     .chain()

@@ -478,6 +478,21 @@ mod tests {
     }
 
     #[test]
+    fn the_grass_lab_authors_its_own_long_grass_tile() {
+        // Pasto must be a real terrain map, not a renderer exception such as
+        // "spawn grass when SceneId::Grass". Its semantic tile chooses both
+        // the long-grass ground look and the long-cover renderer profile.
+        let text = include_str!("../../assets/game/world/grass.ron");
+        let mut terrain = bof_simulation::world::Terrain::flat_for_test();
+        terrain.apply_ron(text).expect("the grass lab level loads");
+        assert_eq!(
+            terrain.kind_at(Vec2::ZERO),
+            bof_simulation::world::TerrainKind::TallGrass,
+            "the grass lab map must explicitly author long grass"
+        );
+    }
+
+    #[test]
     fn the_world_scene_gathers_every_shipping_piece() {
         // The other end of the table: whatever a box proves out has somewhere to
         // land. A piece that exists but no scene ever builds is dead weight.

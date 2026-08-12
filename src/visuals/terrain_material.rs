@@ -13,6 +13,7 @@ use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, Tex
 use bevy::shader::ShaderRef;
 
 use crate::asset_pipeline::terrain_textures::{TERRAIN_TEXTURE_EDGE, TERRAIN_TEXTURES};
+use crate::visuals::grass::GrassRendererSettings;
 use crate::visuals::material_registry::InstrumentedMaterialAppExt;
 use crate::world::TerrainKind;
 
@@ -198,6 +199,7 @@ impl Plugin for TerrainMaterialPlugin {
                     mark_changed_source_textures,
                     rebuild_texture_array,
                     apply_debug_view_requests,
+                    sync_grass_tint,
                 )
                     .chain(),
             );
@@ -209,6 +211,7 @@ fn setup_terrain_material(
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
+    grass: Res<GrassRendererSettings>,
 ) {
     let array = images.add(fallback_array());
     let material = materials.add(ExtendedMaterial {
@@ -222,7 +225,7 @@ fn setup_terrain_material(
         extension: TerrainExtension {
             textures: array.clone(),
             debug: Vec4::ZERO,
-            grass_tint: grass_tint(),
+            grass_tint: grass_tint(&grass),
             grass_rules: grass_rules(),
         },
     });
@@ -259,11 +262,31 @@ fn setup_terrain_material(
 /// grano. Se baja, no se borra: sigue siendo lo que distingue el suelo *donde
 /// crece pasto* del mismo suelo en una pendiente donde no crece, que es una
 /// diferencia que ninguna textura puede expresar porque depende de la geometría.
-const GRASS_TINT_STRENGTH: f32 = 0.25;
+fn grass_tint(settings: &GrassRendererSettings) -> Vec4 {
+    let root = settings.root_color;
+    Vec4::new(
+        root.red,
+        root.green,
+        root.blue,
+        settings.grass_tint_strength,
+    )
+}
 
-fn grass_tint() -> Vec4 {
-    let root = super::grass::ROOT_COLOR;
-    Vec4::new(root.red, root.green, root.blue, GRASS_TINT_STRENGTH)
+/// The terrain has to rhyme with the live blade configuration. Keeping this
+/// update here means a future Grass Lab colour control cannot leave the ground
+/// carrying the prior grass root colour.
+fn sync_grass_tint(
+    settings: Res<GrassRendererSettings>,
+    terrain: Option<Res<TerrainMaterialAssets>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let Some(terrain) = terrain else { return };
+    if let Some(mut material) = materials.get_mut(&terrain.material) {
+        material.extension.grass_tint = grass_tint(&settings);
+    }
 }
 
 fn grass_rules() -> Vec4 {

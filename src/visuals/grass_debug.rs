@@ -61,8 +61,11 @@ pub(crate) struct RingLegend {
 ///
 /// Los hechos los da la pradera —que es la única que sabe qué plantó— y el color
 /// lo pone la paleta de acá.
-pub(crate) fn ring_legend(perf: &crate::perf::PerfToggles) -> Vec<RingLegend> {
-    super::grass::ring_facts(perf)
+pub(crate) fn ring_legend(
+    perf: &crate::perf::PerfToggles,
+    settings: &super::grass::GrassRendererSettings,
+) -> Vec<RingLegend> {
+    super::grass::ring_facts(perf, settings)
         .into_iter()
         .enumerate()
         .map(|(slot, facts)| RingLegend {
@@ -117,6 +120,7 @@ pub(crate) fn shape_measure_legend() -> Vec<SubpixelBand> {
 /// diagnóstico: es una imagen bonita.
 pub(crate) fn announce_grass_debug_view(
     perf: Res<crate::perf::PerfToggles>,
+    settings: Res<super::grass::GrassRendererSettings>,
     mut announced: Local<Option<usize>>,
 ) {
     let step = perf.grass_debug_step();
@@ -128,7 +132,7 @@ pub(crate) fn announce_grass_debug_view(
         return;
     }
     info!("[grass] vista '{}':", perf.grass_debug_label());
-    for ring in ring_legend(&perf) {
+    for ring in ring_legend(&perf, &settings) {
         let [r, g, b] = ring.color;
         info!(
             "[grass]   anillo {} #{r:02X}{g:02X}{b:02X} — hasta {:.0} m, chunks de {:.0} m, \

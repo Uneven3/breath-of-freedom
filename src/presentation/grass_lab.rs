@@ -176,8 +176,9 @@ fn spawn_grass_lab(mut commands: Commands) {
                 .with_child((Text::new("Restaurar baseline"), body_font(13.0), TextColor(TEXT_BRIGHT)));
             panel.spawn((
                 Text::new(
-                    "F9 cerrar · F1 sigue siendo diagnóstico global\n\
-                     Estos controles rebakean la pradera real. El relevo púa→carta requiere grupos; mover la raya sólo permite medirlo.",
+                    "F9 cerrar · F1 sigue siendo diagnóstico global, salvo grass-shape/grass-card:\n\
+                     esas dos SÍ pisan estos controles — son el banco para medir sin jugador.\n\
+                     El relevo púa→carta requiere grupos; mover la raya sólo permite medirlo.",
                 ),
                 body_font(12.0),
                 TextColor(TEXT_MUTED),
@@ -293,17 +294,35 @@ fn update_readout(
     readout.0 = lines.join("\n");
 }
 
+/// **F9 no es la única mano en `GrassRendererSettings`.** El banco de F1
+/// (`grass-shape`/`grass-card`, pensado para medir sin jugador) pisa una
+/// copia de esta configuración en el mismo punto donde se renderiza — nunca
+/// escribe el recurso, pero el resultado en pantalla es el suyo mientras esté
+/// activo. Sin este aviso, mover "Umbral de carta" acá parecía no hacer nada
+/// y no había forma de saber por qué.
 fn update_settings_readout(
     settings: Res<GrassRendererSettings>,
+    perf: Res<crate::perf::PerfToggles>,
     mut readout: Single<&mut Text, With<GrassLabSettingsReadout>>,
 ) {
-    readout.0 = format!(
+    let effective = crate::visuals::grass::shape_bench_settings(&perf, *settings);
+    let shape_label = perf.grass_shape_bench_label();
+    let card_label = perf.grass_card_candidate_label();
+    let mut lines = Vec::new();
+    if shape_label != "auto" || card_label != "base" {
+        lines.push(format!(
+            "⚠ F1 grass-shape={shape_label} grass-card={card_label} — pisa lo de abajo. \
+             Volvé a auto/base en el hub para editar acá.",
+        ));
+    }
+    lines.push(format!(
         "Activo · anillo 0→1 {:.0} m · anillo 1→2 {:.0} m\n\
          carta desde {:.2}px · ancho {:.2} m",
-        settings.rings[0].reach_m,
-        settings.rings[1].reach_m,
-        settings.spike_min_pixels,
-        settings.card_width_m,
-    );
-    debug_assert_eq!(settings.rings.len(), GRASS_RING_COUNT);
+        effective.rings[0].reach_m,
+        effective.rings[1].reach_m,
+        effective.spike_min_pixels,
+        effective.card_width_m,
+    ));
+    readout.0 = lines.join("\n");
+    debug_assert_eq!(effective.rings.len(), GRASS_RING_COUNT);
 }

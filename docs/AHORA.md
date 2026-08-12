@@ -39,6 +39,20 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 - **Una curva en una corrida: `BOF_SHOT_SWEEP=<perilla>`** recorre su escalera
   entera, deja una foto por paso e imprime la tabla —fila por paso, columna por
   banda— más el despeje de `C = 1 − e^(−λ·a)` contra la densidad **viva**.
+- **Banco hoja/púa/carta: `BOF_SHOT_SWEEP=grass-shape`** (con
+  `BOF_KNOBS=grass-view=7` para que cuente). Perilla nueva (2026-08-12): fuerza
+  **toda** la corona a una sola forma —no sólo más allá de la hoja— sin tocar
+  la densidad de cada forma ni la cámara. `BOF_KNOBS=grass-shape=N` la fija al
+  arrancar (0 auto, 1 hoja, 2 púa, 3 carta).
+- **Banco de candidatas de carta: `BOF_SHOT_SWEEP=grass-card`** (2026-08-12).
+  Las tres texturas que existen —`base`/`legacy`/`v3`— vueltas perilla en vivo:
+  recarga el handle sin rehornear la grilla. Combinada con
+  `grass-shape=3` ("solo carta") aísla el silueteado de cada PNG del resto.
+- **Triángulos por LOD en el reporte** (2026-08-12): toda corrida de
+  `BOF_SHOT`/`BOF_SHOT_SWEEP` en una escena con `grass_lab` imprime
+  `[shot] pradera por LOD: anillo 0 …tris · anillo 1 … · anillo 2 …` —el mismo
+  desglose que F9 muestra jugando, reusando `GrassLabStats` en vez de
+  duplicarlo. Detalle en "Banco hoja/púa/carta" más abajo.
 - **Antes de explicar una diferencia entre dos configuraciones, sacar la misma
   captura dos veces.** El 2026-08-07 fue lo único que destapó un bug que apagaba
   un nivel entero con resultado distinto en cada corrida, y cada foto suelta
@@ -184,10 +198,82 @@ triángulos, y mueve fronteras, umbral de carta y ancho de carta sobre la única
 cambio reconstruye la grilla; no hay valores LOD paralelos ni excepciones por
 nombre de escena. El mapa de Pasto declara `TallGrass` en su propio RON: `Soil`
 queda tierra desnuda. Esto permite medir, no arregla el relevo por grupos.
-**Validado sólo en código:** `cargo test --package breath-of-freedom` pasó
-(182 unitarios + 15 de arquitectura); el checkpoint jugado de Pasto —que F9
-abre, que sus controles cambian el campo y que TallGrass se ve— queda pendiente
-para la próxima sesión. Detalle y criterios en `BOTWGrass.md`.
+**Checkpoint jugado (2026-08-12): cerrado.** F9 abre, sus controles mueven el
+campo real y `TallGrass` se ve al pintarlo — *"el laboratorio funciona"*.
+
+## Banco hoja/púa/carta (2026-08-12)
+
+Segunda y tercera herramienta del corte de sesión del 2026-08-11 (la primera
+fue Grass Lab, arriba). Pedía comparar las formas **sin confundir asset,
+densidad ni cámara**, y de paso —pedido explícito— separar la forma del LOD de
+"un anillo" y sumar las tres candidatas de carta que existen en
+`assets/textures/props/`, con los triángulos por nivel a la vista.
+
+**Primer intento (retirado el mismo día): mover `spike_min_pixels` a sus
+extremos ya legales de F9.** Dejaba el anillo cercano intacto y, medido,
+"solo carta" filtraba una franja fina de púa cerca del borde de la hoja —
+`leaf_min_pixels` nunca alcanzaba a cubrir el anillo lejano dentro de esos
+límites, así que "solo hoja" ni siquiera era alcanzable así.
+
+**Versión actual: saturar los dos umbrales, no nudgearlos.** `shape_at`
+(Rust) y `blade_shape_at` (WGSL, vía `spike_from_m`/`card_from_m` en el
+uniform) ya derivan la forma de los mismos dos números
+(`leaf_min_pixels`/`spike_min_pixels`); llevarlos a pares que los saturan —
+`(tiny, tiny)` = hoja, `(huge, tiny)` = púa, `(huge, huge)` = carta, con
+`tiny=1e-4`/`huge=1e6` — da una forma pura de punta a punta **sin tocar
+`grass.wgsl`**: Rust y el shader siguen clasificando la misma brizna igual
+porque saturan la misma fórmula que ya comparten. Medido: cada paso da
+100,0% de su color y 0,0% de los otros dos, en toda la pantalla — antes
+"solo carta" daba 97,x%/2,x% de púa en el borde.
+
+**Candidata de carta, la tercera que faltaba.** `T_GrassCard_Albedo.png` —la
+primera carta del proyecto, descartada para la pradera por alfa binaria y RGB
+oculto negro (`BOTWGrass.md` → *Técnica 1*)— se suma como `"legacy"` junto a
+`"base"` y `"v3"`. Antes era un env var leído una sola vez al entrar a escena
+(`BOF_GRASS_CARD_CANDIDATE`); ahora es `PerfKnob::GrassCardCandidate`
+(`grass-card`), recarga el handle en vivo sin rehornear la grilla, y barre en
+una corrida como cualquier perilla. Combinada con `grass-shape=3` (solo
+carta) mide el silueteado de cada PNG solo: **base 67,7%, legacy 77,2%, v3
+73,0%** de la pantalla, misma geometría (271.296 tris) en las tres.
+
+**Triángulos por LOD, en el reporte y no sólo jugando.** `GrassLabStats` ya
+lo calculaba cada frame para F9; ahora `BOF_SHOT`/`BOF_SHOT_SWEEP` lo imprime
+también (`[shot] pradera por LOD: anillo 0 … · anillo 1 … · anillo 2 …`),
+residentes y en frustum, sin sistema nuevo. Confirma en números lo que ya se
+sabía: hoja y púa comparten `footprint_m` (mismos triángulos, sólo cambia el
+shader), carta cuesta una fracción por su huella más ancha (~270k tris totales
+contra ~1,6M de hoja/púa puros, mismo mirador).
+
+**No es conclusión todavía.** Una sola corrida, viento apagado, un solo
+mirador (`grass` canónico, no la pose F7 real). Sirve para descartar
+experimentos antes de gastar una sesión de juego, no para decidir densidad ni
+candidata final.
+
+**F1 o F9, decidido (2026-08-12): F1.** El usuario notó que jugando confundía
+las dos — F9 sigue afirmando que sus controles rebakean "la pradera real"
+mientras `grass-shape`/`grass-card` (F1) pisan esa misma configuración en
+silencio. Se queda en F1 porque `BOF_SHOT_SWEEP` sólo sabe barrer
+`PerfKnob`: pasarlas a F9 (mensajes a `GrassRendererSettings`) mataría la
+única razón de ser de este banco, medir sin jugador. Lo que sí se arregló es
+el silencio: el panel de F9 ahora muestra los valores **efectivos** (ya con el
+banco aplicado, no los crudos) y una línea de aviso cuando `grass-shape` o
+`grass-card` no están en su neutro — *"pisa lo de abajo, volvé a auto/base
+para editar acá"*. Antes mover "Umbral de carta" con el banco activo parecía
+no hacer nada; ahora dice por qué.
+
+**F1 pasó a pestañas (2026-08-12).** Pedido explícito: bajar por
+Medición/Render/Canales/Terreno enteros para llegar a Pradera era un scroll
+gigante. Ahora hay una barra fija (Medición, Render, Pradera, Canales,
+Terreno, Acciones) y sólo el panel activo se dibuja/mide/scrollea; "Pradera"
+además se esconde donde no hay pradera (`Contents::meadow`) y, si se sale de
+esa escena con la pestaña puesta, cae sola a "Render" en vez de dejar un panel
+vacío. **Deuda anotada para la próxima sesión: migrar `debug_ui` a
+`bevy_feathers`** — ya viene con Bevy 0.19 (`bevy_feathers` +
+`bevy_ui_widgets`, hoy sin prender), es su kit de widgets pensado justo para
+paneles de herramientas, y no se usó desde el principio por no haberlo
+revisado. Esta ronda se quedó con lo artesanal (`presentation/debug_ui/`,
+~1250 líneas) porque el problema era de organización, no de widgets — migrar
+motor de por medio es la tarea aparte.
 
 ## Escenas: cajas de prueba + mundo
 

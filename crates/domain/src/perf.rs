@@ -122,6 +122,27 @@ pub const GRASS_REACH_STEPS: [f32; 3] = [1.0, 0.75, 0.5];
 /// con su ventana de asentamiento.
 pub const MSAA_STEPS: [u32; 3] = [1, 4, 2];
 
+/// El banco hoja/púa/carta: fuerza la forma de **toda** la corona, no sólo
+/// más allá de la hoja.
+///
+/// **Existe para comparar sin confundir asset, densidad ni cámara** (corte de
+/// sesión 2026-08-11, `AHORA.md`). Cada forma conserva su propia densidad
+/// (`footprint_m`), así que lo único que varía entre pasos es el asset; la
+/// cámara la fija el mirador de la corrida, no esta perilla.
+pub const GRASS_SHAPE_BENCH_STEPS: [&str; 4] = ["auto", "solo hoja", "solo púa", "solo carta"];
+
+/// Qué candidata de textura/malla de carta usa la pradera, por nombre.
+///
+/// **Existe porque hay tres, no dos.** `"base"` es la de producción
+/// (`T_GrassMeadowCard_Albedo.png`, aprobada en el laboratorio `Card mesh` el
+/// 2026-08-10) y `"v3"` su segundo incremento — las dos ya elegibles por
+/// `BOF_GRASS_CARD_CANDIDATE` antes de que esto fuera perilla. `"legacy"` es
+/// `T_GrassCard_Albedo.png`, la primera carta que tuvo el proyecto: hoy sólo
+/// la usa el prop suelto `FoliageCard` (`prop_grass_card_a`), pero el
+/// laboratorio la descartó para la pradera por alfa binaria y RGB oculto
+/// negro — candidata igual, para que el banco mida en vez de asumir.
+pub const GRASS_CARD_CANDIDATE_STEPS: [&str; 3] = ["base", "legacy", "v3"];
+
 /// Las vistas de diagnóstico de la pradera, por nombre.
 ///
 /// **Existen porque el pasto se discute a ciegas.** Todo lo que decide su forma
@@ -196,12 +217,14 @@ pub enum PerfKnob {
     GrassRings,
     GrassGrowth,
     GrassDebug,
+    GrassShapeBench,
+    GrassCardCandidate,
     RenderScale,
     Msaa,
 }
 
 impl PerfKnob {
-    pub const ALL: [PerfKnob; 19] = [
+    pub const ALL: [PerfKnob; 21] = [
         PerfKnob::Vsync,
         PerfKnob::Forest,
         PerfKnob::Wireframe,
@@ -219,6 +242,8 @@ impl PerfKnob {
         PerfKnob::GrassRings,
         PerfKnob::GrassGrowth,
         PerfKnob::GrassDebug,
+        PerfKnob::GrassShapeBench,
+        PerfKnob::GrassCardCandidate,
         PerfKnob::RenderScale,
         PerfKnob::Msaa,
     ];
@@ -248,6 +273,8 @@ impl PerfKnob {
             PerfKnob::GrassRings => GRASS_RINGS_STEPS.len(),
             PerfKnob::GrassGrowth => GRASS_GROWTH_STEPS.len(),
             PerfKnob::GrassDebug => GRASS_DEBUG_STEPS.len(),
+            PerfKnob::GrassShapeBench => GRASS_SHAPE_BENCH_STEPS.len(),
+            PerfKnob::GrassCardCandidate => GRASS_CARD_CANDIDATE_STEPS.len(),
             PerfKnob::RenderScale => RENDER_SCALE_STEPS.len(),
             PerfKnob::Msaa => MSAA_STEPS.len(),
         }
@@ -272,8 +299,65 @@ impl PerfKnob {
             PerfKnob::GrassRings => "grass-rings",
             PerfKnob::GrassGrowth => "grass-growth",
             PerfKnob::GrassDebug => "grass-view",
+            PerfKnob::GrassShapeBench => "grass-shape",
+            PerfKnob::GrassCardCandidate => "grass-card",
             PerfKnob::RenderScale => "render-scale",
             PerfKnob::Msaa => "msaa",
+        }
+    }
+
+    /// A qué contexto pertenece la perilla, para que el hub deje de mostrar
+    /// una lista plana que crece con cada laboratorio nuevo.
+    ///
+    /// **Dato, no presentación** (§7): qué perillas son de un lab concreto es
+    /// tan objetivo como su nombre o su escalera — el hub sólo decide *cómo*
+    /// agruparlas, nunca *cuáles* van juntas. Nace con dos: `Global` (todo lo
+    /// que ya existía, útil en cualquier escena) y `Grass` (el banco de
+    /// Pasto). El próximo laboratorio suma una categoría, no una excepción en
+    /// la vista.
+    pub fn category(self) -> PerfKnobCategory {
+        match self {
+            PerfKnob::GrassDensity
+            | PerfKnob::GrassReach
+            | PerfKnob::GrassRings
+            | PerfKnob::GrassGrowth
+            | PerfKnob::GrassDebug
+            | PerfKnob::GrassShapeBench
+            | PerfKnob::GrassCardCandidate => PerfKnobCategory::Grass,
+            PerfKnob::Vsync
+            | PerfKnob::Forest
+            | PerfKnob::Wireframe
+            | PerfKnob::Overdraw
+            | PerfKnob::SunShadows
+            | PerfKnob::MoonShadows
+            | PerfKnob::Cull
+            | PerfKnob::ShadowRange
+            | PerfKnob::ShadowDistance
+            | PerfKnob::ShadowMap
+            | PerfKnob::LeafShadows
+            | PerfKnob::TreeDetail
+            | PerfKnob::RenderScale
+            | PerfKnob::Msaa => PerfKnobCategory::Global,
+        }
+    }
+}
+
+/// En qué sección del hub aparece una perilla. Ver [`PerfKnob::category`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PerfKnobCategory {
+    /// Tiene sentido en cualquier escena — la mayoría de lo que ya existía.
+    Global,
+    /// Sólo relevante donde hay pradera; el hub la muestra ahí nomás.
+    Grass,
+}
+
+impl PerfKnobCategory {
+    pub const ALL: [PerfKnobCategory; 2] = [PerfKnobCategory::Global, PerfKnobCategory::Grass];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            PerfKnobCategory::Global => "Render",
+            PerfKnobCategory::Grass => "Pradera",
         }
     }
 }
@@ -340,6 +424,13 @@ pub struct PerfToggles {
     /// dibuja: ni un triángulo de diferencia, para que mirar y medir sean el
     /// mismo campo.
     pub grass_debug_step: usize,
+    /// Indexes [`GRASS_SHAPE_BENCH_STEPS`]. Como `grass_debug_step`, no
+    /// rehornea por sí solo: reescribe `spike_min_pixels` en
+    /// `GrassRendererSettings`, que ya dispara su propio rebake al cambiar.
+    pub grass_shape_bench_step: usize,
+    /// Indexes [`GRASS_CARD_CANDIDATE_STEPS`]. Recarga el handle de textura al
+    /// cambiar — no rehornea la grilla, sólo el material.
+    pub grass_card_candidate_step: usize,
     /// Indexes [`RENDER_SCALE_STEPS`].
     pub render_scale_step: usize,
     /// Indexes [`MSAA_STEPS`]. Set from the profile at launch rather than
@@ -370,6 +461,8 @@ impl Default for PerfToggles {
             grass_rings_step: 0,
             grass_growth_step: 0,
             grass_debug_step: 0,
+            grass_shape_bench_step: 0,
+            grass_card_candidate_step: 0,
             render_scale_step: 0,
             msaa_step: 2,
         }
@@ -467,6 +560,15 @@ impl PerfToggles {
         GRASS_DEBUG_STEPS[self.grass_debug_step()]
     }
 
+    pub fn grass_shape_bench_label(&self) -> &'static str {
+        GRASS_SHAPE_BENCH_STEPS[self.grass_shape_bench_step % GRASS_SHAPE_BENCH_STEPS.len()]
+    }
+
+    pub fn grass_card_candidate_label(&self) -> &'static str {
+        GRASS_CARD_CANDIDATE_STEPS
+            [self.grass_card_candidate_step % GRASS_CARD_CANDIDATE_STEPS.len()]
+    }
+
     pub fn msaa_samples(&self) -> u32 {
         MSAA_STEPS
             .get(self.msaa_step)
@@ -524,6 +626,14 @@ impl PerfToggles {
             PerfKnob::GrassDebug => {
                 self.grass_debug_step = (self.grass_debug_step + 1) % GRASS_DEBUG_STEPS.len()
             }
+            PerfKnob::GrassShapeBench => {
+                self.grass_shape_bench_step =
+                    (self.grass_shape_bench_step + 1) % GRASS_SHAPE_BENCH_STEPS.len()
+            }
+            PerfKnob::GrassCardCandidate => {
+                self.grass_card_candidate_step =
+                    (self.grass_card_candidate_step + 1) % GRASS_CARD_CANDIDATE_STEPS.len()
+            }
             PerfKnob::RenderScale => {
                 self.render_scale_step = (self.render_scale_step + 1) % RENDER_SCALE_STEPS.len()
             }
@@ -571,6 +681,12 @@ impl PerfToggles {
             PerfKnob::GrassRings => self.grass_rings_step = step % GRASS_RINGS_STEPS.len(),
             PerfKnob::GrassGrowth => self.grass_growth_step = step % GRASS_GROWTH_STEPS.len(),
             PerfKnob::GrassDebug => self.grass_debug_step = step % GRASS_DEBUG_STEPS.len(),
+            PerfKnob::GrassShapeBench => {
+                self.grass_shape_bench_step = step % GRASS_SHAPE_BENCH_STEPS.len()
+            }
+            PerfKnob::GrassCardCandidate => {
+                self.grass_card_candidate_step = step % GRASS_CARD_CANDIDATE_STEPS.len()
+            }
             PerfKnob::RenderScale => self.render_scale_step = step % RENDER_SCALE_STEPS.len(),
             PerfKnob::Msaa => self.msaa_step = step % MSAA_STEPS.len(),
         }
@@ -616,6 +732,8 @@ impl PerfToggles {
                 format!("{:.1}m", self.grass_growth())
             }
             PerfKnob::GrassDebug => self.grass_debug_label().to_string(),
+            PerfKnob::GrassShapeBench => self.grass_shape_bench_label().to_string(),
+            PerfKnob::GrassCardCandidate => self.grass_card_candidate_label().to_string(),
             PerfKnob::RenderScale => format!("{:.0}%", self.render_scale() * 100.0),
             PerfKnob::Msaa => match self.msaa_samples() {
                 1 => "off".to_string(),
@@ -679,6 +797,23 @@ mod tests {
             assert!(
                 seen.contains(&after),
                 "{}: pasado el final aparece '{after}', que la escalera no recorrió",
+                knob.label()
+            );
+        }
+    }
+
+    /// Guardrail barato contra el error de copiar/pegar una perilla nueva
+    /// dentro del `match` de `label()` y olvidar sumarla a `category()`: el
+    /// nombre ya declara a qué lab pertenece, así que las dos listas no
+    /// pueden discrepar.
+    #[test]
+    fn every_grass_prefixed_label_lands_in_the_grass_category() {
+        for knob in PerfKnob::ALL {
+            let labelled_as_grass = knob.label().starts_with("grass-");
+            let categorised_as_grass = knob.category() == PerfKnobCategory::Grass;
+            assert_eq!(
+                labelled_as_grass, categorised_as_grass,
+                "{}: el nombre y la categoría no coinciden",
                 knob.label()
             );
         }

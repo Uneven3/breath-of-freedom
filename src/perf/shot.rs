@@ -29,6 +29,7 @@
 
 use std::path::PathBuf;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use serde::Serialize;
@@ -696,6 +697,47 @@ fn log_framing(inventory: &SceneInventory, records: &crate::visuals::grass::Mead
     );
 }
 
+/// Triángulos por LOD, anillo por anillo — el mismo desglose que F9 muestra
+/// jugando, acá en el reporte de una corrida sin ventana adelante.
+///
+/// **Existe porque el banco hoja/púa/carta lo pedía** (2026-08-12): sin esto,
+/// comparar "solo hoja" contra "solo carta" sólo daba el total de la escena,
+/// que ya mezclaba terreno y el resto. `GrassLabStats` ya lo calcula cada
+/// frame que la escena lo permite (`Contents::grass_lab`) — la escena `grass`
+/// de esta suite lo es, así que reusarlo no cuesta un sistema nuevo.
+fn log_meadow_lod(stats: &crate::visuals::grass::GrassLabStats) {
+    use crate::visuals::grass::GRASS_RING_COUNT;
+    use std::fmt::Write as _;
+
+    let mut out = String::from("[shot] pradera por LOD:");
+    for ring in 0..GRASS_RING_COUNT {
+        let _ = write!(
+            out,
+            " anillo {ring} {}/{} chunks {}/{} tris (residentes/frustum) ·",
+            stats.resident_chunks[ring],
+            stats.frustum_chunks[ring],
+            stats.resident_triangles[ring],
+            stats.frustum_triangles[ring],
+        );
+    }
+    out.pop();
+    info!("{out}");
+}
+
+/// Los recursos de sólo-lectura que el reporte de una corrida necesita,
+/// agrupados en un solo parámetro.
+///
+/// Bevy deja de reconocer un sistema como tal pasado cierto número de
+/// parámetros de nivel superior — `drive_auto_shot` ya estaba en ese borde
+/// antes de sumar `GrassLabStats`. Agrupar es la salida documentada, no una
+/// forma nueva de leer estos recursos.
+#[derive(SystemParam)]
+pub(super) struct ShotReportInputs<'w> {
+    broken: Res<'w, BrokenAssets>,
+    records: Res<'w, crate::visuals::grass::MeadowRecordMemory>,
+    grass_lab_stats: Res<'w, crate::visuals::grass::GrassLabStats>,
+}
+
 /// Lleva la foto de punta a punta, con la misma máquina de estados que la
 /// medición y por la misma razón: el orden de las etapas *es* la lógica.
 #[expect(
@@ -716,11 +758,12 @@ pub(super) fn drive_auto_shot(
     camera: Option<Single<(&GlobalTransform, &Projection), With<Camera3d>>>,
     window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     terrain: crate::world::TerrainAccess,
-    broken: Res<BrokenAssets>,
-    records: Res<crate::visuals::grass::MeadowRecordMemory>,
+    report: ShotReportInputs,
     log: Res<shot_stats::ShotStatsLog>,
     progress: Res<ShotCaptureProgress>,
 ) {
+    let (broken, records, grass_lab_stats) =
+        (&report.broken, &report.records, &report.grass_lab_stats);
     match shot.stage {
         Stage::EnteringScene => {
             let wanted = AppState::Scene(shot.suite.scene());
@@ -780,9 +823,17 @@ pub(super) fn drive_auto_shot(
             }
             // Lo que la foto no puede mostrar: si dos encuadres discrepan, hace
             // falta saber si cambió lo que se dibuja o sólo cómo se proyecta.
-            warn_on_broken_assets(&broken);
+            warn_on_broken_assets(broken);
             shot.invalid |= broken.count() > 0;
-            log_framing(&inventory, &records);
+            log_framing(&inventory, records);
+            // Sólo donde `GrassLabStats` realmente se llena — en otra escena
+            // el recurso puede quedar en lo último que dejó una visita previa
+            // a `Pasto`, y un cero ahí no significaría que no hay pradera.
+            if crate::scene::current_scene(&scene)
+                .is_some_and(|current| current.authoring.grass_lab)
+            {
+                log_meadow_lod(grass_lab_stats);
+            }
             // La geometría sale de la cámara **real**, no del mirador pedido:
             // si las dos discrepan el aviso de arriba ya sonó, y una conversión
             // a metros hecha sobre una pose que la foto no tiene sería un

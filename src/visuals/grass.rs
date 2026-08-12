@@ -38,6 +38,14 @@ pub(crate) struct GrassRendererSettings {
     pub rings: [GrassRingSettings; GRASS_RING_COUNT],
     pub leaf_min_pixels: f32,
     pub spike_min_pixels: f32,
+    /// Wide enough at the base to cover ground, tapered at the tip so it reads
+    /// as a leaf rather than a strip of paper.
+    ///
+    /// **+2mm el 2026-08-09, experimento de overdraw**: `minimum_density` pide
+    /// densidad inversamente proporcional a este ancho, así que una brizna más
+    /// gorda ya pide menos briznas sola, por la misma ley — no hace falta bajar
+    /// la densidad aparte. Menos briznas solapadas para la misma cobertura es
+    /// menos overdraw, que es lo que cuesta en un frame fill-bound.
     pub blade_width_m: f32,
     pub blade_waist: f32,
     pub blade_root_sink_m: f32,
@@ -180,19 +188,73 @@ mod grass_lab_settings_tests {
 /// Selector de una máscara candidata exclusivamente para una corrida de
 /// medición. La configuración normal nunca lo escribe: la pradera de juego
 /// sigue usando el asset base hasta que el checkpoint apruebe una calibración.
-const CARD_CANDIDATE_ENV: &str = "BOF_GRASS_CARD_CANDIDATE";
 const CARD_ALBEDO_BASE: &str = "textures/props/T_GrassMeadowCard_Albedo.png";
+/// La primera carta que tuvo el proyecto. Hoy sólo la usa el prop suelto
+/// `FoliageCard` (`prop_grass_card_a`) — el laboratorio `Card mesh` la
+/// descartó para la pradera por alfa binaria y RGB oculto negro
+/// (`BOTWGrass.md` → *Técnica 1*), pero sigue siendo una candidata medible.
+const CARD_ALBEDO_LEGACY: &str = "textures/props/T_GrassCard_Albedo.png";
 const CARD_ALBEDO_V3: &str = "textures/props/T_GrassMeadowCard_v3_Albedo.png";
 
-fn card_albedo_path(candidate: Option<&str>) -> &'static str {
-    match candidate {
-        Some("v3") => CARD_ALBEDO_V3,
-        Some(other) => {
-            warn!("[grass] ignorando {CARD_CANDIDATE_ENV}={other:?}; candidatos: v3");
+fn card_albedo_path(candidate_label: &str) -> &'static str {
+    match candidate_label {
+        "legacy" => CARD_ALBEDO_LEGACY,
+        "v3" => CARD_ALBEDO_V3,
+        other => {
+            if other != "base" {
+                warn!(
+                    "[grass] candidata de carta desconocida {other:?}; candidatos: {:?}",
+                    bof_domain::perf::GRASS_CARD_CANDIDATE_STEPS
+                );
+            }
             CARD_ALBEDO_BASE
         }
-        None => CARD_ALBEDO_BASE,
     }
+}
+
+/// Umbral que ninguna distancia real cruza — el mismo sentido que ya usa
+/// `GrassUniform::default` (`spike_from_m`/`card_from_m` en `1e9`) para decir
+/// "nunca dispara".
+const SHAPE_BENCH_NEVER_PIXELS: f32 = 1.0e6;
+/// Umbral que cualquier distancia real cruza, incluida la más cercana.
+const SHAPE_BENCH_ALWAYS_PIXELS: f32 = 1.0e-4;
+
+/// Aplica el banco hoja/púa/carta (`PerfKnob::GrassShapeBench`) sobre una
+/// copia de la configuración, sin tocar el recurso real.
+///
+/// **Mueve los dos umbrales de píxeles que ya deciden la forma
+/// (`shape_at`), a pares que los saturan en vez de nudgearlos.** No agrega un
+/// mecanismo nuevo ni un campo de uniform nuevo: `spike_from_m`/`card_from_m`
+/// —que el shader ya deriva de estos mismos dos números— saturan igual, así
+/// que Rust y WGSL siguen clasificando la misma brizna igual sin tocar
+/// `grass.wgsl`. Cada forma conserva su propia densidad (`footprint_m`), así
+/// que lo único que cambia entre pasos es el asset — ni densidad ni cámara,
+/// que es lo que el corte de sesión del 2026-08-11 pedía separar. A
+/// diferencia del primer intento (mover `spike_min_pixels` a sus extremos ya
+/// legales en Grass Lab), esta versión es pura de punta a punta: "solo carta"
+/// ya no deja una franja de púa en el borde de la hoja, y "solo hoja" —antes
+/// imposible, `leaf_min_pixels` nunca alcanzaba a cubrir el anillo lejano
+/// dentro de sus límites de F9— ahora es un tercer extremo más.
+pub(crate) fn shape_bench_settings(
+    perf: &crate::perf::PerfToggles,
+    mut settings: GrassRendererSettings,
+) -> GrassRendererSettings {
+    match perf.grass_shape_bench_label() {
+        "solo hoja" => {
+            settings.leaf_min_pixels = SHAPE_BENCH_ALWAYS_PIXELS;
+            settings.spike_min_pixels = SHAPE_BENCH_ALWAYS_PIXELS;
+        }
+        "solo púa" => {
+            settings.leaf_min_pixels = SHAPE_BENCH_NEVER_PIXELS;
+            settings.spike_min_pixels = SHAPE_BENCH_ALWAYS_PIXELS;
+        }
+        "solo carta" => {
+            settings.leaf_min_pixels = SHAPE_BENCH_NEVER_PIXELS;
+            settings.spike_min_pixels = SHAPE_BENCH_NEVER_PIXELS;
+        }
+        _ => {}
+    }
+    settings
 }
 
 /// Metros cubiertos por un píxel y por metro de distancia, derivados de FOV y
@@ -539,15 +601,6 @@ const CHUNKS_BAKED_PER_FRAME: usize = 1;
 /// frame: a scene that starts with a hole in the meadow is worse than one hitch.
 const FILL_IN_ONE_FRAME: bool = true;
 
-/// Blade shape. Wide enough at the base to cover ground, tapered at the tip so
-/// it reads as a leaf rather than a strip of paper.
-///
-/// **+2mm el 2026-08-09, experimento de overdraw**: `minimum_density` pide
-/// densidad inversamente proporcional a este ancho, así que una brizna más
-/// gorda ya pide menos briznas sola, por la misma ley — no hace falta bajar
-/// la densidad aparte. Menos briznas solapadas para la misma cobertura es
-/// menos overdraw, que es lo que cuesta en un frame fill-bound.
-
 /// Un chunk de la pradera: una entidad, un casillero del buffer de su nivel.
 #[derive(Component)]
 pub(super) struct GrassChunk;
@@ -569,6 +622,12 @@ pub(super) struct GrassField {
     materials: [Handle<GrassMaterial>; GRASS_RING_COUNT],
     records: [RingRecords; GRASS_RING_COUNT],
     live: HashMap<ChunkKey, Entity>,
+    /// Qué candidata de carta llevan los materiales ahora mismo. Vive acá y no
+    /// en un `Local` de sistema: el campo se recrea entera al entrar a
+    /// escena, y un `Local` sobrevive a esa entrada — comparar contra un
+    /// estado viejo dejaría los materiales frescos con la textura de la
+    /// sesión anterior hasta que la perilla *cambiara* de nuevo.
+    card_candidate_step: usize,
 }
 
 /// Facts for the controlled grass lab, not a second culling mechanism.
@@ -874,6 +933,7 @@ pub(super) fn init_meadow_material(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     asset_server: Res<AssetServer>,
     settings: Res<GrassRendererSettings>,
+    perf: Res<crate::perf::PerfToggles>,
 ) {
     // Un buffer y un material por nivel. El buffer arranca con un registro de
     // relleno porque un `ShaderBuffer` vacío no es un binding válido, y el
@@ -891,8 +951,7 @@ pub(super) fn init_meadow_material(
     // Una sola textura compartida por los tres materiales: no agrega batches y
     // cubre las briznas del anillo lejano que, por distancia individual, aún
     // están construidas como hoja o púa.
-    let candidate = std::env::var(CARD_CANDIDATE_ENV).ok();
-    let card_albedo = asset_server.load(card_albedo_path(candidate.as_deref()));
+    let card_albedo = asset_server.load(card_albedo_path(perf.grass_card_candidate_label()));
     let materials = std::array::from_fn(|ring| {
         let mut material = grass_material(&settings);
         material.extension.blade_records = records[ring].buffer.clone();
@@ -910,7 +969,32 @@ pub(super) fn init_meadow_material(
         materials,
         records,
         live: HashMap::default(),
+        card_candidate_step: perf.grass_card_candidate_step,
     });
+}
+
+/// Recarga la textura de carta cuando `PerfKnob::GrassCardCandidate` cambia.
+///
+/// Separado de `track_meadow_focus`: eso corre cada frame porque el uniform
+/// sigue a la cámara, esto sólo hace algo el frame en que la perilla se
+/// movió. No rehornea la grilla — ninguna candidata cambia densidad ni
+/// alcance, sólo qué PNG lee el fragment.
+pub(super) fn apply_card_candidate(
+    mut field: ResMut<GrassField>,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<GrassMaterial>>,
+    perf: Res<crate::perf::PerfToggles>,
+) {
+    if field.card_candidate_step == perf.grass_card_candidate_step {
+        return;
+    }
+    field.card_candidate_step = perf.grass_card_candidate_step;
+    let card_albedo = asset_server.load(card_albedo_path(perf.grass_card_candidate_label()));
+    for handle in &field.materials {
+        if let Some(mut material) = materials.get_mut(handle) {
+            material.extension.card_albedo = Some(card_albedo.clone());
+        }
+    }
 }
 
 /// Sube al GPU lo que el rodado dejó escrito, un buffer por nivel.
@@ -1011,6 +1095,11 @@ fn grass_material(settings: &GrassRendererSettings) -> GrassMaterial {
     }
 }
 
+/// Qué dispara un rehorneado completo de la grilla: los tres pasos de perilla
+/// que cambian cuántas briznas tiene un chunk, más la configuración efectiva
+/// (ya con el banco de forma aplicado) que decide qué forma tiene cada anillo.
+type MeadowRebuildDials = (usize, usize, usize, usize, GrassRendererSettings);
+
 /// Roll the grid: drop the chunks that fell behind, bake the ones ahead.
 ///
 /// Reads the camera rather than the player because the LOD has to answer to what
@@ -1029,11 +1118,12 @@ pub(super) fn roll_meadow_grid(
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
-    mut dial: Local<Option<(usize, usize, usize, GrassRendererSettings)>>,
+    mut dial: Local<Option<MeadowRebuildDials>>,
 ) {
     let Some(camera) = camera else {
         return;
     };
+    let settings = shape_bench_settings(&perf, *settings);
 
     // Painting semantic terrain changes which chunks exist. The first vertical
     // slice deliberately re-bakes the *visible meadow*, not the entire map:
@@ -1070,7 +1160,8 @@ pub(super) fn roll_meadow_grid(
         perf.grass_density_step,
         perf.grass_reach_step,
         perf.grass_rings_step,
-        *settings,
+        perf.grass_shape_bench_step,
+        settings,
     );
     if dial.replace(dials) != Some(dials) {
         for entity in field.live.values() {
@@ -1103,7 +1194,7 @@ pub(super) fn roll_meadow_grid(
 
     let planted = |ring: usize| planted_ring(&perf, ring);
 
-    let settings_value = *settings;
+    let settings_value = settings;
     let wanted: HashSet<ChunkKey> = settings_value
         .rings
         .iter()
@@ -1294,6 +1385,7 @@ pub(super) fn track_meadow_focus(
     // cartas se construyen como hojas: el nivel lejano desaparece, y no por un
     // frame sino hasta la siguiente escritura. El caso y su síntoma, en
     // `BOTWGrass.md`.
+    let settings = shape_bench_settings(&perf, *settings);
     let viewport_height = window.map_or(REFERENCE_VIEWPORT_HEIGHT, |window| {
         window.physical_height() as f32
     });
@@ -1562,8 +1654,70 @@ mod tests {
 
     #[test]
     fn a_card_candidate_never_changes_the_shipped_asset_without_an_explicit_name() {
-        assert_eq!(card_albedo_path(None), CARD_ALBEDO_BASE);
-        assert_eq!(card_albedo_path(Some("v3")), CARD_ALBEDO_V3);
+        assert_eq!(card_albedo_path("base"), CARD_ALBEDO_BASE);
+        assert_eq!(card_albedo_path("legacy"), CARD_ALBEDO_LEGACY);
+        assert_eq!(card_albedo_path("v3"), CARD_ALBEDO_V3);
+        assert_eq!(card_albedo_path("nada-que-exista"), CARD_ALBEDO_BASE);
+    }
+
+    #[test]
+    fn shape_bench_auto_leaves_the_configuration_untouched() {
+        let perf = crate::perf::PerfToggles::default();
+        assert_eq!(shape_bench_settings(&perf, settings()), settings());
+    }
+
+    /// Distancias que un experimento real recorre: desde casi encima de la
+    /// cámara hasta el borde del anillo más lejano. Un banco puro tiene que
+    /// dar la misma forma en las dos puntas, no sólo lejos.
+    fn shape_bench_probe_distances() -> [f32; 2] {
+        [0.5, farthest_reach(1.0, &GrassRendererSettings::default())]
+    }
+
+    #[test]
+    fn shape_bench_solo_leaf_covers_the_whole_dome_leaf_shaped() {
+        let mut perf = crate::perf::PerfToggles::default();
+        perf.set_knob_step(crate::perf::PerfKnob::GrassShapeBench, 1);
+        let bench = shape_bench_settings(&perf, settings());
+        let scale = reference_scale();
+        for distance in shape_bench_probe_distances() {
+            assert_eq!(shape_at(distance, scale, &bench), BladeShape::Leaf);
+        }
+    }
+
+    #[test]
+    fn shape_bench_solo_spike_never_lets_a_blade_open_as_leaf_or_card() {
+        let mut perf = crate::perf::PerfToggles::default();
+        perf.set_knob_step(crate::perf::PerfKnob::GrassShapeBench, 2);
+        let bench = shape_bench_settings(&perf, settings());
+        let scale = reference_scale();
+        for distance in shape_bench_probe_distances() {
+            assert_eq!(shape_at(distance, scale, &bench), BladeShape::Spike);
+        }
+    }
+
+    #[test]
+    fn shape_bench_solo_card_never_leaves_a_sliver_of_another_shape() {
+        let mut perf = crate::perf::PerfToggles::default();
+        perf.set_knob_step(crate::perf::PerfKnob::GrassShapeBench, 3);
+        let bench = shape_bench_settings(&perf, settings());
+        let scale = reference_scale();
+        for distance in shape_bench_probe_distances() {
+            assert_eq!(shape_at(distance, scale, &bench), BladeShape::Card);
+        }
+    }
+
+    /// El banco compara asset, no densidad: cada forma sigue calculando su
+    /// propia huella con los mismos números que el juego real.
+    #[test]
+    fn shape_bench_never_touches_the_footprint_a_shape_declares() {
+        let mut perf = crate::perf::PerfToggles::default();
+        for step in 0..bof_domain::perf::GRASS_SHAPE_BENCH_STEPS.len() {
+            perf.set_knob_step(crate::perf::PerfKnob::GrassShapeBench, step);
+            let bench = shape_bench_settings(&perf, settings());
+            assert_eq!(bench.card_width_m, settings().card_width_m);
+            assert_eq!(bench.card_silhouette_area, settings().card_silhouette_area);
+            assert_eq!(bench.blade_width_m, settings().blade_width_m);
+        }
     }
 
     /// Un chunk de prueba: dos baldosas por lado y un tramo de la secuencia,

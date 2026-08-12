@@ -26,7 +26,7 @@ use bevy::diagnostic::DiagnosticsStore;
 use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 
-pub use data::{PerfKnob, PerfProfile, PerfToggles};
+pub use data::{PerfKnob, PerfKnobCategory, PerfProfile, PerfToggles};
 pub use flythrough::{Flythrough, FlythroughRequest};
 pub use sequence::{Benchmark, BenchmarkRequest};
 pub use suite::BenchSuite;

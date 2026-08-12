@@ -12,6 +12,7 @@
 //! overlay is extra UI draw work and holds the pointer, and neither belongs in
 //! the frame times the run is about to record.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::debug::channel::{
@@ -34,7 +35,54 @@ mod view;
 #[derive(Resource, Default)]
 struct DebugUiState {
     open: bool,
+    active_tab: DebugTab,
 }
+
+/// Qué contenido muestra el cuerpo del hub. Todo vivía en un solo scroll: un
+/// laboratorio nuevo alargaba el scroll de **todos**, no sólo el suyo — la
+/// queja concreta fue tener que bajar por Medición/Render/Canales/Terreno
+/// enteros para llegar a Pradera. Una pestaña por bloque, y sólo la activa
+/// ocupa el panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum DebugTab {
+    #[default]
+    Measurement,
+    Render,
+    Grass,
+    Channels,
+    Terrain,
+    Actions,
+}
+
+impl DebugTab {
+    const ALL: [DebugTab; 6] = [
+        DebugTab::Measurement,
+        DebugTab::Render,
+        DebugTab::Grass,
+        DebugTab::Channels,
+        DebugTab::Terrain,
+        DebugTab::Actions,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            DebugTab::Measurement => "Medición",
+            DebugTab::Render => "Render",
+            DebugTab::Grass => "Pradera",
+            DebugTab::Channels => "Canales",
+            DebugTab::Terrain => "Terreno",
+            DebugTab::Actions => "Acciones",
+        }
+    }
+}
+
+#[derive(Component)]
+struct TabButton(DebugTab);
+
+/// El contenido de una pestaña. Sólo uno está `Display::Flex` a la vez
+/// (`view::sync_tab_panes`); el resto existe pero no se dibuja ni se mide.
+#[derive(Component)]
+struct TabPane(DebugTab);
 
 #[derive(Component)]
 struct DebugUiRoot;
@@ -101,6 +149,8 @@ impl Plugin for DebugUiPlugin {
                 toggle_hub,
                 handle_clicks,
                 sync_visibility,
+                view::sync_tab_panes.run_if(hub_is_open),
+                view::sync_tab_buttons.run_if(hub_is_open),
                 sync_labels.run_if(hub_is_open),
                 scroll_panel.run_if(hub_is_open),
                 // Outside the `hub_is_open` gate on purpose: the panel closes
@@ -168,17 +218,30 @@ fn set_open(
     });
 }
 
+/// Todas las queries de sólo-lectura que `handle_clicks` recorre, en un solo
+/// parámetro.
+///
+/// Bevy deja de reconocer un sistema como tal pasado cierto número de
+/// parámetros de nivel superior; sumar `tabs` lo cruzó. Agrupar es la salida
+/// documentada (ver `ShotReportInputs` en `perf::shot` para el mismo caso).
+#[derive(SystemParam)]
+struct ClickQueries<'w, 's> {
+    close: Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<CloseButton>)>,
+    tabs: Query<'w, 's, (&'static Interaction, &'static TabButton), Changed<Interaction>>,
+    bench: Query<'w, 's, (&'static Interaction, &'static BenchmarkButton), Changed<Interaction>>,
+    flythrough: Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<FlythroughButton>)>,
+    knobs: Query<'w, 's, (&'static Interaction, &'static KnobButton), Changed<Interaction>>,
+    channels: Query<'w, 's, (&'static Interaction, &'static ChannelButton), Changed<Interaction>>,
+    actions: Query<'w, 's, (&'static Interaction, &'static ActionButton), Changed<Interaction>>,
+    terrain_views:
+        Query<'w, 's, (&'static Interaction, &'static TerrainViewButton), Changed<Interaction>>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_clicks(
     mut state: ResMut<DebugUiState>,
     root: Single<Entity, With<DebugUiRoot>>,
-    close: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
-    bench: Query<(&Interaction, &BenchmarkButton), Changed<Interaction>>,
-    flythrough: Query<&Interaction, (Changed<Interaction>, With<FlythroughButton>)>,
-    knobs: Query<(&Interaction, &KnobButton), Changed<Interaction>>,
-    channels: Query<(&Interaction, &ChannelButton), Changed<Interaction>>,
-    actions: Query<(&Interaction, &ActionButton), Changed<Interaction>>,
-    terrain_views: Query<(&Interaction, &TerrainViewButton), Changed<Interaction>>,
+    queries: ClickQueries,
     mut focus: MessageWriter<ModalInputFocusRequest>,
     mut knob_writer: MessageWriter<PerfKnobToggle>,
     mut channel_writer: MessageWriter<DebugChannelToggle>,
@@ -192,39 +255,44 @@ fn handle_clicks(
     }
     let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
 
-    for (interaction, knob) in &knobs {
+    for (interaction, tab) in &queries.tabs {
+        if pressed(interaction) {
+            state.active_tab = tab.0;
+        }
+    }
+    for (interaction, knob) in &queries.knobs {
         if pressed(interaction) {
             knob_writer.write(PerfKnobToggle(knob.0));
         }
     }
-    for (interaction, channel) in &channels {
+    for (interaction, channel) in &queries.channels {
         if pressed(interaction) {
             channel_writer.write(DebugChannelToggle(channel.0));
         }
     }
-    for (interaction, action) in &actions {
+    for (interaction, action) in &queries.actions {
         if pressed(interaction) {
             action_writer.write(DebugActionRequest(action.0));
         }
     }
-    for (interaction, view) in &terrain_views {
+    for (interaction, view) in &queries.terrain_views {
         if pressed(interaction) {
             terrain_view_writer.write(TerrainDebugViewRequest(view.0));
         }
     }
-    for (interaction, button) in &bench {
+    for (interaction, button) in &queries.bench {
         if pressed(interaction) {
             bench_writer.write(button.0);
             // The panel would be measured along with the scene; close it first.
             set_open(&mut state, false, *root, &mut focus);
         }
     }
-    if flythrough.iter().any(pressed) {
+    if queries.flythrough.iter().any(pressed) {
         flythrough_writer.write(FlythroughRequest);
         // Same reason as the benchmark: the modal must not enter the measurement.
         set_open(&mut state, false, *root, &mut focus);
     }
-    if close.iter().any(pressed) {
+    if queries.close.iter().any(pressed) {
         set_open(&mut state, false, *root, &mut focus);
     }
 }

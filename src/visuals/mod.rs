@@ -141,6 +141,7 @@ impl Plugin for VisualsPlugin {
                     // Después de rodar: sube lo que el rodado dejó escrito.
                     grass::upload_meadow_records,
                     grass::track_meadow_focus,
+                    grass::apply_card_candidate,
                     grass::collect_grass_lab_stats
                         .run_if(crate::scene::scene_allows(|tools| tools.grass_lab)),
                     grass_debug::announce_grass_debug_view,

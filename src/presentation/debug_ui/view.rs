@@ -8,14 +8,14 @@ use super::style::{
     heading_font, row_node, section_title,
 };
 use super::{
-    BenchmarkButton, BenchmarkText, ChannelButton, ChannelText, CloseButton, DebugUiRoot,
-    FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel, TerrainViewButton,
-    TerrainViewText,
+    BenchmarkButton, BenchmarkText, ChannelButton, ChannelText, CloseButton, DebugTab, DebugUiRoot,
+    DebugUiState, FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel, TabButton,
+    TabPane, TerrainViewButton, TerrainViewText,
 };
 use crate::debug::channel::{DebugAction, DebugChannel};
 use crate::perf::BenchSuite;
-use crate::perf::PerfKnob;
 use crate::perf::sequence::{BenchmarkRequest, VantageMode};
+use crate::perf::{PerfKnob, PerfKnobCategory};
 use crate::visuals::terrain_material::TerrainDebugView;
 
 use super::ActionButton;
@@ -40,8 +40,6 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
         ))
         .with_children(|root| {
             root.spawn((
-                ScrollPanel,
-                ScrollPosition::default(),
                 Node {
                     width: Val::Px(720.0),
                     max_width: Val::Percent(96.0),
@@ -49,7 +47,6 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
                     flex_direction: FlexDirection::Column,
                     padding: UiRect::all(Val::Px(18.0)),
                     row_gap: Val::Px(8.0),
-                    overflow: Overflow::scroll_y(),
                     border: UiRect::all(Val::Px(1.0)),
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
@@ -59,13 +56,153 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
             ))
             .with_children(|panel| {
                 header(panel);
-                measurement_section(panel);
-                knob_section(panel);
-                channel_section(panel);
-                terrain_section(panel);
-                action_section(panel);
+                tab_bar(panel);
+                // Sólo esto scrollea: antes era el panel entero, así que
+                // cambiar de pestaña también cambiaba cuánto había que bajar
+                // para ver el header. Las pestañas viven afuera, fijas.
+                panel
+                    .spawn((
+                        ScrollPanel,
+                        ScrollPosition::default(),
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|scroll| {
+                        tab_pane(scroll, DebugTab::Measurement, measurement_section);
+                        tab_pane(scroll, DebugTab::Render, render_section);
+                        tab_pane(scroll, DebugTab::Grass, grass_section);
+                        tab_pane(scroll, DebugTab::Channels, channel_section);
+                        tab_pane(scroll, DebugTab::Terrain, terrain_section);
+                        tab_pane(scroll, DebugTab::Actions, action_section);
+                    });
             });
         });
+}
+
+/// Una barra de botones, uno por `DebugTab`. `sync_tab_buttons` pinta cuál
+/// está activo y esconde "Pradera" donde no hay pradera que ajustar.
+fn tab_bar(panel: &mut ChildSpawnerCommands) {
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            column_gap: Val::Px(6.0),
+            flex_wrap: FlexWrap::Wrap,
+            row_gap: Val::Px(6.0),
+            ..default()
+        })
+        .with_children(|row| {
+            for tab in DebugTab::ALL {
+                row.spawn((
+                    TabButton(tab),
+                    Button,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(if tab == DebugTab::default() {
+                        ACCENT_DARK
+                    } else {
+                        ROW
+                    }),
+                ))
+                .with_child((
+                    Text::new(tab.label()),
+                    body_font(),
+                    TextColor(TEXT_BRIGHT),
+                ));
+            }
+        });
+}
+
+/// Un panel de pestaña: arranca oculto salvo el que abre por default
+/// (`DebugTab::default()`); `sync_tab_panes` decide el resto cada frame.
+fn tab_pane(
+    scroll: &mut ChildSpawnerCommands,
+    tab: DebugTab,
+    build: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    scroll
+        .spawn((
+            TabPane(tab),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                display: if tab == DebugTab::default() {
+                    Display::Flex
+                } else {
+                    Display::None
+                },
+                ..default()
+            },
+        ))
+        .with_children(build);
+}
+
+/// Cuál pestaña se ve. `Grass` además exige pradera en la escena: si el
+/// usuario cambia de escena con esa pestaña activa, cae a `Render` en vez de
+/// dejar un panel vacío al que el botón (ya escondido) no puede volver.
+pub(super) fn sync_tab_panes(
+    mut state: ResMut<DebugUiState>,
+    scene: Res<State<crate::scene::AppState>>,
+    mut scroll: Single<&mut ScrollPosition, With<ScrollPanel>>,
+    mut panes: Query<(&mut Node, &TabPane)>,
+    mut last_tab: Local<Option<DebugTab>>,
+) {
+    let has_meadow = crate::scene::current_scene(&scene).is_some_and(|def| def.contents.meadow);
+    if state.active_tab == DebugTab::Grass && !has_meadow {
+        state.active_tab = DebugTab::Render;
+    }
+    let active = state.active_tab;
+    // Cambiar de pestaña con el scroll a mitad de camino deja la próxima
+    // mostrando su mitad de abajo hasta que alguien mueva la rueda.
+    if *last_tab != Some(active) {
+        scroll.0.y = 0.0;
+        *last_tab = Some(active);
+    }
+    for (mut node, pane) in &mut panes {
+        let wanted = if pane.0 == active {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != wanted {
+            node.display = wanted;
+        }
+    }
+}
+
+/// Qué botón está resaltado, y cuáles existen. Separado de `sync_tab_panes`
+/// porque uno lee/escribe el estado activo y el otro sólo lo lee para pintar.
+pub(super) fn sync_tab_buttons(
+    state: Res<DebugUiState>,
+    scene: Res<State<crate::scene::AppState>>,
+    mut buttons: Query<(&TabButton, &mut Node, &mut BackgroundColor)>,
+) {
+    let has_meadow = crate::scene::current_scene(&scene).is_some_and(|def| def.contents.meadow);
+    for (tab, mut node, mut background) in &mut buttons {
+        let visible = tab.0 != DebugTab::Grass || has_meadow;
+        let wanted_display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != wanted_display {
+            node.display = wanted_display;
+        }
+        let wanted_bg = if tab.0 == state.active_tab {
+            ACCENT_DARK
+        } else {
+            ROW
+        };
+        if background.0 != wanted_bg {
+            background.0 = wanted_bg;
+        }
+    }
 }
 
 fn terrain_section(panel: &mut ChildSpawnerCommands) {
@@ -219,25 +356,52 @@ fn measurement_section(panel: &mut ChildSpawnerCommands) {
     ));
 }
 
-fn knob_section(panel: &mut ChildSpawnerCommands) {
+/// Antes una lista plana de `PerfKnob::ALL` bajo un único título "Render":
+/// cada lab nuevo (`Pradera`, y el que siga) alargaba esa lista sin decir
+/// dónde hace algo. Ahora cada `PerfKnobCategory` es su propia pestaña —
+/// `render_section`/`grass_section` — y `tab_pane` decide sola cuál se ve.
+fn render_section(panel: &mut ChildSpawnerCommands) {
     section_title(
         panel,
         "Render",
         "Solo presentación. Overdraw respeta el culling del material: 1-2 capas bien, 3-5 medio, 6-9 malo, 10+ crítico si cubre un área grande. La secuencia apaga ambas vistas al medir.",
     );
-    for knob in PerfKnob::ALL {
-        panel
-            .spawn((KnobButton(knob), Button, row_node(), BackgroundColor(ROW)))
-            .with_children(|row| {
-                row.spawn((Text::new(knob.label()), body_font(), TextColor(TEXT_BRIGHT)));
-                row.spawn((
-                    KnobText(knob),
-                    Text::new("—"),
-                    body_font(),
-                    TextColor(ACCENT),
-                ));
-            });
+    for knob in knobs_in(PerfKnobCategory::Global) {
+        knob_row(panel, knob);
     }
+}
+
+fn grass_section(panel: &mut ChildSpawnerCommands) {
+    section_title(
+        panel,
+        "Pradera",
+        "Sólo llega acá si la escena tiene pradera (`sync_tab_buttons` esconde la pestaña si \
+         no). `grass-shape`/`grass-card` son el banco de medición: pisan los controles de \
+         Grass Lab (F9) mientras no estén en auto/base.",
+    );
+    for knob in knobs_in(PerfKnobCategory::Grass) {
+        knob_row(panel, knob);
+    }
+}
+
+fn knobs_in(category: PerfKnobCategory) -> impl Iterator<Item = PerfKnob> {
+    PerfKnob::ALL
+        .into_iter()
+        .filter(move |knob| knob.category() == category)
+}
+
+fn knob_row(panel: &mut ChildSpawnerCommands, knob: PerfKnob) {
+    panel
+        .spawn((KnobButton(knob), Button, row_node(), BackgroundColor(ROW)))
+        .with_children(|row| {
+            row.spawn((Text::new(knob.label()), body_font(), TextColor(TEXT_BRIGHT)));
+            row.spawn((
+                KnobText(knob),
+                Text::new("—"),
+                body_font(),
+                TextColor(ACCENT),
+            ));
+        });
 }
 
 fn channel_section(panel: &mut ChildSpawnerCommands) {

@@ -8,10 +8,13 @@
 //! It carries `DespawnOnExit(MainMenu)` like any scene content, so entering a
 //! world removes it without a teardown system.
 
+use bevy::feathers::controls::FeathersButton;
+use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 
 use super::{AppState, SCENES, SceneId};
-use crate::presentation::theme::{ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font};
+use crate::presentation::theme::{ACCENT, BORDER, TEXT_MUTED, body_font};
 
 /// What a menu row does when clicked: enter a scene, or leave.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -42,10 +45,7 @@ pub(super) struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::MainMenu), spawn_menu);
-        app.add_systems(
-            Update,
-            (highlight_rows, choose).run_if(in_state(AppState::MainMenu)),
-        );
+        app.add_systems(Update, choose_by_digit.run_if(in_state(AppState::MainMenu)));
     }
 }
 
@@ -106,74 +106,49 @@ fn spawn_menu(mut commands: Commands) {
 }
 
 fn spawn_row(screen: &mut ChildSpawnerCommands, choice: MenuChoice, label: &str, hint: &str) {
-    screen
-        .spawn((
-            choice,
-            Button,
-            Node {
-                width: Val::Px(520.0),
-                padding: UiRect::axes(Val::Px(18.0), Val::Px(10.0)),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(2.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL),
-            BorderColor::all(BORDER),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new(label.to_string()),
-                body_font(20.0),
-                TextColor(TEXT_BRIGHT),
-            ));
-            row.spawn((
-                Text::new(hint.to_string()),
-                body_font(13.0),
-                TextColor(TEXT_MUTED),
-            ));
-        });
+    let label = label.to_string();
+    let hint = hint.to_string();
+    screen.spawn(choice).apply_scene(bsn! {
+        @FeathersButton
+        Node {
+            width: Val::Px(520.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+        }
+        BorderColor::all(BORDER)
+        on(activate_menu_choice)
+        Children [
+            (Text({label}) ThemedText TextFont { font_size: FontSize::Px(20.0) }),
+            (Text({hint}) ThemedText TextFont { font_size: FontSize::Px(13.0) }),
+        ]
+    });
 }
 
-/// Rows whose hover state changed this frame.
-type ChangedRows<'w, 's> = Query<
-    'w,
-    's,
-    (&'static Interaction, &'static mut BackgroundColor),
-    (Changed<Interaction>, With<MenuChoice>),
->;
-
-/// Hover feedback, so the rows read as clickable.
-fn highlight_rows(mut rows: ChangedRows) {
-    for (interaction, mut background) in &mut rows {
-        background.0 = match interaction {
-            Interaction::Hovered | Interaction::Pressed => crate::presentation::theme::PANEL_INSET,
-            Interaction::None => PANEL,
-        };
-    }
-}
-
-/// Click a row or press its number.
-fn choose(
-    keys: Res<ButtonInput<KeyCode>>,
-    rows: Query<(&Interaction, &MenuChoice), Changed<Interaction>>,
+fn activate_menu_choice(
+    activate: On<Activate>,
+    choices: Query<&MenuChoice>,
     mut next: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let mut chosen = rows.iter().find_map(|(interaction, choice)| {
-        (*interaction == Interaction::Pressed).then_some(*choice)
-    });
-    for (index, def) in SCENES.iter().enumerate() {
-        if digit_key(index).is_some_and(|key| keys.just_pressed(key)) {
-            chosen = Some(MenuChoice::Enter(def.id));
-        }
-    }
-    match chosen {
-        Some(MenuChoice::Enter(id)) => next.set(AppState::Scene(id)),
-        Some(MenuChoice::Quit) => {
+    let Ok(choice) = choices.get(activate.entity) else {
+        return;
+    };
+    match *choice {
+        MenuChoice::Enter(id) => next.set(AppState::Scene(id)),
+        MenuChoice::Quit => {
             exit.write(AppExit::Success);
         }
-        None => {}
+    }
+}
+
+/// El mouse ya dispara `activate_menu_choice` vía `bevy_ui_widgets::Activate`;
+/// esto sólo cubre el atajo de número, que no pasa por ningún botón.
+fn choose_by_digit(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>) {
+    for (index, def) in SCENES.iter().enumerate() {
+        if digit_key(index).is_some_and(|key| keys.just_pressed(key)) {
+            next.set(AppState::Scene(def.id));
+        }
     }
 }

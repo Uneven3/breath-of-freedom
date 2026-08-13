@@ -1,3 +1,4 @@
+use bevy::feathers::controls::FeathersButton;
 use bevy::prelude::*;
 
 use super::{
@@ -6,8 +7,7 @@ use super::{
 };
 
 pub(super) use crate::presentation::theme::{
-    ACCENT, ACCENT_DARK, BORDER, DISABLED, PANEL, PANEL_INSET, ROW_OR_SLOT_BG as SLOT_BACKGROUND,
-    SELECTED_SLOT, TEXT_BRIGHT, TEXT_MUTED,
+    ACCENT, BORDER, PANEL, PANEL_INSET, TEXT_BRIGHT, TEXT_MUTED,
 };
 
 fn body_font() -> TextFont {
@@ -42,7 +42,13 @@ pub(super) fn spawn_inventory_ui(mut commands: Commands) {
                     flex_direction: FlexDirection::Column,
                     padding: UiRect::all(Val::Px(24.0)),
                     row_gap: Val::Px(18.0),
-                    overflow: Overflow::scroll_y(),
+                    // Sin scroll a propósito: nadie escribe `ScrollPosition`
+                    // acá (el `scroll_y` de antes no hacía nada, ninguna
+                    // rueda de mouse lo movía), y los SLOT_COUNT=8 slots
+                    // siempre entran en el 94% de alto. Dejar `scroll_y`
+                    // muerto era una trampa para el día que se sume un slot
+                    // — mismo bug de picking-vs-scroll que documentó
+                    // `debug_ui` (ver `AHORA.md`).
                     border: UiRect::all(Val::Px(1.0)),
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
@@ -71,28 +77,18 @@ fn spawn_panel(panel: &mut ChildSpawnerCommands) {
                 },
                 TextColor(TEXT_BRIGHT),
             ));
-            header
-                .spawn((
-                    CloseButton,
-                    Button,
-                    Node {
-                        width: Val::Px(36.0),
-                        height: Val::Px(36.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(PANEL_INSET),
-                ))
-                .with_child((
-                    Text::new("X"),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
-                    TextColor(TEXT_MUTED),
-                ));
+            header.spawn(CloseButton).apply_scene(bsn! {
+                @FeathersButton
+                Node {
+                    width: Val::Px(36.0),
+                    height: Val::Px(36.0),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                }
+                on(super::activate_close)
+                Children [
+                    (Text("X") TextFont { font_size: FontSize::Px(18.0) } TextColor(TEXT_MUTED))
+                ]
+            });
         });
 
     panel
@@ -105,25 +101,24 @@ fn spawn_panel(panel: &mut ChildSpawnerCommands) {
         })
         .with_children(|tabs| {
             for category in InventoryCategory::ALL {
-                tabs.spawn((
-                    CategoryButton(category),
-                    Button,
+                let label = category.label().to_string();
+                tabs.spawn(CategoryButton(category)).apply_scene(bsn! {
+                    @FeathersButton
                     Node {
                         height: Val::Px(38.0),
                         padding: UiRect::horizontal(Val::Px(16.0)),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
                         border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(PANEL_INSET),
-                ))
-                .with_child((
-                    CategoryText(category),
-                    Text::new(category.label()),
-                    body_font(),
-                    TextColor(TEXT_MUTED),
-                ));
+                    }
+                    on(super::activate_category)
+                    Children [
+                        (
+                            CategoryText({category})
+                            Text({label})
+                            TextFont { font_size: FontSize::Px(16.0) }
+                            TextColor(TEXT_MUTED)
+                        )
+                    ]
+                });
             }
         });
 
@@ -173,28 +168,27 @@ fn spawn_panel(panel: &mut ChildSpawnerCommands) {
 
 fn spawn_slots(slots: &mut ChildSpawnerCommands) {
     for index in 0..SLOT_COUNT {
-        slots
-            .spawn((
-                InventorySlotButton(index),
-                Button,
-                Node {
-                    min_width: Val::Px(0.0),
-                    height: Val::Px(104.0),
-                    padding: UiRect::all(Val::Px(14.0)),
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
-                    ..default()
-                },
-                BackgroundColor(SLOT_BACKGROUND),
-                BorderColor::all(BORDER),
-            ))
-            .with_child((
-                InventorySlotText(index),
-                Text::new(""),
-                body_font(),
-                TextColor(TEXT_BRIGHT),
-            ));
+        slots.spawn(InventorySlotButton(index)).apply_scene(bsn! {
+            @FeathersButton
+            Node {
+                min_width: Val::Px(0.0),
+                height: Val::Px(104.0),
+                padding: UiRect::all(Val::Px(14.0)),
+                justify_content: JustifyContent::FlexStart,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+            }
+            BorderColor::all(BORDER)
+            on(super::activate_slot)
+            Children [
+                (
+                    InventorySlotText({index})
+                    Text("")
+                    TextFont { font_size: FontSize::Px(16.0) }
+                    TextColor(TEXT_BRIGHT)
+                )
+            ]
+        });
     }
 }
 
@@ -218,26 +212,18 @@ fn spawn_details(details: &mut ChildSpawnerCommands) {
             ..default()
         },
     ));
-    details
-        .spawn((
-            ActionButton,
-            Button,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(46.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
-                ..default()
-            },
-            BackgroundColor(DISABLED),
-            BorderColor::all(BORDER),
-        ))
-        .with_child((
-            ActionText,
-            Text::new("Slot vacio"),
-            body_font(),
-            TextColor(TEXT_BRIGHT),
-        ));
+    details.spawn(ActionButton).apply_scene(bsn! {
+        @FeathersButton
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(46.0),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(5.0)),
+        }
+        BorderColor::all(BORDER)
+        on(super::activate_action_button)
+        Children [
+            (ActionText Text("Slot vacio") TextFont { font_size: FontSize::Px(16.0) } TextColor(TEXT_BRIGHT))
+        ]
+    });
 }

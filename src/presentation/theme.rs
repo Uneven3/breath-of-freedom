@@ -96,7 +96,39 @@ impl Plugin for ThemePlugin {
             error!("failed to install the embedded UI font: {error}");
         }
         app.add_systems(PreStartup, load_symbol_fonts);
+        // `bevy_feathers::controls::update_button_styles` repinta `BackgroundColor`
+        // sobre cualquier `ButtonVariant` cada vez que cambia `Hovered` — cualquier
+        // botón migrado a `FeathersButton` que además escriba `BackgroundColor` a
+        // mano pelea con eso (mismo tipo de "clobbering" que ya se documentó para
+        // `Node`, ver `AHORA.md`). La migración de F1/F9/menú/inventario evita esa
+        // pelea escribiendo `ButtonVariant` en vez de color — pero eso deja los
+        // botones con el tema oscuro genérico de Bevy salvo que se lo pise acá con
+        // la paleta del juego, que es lo que hace `feathers_theme()`.
+        app.insert_resource(bevy::feathers::theme::UiTheme(feathers_theme()));
     }
+}
+
+fn feathers_theme() -> bevy::feathers::theme::ThemeProps {
+    use bevy::feathers::tokens;
+    let mut props = bevy::feathers::dark_theme::create_dark_theme();
+    props.color.insert(tokens::WINDOW_BG, PANEL);
+    props.color.insert(tokens::TEXT_MAIN, TEXT_BRIGHT);
+    props.color.insert(tokens::TEXT_DIM, TEXT_MUTED);
+    props.color.insert(tokens::BUTTON_BG, ROW_OR_SLOT_BG);
+    props.color.insert(tokens::BUTTON_BG_HOVER, SELECTED_SLOT);
+    props.color.insert(tokens::BUTTON_BG_PRESSED, ACCENT_DARK);
+    props.color.insert(tokens::BUTTON_BG_DISABLED, DISABLED);
+    props.color.insert(tokens::BUTTON_PRIMARY_BG, ACCENT_DARK);
+    props.color.insert(tokens::BUTTON_PRIMARY_BG_HOVER, ACCENT);
+    props
+        .color
+        .insert(tokens::BUTTON_PRIMARY_BG_PRESSED, ACCENT);
+    props
+        .color
+        .insert(tokens::BUTTON_PRIMARY_BG_DISABLED, DISABLED);
+    props.color.insert(tokens::BUTTON_TEXT, TEXT_BRIGHT);
+    props.color.insert(tokens::BUTTON_PRIMARY_TEXT, TEXT_BRIGHT);
+    props
 }
 
 fn load_symbol_fonts(mut commands: Commands, assets: Res<AssetServer>) {

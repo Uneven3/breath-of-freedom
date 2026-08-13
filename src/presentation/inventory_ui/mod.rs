@@ -1,7 +1,9 @@
 //! Read-only inventory presentation. User actions cross into Inventory as
 //! validated messages; this module never mutates simulation components.
 
+use bevy::feathers::controls::ButtonVariant;
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 
 use crate::input::ModalInputFocusRequest;
 use crate::inventory::{
@@ -14,8 +16,13 @@ mod view;
 
 const SLOT_COUNT: usize = crate::inventory::data::INVENTORY_SLOTS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Default`: `CategoryText` lo lleva dentro de un `bsn!` (botón de categoría,
+// `inventory_ui::view`), que exige `Component + Clone + Default` en todo lo
+// que declara ahí adentro aunque el valor real llegue interpolado — misma
+// razón que `PerfKnob`/`DebugChannel` en `debug_ui` (ver `perf.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum InventoryCategory {
+    #[default]
     All,
     Weapons,
     Food,
@@ -108,13 +115,15 @@ struct InventoryUiRoot;
 #[derive(Component)]
 struct InventorySlotButton(usize);
 
-#[derive(Component)]
+// `Clone, Default`: viven dentro de un `bsn!` (ver nota de `InventoryCategory`
+// más arriba).
+#[derive(Component, Clone, Default)]
 struct InventorySlotText(usize);
 
 #[derive(Component)]
 struct CategoryButton(InventoryCategory);
 
-#[derive(Component)]
+#[derive(Component, Clone, Default)]
 struct CategoryText(InventoryCategory);
 
 #[derive(Component)]
@@ -126,7 +135,7 @@ struct EquippedText;
 #[derive(Component)]
 struct ActionButton;
 
-#[derive(Component)]
+#[derive(Component, Clone, Default)]
 struct ActionText;
 
 #[derive(Component)]
@@ -143,7 +152,6 @@ impl Plugin for InventoryUiPlugin {
             (
                 reset_action_latch,
                 toggle_inventory,
-                handle_button_input,
                 handle_keyboard_navigation,
                 render_inventory,
             )
@@ -186,48 +194,56 @@ fn set_open(
 
 type InventoryActorQuery<'a> = (Entity, &'a Inventory, Option<&'a WeaponDurability>);
 
-#[allow(clippy::too_many_arguments)]
-fn handle_button_input(
+// Un observer por tipo de botón, no por instancia: `bevy_ui_widgets::Button`
+// no llena `Interaction` (mismo hallazgo que en `debug_ui`, ver `AHORA.md`),
+// así que el click se lee acá en vez de con `Query<&Interaction,...>`.
+// `On<Activate>::entity` es el botón mismo — el marcador (`CategoryButton`,
+// `InventorySlotButton`, ...) sigue en esa entidad porque `apply_scene` lo
+// pisa encima, no lo reemplaza.
+fn activate_category(
+    activate: On<Activate>,
+    categories: Query<&CategoryButton>,
+    mut state: ResMut<InventoryUiState>,
+    actor: Query<&Inventory, With<Player>>,
+) {
+    let Ok(button) = categories.get(activate.entity) else {
+        return;
+    };
+    state.category = button.0;
+    if let Ok(inventory) = actor.single() {
+        select_first_visible(&mut state, inventory);
+    }
+}
+
+fn activate_slot(
+    activate: On<Activate>,
+    slots: Query<&InventorySlotButton>,
+    mut state: ResMut<InventoryUiState>,
+) {
+    if let Ok(button) = slots.get(activate.entity) {
+        state.selected_slot = button.0;
+    }
+}
+
+fn activate_action_button(
+    _activate: On<Activate>,
     mut state: ResMut<InventoryUiState>,
     actor: Query<InventoryActorQuery, With<Player>>,
-    root: Single<Entity, With<InventoryUiRoot>>,
-    categories: Query<(&Interaction, &CategoryButton), Changed<Interaction>>,
-    slots: Query<(&Interaction, &InventorySlotButton), Changed<Interaction>>,
-    action: Query<&Interaction, (Changed<Interaction>, With<ActionButton>)>,
-    close: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
     mut equip: MessageWriter<EquipSlotRequestMessage>,
     mut consume: MessageWriter<ConsumeSlotRequestMessage>,
-    mut focus: MessageWriter<ModalInputFocusRequest>,
 ) {
-    if !state.open {
-        return;
-    }
-    for (interaction, button) in &categories {
-        if *interaction == Interaction::Pressed {
-            state.category = button.0;
-            if let Ok((_, inventory, _)) = actor.single() {
-                select_first_visible(&mut state, inventory);
-            }
-        }
-    }
-    for (interaction, button) in &slots {
-        if *interaction == Interaction::Pressed {
-            state.selected_slot = button.0;
-        }
-    }
-    if action
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-        && let Ok((entity, inventory, _)) = actor.single()
-    {
+    if let Ok((entity, inventory, _)) = actor.single() {
         state.confirm_selection(entity, inventory, &mut equip, &mut consume);
     }
-    if close
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        set_open(false, *root, &mut state, &mut focus);
-    }
+}
+
+fn activate_close(
+    _activate: On<Activate>,
+    mut state: ResMut<InventoryUiState>,
+    root: Single<Entity, With<InventoryUiRoot>>,
+    mut focus: MessageWriter<ModalInputFocusRequest>,
+) {
+    set_open(false, *root, &mut state, &mut focus);
 }
 
 fn handle_keyboard_navigation(
@@ -311,7 +327,7 @@ fn emit_action(
     }
 }
 
-type CategoryButtonQuery<'a> = (&'a CategoryButton, &'a mut BackgroundColor);
+type CategoryButtonQuery<'a> = (&'a CategoryButton, &'a mut ButtonVariant);
 type CategoryButtonFilter = (Without<InventorySlotButton>, Without<ActionButton>);
 type DetailTextFilter = (
     With<DetailText>,
@@ -325,7 +341,7 @@ type EquippedTextFilter = (
     Without<ActionText>,
     Without<InventorySlotText>,
 );
-type ActionButtonQuery<'a> = (&'a mut BackgroundColor, &'a mut BorderColor);
+type ActionButtonQuery<'a> = (&'a mut ButtonVariant, &'a mut BorderColor);
 type ActionButtonFilter = (
     With<ActionButton>,
     Without<InventorySlotButton>,
@@ -346,7 +362,7 @@ fn render_inventory(
     mut slots: Query<(
         &InventorySlotButton,
         &mut Node,
-        &mut BackgroundColor,
+        &mut ButtonVariant,
         &mut BorderColor,
     )>,
     mut slot_texts: Query<(&InventorySlotText, &mut Text)>,
@@ -371,29 +387,35 @@ fn render_inventory(
         return;
     };
 
-    for (button, mut node, mut background, mut border) in &mut slots {
+    for (button, mut node, mut variant, mut border) in &mut slots {
         node.display = if slot_visible(inventory, button.0, state.category) {
             Display::Flex
         } else {
             Display::None
         };
         let selected = button.0 == state.selected_slot;
-        *background = if selected {
-            view::SELECTED_SLOT.into()
+        let wanted = if selected {
+            ButtonVariant::Primary
         } else {
-            view::SLOT_BACKGROUND.into()
+            ButtonVariant::Normal
         };
+        if *variant != wanted {
+            *variant = wanted;
+        }
         *border = BorderColor::all(if selected { view::ACCENT } else { view::BORDER });
     }
     for (label, mut text) in &mut slot_texts {
         **text = slot_label(inventory.slot(label.0), label.0);
     }
-    for (button, mut background) in &mut categories {
-        *background = if button.0 == state.category {
-            view::ACCENT_DARK.into()
+    for (button, mut variant) in &mut categories {
+        let wanted = if button.0 == state.category {
+            ButtonVariant::Primary
         } else {
-            view::PANEL_INSET.into()
+            ButtonVariant::Normal
         };
+        if *variant != wanted {
+            *variant = wanted;
+        }
     }
     for (label, mut color) in &mut category_texts {
         color.0 = if label.0 == state.category {
@@ -409,11 +431,14 @@ fn render_inventory(
         inventory.slot(state.selected_slot).map(|stack| stack.kind),
         Some(ItemKind::Weapon(_) | ItemKind::Food { .. })
     );
-    action.0.0 = if actionable {
-        view::ACCENT_DARK
+    let wanted_action_variant = if actionable {
+        ButtonVariant::Primary
     } else {
-        view::DISABLED
+        ButtonVariant::Normal
     };
+    if *action.0 != wanted_action_variant {
+        *action.0 = wanted_action_variant;
+    }
     action.1.set_all(if actionable {
         view::ACCENT
     } else {

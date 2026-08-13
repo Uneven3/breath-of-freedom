@@ -6,12 +6,13 @@
 //! change the renderer's real values, but do not pretend a moved boundary can
 //! repair the one-blade-for-one-card handover.
 
+use bevy::feathers::controls::FeathersButton;
+use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 
 use crate::input::{GrassLabToggleRequest, ModalInputFocusRequest};
-use crate::presentation::theme::{
-    ACCENT, BORDER, PANEL, ROW_OR_SLOT_BG, TEXT_BRIGHT, TEXT_MUTED, body_font,
-};
+use crate::presentation::theme::{ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font};
 use crate::scene::{AppState, current_scene};
 use crate::visuals::grass::{
     GRASS_RING_COUNT, GrassLabSettingRequest, GrassLabStats, GrassRendererSettings,
@@ -51,7 +52,6 @@ impl Plugin for GrassLabPlugin {
                 toggle_grass_lab,
                 close_outside_grass_lab,
                 sync_visibility,
-                send_setting_requests,
                 update_readout,
                 update_settings_readout,
             )
@@ -104,6 +104,34 @@ fn set_open(
     } else {
         ModalInputFocusRequest::Release(owner)
     });
+}
+
+/// Un solo observer para las 4 variantes de `GrassLabControl`: comparten
+/// marcador y mensaje, así que no hace falta uno por instancia (mismo
+/// patrón que `debug_ui::view::activate_knob`). `bevy_ui_widgets::Button`
+/// no llena `Interaction` — este observer sobre `On<Activate>` es el único
+/// camino real de click desde la migración a `bevy_feathers`.
+fn activate_grass_lab_control(
+    activate: On<Activate>,
+    controls: Query<&GrassLabControl>,
+    mut requests: MessageWriter<GrassLabSettingRequest>,
+) {
+    let Ok(control) = controls.get(activate.entity) else {
+        return;
+    };
+    let request = match *control {
+        GrassLabControl::Frontier { ring, delta_m } => {
+            GrassLabSettingRequest::AdjustFrontier { ring, delta_m }
+        }
+        GrassLabControl::Spike { delta_pixels } => {
+            GrassLabSettingRequest::AdjustSpikeThreshold { delta_pixels }
+        }
+        GrassLabControl::CardWidth { delta_m } => {
+            GrassLabSettingRequest::AdjustCardWidth { delta_m }
+        }
+        GrassLabControl::Reset => GrassLabSettingRequest::Reset,
+    };
+    requests.write(request);
 }
 
 fn spawn_grass_lab(mut commands: Commands) {
@@ -159,21 +187,12 @@ fn spawn_grass_lab(mut commands: Commands) {
             control_row(panel, "Frontera anillo 1 → 2", GrassLabControl::Frontier { ring: 1, delta_m: -1.0 }, GrassLabControl::Frontier { ring: 1, delta_m: 1.0 });
             control_row(panel, "Umbral de carta", GrassLabControl::Spike { delta_pixels: -0.1 }, GrassLabControl::Spike { delta_pixels: 0.1 });
             control_row(panel, "Ancho de carta", GrassLabControl::CardWidth { delta_m: -0.02 }, GrassLabControl::CardWidth { delta_m: 0.02 });
-            panel
-                .spawn((
-                    Button,
-                    GrassLabControl::Reset,
-                    Node {
-                        align_self: AlignSelf::FlexStart,
-                        padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(ROW_OR_SLOT_BG),
-                    BorderColor::all(BORDER),
-                ))
-                .with_child((Text::new("Restaurar baseline"), body_font(13.0), TextColor(TEXT_BRIGHT)));
+            panel.spawn(GrassLabControl::Reset).apply_scene(bsn! {
+                @FeathersButton
+                Node { align_self: AlignSelf::FlexStart }
+                on(activate_grass_lab_control)
+                Children [ (Text("Restaurar baseline") ThemedText TextFont { font_size: FontSize::Px(13.0) }) ]
+            });
             panel.spawn((
                 Text::new(
                     "F9 cerrar · F1 sigue siendo diagnóstico global, salvo grass-shape/grass-card:\n\
@@ -210,26 +229,12 @@ fn control_row(
                 },
             ));
             for (caption, control) in [("−", decrement), ("+", increment)] {
-                row.spawn((
-                    Button,
-                    control,
-                    Node {
-                        width: Val::Px(28.0),
-                        height: Val::Px(24.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(ROW_OR_SLOT_BG),
-                    BorderColor::all(BORDER),
-                ))
-                .with_child((
-                    Text::new(caption),
-                    body_font(16.0),
-                    TextColor(ACCENT),
-                ));
+                row.spawn(control).apply_scene(bsn! {
+                    @FeathersButton
+                    Node { width: Val::Px(28.0), height: Val::Px(24.0) }
+                    on(activate_grass_lab_control)
+                    Children [ (Text({caption}) ThemedText TextFont { font_size: FontSize::Px(16.0) }) ]
+                });
             }
         });
 }
@@ -242,30 +247,6 @@ fn sync_visibility(lab: Res<GrassLabState>, mut root: Single<&mut Node, With<Gra
     };
     if root.display != wanted {
         root.display = wanted;
-    }
-}
-
-fn send_setting_requests(
-    buttons: Query<(&Interaction, &GrassLabControl), Changed<Interaction>>,
-    mut requests: MessageWriter<GrassLabSettingRequest>,
-) {
-    for (interaction, control) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let request = match *control {
-            GrassLabControl::Frontier { ring, delta_m } => {
-                GrassLabSettingRequest::AdjustFrontier { ring, delta_m }
-            }
-            GrassLabControl::Spike { delta_pixels } => {
-                GrassLabSettingRequest::AdjustSpikeThreshold { delta_pixels }
-            }
-            GrassLabControl::CardWidth { delta_m } => {
-                GrassLabSettingRequest::AdjustCardWidth { delta_m }
-            }
-            GrassLabControl::Reset => GrassLabSettingRequest::Reset,
-        };
-        requests.write(request);
     }
 }
 

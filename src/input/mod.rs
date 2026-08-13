@@ -334,6 +334,7 @@ fn apply_modal_focus_requests(
     mut actions: ResMut<ActiveActions>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut captured: ResMut<PointerCaptured>,
+    mut keyboard_focus: ResMut<bevy::input_focus::InputFocus>,
 ) {
     let mut changed = focus.purge_despawned(entities);
     for request in requests.read() {
@@ -350,6 +351,16 @@ fn apply_modal_focus_requests(
     }
     if changed {
         set_cursor(&mut cursor, &mut captured, !focus.is_active());
+        if !focus.is_active() {
+            // bevy_feathers/bevy_ui_widgets tienen su propio foco de teclado
+            // (bevy_input_focus), separado del ModalInputFocus del proyecto.
+            // Cerrar un panel sólo lo oculta (Display::None); sin este clear,
+            // el último FeathersButton clickeado antes de cerrar se queda
+            // "enfocado" para el motor, y Space/Enter jugando reenvía la
+            // tecla a ese botón oculto — dispara su Activate de nuevo,
+            // minutos después y sin que el panel esté abierto.
+            keyboard_focus.clear();
+        }
     }
 }
 

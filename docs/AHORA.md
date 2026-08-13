@@ -446,6 +446,74 @@ Feathers a propósito — `theme.rs` tiene 5 consumidores, dos de ellos UI de
 juego real (`inventory_ui`, `scene::menu`), así que migrarlo es una
 decisión aparte, no una continuación automática.
 
+*(Cerrado en la sesión siguiente — ver la sección de abajo.)*
+
+## Migración de `grass_lab.rs`, `scene/menu.rs` e `inventory_ui` a Feathers (2026-08-12, sesión siguiente)
+
+Pedido explícito: terminar de migrar lo que había quedado fuera (F9, menú
+principal, inventario) y limpiar el código muerto que dejara. Con la skill
+`iterate-safely`: plan escrito → subagente sin contexto lo revisó contra el
+código y las fuentes reales de `bevy_feathers-0.19.0`/`bevy_ui_widgets-0.19.0`
+→ triage → ejecutar.
+
+**El subagente encontró un bug real que el plan no contemplaba, y que ya
+afectaba a F1/F2 desde la migración anterior:** `bevy_feathers`/
+`bevy_ui_widgets` traen su propio foco de teclado (`bevy_input_focus`),
+separado del `ModalInputFocus` del proyecto. Cualquier click sobre un
+`FeathersButton` deja esa entidad "enfocada" para el motor — con o sin
+`TabGroup` declarado, no hace falta para esto. Cerrar un panel sólo lo
+oculta (`Display::None`); nunca despawnea la raíz ni limpia ese foco. Como
+Bevy reenvía cada tecla a la entidad enfocada sin mirar si es visible, y el
+proyecto no tenía nada tocando `InputFocus`, el último botón clickeado antes
+de cerrar un panel seguía "escuchando" Enter/Espacio — y Espacio es Saltar.
+Jugar, cerrar el inventario después de equipar algo, y saltar más tarde
+podía reenviar el `Activate` de "Equipar" al motor otra vez, en silencio.
+El latch `action_sent_this_frame` no lo cubre: protege una carrera dentro
+del mismo frame, no un foco que sobrevive frames/minutos. Arreglado en
+`src/input/mod.rs::apply_modal_focus_requests`: al liberar el foco modal y
+quedar inactivo, además de restaurar el cursor, se limpia
+`bevy::input_focus::InputFocus`.
+
+El subagente también encontró que `inventory_ui/view.rs` tenía
+`Overflow::scroll_y()` en el panel — el mismo tipo de configuración que
+`debug_ui` evitó a propósito por el bug de picking-vs-scroll del motor
+(sección de arriba). En la práctica nunca scrolleaba (nadie escribía
+`ScrollPosition`, y los 8 slots siempre entran en el 94% de alto), pero
+quedaba como una trampa para el día que se sumara un slot. Se sacó.
+
+Y cuestionó si repintar la paleta global de `UiTheme` con los colores del
+proyecto era necesario para evitar el choque entre `ButtonVariant`
+(automático de Feathers) y escribir `BackgroundColor` a mano — no lo es:
+migrar los tres módulos a `ButtonVariant` (en vez de pintar color directo)
+ya evita el choque solo, con cualquier tema. Repintar es una decisión de
+identidad visual aparte, no una corrección — se hizo de todas formas, al
+final, como paso separado (`presentation::theme::feathers_theme`, parcha
+`UiTheme` con `PANEL`/`ACCENT`/`ACCENT_DARK`/`ROW_OR_SLOT_BG`/etc. en vez de
+dejar el tema oscuro genérico de Bevy), porque dejar el menú principal y el
+inventario con gris genérico de Feathers era un cambio de arte real y no
+pedido, y porque de paso saca los 4 colores de `theme.rs` que quedaban sin
+ningún consumidor tras migrar los `BackgroundColor` manuales a
+`ButtonVariant`. Efecto colateral aceptado: esto también repinta F1/F2/F9.
+
+**Mismo patrón que la migración anterior** (`@FeathersButton` + `Node{...}`
+compuesto en el mismo bloque `bsn!` + observer por tipo de botón sobre
+`On<Activate>`), con dos ajustes de diseño propios de `inventory_ui`: los
+estados persistentes (categoría activa, slot seleccionado, acción
+disponible) pasan a `ButtonVariant::Primary`/`Normal` en vez de
+`BackgroundColor` manual — necesario, no cosmético, porque
+`update_button_styles` (el sistema de Feathers) repinta `BackgroundColor`
+en cualquier `FeathersButton` cada vez que cambia `Hovered`, y pelearía con
+una escritura manual. `BorderColor` en cambio sigue 100% manual (confirmado
+leyendo `bevy_feathers::controls::button.rs`: el sistema de Feathers nunca
+la toca), así que el resaltado de borde de slot seleccionado no cambió.
+
+**Validado:** `cargo fmt` / `cargo clippy --all-targets -D warnings` / los
+tres `cargo test` en verde (187 + 265 + 53). Falta jugar antes de comitear:
+menú principal (mouse y dígitos), F9 en escena con pradera, inventario
+(mouse y flechas+Enter), y F1/F2 para confirmar que el repintado de paleta
+no rompió nada ya aceptado — más el caso puntual del bug de foco: abrir un
+panel, clickear algo, cerrarlo, y ahí probar Espacio/Enter jugando.
+
 ## Escenas: cajas de prueba + mundo
 
 **Las escenas son dato** (`scene::SCENES`): etiqueta, **su propio heightmap** y

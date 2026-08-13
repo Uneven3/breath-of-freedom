@@ -345,6 +345,25 @@ impl BladeShape {
 /// el presupuesto cuenta primitivas enviadas igual que el censo de la malla.
 const SUBMITTED_TRIANGLES_PER_BLADE: usize = 2;
 
+/// Cuántos triángulos por brizna manda la malla índice de un nivel: 2 salvo
+/// que el banco de forma fuerce "solo púa". Ahí, y sólo ahí, todas las
+/// briznas visibles de todos los niveles son púa a la vez —
+/// `shape_bench_settings` satura `leaf_min_pixels`/`spike_min_pixels` juntos,
+/// sin tabla por anillo, así que no hay forma de que sobreviva una hoja o una
+/// carta mientras el banco está en ese paso—, así que el segundo triángulo
+/// —que la púa ya degenera en el shader, `grass.wgsl::blade_vertex` caso
+/// `SHAPE_SPIKE`— se puede directamente no enviar. En juego normal (`"auto"`)
+/// un mismo nivel mezcla formas por brizna según distancia sobre la MISMA
+/// malla índice compartida; bajarla ahí le cortaría la cintura real a
+/// cualquier brizna que el shader clasificara como hoja.
+fn submitted_triangles_per_blade(perf: &crate::perf::PerfToggles) -> usize {
+    if perf.grass_shape_bench_label() == "solo púa" {
+        1
+    } else {
+        SUBMITTED_TRIANGLES_PER_BLADE
+    }
+}
+
 /// Cuántos píxeles de ancho tiene que medir una brizna para merecer cada forma.
 ///
 /// En píxeles y no en metros, que es el punto entero de esta escalera. Con el
@@ -651,12 +670,14 @@ pub(crate) struct GrassLabStats {
 pub(super) fn collect_grass_lab_stats(
     field: Res<GrassField>,
     visibility: Query<&ViewVisibility, With<GrassChunk>>,
+    perf: Res<crate::perf::PerfToggles>,
     mut stats: ResMut<GrassLabStats>,
 ) {
     let mut next = GrassLabStats::default();
+    let triangles_per_blade = submitted_triangles_per_blade(&perf);
     for (key, entity) in &field.live {
         let ring = key.ring;
-        let triangles = field.records[ring].stride as usize * SUBMITTED_TRIANGLES_PER_BLADE;
+        let triangles = field.records[ring].stride as usize * triangles_per_blade;
         next.resident_chunks[ring] += 1;
         next.resident_triangles[ring] += triangles;
         if visibility.get(*entity).is_ok_and(|visible| visible.get()) {
@@ -1182,12 +1203,16 @@ pub(super) fn roll_meadow_grid(
     for ring in 0..GRASS_RING_COUNT {
         let blades = blades_per_chunk(ring, density, scale, reach_scale, &settings);
         if field.records[ring].mesh.is_none() && planted_ring(&perf, ring) && blades > 0 {
-            // **Dos triángulos para todos, no el de la forma del nivel.** La
-            // forma la decide la distancia, y con un solo triángulo indexado una
+            // **Dos triángulos para todos, no el de la forma del nivel** — salvo
+            // que el banco fuerce "solo púa" (`submitted_triangles_per_blade`):
+            // ahí no hay mezcla de formas que proteger. Fuera de eso, la forma
+            // la decide la distancia, y con un solo triángulo indexado una
             // brizna cercana de un nivel de púas salía **media hoja**. La púa no
             // paga el segundo: sus esquinas 2 y 3 caen en la punta y degenera.
-            field.records[ring].mesh =
-                Some(meshes.add(ring_index_mesh(blades, SUBMITTED_TRIANGLES_PER_BLADE)));
+            field.records[ring].mesh = Some(meshes.add(ring_index_mesh(
+                blades,
+                submitted_triangles_per_blade(&perf),
+            )));
             field.records[ring].stride = blades;
         }
     }
@@ -1341,7 +1366,7 @@ pub(super) fn roll_meadow_grid(
                 live * blades_per_chunk(index, density, scale, reach_scale, &settings) as usize;
             debug!(
                 "[grass]   anillo {index}: {live} chunks, {blades} primitivas, {} tris",
-                blades * SUBMITTED_TRIANGLES_PER_BLADE,
+                blades * submitted_triangles_per_blade(&perf),
             );
         }
     }
@@ -1546,7 +1571,7 @@ pub(super) fn ring_facts(
             // enteras la aparta un poco de la tabla.
             density: blades_per_chunk(slot, dial, scale, reach_scale, settings) as f32
                 / (ring.chunk_m * ring.chunk_m),
-            triangles_per_blade: SUBMITTED_TRIANGLES_PER_BLADE,
+            triangles_per_blade: submitted_triangles_per_blade(perf),
             planted: perf.grass_only_ring().is_none_or(|only| only == slot),
         })
         .collect()
@@ -1703,6 +1728,23 @@ mod tests {
         let scale = reference_scale();
         for distance in shape_bench_probe_distances() {
             assert_eq!(shape_at(distance, scale, &bench), BladeShape::Card);
+        }
+    }
+
+    /// Sólo "solo púa" (paso 2) baja a 1 triángulo — es el único paso donde
+    /// ninguna brizna visible puede resolver a hoja, la forma que sí necesita
+    /// el segundo triángulo (ver `submitted_triangles_per_blade`).
+    #[test]
+    fn only_solo_spike_drops_the_second_triangle() {
+        let mut perf = crate::perf::PerfToggles::default();
+        for step in 0..bof_domain::perf::GRASS_SHAPE_BENCH_STEPS.len() {
+            perf.set_knob_step(crate::perf::PerfKnob::GrassShapeBench, step);
+            let expected = if perf.grass_shape_bench_label() == "solo púa" {
+                1
+            } else {
+                2
+            };
+            assert_eq!(submitted_triangles_per_blade(&perf), expected);
         }
     }
 

@@ -883,6 +883,66 @@ reporte midiera qué hay en cuadro.
 Diferido: impostores, streaming por chunks y **occlusion culling** — el de Bevy
 es experimental vía meshlets, y la Polaris 11 del dev no los soporta.
 
+## Malla de 1 triángulo/brizna en "solo púa" (2026-08-13)
+
+Reporte del usuario: "la brizna son 2 triángulos, y hay otra de un
+triángulo — si cambio a la de uno, el conteo debería bajar a la mitad, y no
+baja". `iterate-safely` una vez más.
+
+**Primer error, mío, corregido antes de tocar código**: al investigar
+pensé que la forma degenerada (la de "1 triángulo efectivo") era **Hoja**.
+Es al revés — releyendo `grass.wgsl::blade_vertex` con calma: en
+`SHAPE_SPIKE` las esquinas 2 y 3 devuelven las dos `out.offset = tip`
+(mismo punto), así que el segundo triángulo tiene área cero. En la Hoja
+(el `else` final) las 4 esquinas —raíz hundida, cintura×2, punta— son
+puntos distintos: nada degenera. **Es Púa la de 1 triángulo efectivo, no
+Hoja.** El subagente de crítica confirmó esto releyendo el shader por su
+cuenta antes de tocar nada — si no lo hubiera hecho, el fix habría ido a
+la forma equivocada y el "experimento" habría medido otra cosa.
+
+**Por qué el conteo no bajaba, aunque el shader ya "resolvía" bien**: no
+hay tres mallas por forma. Hay una sola malla índice por nivel, siempre
+`VERTICES_PER_BLADE=4`, y hasta hoy siempre `SUBMITTED_TRIANGLES_PER_BLADE=2`
+sin condicionar a la forma — hoja/púa/carta es una diferencia puramente del
+*vertex shader* (dónde pone las esquinas), no de la malla. El segundo
+triángulo de la Púa se manda igual aunque no pinte nada. El contador
+(`collect_grass_lab_stats`, `log_meadow_lod`, el HUD de F9) lee esa misma
+constante fija — nunca midió lo que de verdad se manda por forma.
+
+**El arreglo, acotado a un solo caso seguro**: `grass_records.rs::ring_index_mesh`
+ya soportaba `triangles_per_blade=1` (con test propio desde antes), sólo
+que nadie lo pedía nunca. Nuevo helper
+`submitted_triangles_per_blade(perf)` en `grass.rs`: devuelve 1 sólo si el
+banco (`grass-shape`) está en "solo púa", 2 en cualquier otro paso
+(incluido juego normal, `"auto"`). Sólo es seguro ahí porque
+`shape_bench_settings` satura `leaf_min_pixels`/`spike_min_pixels` **juntos
+y sin tabla por anillo** — con el banco en "solo púa" no hay forma de que
+sobreviva una hoja en ningún nivel; en juego normal un mismo nivel mezcla
+formas por brizna según distancia sobre la misma malla compartida, así que
+bajarla ahí le cortaría la cintura real a cualquier brizna-hoja.
+
+Usado en los 4 sitios que antes leían la constante fija: donde se
+construye la malla, `collect_grass_lab_stats`, un `debug!` de diagnóstico,
+y `ring_facts()` — este último lo encontró el subagente de crítica, no yo;
+alimenta el `.ron` que acompaña cada captura de `BOF_SHOT`, así que sin
+arreglarlo la evidencia de antes/después habría quedado mintiendo justo en
+el experimento que la pide. También descartó (con motivo) guardar el valor
+en `RingRecords`: como es el mismo para todos los anillos a la vez cuando
+el banco está activo, guardarlo por anillo era complejidad de más — los 4
+sitios llaman al helper directo.
+
+**Validado**: test nuevo (`only_solo_spike_drops_the_second_triangle`,
+recorre los 4 pasos del banco), `cargo fmt`/`clippy -D warnings`/tests en
+verde (191+15+265+53). Jugado por el usuario: confirmó que el conteo ahora
+sí baja en "solo púa" — el mecanismo está arreglado.
+
+**Pero el rendimiento sigue mal, y el conteo de triángulos sigue siendo
+mucho incluso con el fix.** Palabras del usuario: *"vamos a tener que
+cambiar estrategia, y la verdad ya no sé qué hacer"*. No es una conclusión
+de esta sesión, es un punto de partida para la próxima: el problema no era
+(sólo) que el conteo mintiera — era que el conteo real, aun corregido, ya
+es demasiado. La próxima sesión arranca ahí, no desde cero.
+
 ## Pipeline authored de assets
 
 El contrato Blender→GLB→Bevy vive en `ASSET_PIPELINE.md`; texturas en

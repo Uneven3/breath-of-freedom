@@ -32,7 +32,9 @@ pub mod snapshot;
 mod toggles;
 mod trace;
 
-pub use material_report::MaterialReportNotice;
+pub use material_report::{
+    MAX_MATERIAL_ROWS, MaterialBreakdownSnapshot, MaterialLookRow, MaterialReportNotice,
+};
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
@@ -79,6 +81,7 @@ impl Plugin for DebugPlugin {
         app.init_resource::<snapshot::DebugSnapshot>();
         app.init_resource::<snapshot::HudVisibility>();
         app.init_resource::<material_report::MaterialReportNotice>();
+        app.init_resource::<material_report::MaterialBreakdownSnapshot>();
         // FPS / frame-time source for the perf section.
         app.add_plugins(FrameTimeDiagnosticsPlugin::default());
 

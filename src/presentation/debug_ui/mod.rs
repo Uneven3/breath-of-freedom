@@ -14,6 +14,7 @@
 
 use bevy::prelude::*;
 
+use crate::debug::MaterialBreakdownSnapshot;
 use crate::debug::channel::{DebugAction, DebugChannel, DebugConfigView};
 use crate::input::ModalInputFocusRequest;
 use crate::perf::{Benchmark, Flythrough, PerfKnob, PerfToggles};
@@ -43,16 +44,18 @@ enum DebugTab {
     Grass,
     Channels,
     Terrain,
+    Materials,
     Actions,
 }
 
 impl DebugTab {
-    const ALL: [DebugTab; 6] = [
+    const ALL: [DebugTab; 7] = [
         DebugTab::Measurement,
         DebugTab::Render,
         DebugTab::Grass,
         DebugTab::Channels,
         DebugTab::Terrain,
+        DebugTab::Materials,
         DebugTab::Actions,
     ];
 
@@ -63,6 +66,7 @@ impl DebugTab {
             DebugTab::Grass => "Pradera",
             DebugTab::Channels => "Canales",
             DebugTab::Terrain => "Terreno",
+            DebugTab::Materials => "Materiales",
             DebugTab::Actions => "Acciones",
         }
     }
@@ -79,13 +83,15 @@ struct TabPane(DebugTab);
 #[derive(Component)]
 struct DebugUiRoot;
 
-/// The panel body. Deliberately `Overflow::clip_y`, never `scroll_y`
+/// The panel body. No `overflow` at all — not `scroll_y`, not even `clip_y`
 /// (2026-08-12): Bevy's picking doesn't keep the scroll clip in sync with
 /// `ScrollPosition` for hit-testing, which broke the fixed tab buttons above
 /// it after scrolling a long tab — an engine issue, not fixable from here.
-/// Every tab pane is laid out to fit without scrolling instead; `clip_y`
-/// just makes a future regression visible (cut off) rather than silently
-/// breaking clicks again. Kept as a marker for layout identification only.
+/// `clip_y` was tried as a "fail visibly instead of breaking clicks" net, but
+/// it clipped valid content of its own (a layout-timing bug in how Bevy
+/// computes clipped height), so it was removed too — see `AHORA.md`. Every
+/// tab pane has to genuinely fit without any clip to catch it if it doesn't.
+/// Kept as a marker for layout identification only.
 #[derive(Component)]
 struct ScrollPanel;
 
@@ -123,6 +129,34 @@ struct TerrainViewButton(TerrainDebugView);
 #[derive(Component, Clone, Default)]
 struct TerrainViewText(TerrainDebugView);
 
+/// Pestaña "Materiales" — filas fijas, sincronizadas por índice contra
+/// `MaterialBreakdownSnapshot` (mismo patrón que `overlay::TerrainLegendRow`/
+/// `TerrainLegendSwatch`/`TerrainLegendLabel`: tres queries planas por
+/// marcador con índice, nada de navegar `Children`).
+#[derive(Component)]
+struct MaterialRow(usize);
+
+#[derive(Component)]
+struct MaterialSwatch(usize);
+
+#[derive(Component)]
+struct MaterialLabel(usize);
+
+#[derive(Component)]
+struct MaterialTerrainRow;
+
+#[derive(Component)]
+struct MaterialTerrainSwatch;
+
+#[derive(Component)]
+struct MaterialTerrainLabel;
+
+#[derive(Component)]
+struct MaterialSummaryText;
+
+#[derive(Component)]
+struct MaterialOmittedText;
+
 pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
@@ -145,6 +179,7 @@ impl Plugin for DebugUiPlugin {
                 view::sync_tab_panes.run_if(hub_is_open),
                 view::sync_tab_buttons.run_if(hub_is_open),
                 sync_labels.run_if(hub_is_open),
+                sync_material_rows.run_if(hub_is_open),
                 // Outside the `hub_is_open` gate on purpose: the panel closes
                 // when a run starts, and that is exactly when the overlay has
                 // something to say.
@@ -264,4 +299,103 @@ fn sync_labels(
             )
         });
     }
+}
+
+/// Pinta la pestaña "Materiales" desde el último `MaterialBreakdownSnapshot`
+/// (poblado por `debug::material_report::log_material_breakdown` cuando se
+/// corre la acción "Material breakdown" en la pestaña Acciones — esta
+/// pestaña sólo lee, nunca dispara el escaneo por su cuenta). Filas fijas,
+/// ocultas por índice cuando el snapshot tiene menos looks que
+/// `MAX_MATERIAL_ROWS` — mismo patrón que `overlay::update_terrain_legend`.
+// Cuatro marcadores de texto hermanos, todos con `&mut Text` en el mismo
+// sistema: cada uno necesita `Without<>` de los otros tres para que Bevy
+// pruebe que son disjuntos (mismo motivo que las *Filter en `inventory_ui`).
+type SummaryFilter = (
+    With<MaterialSummaryText>,
+    Without<MaterialOmittedText>,
+    Without<MaterialLabel>,
+    Without<MaterialTerrainLabel>,
+);
+type OmittedFilter = (
+    With<MaterialOmittedText>,
+    Without<MaterialSummaryText>,
+    Without<MaterialLabel>,
+    Without<MaterialTerrainLabel>,
+);
+type RowLabelFilter = (
+    Without<MaterialSummaryText>,
+    Without<MaterialOmittedText>,
+    Without<MaterialTerrainLabel>,
+);
+type TerrainLabelFilter = (
+    With<MaterialTerrainLabel>,
+    Without<MaterialSummaryText>,
+    Without<MaterialOmittedText>,
+    Without<MaterialLabel>,
+);
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn sync_material_rows(
+    snapshot: Res<MaterialBreakdownSnapshot>,
+    mut summary: Single<&mut Text, SummaryFilter>,
+    mut omitted: Single<&mut Text, OmittedFilter>,
+    mut rows: Query<(&MaterialRow, &mut Node)>,
+    mut swatches: Query<(&MaterialSwatch, &mut BackgroundColor), Without<MaterialTerrainSwatch>>,
+    mut labels: Query<(&MaterialLabel, &mut Text), RowLabelFilter>,
+    mut terrain_row: Query<&mut Node, (With<MaterialTerrainRow>, Without<MaterialRow>)>,
+    mut terrain_swatch: Single<&mut BackgroundColor, With<MaterialTerrainSwatch>>,
+    mut terrain_label: Single<&mut Text, TerrainLabelFilter>,
+) {
+    if !snapshot.is_changed() {
+        return;
+    }
+    summary.0 = if snapshot.summary.is_empty() {
+        "Sin datos — corré \"Material breakdown\" en Acciones.".to_string()
+    } else {
+        snapshot.summary.clone()
+    };
+    omitted.0 = if snapshot.omitted > 0 {
+        format!("… {} looks más, omitidos por espacio", snapshot.omitted)
+    } else {
+        String::new()
+    };
+    for (row, mut node) in &mut rows {
+        node.display = if row.0 < snapshot.rows.len() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for (swatch, mut color) in &mut swatches {
+        if let Some(row) = snapshot.rows.get(swatch.0) {
+            color.0 = row.color;
+        }
+    }
+    for (label, mut text) in &mut labels {
+        if let Some(row) = snapshot.rows.get(label.0) {
+            text.0 = material_row_label(row);
+        }
+    }
+    if let Ok(mut node) = terrain_row.single_mut() {
+        node.display = if snapshot.terrain.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    if let Some(terrain) = &snapshot.terrain {
+        terrain_swatch.0 = terrain.color;
+        terrain_label.0 = format!("terreno · {}", material_row_label(terrain));
+    }
+}
+
+fn material_row_label(row: &crate::debug::MaterialLookRow) -> String {
+    format!(
+        "{} mats · {} mesh · rough {:.2} · metal {:.2}{}",
+        row.handles,
+        row.meshes,
+        row.roughness,
+        row.metallic,
+        if row.textured { " · tex" } else { "" },
+    )
 }

@@ -11,9 +11,12 @@ use super::style::{
 };
 use super::{
     BenchmarkButton, ChannelButton, ChannelText, DebugTab, DebugUiRoot, DebugUiState,
-    FlythroughButton, KnobButton, KnobText, ReadoutText, ScrollPanel, TabButton, TabPane,
-    TerrainViewButton, TerrainViewText,
+    FlythroughButton, KnobButton, KnobText, MaterialLabel, MaterialOmittedText, MaterialRow,
+    MaterialSummaryText, MaterialSwatch, MaterialTerrainLabel, MaterialTerrainRow,
+    MaterialTerrainSwatch, ReadoutText, ScrollPanel, TabButton, TabPane, TerrainViewButton,
+    TerrainViewText,
 };
+use crate::debug::MAX_MATERIAL_ROWS;
 use crate::debug::channel::{DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle};
 use crate::input::ModalInputFocusRequest;
 use crate::perf::BenchSuite;
@@ -166,6 +169,7 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
                         tab_pane(scroll, DebugTab::Grass, grass_section);
                         tab_pane(scroll, DebugTab::Channels, channel_section);
                         tab_pane(scroll, DebugTab::Terrain, terrain_section);
+                        tab_pane(scroll, DebugTab::Materials, materials_section);
                         tab_pane(scroll, DebugTab::Actions, action_section);
                     });
             });
@@ -305,6 +309,110 @@ fn terrain_section(panel: &mut ChildSpawnerCommands) {
                 });
             }
         });
+}
+
+/// Filas fijas, spawneadas una vez y ocultas por índice (`sync_material_rows`
+/// en `mod.rs`) contra el último `MaterialBreakdownSnapshot` — mismo
+/// mecanismo que `overlay::TerrainLegendRow`. Sin `bsn!`/`FeathersButton`:
+/// nada acá se clickea, es sólo lectura, así que un `Node`/`Text` común
+/// alcanza (y no exige `Clone + Default` en los marcadores).
+fn materials_section(panel: &mut ChildSpawnerCommands) {
+    section_title(
+        panel,
+        "Materiales",
+        "El desglose de \"Material breakdown\" (pestaña Acciones), en colores reales en \
+         vez de una tabla en el log. Cada fila es un \"look\" — materiales que un \
+         cambio de paleta podría colapsar en uno solo.",
+    );
+    panel.spawn((
+        MaterialSummaryText,
+        Text::new("—"),
+        body_font(),
+        TextColor(TEXT_MUTED),
+    ));
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(6.0),
+            ..default()
+        })
+        .with_children(|grid| {
+            for index in 0..MAX_MATERIAL_ROWS {
+                material_row(
+                    grid,
+                    MaterialRow(index),
+                    MaterialSwatch(index),
+                    MaterialLabel(index),
+                );
+            }
+            grid.spawn((
+                MaterialTerrainRow,
+                Node {
+                    width: Val::Percent(48.5),
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    display: Display::None,
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                row.spawn((
+                    MaterialTerrainSwatch,
+                    Node {
+                        width: Val::Px(14.0),
+                        height: Val::Px(14.0),
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ));
+                row.spawn((
+                    MaterialTerrainLabel,
+                    Text::new("—"),
+                    body_font(),
+                    TextColor(TEXT_BRIGHT),
+                ));
+            });
+        });
+    panel.spawn((
+        MaterialOmittedText,
+        Text::new(""),
+        body_font(),
+        TextColor(TEXT_MUTED),
+    ));
+}
+
+fn material_row(
+    grid: &mut ChildSpawnerCommands,
+    row: MaterialRow,
+    swatch: MaterialSwatch,
+    label: MaterialLabel,
+) {
+    grid.spawn((
+        row,
+        Node {
+            width: Val::Percent(48.5),
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            display: Display::None,
+            ..default()
+        },
+    ))
+    .with_children(|entry| {
+        entry.spawn((
+            swatch,
+            Node {
+                width: Val::Px(14.0),
+                height: Val::Px(14.0),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ));
+        entry.spawn((label, Text::new("—"), body_font(), TextColor(TEXT_BRIGHT)));
+    });
 }
 
 fn header(panel: &mut ChildSpawnerCommands) {

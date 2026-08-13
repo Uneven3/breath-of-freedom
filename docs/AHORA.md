@@ -514,6 +514,59 @@ menú principal (mouse y dígitos), F9 en escena con pradera, inventario
 no rompió nada ya aceptado — más el caso puntual del bug de foco: abrir un
 panel, clickear algo, cerrarlo, y ahí probar Espacio/Enter jugando.
 
+## Panel de materiales en F1 (pestaña "Materiales", 2026-08-13)
+
+Pedido: seguir construyendo herramientas de medición; el usuario quería poder
+*ver* materiales/texturas de forma simple, no sólo leer números. `iterate-safely`
+otra vez: plan → crítica → triage → ejecutar.
+
+No hizo falta cómputo nuevo: `debug::material_report::log_material_breakdown`
+(la acción "Material breakdown" en Acciones) ya escaneaba las mallas visibles,
+agrupaba por "look" cuantizado (color/rugosidad/metalicidad/textura) y lo
+tiraba a `info!()`. Se le agregó un segundo sumidero — `MaterialBreakdownSnapshot`,
+un `Resource` con hasta `MAX_MATERIAL_ROWS=16` filas ya reducidas a lo que el
+panel dibuja (color, mats, meshes, rugosidad, metalicidad, textura) — sin
+tocar el escaneo ni su condición de disparo (sigue siendo on-demand, un click,
+no continuo). La pestaña nueva reusa el patrón exacto de
+`overlay::TerrainLegendRow`/`Swatch`/`Label`: filas fijas spawneadas una vez,
+ocultas por índice cuando el snapshot tiene menos looks que el cupo.
+
+**La crítica encontró cuatro cosas reales antes de escribir código:**
+1. La función tiene 3 `return` tempranos; sólo 2 debían tocar el snapshot (los
+   que corren *después* de confirmar que hubo click). El primero — "sin click
+   este frame" — corre casi todos los frames; si tocara el snapshot, el panel
+   se habría vaciado un frame después de cada corrida real.
+2. El comentario de `ScrollPanel` decía "Deliberately `clip_y`" — desactualizado
+   desde que se sacó el clip la sesión pasada (cortaba contenido válido). Se
+   corrigió: hoy no hay ningún clip de seguridad, así que un desborde se ve
+   roto, no cortado — razón de más para medir antes de confiar en el layout.
+3. `terrain_look` no cargaba color (sólo rugosidad/metalicidad/textura); hubo
+   que agregar `resolved.base.base_color.to_srgba()` al loop de terreno.
+4. La duda del plan entre "queries planas por índice" o navegar `Children`
+   ya tenía precedente exacto: `overlay.rs`'s `TerrainLegendRow/Swatch/Label`.
+   Se copió tal cual — se evitó decidir de nuevo algo ya resuelto.
+
+**Un quinto bug, no visto por la crítica ni por los tests, lo encontró
+correr el juego de verdad**: `sync_material_rows` tenía 4 queries que tocan
+`&mut Text` (resumen, omitidas, filas, terreno) sin `Without<>` cruzado entre
+ellas — panic de Bevy (`B0001`, queries no comprobadamente disjuntas) apenas
+arrancaba, ni bien tocaba ese sistema. `cargo check`/`clippy`/tests no lo
+vieron porque el chequeo de aridad de queries es un panic en runtime al
+construir el `World`, no un error de tipos. Se arregló con el mismo patrón
+que ya usa `inventory_ui::render_inventory` (un alias de filtro `Without<>`
+por marcador hermano). **Recordatorio para la próxima vez que algo tenga
+varias queries mutables sobre el mismo componente**: `cargo check` en verde
+no es suficiente, hay que arrancar el binario al menos una vez.
+
+Verificado con `BOF_SHOT` (hub forzado abierto en Materiales, snapshot
+fabricado con las 16 filas + terreno + "3 más omitidas" — el peor caso real,
+porque no hay clip que lo salve si no entra): todo cupo sin cortarse. Hack
+revertido entero, confirmado con `git status`. `cargo fmt`/`clippy -D
+warnings`/tests en verde (190 + 15 + 265 + 53, tres tests nuevos sobre el
+recorte a `MAX_MATERIAL_ROWS`). Falta jugar: correr "Material breakdown" en
+Acciones y confirmar que la pestaña Materiales muestra colores reales que
+coinciden con lo que dice el log.
+
 ## Escenas: cajas de prueba + mundo
 
 **Las escenas son dato** (`scene::SCENES`): etiqueta, **su propio heightmap** y

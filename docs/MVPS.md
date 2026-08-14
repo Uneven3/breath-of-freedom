@@ -89,26 +89,46 @@ El paso que convierte esto en un editor de mapas. Hoy los objetos del mundo
 viven en `world/layout.rs` (656 líneas de tablas Rust) y en un scatter
 determinista: un mapa nuevo no se puede hacer sin recompilar.
 
-**Qué se construye**
+**Primer corte construido, 2026-08-14 — alcance reducido a propósito:**
+colocar, borrar y persistir. Rotar/escalar interactivo y deshacer/rehacer
+quedan explícitamente para después de jugar este corte — separar el historial
+en un `HistoryStep` enum es trabajo real y no vale la pena pagarlo antes de
+saber si el resto sirve.
 
-- `Instance { kind: PropKind, xz, yaw, scale }` en `bof_domain` — sin handles,
-  sin rutas, sin materiales. La altura **no se guarda**: se muestrea del terreno
-  al spawnear, o la primera persona que esculpa debajo deja todo flotando.
-- `#[serde(default)] instances: Vec<Instance>` en `TerrainFile`, que es lo que
-  deja cargar los cinco niveles que ya existen en disco. No se remuestrean: ya
-  están en metros.
-- `ToolLayer::Instances`: colocar, borrar, rotar, escalar.
-- `HistoryStep` como enum (`Terrain(snapshot)` / `Instances(before, after)`),
-  antes de que el historial mezcle dos costos muy distintos.
-- `PropKind` → escena: el lugar natural del **primer `SceneComponent`** del
-  proyecto (ver la sección de BSN en `MAP_EDITOR.md`).
+- `Instance { kind: PropKind, xz, yaw, scale }` y `PropKind` (6 variantes de
+  pasto, hoy) en `bof_domain::props` — sin handles, sin rutas, sin materiales.
+  La altura **no se guarda**: se muestrea del terreno al spawnear. Requirió
+  sumarle `serde` a `bof_domain` (§17, con OK explícito) y el feature
+  `serialize` de `bevy_math` (`Vec2` no serializa sin él).
+- `#[serde(default)] instances: Vec<Instance>` en `TerrainFile`, y un
+  `instances_revision: u32` en `Terrain` (mismo patrón que `relief_revision`)
+  para que la presentación no reconstruya todo en cada trazo de escultura.
+  No se remuestrean: ya están en metros — probado en las dos ramas de
+  `apply_ron` (copia directa y remuestreo), no sólo en una.
+- `ToolLayer::Instances`, tercera capa del editor F5/F6. **Interacción de
+  pincel, no de click**: LMB arrastrado esparce dentro del círculo (con
+  separación mínima entre instancias), RMB arrastrado borra todo lo que cae
+  adentro — mismo radio compartido que Relieve/Semántica, para que la
+  herramienta se sienta como una sola cosa en vez de tres reglas distintas.
+  Deliberadamente sin deshacer: el HUD lo dice en la capa Instancias en vez de
+  mostrar un contador de deshacer/rehacer que no le pertenece.
+- `PropKind` → escena: **primer uso real de `bsn!`/`SceneComponent`** del
+  proyecto (`src/visuals/instances.rs`). Sin tier de proxy ni máquina de
+  estados de swap — a diferencia de `forest.rs`, que sí la tiene y que el
+  usuario identificó como parte de por qué dos semanas de pelea con el pasto
+  procedural no llegaron a buen puerto. La sincronización con `Terrain` es
+  incremental en el caso caliente (esparcir sólo agrega la cola nueva, sin
+  reconstruir lo ya colocado); un borrado sí reconstruye todo, porque
+  `Vec::retain` no dice qué filas sacó.
 
 *(`MAP_EDITOR.md` Paso 2.)*
 
-**Criterio de aceptación**
+**Criterio de aceptación — sin jugar todavía**
 
-Colocar veinte rocas, guardar, cerrar el juego, volver a abrirlo y encontrarlas
-donde estaban. Después esculpir debajo y verlas seguir el suelo.
+Colocar props de pasto, guardar, cerrar el juego, volver a abrirlo y
+encontrarlos donde estaban. Después esculpir debajo y verlos seguir el suelo.
+Y el que de verdad importa acá: si una pradera hecha de instancias `.glb` se
+ve mejor que el meadow procedural — la pregunta que motivó todo este MVP.
 
 ---
 

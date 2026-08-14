@@ -48,6 +48,7 @@ impl Terrain {
                 extent: self.extent,
                 heights: self.heights.clone(),
                 kinds: encode_kinds(&self.kinds),
+                instances: self.instances.clone(),
             },
             config,
         )
@@ -86,6 +87,10 @@ impl Terrain {
         let file_kinds = decode_kinds(&file.kinds, file_cells)?;
         // Exact bits mean the authored and runtime grids share coordinates;
         // any numerical difference requires the world-space resample below.
+        // Instances are already in metres, unlike heights (resampled bilinearly
+        // below) and kinds (resampled to the nearest cell): both branches copy
+        // them through unchanged, whether or not the grid resolution matches.
+        self.instances = file.instances;
         if file.points == self.points && file.extent.to_bits() == self.extent.to_bits() {
             self.heights = file.heights;
             self.kinds = file_kinds;
@@ -124,6 +129,11 @@ impl Terrain {
             *height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
         }
         self.relief_revision = self.relief_revision.wrapping_add(1);
+        self.instances_revision = self.instances_revision.wrapping_add(1);
+        // A load always replaces `instances` wholesale, never appends to what
+        // was already there — presentation's incremental sync needs this to
+        // tell the two apart (`Terrain::instances_generation`).
+        self.instances_generation = self.instances_generation.wrapping_add(1);
         Ok(())
     }
 }

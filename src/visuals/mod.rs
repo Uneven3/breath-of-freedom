@@ -30,6 +30,7 @@ pub mod grass_material;
 mod grass_records;
 mod grass_tiles;
 pub mod horse;
+mod instances;
 pub(crate) mod material_registry;
 pub mod player;
 pub mod probe;
@@ -152,6 +153,8 @@ impl Plugin for VisualsPlugin {
                 card_mesh_lab::face_card_meshes
                     .run_if(crate::scene::scene_has(|c| c.card_mesh_lab)),
                 terrain::sync_terrain_visual,
+                instances::sync_instance_visuals,
+                instances::follow_relief_changes,
                 budget::warn_on_heavy_meshes,
                 (vfx::spawn_swing_vfx, vfx::fade_swing_vfx),
                 (

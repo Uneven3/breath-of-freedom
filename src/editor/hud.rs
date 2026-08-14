@@ -18,7 +18,7 @@ use super::{EditorTool, ToolLayer};
 use crate::presentation::theme::{
     ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font, emoji_font, icon_font,
 };
-use crate::world::TerrainKind;
+use crate::world::{PropKind, TerrainKind};
 
 /// `nf-md-terrain` from the Nerd Font symbol range (private use area, so it is
 /// only meaningful in that face).
@@ -171,20 +171,32 @@ pub(super) fn update_hud(
                     kind.surface()
                 )
             }
+            ToolLayer::Instances => format!(
+                "{}: {} — LMB esparce · RMB borra dentro del círculo",
+                ToolLayer::Instances.label(),
+                tool.prop_kind.label(),
+            ),
         };
     }
     if let Ok(mut text) = knob_line.single_mut() {
-        let (undo, redo) = history.depth();
         // Strength is a relief-only knob (painting has no rate), so showing it in
-        // the meaning layer would advertise a control that does nothing.
+        // the meaning or instance layer would advertise a control that does
+        // nothing.
         let strength = match tool.layer {
             ToolLayer::Relief => format!(" · fuerza {:.1}×", tool.strength),
-            ToolLayer::Meaning => String::new(),
+            ToolLayer::Meaning | ToolLayer::Instances => String::new(),
         };
-        **text = format!(
-            "radio {:.0} m{strength} · deshacer {undo} / rehacer {redo}",
-            tool.radius
-        );
+        // Instances have no undo yet (`docs/MAP_EDITOR.md`): showing the grid's
+        // deshacer/rehacer count here would read as if it covered this layer
+        // too, when Ctrl+Z cannot take back a placed or cleared prop.
+        let history_note = match tool.layer {
+            ToolLayer::Relief | ToolLayer::Meaning => {
+                let (undo, redo) = history.depth();
+                format!(" · deshacer {undo} / rehacer {redo}")
+            }
+            ToolLayer::Instances => " · sin deshacer todavía".to_string(),
+        };
+        **text = format!("radio {:.0} m{strength}{history_note}", tool.radius);
     }
     if let Ok(mut text) = legend_line.single_mut() {
         let palette = match tool.layer {
@@ -200,10 +212,20 @@ pub(super) fn update_hud(
                 .map(|(index, kind)| format!("{} {}", index + 1, kind.label()))
                 .collect::<Vec<_>>()
                 .join(" · "),
+            ToolLayer::Instances => PropKind::ALL
+                .iter()
+                .enumerate()
+                .map(|(index, kind)| format!("{} {}", index + 1, kind.label()))
+                .collect::<Vec<_>>()
+                .join(" · "),
         };
         let layer_keys = match tool.layer {
             ToolLayer::Relief => "MMB suaviza siempre · rueda: radio · Shift+rueda o [ ]: fuerza\n",
             ToolLayer::Meaning => "LMB pinta · para borrar, pintá Tierra encima · rueda: radio\n",
+            ToolLayer::Instances => {
+                "LMB esparce dentro del círculo · RMB borra todo dentro del círculo · rueda: \
+                 radio · Ctrl+L sin guardar pierde instancias sin deshacer\n"
+            }
         };
         **text = format!(
             "{palette}\n\

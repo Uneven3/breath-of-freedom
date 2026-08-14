@@ -17,6 +17,7 @@ mod spawn;
 
 pub use forest::TreeKind;
 
+pub use bof_domain::props::PropKind;
 pub use bof_simulation::world::{
     GameLayer, Ladder, NonClimbable, PRACTICE_TARGET_HP, PracticeTarget, Stairs, Surface, Terrain,
     TerrainAccess, TerrainKind, TerrainSnapshot,

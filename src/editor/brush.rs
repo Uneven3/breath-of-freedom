@@ -299,6 +299,7 @@ pub(super) fn draw_brush_gizmo(
     let ring = match tool.layer {
         ToolLayer::Relief => css::YELLOW,
         ToolLayer::Meaning => css::AQUA,
+        ToolLayer::Instances => css::MAGENTA,
     };
     gizmos.circle(Isometry3d::new(hit + lift, flat), tool.radius, ring);
 

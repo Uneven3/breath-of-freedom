@@ -27,6 +27,7 @@ use bevy_transform::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::terrain_kind::TerrainKind;
+use bof_domain::props::Instance;
 use bof_domain::world::WORLD_SIZE;
 
 /// Grid cells per side; the heightfield has `CELLS + 1` points per side. Sized
@@ -105,6 +106,22 @@ pub struct Terrain {
     /// of sand would rebuild a 16k-point heightfield that is bit-identical to the
     /// one already there — the most expensive thing this module does, for nothing.
     relief_revision: u32,
+    /// Discrete objects an author placed on this terrain — never a model, a
+    /// path or a material, just what and where. See [`bof_domain::props`].
+    instances: Vec<Instance>,
+    /// Bumped every time [`Terrain::instances`] actually changes.
+    ///
+    /// Same reason as [`Terrain::relief_revision`]: `Changed<Terrain>` fires on
+    /// every sculpt or paint stroke too, and presentation's instance sync has
+    /// to tell "an instance moved" from "the ground under it moved" without
+    /// paying to rebuild every placed prop on every brush frame.
+    instances_revision: u32,
+    /// Bumped only when [`Terrain::instances`] is **replaced wholesale**,
+    /// today only by [`Terrain::apply_ron`] — a `Ctrl+L` reload can grow the
+    /// list too, but every entry may have moved. `instances_revision` alone
+    /// cannot tell that apart from one prop appended to what was already
+    /// there; presentation needs this second signal to know which happened.
+    instances_generation: u32,
     /// Points per side (`CELLS + 1`).
     points: usize,
     /// World size spanned on each of X and Z.
@@ -114,7 +131,7 @@ pub struct Terrain {
 /// The on-disk shape of a level. Resolution and extent travel with the data so a
 /// file authored before a `CELLS` or `WORLD_SIZE` change still loads —
 /// [`Terrain::apply_ron`] resamples in world space instead of rejecting.
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct TerrainFile {
     points: usize,
     extent: f32,
@@ -132,6 +149,14 @@ struct TerrainFile {
     /// error. That is what keeps the terrain files already on disk loadable.
     #[serde(default)]
     kinds: Vec<KindRun>,
+    /// The instance layer: "here is a `kind`" as rows of world-space data.
+    ///
+    /// `default` for the same reason as `kinds`: the five levels saved before
+    /// this layer existed have no field, and an empty list is the honest
+    /// reading of "nobody placed anything yet". Never resampled — instances
+    /// are already in metres, unlike `heights`.
+    #[serde(default)]
+    instances: Vec<Instance>,
 }
 
 /// Read-only seam for terrain queries outside the terrain owner.
@@ -209,6 +234,7 @@ fn sample_bilinear(heights: &[f32], points: usize, row: f32, col: f32) -> f32 {
     top.lerp(bottom, fr)
 }
 
+pub mod instances;
 pub mod persist;
 pub mod query;
 pub mod sculpt;
@@ -220,6 +246,9 @@ impl Terrain {
             heights: vec![0.0; points * points],
             kinds: vec![TerrainKind::default(); CELLS * CELLS],
             relief_revision: 0,
+            instances: Vec::new(),
+            instances_revision: 0,
+            instances_generation: 0,
             points,
             extent: WORLD_SIZE,
         }
@@ -344,6 +373,7 @@ mod tests {
     use super::persist::{decode_kinds, encode_kinds};
     use super::*;
     use bevy_ecs::system::RunSystemOnce;
+    use bof_domain::props::PropKind;
 
     fn read_access(terrain: TerrainAccess) -> (Option<f32>, Option<TerrainKind>, usize) {
         (
@@ -846,6 +876,7 @@ mod tests {
             heights: vec![0.0; 9],
             // 2×2 cells: rock along the low-x row, sand along the high-x row.
             kinds: vec![KindRun(2, TerrainKind::Rock), KindRun(2, TerrainKind::Sand)],
+            instances: Vec::new(),
         };
         let text = ron::ser::to_string(&coarse).expect("serialises");
         let mut terrain = Terrain::flat();
@@ -878,6 +909,70 @@ mod tests {
     }
 
     #[test]
+    fn instances_round_trip_through_disk_on_the_direct_copy_branch() {
+        // Same points/extent as the file: `apply_ron` takes the direct-copy
+        // branch, not the resample one. Both branches carry instances through
+        // unchanged, but only a test that exercises each branch separately
+        // could tell them apart if one silently dropped instances.
+        let mut terrain = Terrain::flat();
+        terrain.place_instance(PropKind::GrassA, Vec2::new(12.0, -34.0), 0.7, 1.2);
+        terrain.place_instance(PropKind::GrassTallA, Vec2::new(-5.0, 5.0), 0.0, 0.9);
+        let text = terrain.to_ron().expect("serialises");
+        let mut loaded = Terrain::flat();
+        loaded.apply_ron(&text).expect("loads");
+        assert_eq!(loaded.instances(), terrain.instances());
+    }
+
+    #[test]
+    fn instances_survive_a_resample_unchanged() {
+        // Different points/extent than the file: `apply_ron` takes the
+        // resample branch. Instances must come through byte-for-byte — they
+        // are already in metres, so resampling must not touch them at all.
+        let coarse = TerrainFile {
+            points: 3,
+            extent: WORLD_SIZE,
+            heights: vec![0.0; 9],
+            kinds: Vec::new(),
+            instances: vec![Instance {
+                kind: PropKind::GrassDryA,
+                xz: Vec2::new(40.0, -10.0),
+                yaw: 1.1,
+                scale: 1.0,
+            }],
+        };
+        let text = ron::ser::to_string(&coarse).expect("serialises");
+        let mut terrain = Terrain::flat();
+        assert_ne!(
+            terrain.points(),
+            coarse.points,
+            "must exercise the resample branch"
+        );
+        terrain.apply_ron(&text).expect("loads");
+        assert_eq!(terrain.instances(), coarse.instances);
+    }
+
+    #[test]
+    fn a_level_saved_before_the_instance_layer_still_loads() {
+        // The five levels on disk today have no `instances` field. Losing that
+        // would be exactly the format-change breakage `#[serde(default)]`
+        // exists to prevent.
+        let text = format!(
+            "(points: {}, extent: {WORLD_SIZE:?}, heights: {:?})",
+            CELLS + 1,
+            vec![0.0f32; (CELLS + 1) * (CELLS + 1)]
+        );
+        let mut terrain = Terrain::flat();
+        terrain.place_instance(PropKind::GrassA, Vec2::ZERO, 0.0, 1.0);
+        terrain
+            .apply_ron(&text)
+            .expect("a file without instances loads");
+        assert!(
+            terrain.instances().is_empty(),
+            "the file is the level, all of it — a missing field means none placed"
+        );
+    }
+
+    #[test]
     fn a_grid_saved_at_another_resolution_is_resampled() {
         // A file authored before a `CELLS` change must still load: half the
         // resolution, same world, so the shape survives even though the sample
@@ -887,6 +982,7 @@ mod tests {
             extent: WORLD_SIZE,
             heights: (0..25).map(|i| (i / 5) as f32).collect(),
             kinds: Vec::new(),
+            instances: Vec::new(),
         };
         let text = ron::ser::to_string(&coarse).expect("serialises");
         let mut terrain = Terrain::flat();
@@ -924,6 +1020,7 @@ mod tests {
             extent: half,
             heights: vec![0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0],
             kinds: Vec::new(),
+            instances: Vec::new(),
         };
         let text = ron::ser::to_string(&coarse).expect("serialises");
         let mut terrain = Terrain::flat();

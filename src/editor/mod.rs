@@ -22,6 +22,7 @@
 mod brush;
 mod history;
 mod hud;
+mod instances;
 mod paint;
 mod persist;
 
@@ -30,7 +31,7 @@ use bevy::prelude::*;
 
 use crate::input::ModalInputFocusRequest;
 use crate::scene::{AppState, scene_allows};
-use crate::world::{TerrainAccess, TerrainKind};
+use crate::world::{PropKind, TerrainAccess, TerrainKind};
 use brush::BrushKind;
 use history::SculptHistory;
 
@@ -62,6 +63,9 @@ pub(crate) enum ToolLayer {
     Relief,
     /// The semantic grid: what each cell is made of.
     Meaning,
+    /// Discrete props placed on top of the ground. No undo yet — see
+    /// `instances::place_or_clear_instances`.
+    Instances,
 }
 
 impl ToolLayer {
@@ -69,13 +73,15 @@ impl ToolLayer {
         match self {
             ToolLayer::Relief => "Relieve",
             ToolLayer::Meaning => "Semántica",
+            ToolLayer::Instances => "Instancias",
         }
     }
 
     fn next(self) -> Self {
         match self {
             ToolLayer::Relief => ToolLayer::Meaning,
-            ToolLayer::Meaning => ToolLayer::Relief,
+            ToolLayer::Meaning => ToolLayer::Instances,
+            ToolLayer::Instances => ToolLayer::Relief,
         }
     }
 }
@@ -96,6 +102,8 @@ pub(crate) struct EditorTool {
     pub brush: BrushKind,
     /// The selected kind for the semantic brush.
     pub paint_kind: TerrainKind,
+    /// The selected prop for the instance layer.
+    pub prop_kind: PropKind,
     /// Where the current stroke started, in world XZ plus the ground height
     /// there at press time. `Flatten` levels to that height and `Ramp` runs from
     /// it — both need the value *before* the stroke starts changing it.
@@ -118,6 +126,7 @@ impl Default for EditorTool {
             strength: 1.0,
             brush: BrushKind::Sculpt,
             paint_kind: TerrainKind::Rock,
+            prop_kind: PropKind::ALL[0],
             anchor: None,
         }
     }
@@ -149,6 +158,7 @@ impl Plugin for EditorPlugin {
                 // on the active layer, so the pointer is never claimed twice.
                 brush::sculpt_terrain,
                 paint::paint_terrain,
+                instances::place_or_clear_instances,
                 history::undo_redo,
                 persist::save_or_reload,
                 brush::draw_brush_gizmo,
@@ -277,6 +287,13 @@ fn select_brush(keys: Res<ButtonInput<KeyCode>>, mut tool: ResMut<EditorTool>) {
             for (index, kind) in TerrainKind::ALL.into_iter().enumerate() {
                 if keys.just_pressed(digit_key(index)) {
                     tool.paint_kind = kind;
+                }
+            }
+        }
+        ToolLayer::Instances => {
+            for (index, kind) in PropKind::ALL.into_iter().enumerate() {
+                if keys.just_pressed(digit_key(index)) {
+                    tool.prop_kind = kind;
                 }
             }
         }

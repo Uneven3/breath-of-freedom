@@ -158,19 +158,19 @@ Si sí, migrar `layout.rs`. Es reversible, no toca el archivo de nivel y es la
 
 ## Qué le falta, en orden de cuánto duele
 
-### 1. La tercera capa no existe: no se pueden poner cosas
+### 1. La tercera capa existe para props sueltos, no para el mundo entero
 
-Es lo más grande. El editor autora la forma del suelo y su significado, y
-**nada de lo que hay encima**. Hoy los objetos del mundo vienen de dos lugares,
-ninguno de los cuales es el editor:
+**Parcialmente resuelto (Paso 2, primer corte).** Se puede colocar y borrar
+props `.glb` en caliente, sin recompilar, y eso persiste. Lo que sigue sin
+poderse autorar sin tocar código:
 
 - **`src/world/layout.rs`**: 656 líneas de tablas Rust — cajas, escaleras,
   blancos de práctica, el perímetro. Cambiar el mapa es recompilar.
 - **`src/world/forest.rs`**: un scatter procedural determinista. El bosque no
-  está autorado: está *calculado*.
+  está autorado: está *calculado*, y sigue sin usar la capa de instancias.
 
-O sea que un mapa nuevo no se puede hacer sin tocar código, que es exactamente
-lo que una herramienta de autoría existe para evitar.
+Migrar `layout.rs`/`forest.rs` a la capa de instancias es trabajo aparte, no
+incluido en este primer corte.
 
 ### 2. La cobertura vegetal todavía no diferencia su densidad
 
@@ -235,6 +235,27 @@ opcional. También es donde vive la deuda C1 (~130 allocations por tick en
 ### Paso 2: La capa de instancias
 
 **El paso que convierte esto en un editor de mapas.**
+
+**Primer corte construido, 2026-08-14** (colocar, borrar, persistir — sin
+rotar/escalar/deshacer, ver `MVPS.md` MVP 2 para el detalle completo y por qué
+ese alcance). Dos cosas que este primer corte hizo distinto de lo que sigue
+escrito abajo, porque se descubrieron recién al construirlo:
+
+- **Interacción de pincel, no de click.** Lo escrito abajo decía "colocar
+  (click), borrar (click derecho sobre una)". Se cambió a un pincel de área —
+  mismo radio compartido que Relieve/Semántica, LMB esparce adentro, RMB borra
+  todo lo que cae adentro — porque un click por instancia no alcanza para
+  poblar nada que se sienta como una pradera, y reusar el modelo de
+  interacción que el autor ya conoce de las otras dos capas es lo que hace la
+  herramienta clara de usar.
+- **`bsn!`/`SceneComponent` sí, desde el primer corte.** La sección de BSN más
+  abajo lo daba por bueno pero no confirmado; se verificó contra las fuentes
+  de `bevy_scene` 0.19 instaladas y funciona tal como se esperaba —
+  `Handle<T>` acepta un string literal dentro de `bsn!` y se resuelve solo. Se
+  usó a propósito en vez del patrón de `forest.rs` (`WorldAssetRoot` manual +
+  máquina de estados de swap proxy/detallado): el usuario señaló que esa
+  coordinación de swap es, sospecha, la raíz de dos semanas peleando con el
+  pasto procedural, y una instancia colocada no tiene dos tiers que coordinar.
 
 - **El dato** (en `bof_domain`, junto a los otros tipos compartidos):
   ```rust

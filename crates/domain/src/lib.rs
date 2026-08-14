@@ -28,6 +28,7 @@ pub mod movement;
 pub mod perf;
 pub mod projectiles;
 pub mod proposal;
+pub mod props;
 pub mod scene;
 pub mod visuals;
 pub mod world;

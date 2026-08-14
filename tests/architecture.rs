@@ -44,6 +44,7 @@ const HARDWARE_DEBT: &[&str] = &[
     "src/debug/console.rs",
     "src/editor/brush.rs",
     "src/editor/history.rs",
+    "src/editor/instances.rs",
     "src/editor/mod.rs",
     "src/editor/paint.rs",
     "src/editor/persist.rs",

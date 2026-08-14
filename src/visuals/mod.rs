@@ -75,6 +75,7 @@ impl Plugin for VisualsPlugin {
         app.init_resource::<grass::MeadowRecordMemory>();
         app.init_resource::<grass::GrassLabStats>();
         app.init_resource::<grass::GrassRendererSettings>();
+        app.init_resource::<grass::GrowthRampOverride>();
         app.add_message::<grass::GrassLabSettingRequest>();
         // Startup keeps only what outlives a scene: loaded assets and shared
         // meshes. The player's visual and the meadow are scene content

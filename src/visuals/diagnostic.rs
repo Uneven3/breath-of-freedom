@@ -443,6 +443,7 @@ mod tests {
                 interaction_map: None,
                 card_albedo: None,
                 blade_records: Handle::default(),
+                chunk_born_at: Handle::default(),
             },
         };
         assert_eq!(grass.diagnostic_cull_mode(), None);

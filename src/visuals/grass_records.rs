@@ -69,6 +69,14 @@ pub(super) struct RingRecords {
     /// encoge: rodar la grilla los recicla, así que se estabiliza en cuanto el
     /// jugador dio una vuelta.
     data: Vec<u8>,
+    /// Segundo buffer, mucho más chico: **un `f32` por casillero, no por
+    /// brizna** — cuándo nació el chunk que ocupa ese casillero (`Time::
+    /// elapsed_secs()`, nunca el reloj con wrap que usa el viento). El shader
+    /// lo resta contra su propio reloj para desvanecer un chunk recién
+    /// horneado en vez de plantarlo a altura completa de una — ver
+    /// `grass::ALREADY_GROWN_BORN_AT` para el centinela de reasignación.
+    pub born_buffer: Handle<ShaderBuffer>,
+    born_data: Vec<u8>,
     slots: SlotBook,
     by_chunk: HashMap<IVec2, u32>,
     /// Cuántas briznas lleva un chunk de este nivel. Es el stride del buffer y
@@ -78,10 +86,11 @@ pub(super) struct RingRecords {
 }
 
 impl RingRecords {
-    /// Un nivel recién nacido, con su buffer y sin briznas.
-    pub fn new(buffer: Handle<ShaderBuffer>) -> Self {
+    /// Un nivel recién nacido, con sus dos buffers y sin briznas.
+    pub fn new(buffer: Handle<ShaderBuffer>, born_buffer: Handle<ShaderBuffer>) -> Self {
         Self {
             buffer,
+            born_buffer,
             ..Self::default()
         }
     }
@@ -94,6 +103,7 @@ impl RingRecords {
     pub fn reset(&mut self) {
         self.mesh = None;
         self.data.clear();
+        self.born_data.clear();
         self.slots.clear();
         self.by_chunk.clear();
         self.stride = 0;
@@ -121,8 +131,9 @@ impl RingRecords {
     }
 
     /// Copia los registros de un chunk a su casillero, agrandando el buffer si
-    /// hace falta.
-    pub fn write(&mut self, slot: u32, records: &[[f32; 4]]) {
+    /// hace falta. `born_at` es un solo número por casillero, no por brizna —
+    /// ver el campo `born_data`.
+    pub fn write(&mut self, slot: u32, records: &[[f32; 4]], born_at: f32) {
         let stride = self.stride as usize;
         assert_eq!(
             records.len(),
@@ -140,6 +151,12 @@ impl RingRecords {
                 self.data[at + lane * 4..at + lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
             }
         }
+        let born_needed = (slot as usize + 1) * 4;
+        if self.born_data.len() < born_needed {
+            self.born_data.resize(born_needed, 0);
+        }
+        let born_at_start = slot as usize * 4;
+        self.born_data[born_at_start..born_at_start + 4].copy_from_slice(&born_at.to_le_bytes());
         self.dirty = true;
     }
 
@@ -148,19 +165,22 @@ impl RingRecords {
         if !self.dirty || self.data.is_empty() {
             return;
         }
-        let Some(mut buffer) = buffers.get_mut(&self.buffer) else {
-            return;
-        };
-        buffer.buffer_description.size = self.data.len() as u64;
-        buffer.data = Some(self.data.clone());
+        if let Some(mut buffer) = buffers.get_mut(&self.buffer) {
+            buffer.buffer_description.size = self.data.len() as u64;
+            buffer.data = Some(self.data.clone());
+        }
+        if let Some(mut buffer) = buffers.get_mut(&self.born_buffer) {
+            buffer.buffer_description.size = self.born_data.len() as u64;
+            buffer.data = Some(self.born_data.clone());
+        }
         self.dirty = false;
     }
 
-    /// Cuántos bytes ocupa este nivel en el buffer. **El inventario de la escena
-    /// cuenta mallas y no `ShaderBuffer`s**, así que sin este número la memoria
-    /// que el Paso 2 mudó de una cosa a la otra no la ve nadie.
+    /// Cuántos bytes ocupa este nivel en los dos buffers. **El inventario de la
+    /// escena cuenta mallas y no `ShaderBuffer`s**, así que sin este número la
+    /// memoria que el Paso 2 mudó de una cosa a la otra no la ve nadie.
     pub fn buffer_bytes(&self) -> usize {
-        self.data.len()
+        self.data.len() + self.born_data.len()
     }
 
     pub fn chunks(&self) -> usize {
@@ -292,7 +312,7 @@ mod tests {
             stride: 2,
             ..RingRecords::default()
         };
-        ring.write(1, &[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]);
+        ring.write(1, &[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], 12.5);
         assert_eq!(ring.data.len(), 2 * 2 * RECORD_BYTES);
         // El casillero 0 quedó en cero y el 1 tiene lo escrito.
         assert!(ring.data[..2 * RECORD_BYTES].iter().all(|byte| *byte == 0));
@@ -304,6 +324,14 @@ mod tests {
             ),
             1.0,
         );
+        // El casillero 0 del buffer de nacimiento quedó en cero y el 1 lleva
+        // el `born_at` pasado a `write` — un `f32` por casillero, no por
+        // brizna, así que el índice es `slot`, no `slot * stride`.
+        assert!(ring.born_data[..4].iter().all(|byte| *byte == 0));
+        assert_eq!(
+            f32::from_le_bytes(ring.born_data[4..8].try_into().unwrap()),
+            12.5,
+        );
     }
 
     #[test]
@@ -313,7 +341,7 @@ mod tests {
             stride: 2,
             ..RingRecords::default()
         };
-        ring.write(0, &[[1.0, 2.0, 3.0, 4.0]]);
+        ring.write(0, &[[1.0, 2.0, 3.0, 4.0]], 0.0);
     }
 
     /// La malla soporta ambos layouts y sus índices nunca salen del rango de

@@ -722,6 +722,43 @@ fn log_meadow_lod(stats: &crate::visuals::grass::GrassLabStats) {
     }
     out.pop();
     info!("{out}");
+    // El anillo 0 es el único escalonado en tiers de buffer — un desglose
+    // aparte, no una fila más de la tabla de arriba, que sigue siendo por
+    // anillo visual.
+    let mut tiers = String::from("[shot] anillo 0 por tier:");
+    for (tier, (chunks, triangles)) in stats
+        .ring0_tier_chunks
+        .iter()
+        .zip(stats.ring0_tier_triangles.iter())
+        .enumerate()
+    {
+        let _ = write!(tiers, " tier {tier} {chunks} chunks {triangles} tris ·");
+    }
+    tiers.pop();
+    info!("{tiers}");
+}
+
+/// Briznas vivas contra residentes, por anillo — la fracción que ningún
+/// contador de triángulos distinguía (ver `docs/AHORA.md`). `GrassVitality`
+/// no es continua como `GrassLabStats`: se calcula acá mismo, una vez por
+/// captura, recorriendo `GrassField` de verdad.
+fn log_grass_vitality(vitality: &crate::visuals::grass::GrassVitality) {
+    use crate::visuals::grass::GRASS_RING_COUNT;
+    use std::fmt::Write as _;
+
+    let mut out = String::from("[shot] pradera vitalidad:");
+    for ring in 0..GRASS_RING_COUNT {
+        let resident = vitality.resident_blades[ring];
+        let alive = vitality.alive_blades[ring];
+        let pct = if resident == 0 {
+            0.0
+        } else {
+            100.0 * alive as f64 / resident as f64
+        };
+        let _ = write!(out, " anillo {ring} {alive}/{resident} vivas ({pct:.1}%) ·");
+    }
+    out.pop();
+    info!("{out}");
 }
 
 /// Los recursos de sólo-lectura que el reporte de una corrida necesita,
@@ -736,6 +773,7 @@ pub(super) struct ShotReportInputs<'w> {
     broken: Res<'w, BrokenAssets>,
     records: Res<'w, crate::visuals::grass::MeadowRecordMemory>,
     grass_lab_stats: Res<'w, crate::visuals::grass::GrassLabStats>,
+    grass_field: Res<'w, crate::visuals::grass::GrassField>,
 }
 
 /// Lleva la foto de punta a punta, con la misma máquina de estados que la
@@ -762,8 +800,12 @@ pub(super) fn drive_auto_shot(
     log: Res<shot_stats::ShotStatsLog>,
     progress: Res<ShotCaptureProgress>,
 ) {
-    let (broken, records, grass_lab_stats) =
-        (&report.broken, &report.records, &report.grass_lab_stats);
+    let (broken, records, grass_lab_stats, grass_field) = (
+        &report.broken,
+        &report.records,
+        &report.grass_lab_stats,
+        &report.grass_field,
+    );
     match shot.stage {
         Stage::EnteringScene => {
             let wanted = AppState::Scene(shot.suite.scene());
@@ -833,6 +875,21 @@ pub(super) fn drive_auto_shot(
                 .is_some_and(|current| current.authoring.grass_lab)
             {
                 log_meadow_lod(grass_lab_stats);
+                // La misma cámara real que ya se verificó arriba — un foco de
+                // otra parte reportaría vitalidad de un lugar que la foto no
+                // muestra.
+                if let Some(camera) = &camera {
+                    let bench_settings =
+                        crate::visuals::grass::shape_bench_settings(&perf, *settings);
+                    let vitality = crate::visuals::grass::grass_vitality(
+                        grass_field,
+                        camera.0.translation().xz(),
+                        perf.grass_density(),
+                        perf.grass_reach_scale(),
+                        &bench_settings,
+                    );
+                    log_grass_vitality(&vitality);
+                }
             }
             // La geometría sale de la cámara **real**, no del mirador pedido:
             // si las dos discrepan el aviso de arriba ya sonó, y una conversión

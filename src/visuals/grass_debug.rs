@@ -107,11 +107,11 @@ pub(crate) fn subpixel_legend() -> Vec<SubpixelBand> {
 /// misma franja de la imagen. Los colores son slots existentes de la paleta:
 /// no agrega otra tabla que el analizador pueda desincronizar.
 pub(crate) fn shape_measure_legend() -> Vec<SubpixelBand> {
-    [("hoja", 0usize), ("púa", 1), ("carta", 2)]
+    super::grass::BladeShape::ALL
         .into_iter()
-        .map(|(name, slot)| SubpixelBand {
-            name: name.to_string(),
-            color: slot_srgb(slot),
+        .map(|shape| SubpixelBand {
+            name: shape.name().to_string(),
+            color: slot_srgb(shape.shader_index() as usize),
         })
         .collect()
 }
@@ -257,11 +257,16 @@ mod tests {
                 .iter()
                 .map(|shape| shape.name.as_str())
                 .collect::<Vec<_>>(),
-            ["hoja", "púa", "carta"]
+            super::super::grass::BladeShape::ALL
+                .map(super::super::grass::BladeShape::name)
+                .to_vec()
         );
-        assert_eq!(shapes[0].color, slot_srgb(0));
-        assert_eq!(shapes[1].color, slot_srgb(1));
-        assert_eq!(shapes[2].color, slot_srgb(2));
+        for shape in super::super::grass::BladeShape::ALL {
+            assert_eq!(
+                shapes[shape.shader_index() as usize].color,
+                slot_srgb(shape.shader_index() as usize)
+            );
+        }
         let wgsl = include_str!("../../assets/shaders/grass.wgsl");
         assert!(wgsl.contains("const DEBUG_SHAPE_MEASURE: u32 = 7u;"));
         assert!(wgsl.contains("shape == SHAPE_CARD"));

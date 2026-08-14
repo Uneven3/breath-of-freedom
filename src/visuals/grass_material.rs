@@ -16,6 +16,11 @@ pub struct GrassUniform {
     pub sun_direction: Vec3,
     pub sss_amount: f32,
     pub time: f32,
+    /// Como `time`, pero **sin wrap** — un reloj que da la vuelta rompería la
+    /// resta contra `chunk_born_at`. Detalle en `GRASS_PERF_DATA.md`.
+    pub chunk_clock: f32,
+    /// Segundos hasta el desvanecimiento normal — ver `total_growth`.
+    pub chunk_fade_in_s: f32,
     /// Dónde está la cámara en XZ: un chunk se descarta *después* de que sus
     /// briznas ya encogieron a nada.
     pub focus_xz: Vec2,
@@ -83,6 +88,9 @@ impl Default for GrassUniform {
             sun_direction: Vec3::new(0.3, 0.8, 0.5).normalize(),
             sss_amount: 0.4,
             time: 0.0,
+            chunk_clock: 0.0,
+            // Cero = sin fundido, el lado seguro del artefacto.
+            chunk_fade_in_s: 0.0,
             focus_xz: Vec2::ZERO,
             // Shrinks nothing by default; the meadow overwrites these.
             growth_ramp: 0.0,
@@ -134,6 +142,9 @@ pub struct GrassExtension {
     /// aunque el nivel no lo use**: el macro no pasa por `Option`.
     #[storage(103, read_only)]
     pub blade_records: Handle<ShaderBuffer>,
+    /// Un `f32` por casillero, no por brizna: cuándo nació ese chunk.
+    #[storage(106, read_only)]
+    pub chunk_born_at: Handle<ShaderBuffer>,
 }
 
 impl MaterialExtension for GrassExtension {

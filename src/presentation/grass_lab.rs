@@ -16,6 +16,7 @@ use crate::presentation::theme::{ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED,
 use crate::scene::{AppState, current_scene};
 use crate::visuals::grass::{
     GRASS_RING_COUNT, GrassLabSettingRequest, GrassLabStats, GrassRendererSettings,
+    GrowthRampOverride,
 };
 
 #[derive(Resource, Default)]
@@ -37,6 +38,8 @@ enum GrassLabControl {
     Frontier { ring: usize, delta_m: f32 },
     Spike { delta_pixels: f32 },
     CardWidth { delta_m: f32 },
+    GrowthRamp { delta_m: f32 },
+    RaggedRingBoundary,
     Reset,
 }
 
@@ -106,7 +109,7 @@ fn set_open(
     });
 }
 
-/// Un solo observer para las 4 variantes de `GrassLabControl`: comparten
+/// Un solo observer para las 5 variantes de `GrassLabControl`: comparten
 /// marcador y mensaje, así que no hace falta uno por instancia (mismo
 /// patrón que `debug_ui::view::activate_knob`). `bevy_ui_widgets::Button`
 /// no llena `Interaction` — este observer sobre `On<Activate>` es el único
@@ -129,6 +132,10 @@ fn activate_grass_lab_control(
         GrassLabControl::CardWidth { delta_m } => {
             GrassLabSettingRequest::AdjustCardWidth { delta_m }
         }
+        GrassLabControl::GrowthRamp { delta_m } => {
+            GrassLabSettingRequest::AdjustGrowthRamp { delta_m }
+        }
+        GrassLabControl::RaggedRingBoundary => GrassLabSettingRequest::ToggleRaggedRingBoundary,
         GrassLabControl::Reset => GrassLabSettingRequest::Reset,
     };
     requests.write(request);
@@ -143,7 +150,7 @@ fn spawn_grass_lab(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: Val::Px(16.0),
                 top: Val::Px(16.0),
-                width: Val::Px(430.0),
+                width: Val::Px(560.0),
                 max_width: Val::Percent(92.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
@@ -187,6 +194,13 @@ fn spawn_grass_lab(mut commands: Commands) {
             control_row(panel, "Frontera anillo 1 → 2", GrassLabControl::Frontier { ring: 1, delta_m: -1.0 }, GrassLabControl::Frontier { ring: 1, delta_m: 1.0 });
             control_row(panel, "Umbral de carta", GrassLabControl::Spike { delta_pixels: -0.1 }, GrassLabControl::Spike { delta_pixels: 0.1 });
             control_row(panel, "Ancho de carta", GrassLabControl::CardWidth { delta_m: -0.02 }, GrassLabControl::CardWidth { delta_m: 0.02 });
+            control_row(panel, "Rampa de crecimiento", GrassLabControl::GrowthRamp { delta_m: -2.0 }, GrassLabControl::GrowthRamp { delta_m: 2.0 });
+            panel.spawn(GrassLabControl::RaggedRingBoundary).apply_scene(bsn! {
+                @FeathersButton
+                Node { align_self: AlignSelf::FlexStart }
+                on(activate_grass_lab_control)
+                Children [ (Text("Borde de anillo: ruido on/off") ThemedText TextFont { font_size: FontSize::Px(13.0) }) ]
+            });
             panel.spawn(GrassLabControl::Reset).apply_scene(bsn! {
                 @FeathersButton
                 Node { align_self: AlignSelf::FlexStart }
@@ -271,6 +285,20 @@ fn update_readout(
             stats.resident_triangles[ring],
             stats.frustum_triangles[ring],
         ));
+        // El anillo 0 es el único que se parte en tiers de buffer (mismo
+        // anillo visual, distinto stride según qué tan lejos del foco esté
+        // cada chunk) — mostrarlo acá es lo que deja ver que el escalonado
+        // está haciendo algo, no sólo que el total del anillo bajó.
+        if ring == 0 {
+            for (tier, (chunks, triangles)) in stats
+                .ring0_tier_chunks
+                .iter()
+                .zip(stats.ring0_tier_triangles.iter())
+                .enumerate()
+            {
+                lines.push(format!("  tier {tier}  {chunks} chunks · {triangles} tris"));
+            }
+        }
     }
     readout.0 = lines.join("\n");
 }
@@ -284,6 +312,7 @@ fn update_readout(
 fn update_settings_readout(
     settings: Res<GrassRendererSettings>,
     perf: Res<crate::perf::PerfToggles>,
+    growth_override: Res<GrowthRampOverride>,
     mut readout: Single<&mut Text, With<GrassLabSettingsReadout>>,
 ) {
     let effective = crate::visuals::grass::shape_bench_settings(&perf, *settings);
@@ -296,13 +325,29 @@ fn update_settings_readout(
              Volvé a auto/base en el hub para editar acá.",
         ));
     }
+    let growth_effective = growth_override.0.unwrap_or_else(|| perf.grass_growth());
+    if growth_override.0.is_some() {
+        lines.push(format!(
+            "⚠ este control pisa la perilla F1 grass-growth ({:.1} m) — \"Restaurar \
+             baseline\" le devuelve el mando.",
+            perf.grass_growth(),
+        ));
+    }
     lines.push(format!(
         "Activo · anillo 0→1 {:.0} m · anillo 1→2 {:.0} m\n\
-         carta desde {:.2}px · ancho {:.2} m",
+         carta desde {:.2}px · ancho {:.2} m · rampa de crecimiento {:.1} m\n\
+         borde de anillo con ruido: {} (hasta {:.1} m)",
         effective.rings[0].reach_m,
         effective.rings[1].reach_m,
         effective.spike_min_pixels,
         effective.card_width_m,
+        growth_effective,
+        if effective.ragged_ring_boundary_enabled {
+            "ON"
+        } else {
+            "off"
+        },
+        effective.ragged_ring_boundary_max_m,
     ));
     readout.0 = lines.join("\n");
     debug_assert_eq!(effective.rings.len(), GRASS_RING_COUNT);

@@ -62,6 +62,23 @@ pub(crate) struct GrassRendererSettings {
     pub hidden_by_distance: [(f32, f32); 7],
     pub hidden_per_width_per_metre_card: f32,
     pub target_coverage: f32,
+    /// Técnica 2 del plan de anillos (2026-08-09): romper el círculo
+    /// perfecto de la frontera **entre anillos** (0→1→2, la que cambia
+    /// densidad y forma de golpe) con ruido determinista por chunk, en vez
+    /// de una línea limpia. Apagado por default — no cambia nada hasta que
+    /// F9 lo prenda.
+    ///
+    /// Un primer intento (2026-08-13, madrugada) aplicó este mismo ruido al
+    /// límite interno de los tiers de buffer del anillo 0
+    /// (`RING0_TIERS`) — un límite invisible por diseño (nunca cambia qué se
+    /// ve, sólo cuántos índices se someten al shader), así que el ruido no
+    /// tenía nada que romper ahí. Jugando se confirmó "no hace nada". Este
+    /// campo ahora controla el lugar correcto — ver [`ring_boundary_jitter_m`].
+    pub ragged_ring_boundary_enabled: bool,
+    /// Cuánto puede correr el borde, en metros. Sólo empuja hacia **más**
+    /// alcance — ver [`ring_boundary_jitter_m`] — así que un chunk nunca
+    /// pierde cobertura que la asignación limpia le daría.
+    pub ragged_ring_boundary_max_m: f32,
 }
 
 impl Default for GrassRendererSettings {
@@ -78,7 +95,14 @@ impl Default for GrassRendererSettings {
                 },
                 GrassRingSettings {
                     reach_m: 128.0,
-                    chunk_m: 64.0,
+                    // Achicado de 64 a 48 el 2026-08-13: mitiga (no elimina) el pop
+                    // de chunk documentado en `GRASS_PERF_DATA.md` ("Chunks
+                    // apareciendo de golpe en el anillo lejano") — un chunk nuevo
+                    // trae ~44% menos briznas de golpe. No se probó 32 (el valor
+                    // que daría ~4× menos): rompe `the_neighbourhood_is_bounded`
+                    // (120/100 chunks en el peor caso). 48 deja margen real
+                    // (90/100).
+                    chunk_m: 48.0,
                 },
             ],
             leaf_min_pixels: 3.0,
@@ -107,6 +131,8 @@ impl Default for GrassRendererSettings {
             ],
             hidden_per_width_per_metre_card: 0.185,
             target_coverage: 0.95,
+            ragged_ring_boundary_enabled: false,
+            ragged_ring_boundary_max_m: 4.0,
         }
     }
 }
@@ -115,15 +141,37 @@ impl Default for GrassRendererSettings {
 /// writes its configuration.
 #[derive(Message, Debug, Clone, Copy)]
 pub(crate) enum GrassLabSettingRequest {
-    AdjustFrontier { ring: usize, delta_m: f32 },
-    AdjustSpikeThreshold { delta_pixels: f32 },
-    AdjustCardWidth { delta_m: f32 },
+    AdjustFrontier {
+        ring: usize,
+        delta_m: f32,
+    },
+    AdjustSpikeThreshold {
+        delta_pixels: f32,
+    },
+    AdjustCardWidth {
+        delta_m: f32,
+    },
+    /// No toca `GrassRendererSettings` — ver [`GrowthRampOverride`]. El
+    /// primer click arranca desde el valor **efectivo** de la perilla F1
+    /// (`perf.grass_growth()`), no de un piso fijo, para que no salte al
+    /// activarse.
+    AdjustGrowthRamp {
+        delta_m: f32,
+    },
+    /// Prende/apaga el ruido en la frontera entre anillos (Técnica 2, ver
+    /// [`ring_boundary_jitter_m`]). Sí vive en `GrassRendererSettings` — a
+    /// diferencia de la rampa de crecimiento, esto cambia qué chunks existen,
+    /// así que el rehorneado completo que dispara es necesario, no un costo
+    /// evitable.
+    ToggleRaggedRingBoundary,
     Reset,
 }
 
 pub(super) fn apply_grass_lab_settings(
     mut requests: MessageReader<GrassLabSettingRequest>,
     mut settings: ResMut<GrassRendererSettings>,
+    mut growth_override: ResMut<GrowthRampOverride>,
+    perf: Res<crate::perf::PerfToggles>,
 ) {
     for request in requests.read() {
         match *request {
@@ -147,7 +195,17 @@ pub(super) fn apply_grass_lab_settings(
             GrassLabSettingRequest::AdjustCardWidth { delta_m } => {
                 settings.card_width_m = (settings.card_width_m + delta_m).clamp(0.10, 1.50);
             }
-            GrassLabSettingRequest::Reset => *settings = GrassRendererSettings::default(),
+            GrassLabSettingRequest::AdjustGrowthRamp { delta_m } => {
+                let base = growth_override.0.unwrap_or_else(|| perf.grass_growth());
+                growth_override.0 = Some((base + delta_m).clamp(0.4, 80.0));
+            }
+            GrassLabSettingRequest::ToggleRaggedRingBoundary => {
+                settings.ragged_ring_boundary_enabled = !settings.ragged_ring_boundary_enabled;
+            }
+            GrassLabSettingRequest::Reset => {
+                *settings = GrassRendererSettings::default();
+                growth_override.0 = None;
+            }
             _ => {}
         }
     }
@@ -164,6 +222,8 @@ mod grass_lab_settings_tests {
         settings.rings[0].reach_m = settings.rings[1].reach_m - 4.0;
         let mut app = App::new();
         app.insert_resource(settings);
+        app.insert_resource(GrowthRampOverride::default());
+        app.insert_resource(crate::perf::PerfToggles::default());
         app.add_message::<GrassLabSettingRequest>();
         app.add_systems(Update, apply_grass_lab_settings);
         app.world_mut()
@@ -182,6 +242,40 @@ mod grass_lab_settings_tests {
             .write(GrassLabSettingRequest::Reset);
         app.update();
         assert_eq!(*app.world().resource::<GrassRendererSettings>(), baseline);
+    }
+
+    /// El ajuste de rampa arranca desde el valor efectivo de la perilla F1
+    /// (no de cero), se satura, y `Reset` lo devuelve a "sin ajuste" — no a
+    /// un número, para que la perilla F1 vuelva a mandar sola.
+    #[test]
+    fn a_live_growth_ramp_starts_from_the_knob_and_resets_to_no_override() {
+        let mut app = App::new();
+        app.insert_resource(GrassRendererSettings::default());
+        app.insert_resource(GrowthRampOverride::default());
+        let mut perf = crate::perf::PerfToggles::default();
+        perf.set_knob_step(bof_domain::perf::PerfKnob::GrassGrowth, 2);
+        let knob_value = perf.grass_growth();
+        app.insert_resource(perf);
+        app.add_message::<GrassLabSettingRequest>();
+        app.add_systems(Update, apply_grass_lab_settings);
+        app.world_mut()
+            .resource_mut::<Messages<GrassLabSettingRequest>>()
+            .write(GrassLabSettingRequest::AdjustGrowthRamp { delta_m: 5.0 });
+        app.update();
+        assert_eq!(
+            app.world().resource::<GrowthRampOverride>().0,
+            Some(knob_value + 5.0),
+            "el primer ajuste tiene que arrancar del valor efectivo de la perilla, no de cero",
+        );
+        app.world_mut()
+            .resource_mut::<Messages<GrassLabSettingRequest>>()
+            .write(GrassLabSettingRequest::Reset);
+        app.update();
+        assert_eq!(
+            app.world().resource::<GrowthRampOverride>().0,
+            None,
+            "Reset tiene que devolver el mando a la perilla F1, no dejar un número fijo",
+        );
     }
 }
 
@@ -299,7 +393,7 @@ fn density_at(distance_m: f32, shape: BladeShape, settings: &GrassRendererSettin
 
 /// La brizna, en dos niveles de detalle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BladeShape {
+pub(super) enum BladeShape {
     /// Cuatro vértices, dos triángulos unidos por una arista **horizontal** a la
     /// altura de la cintura: uno apunta abajo y otro arriba. Termina en punta por
     /// los dos lados, y esa fila del medio es la que le permite arquearse. El
@@ -332,11 +426,25 @@ impl BladeShape {
 
     /// El número con que el shader la reconoce. Un test lo cobra contra las
     /// constantes `SHAPE_*` de `grass.wgsl`, que es lo único que las ata.
-    const fn shader_index(self) -> u32 {
+    pub(super) const fn shader_index(self) -> u32 {
         match self {
             Self::Leaf => 0,
             Self::Spike => 1,
             Self::Card => 2,
+        }
+    }
+
+    /// Las tres formas, en el orden en que la leyenda y el shader las
+    /// numeran. Única fuente para cualquier tabla que las enumere — antes
+    /// había dos listas de nombres escritas a mano en `grass_debug.rs`,
+    /// ninguna derivada de este enum.
+    pub(super) const ALL: [Self; 3] = [Self::Leaf, Self::Spike, Self::Card];
+
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Leaf => "hoja",
+            Self::Spike => "púa",
+            Self::Card => "carta",
         }
     }
 }
@@ -416,11 +524,18 @@ pub(crate) fn live_blades_per_m2(
     // compara dos corridas.
     let scale = reference_scale();
     let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale, settings);
+    // El tier 0 de cualquier anillo siempre pide el rango **entero** del
+    // anillo — su borde interno es el del anillo mismo (`ring0_tier_bounds`
+    // arranca en `band_inner`), y los tiers de más afuera son subconjuntos de
+    // ése. Cuántas briznas están vivas a una distancia no depende de cómo se
+    // partió el buffer del anillo en tiers, así que este cómputo usa siempre
+    // el rango de su tier 0.
     let alive: usize = tile_ranges(dial, scale, reach_scale, settings)
         .iter()
         .enumerate()
         .filter(|(index, _)| ring_reach(*index, reach_scale, settings) >= distance_m)
-        .map(|(_, range)| {
+        .map(|(_, tiers)| {
+            let range = &tiers[0];
             ladder
                 .get(range.start as usize..range.end as usize)
                 .map_or(0, |tramo| {
@@ -440,6 +555,252 @@ fn band_inner(index: usize, reach_scale: f32, settings: &GrassRendererSettings) 
     index.checked_sub(1).map_or(NEAREST_INTEREST_M, |inner| {
         ring_reach(inner, reach_scale, settings)
     })
+}
+
+/// Cuántos tiers internos de buffer tiene un anillo. Sólo el anillo 0 —el
+/// único donde se midió que un solo casillero por chunk desperdicia la
+/// mayoría de lo que envía (`docs/GRASS_PERF_DATA.md`)— se parte en
+/// [`RING0_TIERS`]; los demás siguen con uno, sin cambiar su comportamiento.
+pub(super) const RING0_TIERS: usize = 6;
+pub(super) const MAX_TIERS: usize = RING0_TIERS;
+
+pub(super) fn tier_count(ring: usize) -> usize {
+    if ring == 0 { RING0_TIERS } else { 1 }
+}
+
+/// Los bordes internos de los tiers del anillo 0, como **fracción de su
+/// alcance vigente** — nunca metros fijos. El alcance del anillo 0 se mueve en
+/// vivo (perilla `grass-reach`, o `AdjustFrontier` desde el hub F9); un borde
+/// en metros fijos dejaría un tier sin territorio de un lado, o un chunk sin
+/// tier del otro — la misma clase de agujero que ya costó el bug de
+/// `vertex_index` (`BOTWGrass.md`). El primer borde coincide siempre con
+/// `band_inner(0, ...)`, el último con `ring_reach(0, ...)`.
+fn ring0_tier_bounds(reach_scale: f32, settings: &GrassRendererSettings) -> [f32; RING0_TIERS + 1] {
+    let inner = band_inner(0, reach_scale, settings);
+    let outer = ring_reach(0, reach_scale, settings);
+    std::array::from_fn(|t| inner + (outer - inner) * t as f32 / RING0_TIERS as f32)
+}
+
+/// La distancia de un chunk al foco que importa para decidir su tier: su
+/// **punto más cercano**, no su centro. Un chunk de varios metros de lado
+/// cubre un rango de distancias, y el tier tiene que cubrir el peor caso
+/// —el punto más cercano— o un chunk cerca de una frontera de tier queda con
+/// menos casilleros de los que su propia esquina necesita. Misma fórmula que
+/// ya usa `ring_cells_with_slack` para decidir si un chunk existe: una sola
+/// función para las dos preguntas, para que nunca puedan divergir.
+fn chunk_nearest_m(cell: IVec2, chunk_m: f32, focus: Vec2) -> f32 {
+    let half = chunk_m * 0.5;
+    let offset = (cell_centre(cell, chunk_m) - focus).abs();
+    (offset - Vec2::splat(half)).max(Vec2::ZERO).length()
+}
+
+/// Tope del ruido de frontera para un anillo dado: cero si el ruido está
+/// apagado, o si `ring` es el **último** anillo (`GRASS_RING_COUNT - 1`).
+/// El último anillo no tiene territorio de sobra para prestar — más allá de
+/// `farthest_reach()` no vive ninguna brizna de toda la pradera
+/// (`grass_tiles::reach_ladder` corta ahí, un tope duro), así que un chunk
+/// que sólo existiera por el ruido en ese borde saldría vacío: puro gasto de
+/// draw call y memoria sin un triángulo que pintar. Una sola fuente de
+/// verdad para "cuánto puede correr esta celda" — la usan tanto
+/// [`ring_boundary_jitter_m`] como el radio de búsqueda de
+/// `ring_cells_with_slack`, para que nunca puedan discrepar.
+fn ring_boundary_jitter_cap_m(ring: usize, settings: &GrassRendererSettings) -> f32 {
+    if !settings.ragged_ring_boundary_enabled || ring + 1 >= GRASS_RING_COUNT {
+        0.0
+    } else {
+        settings.ragged_ring_boundary_max_m.max(0.0)
+    }
+}
+
+/// Ruido determinista por celda para la frontera **entre anillos** — Técnica
+/// 2 del plan de anillos (`BOTWGrass.md`, 2026-08-09): romper el círculo con
+/// ruido, no con una forma nueva.
+///
+/// Un primer intento (2026-08-13, madrugada) aplicó este mismo ruido al
+/// límite interno de los tiers de buffer del anillo 0 — invisible por
+/// diseño, así que no rompía nada. Éste perturba `reach_m`, el radio real
+/// que decide si un chunk del anillo existe (`ring_cells_with_slack`).
+///
+/// **Siempre `>= 0`, a propósito.** Sólo puede **extender** hacia afuera el
+/// alcance de un anillo para ciertas celdas, nunca acortarlo — un chunk
+/// nunca pierde cobertura que la asignación limpia le daría. El corte
+/// *interior* de la corona siguiente (`handover` en `ring_cells_with_slack`)
+/// sigue anclado al alcance limpio del anillo de adentro, no a éste: el
+/// anillo de adentro nunca cubre menos que su valor limpio, con o sin ruido,
+/// así que excluir al de afuera hasta ese punto sigue siendo seguro — en el
+/// peor caso hay superposición extra, nunca un agujero. Empujar este valor
+/// en la otra dirección dejaría un chunk con menos cobertura de la que su
+/// punto más cercano real exige: el mismo bug que costó `vertex_index`
+/// (2026-08-07), esta vez a propósito si alguien lo invirtiera sin leer este
+/// comentario.
+fn ring_boundary_jitter_m(cell: IVec2, ring: usize, settings: &GrassRendererSettings) -> f32 {
+    let cap = ring_boundary_jitter_cap_m(ring, settings);
+    if cap <= 0.0 {
+        return 0.0;
+    }
+    let seed = crate::world::forest::hash_u32(
+        cell.x.cast_unsigned().wrapping_mul(0x9e37_79b9)
+            ^ cell.y.cast_unsigned().wrapping_mul(0x85eb_ca6b)
+            ^ u32::try_from(ring)
+                .unwrap_or(u32::MAX)
+                .wrapping_mul(0xc2b2_ae35),
+    );
+    crate::world::forest::hash_unit(seed) * cap
+}
+
+/// A qué tier le toca un chunk del anillo 0, dado su punto más cercano.
+/// Satura al último tier en vez de fallar: como `ring0_tier_bounds` deriva su
+/// borde exterior del alcance **vigente**, y `ring_cells`/`ring_cells_with_slack`
+/// filtran por ese mismo alcance salvo que el ruido de frontera
+/// (`ragged_ring_boundary_enabled`) extienda la selección del propio anillo
+/// más allá — en ese caso un chunk sí puede llegar con `nearest_m` más allá
+/// del último borde, y saturar al último tier sigue siendo seguro: ese tier
+/// ya reserva índices hasta `farthest_reach()` (ver `tile_ranges`), muy más
+/// allá del borde limpio del anillo 0, así que necesitar menos de los que
+/// tiene reservados nunca es un problema. Saturar en vez de entrar en pánico
+/// es la misma disciplina que ya usa el resto del módulo ante un índice
+/// fuera de rango.
+fn ring0_tier_for(nearest_m: f32, reach_scale: f32, settings: &GrassRendererSettings) -> usize {
+    let bounds = ring0_tier_bounds(reach_scale, settings);
+    (0..RING0_TIERS)
+        .rev()
+        .find(|&tier| nearest_m >= bounds[tier])
+        .unwrap_or(0)
+}
+
+/// El tier de un chunk del anillo 0, con histéresis: si el chunk ya existe en
+/// algún tier y su distancia actual sigue dentro de la banda de ese tier
+/// ensanchada por [`KEEP_SLACK_M`], se queda ahí — igual que un chunk en el
+/// borde de un anillo no se rehornea cada cuadro. Sólo se reasigna cuando
+/// cruza sólidamente a otra banda, o cuando todavía no existe.
+///
+/// **`wanted` y `keep_set` tienen que llamar a esta misma función**, no una
+/// versión sin memoria cada uno: si acordaran un tier distinto para el mismo
+/// chunk ya vivo, el de abajo se armaría como "falta" en el tier nuevo
+/// mientras el de arriba mantiene vivo el tier viejo — la misma brizna
+/// dibujada dos veces a la vez.
+fn ring0_tier_with_hysteresis(
+    field: &GrassField,
+    cell: IVec2,
+    nearest_m: f32,
+    reach_scale: f32,
+    settings: &GrassRendererSettings,
+) -> usize {
+    let bounds = ring0_tier_bounds(reach_scale, settings);
+    for tier in 0..RING0_TIERS {
+        if !field.live.contains_key(&ChunkKey {
+            ring: 0,
+            tier,
+            cell,
+        }) {
+            continue;
+        }
+        let lo = if tier == 0 {
+            f32::MIN
+        } else {
+            bounds[tier] - KEEP_SLACK_M
+        };
+        let hi = if tier + 1 == RING0_TIERS {
+            f32::MAX
+        } else {
+            bounds[tier + 1] + KEEP_SLACK_M
+        };
+        if nearest_m >= lo && nearest_m < hi {
+            return tier;
+        }
+    }
+    ring0_tier_for(nearest_m, reach_scale, settings)
+}
+
+/// Cuántas briznas de un chunk producen geometría visible ahora, contra
+/// cuántas paga su casillero de stride fijo.
+///
+/// Réplica en CPU de `blade_growth` (`grass.wgsl`): una brizna está muerta
+/// —cero altura, cero píxeles— si su distancia al foco es menor al borde
+/// interno de la corona (la dibuja el nivel de adentro) o mayor/igual a su
+/// propio alcance horneado (`baked_reach`, la misma función que usó el
+/// registro real, no la escalera cruda — sin el `floor`, una brizna con
+/// `ladder[índice] = 30.7` se contaría viva un metro más allá de donde el
+/// shader ya la mató). La zona de desvanecimiento (`growth_ramp` metros antes
+/// del alcance) cuenta como viva: tiene altura fraccional, no cero.
+fn chunk_vitality(
+    centre: Vec2,
+    chunk_m: f32,
+    blades: std::ops::Range<u32>,
+    ladder: &[f32],
+    inner: f32,
+    focus: Vec2,
+) -> (usize, usize) {
+    let mut resident = 0;
+    let mut alive = 0;
+    for (index, blade) in chunk_blade_positions(centre, chunk_m, blades) {
+        resident += 1;
+        let distance = (blade.xz - focus).length();
+        if distance >= inner && distance < baked_reach(ladder, index) {
+            alive += 1;
+        }
+    }
+    (resident, alive)
+}
+
+/// Briznas vivas contra residentes, por anillo, para todo el campo que
+/// `GrassField` tiene en memoria ahora mismo.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GrassVitality {
+    pub resident_blades: [usize; GRASS_RING_COUNT],
+    pub alive_blades: [usize; GRASS_RING_COUNT],
+}
+
+/// **A pedido, no continua.** Recorre cada brizna residente —hasta cientos de
+/// miles en un campo típico—, así que su costo escala con el campo entero.
+/// Vive del lado de `BOF_SHOT`, que ya paga una vuelta de GPU (una captura de
+/// pantalla) más cara que este recorrido en CPU; llamarla cada frame junto al
+/// resto de `GrassLabStats` competiría con el propio medidor de milisegundos
+/// que esta herramienta existe para no contaminar.
+///
+/// `dial`/`reach_scale`/`settings` tienen que ser los mismos con que se
+/// horneó `field` — la escala es siempre `reference_scale()`, nunca la del
+/// viewport real, porque es la que usó `roll_meadow_grid` para fijar el
+/// stride de cada nivel. Pasar la escala de cámara real haría que
+/// `resident_blades` no coincidiera con `chunks × stride` sin que nada lo
+/// avisara.
+pub(crate) fn grass_vitality(
+    field: &GrassField,
+    focus: Vec2,
+    dial: f32,
+    reach_scale: f32,
+    settings: &GrassRendererSettings,
+) -> GrassVitality {
+    let scale = reference_scale();
+    let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale, settings);
+    let ranges = tile_ranges(dial, scale, reach_scale, settings);
+    let mut out = GrassVitality::default();
+    for key in field.live.keys() {
+        let ring = key.ring;
+        let Some(ring_settings) = settings.rings.get(ring) else {
+            continue;
+        };
+        let blades = ranges
+            .get(ring)
+            .and_then(|tiers| tiers.get(key.tier))
+            .cloned()
+            .unwrap_or(0..0);
+        // Mismo truncamiento que el uniform (`record_layout.w`,
+        // `metres_as_u32`): el shader compara contra un entero, no contra el
+        // metro exacto de `band_inner`.
+        let inner = metres_as_u32(band_inner(ring, reach_scale, settings)) as f32;
+        let (resident, alive) = chunk_vitality(
+            cell_centre(key.cell, ring_settings.chunk_m),
+            ring_settings.chunk_m,
+            blades,
+            &ladder,
+            inner,
+            focus,
+        );
+        out.resident_blades[ring] += resident;
+        out.alive_blades[ring] += alive;
+    }
+    out
 }
 
 fn band_midpoint(index: usize, reach_scale: f32, settings: &GrassRendererSettings) -> f32 {
@@ -587,12 +948,25 @@ fn metres_as_u32(metres: f32) -> u32 {
     metres.clamp(0.0, 1_000.0) as u32
 }
 
-/// La rampa del crecimiento, **con la perilla aplicada**. Vive en `bof_domain`
-/// porque lo que gobierna sólo se ve caminando: lo elige el usuario barriéndolo,
-/// no una captura (`BOTWGrass.md`).
-fn growth_band(perf: &crate::perf::PerfToggles) -> f32 {
-    perf.grass_growth()
+/// La rampa del crecimiento, **con la perilla aplicada** — o con el ajuste
+/// vivo de F9 si hay uno puesto, que gana. Ver [`GrowthRampOverride`] para
+/// por qué ese ajuste no vive en `GrassRendererSettings`.
+fn growth_band(perf: &crate::perf::PerfToggles, override_ramp: &GrowthRampOverride) -> f32 {
+    override_ramp.0.unwrap_or_else(|| perf.grass_growth())
 }
+
+/// Ajuste vivo de F9 sobre la rampa de crecimiento, para medir sin depender
+/// de la escalera fija de la perilla F1 (`GRASS_GROWTH_STEPS`, que sólo baja
+/// de 6 m, nunca sube).
+///
+/// **Deliberadamente afuera de `GrassRendererSettings`.** Ese struct entero
+/// se compara por valor en `MeadowRebuildDials` (`roll_meadow_grid`): *
+/// cualquier* campo que cambie ahí tira la grilla entera y la rehornea. La
+/// rampa de crecimiento ya viaja gratis por uniform cada cuadro
+/// (`meadow_uniform`) — meterla en ese struct le costaría un rehorneado
+/// completo por cada click de F9, para un número que nunca necesitó uno.
+#[derive(Resource, Default, Clone, Copy, PartialEq)]
+pub(crate) struct GrowthRampOverride(pub Option<f32>);
 
 /// Desde qué distancia una brizna se abre como carta.
 ///
@@ -620,15 +994,40 @@ const CHUNKS_BAKED_PER_FRAME: usize = 1;
 /// frame: a scene that starts with a hole in the meadow is worse than one hitch.
 const FILL_IN_ONE_FRAME: bool = true;
 
+/// Cuántos segundos tarda un chunk recién horneado en llegar al
+/// desvanecimiento por distancia que ya tenía prometido (`blade_growth` en
+/// `grass.wgsl`). Ataca el pop de chunk cuadrado en anillo 0/1 —confirmado
+/// jugando el 2026-08-13, sólo caminando, con `growth_ramp` en su default—:
+/// ese mecanismo desvanece una brizna cerca de **su propio** alcance, sin
+/// noción de cuándo nació el chunk que la contiene, así que la mayoría de las
+/// briznas de un chunk recién horneado no están cerca de su límite propio y
+/// aparecen a altura completa de una. Fuera de `GrassRendererSettings` a
+/// propósito, mismo motivo que [`GrowthRampOverride`]: sólo escala un número
+/// de uniform, no cambia qué chunks existen, así que meterlo ahí costaría un
+/// rehorneado completo por nada.
+const CHUNK_FADE_IN_S: f32 = 0.35;
+
+/// Centinela para "este chunk ya terminó de crecer, no arranques el fundido
+/// de nuevo" — usado cuando una celda cambia de casillero sin ser brizna
+/// nueva (reasignación de tier del anillo 0, ver `is_reassignment` en
+/// `roll_meadow_grid`). Suficientemente negativo para que
+/// `(reloj_actual - esto) / CHUNK_FADE_IN_S` sature en 1.0 sin desbordar a
+/// `f32::INFINITY` ni `NaN` para ningún reloj real.
+const ALREADY_GROWN_BORN_AT: f32 = -1.0e9;
+
 /// Un chunk de la pradera: una entidad, un casillero del buffer de su nivel.
 #[derive(Component)]
 pub(super) struct GrassChunk;
 
-/// Which chunk of which ring. The ring is part of the identity because the same
-/// patch of ground is covered by different chunks at different distances.
+/// Which chunk of which ring, and which internal buffer tier of that ring. The
+/// ring is part of the identity because the same patch of ground is covered by
+/// different chunks at different distances; the tier is part of it for the
+/// same reason inside a single ring (`RING0_TIERS`) — always `0` for rings
+/// that only have one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct ChunkKey {
     ring: usize,
+    tier: usize,
     cell: IVec2,
 }
 
@@ -637,9 +1036,11 @@ struct ChunkKey {
 /// **Un material por nivel**: cada uno lleva su stride y su forma, y el de las
 /// cartas además `AlphaMode::AlphaToCoverage`. No cuesta draws — es lo que los junta.
 #[derive(Resource)]
-pub(super) struct GrassField {
-    materials: [Handle<GrassMaterial>; GRASS_RING_COUNT],
-    records: [RingRecords; GRASS_RING_COUNT],
+pub(crate) struct GrassField {
+    /// `[ring][tier]`. Sólo el anillo 0 usa más de un casillero de tier — los
+    /// demás dejan `1..MAX_TIERS` sin usar (`tier_count`).
+    materials: [[Handle<GrassMaterial>; MAX_TIERS]; GRASS_RING_COUNT],
+    records: [[RingRecords; MAX_TIERS]; GRASS_RING_COUNT],
     live: HashMap<ChunkKey, Entity>,
     /// Qué candidata de carta llevan los materiales ahora mismo. Vive acá y no
     /// en un `Local` de sistema: el campo se recrea entera al entrar a
@@ -662,6 +1063,11 @@ pub(crate) struct GrassLabStats {
     pub frustum_chunks: [usize; GRASS_RING_COUNT],
     pub resident_triangles: [usize; GRASS_RING_COUNT],
     pub frustum_triangles: [usize; GRASS_RING_COUNT],
+    /// Desglose por tier **sólo del anillo 0** — el único que se parte en
+    /// más de un buffer (`RING0_TIERS`). Los demás anillos siguen contados
+    /// enteros arriba; esto es lo nuevo que el escalonado agrega a mirar.
+    pub ring0_tier_chunks: [usize; RING0_TIERS],
+    pub ring0_tier_triangles: [usize; RING0_TIERS],
 }
 
 /// Snapshot the field after rolling it. This deliberately reads `ViewVisibility`
@@ -677,9 +1083,13 @@ pub(super) fn collect_grass_lab_stats(
     let triangles_per_blade = submitted_triangles_per_blade(&perf);
     for (key, entity) in &field.live {
         let ring = key.ring;
-        let triangles = field.records[ring].stride as usize * triangles_per_blade;
+        let triangles = field.records[ring][key.tier].stride as usize * triangles_per_blade;
         next.resident_chunks[ring] += 1;
         next.resident_triangles[ring] += triangles;
+        if ring == 0 {
+            next.ring0_tier_chunks[key.tier] += 1;
+            next.ring0_tier_triangles[key.tier] += triangles;
+        }
         if visibility.get(*entity).is_ok_and(|visible| visible.get()) {
             next.frustum_chunks[ring] += 1;
             next.frustum_triangles[ring] += triangles;
@@ -688,6 +1098,36 @@ pub(super) fn collect_grass_lab_stats(
     if *stats != next {
         *stats = next;
     }
+}
+
+/// Cuántas briznas manda un anillo en vista, sumando chunk por chunk — no
+/// `chunks × blades_per_chunk` como cuando cada chunk de un anillo llevaba el
+/// mismo stride. Con tiers, cada chunk del anillo 0 paga el de **su propio**
+/// tier, así que hay que sumarlos uno por uno.
+#[cfg(test)]
+fn ring_blades_in_view(
+    ring: usize,
+    focus: Vec2,
+    dial: f32,
+    scale: f32,
+    reach_scale: f32,
+    settings: &GrassRendererSettings,
+) -> usize {
+    ring_cells(ring, focus, reach_scale, settings)
+        .into_iter()
+        .map(|cell| {
+            let tier = if ring == 0 {
+                ring0_tier_for(
+                    chunk_nearest_m(cell, settings.rings[ring].chunk_m, focus),
+                    reach_scale,
+                    settings,
+                )
+            } else {
+                0
+            };
+            blades_per_chunk(ring, tier, dial, scale, reach_scale, settings) as usize
+        })
+        .sum()
 }
 
 /// Triángulos que la pradera declara a la escena, para `perf::budget`.
@@ -707,21 +1147,16 @@ pub(crate) fn meadow_triangles() -> usize {
     for z in 0..8 {
         for x in 0..8 {
             let focus = Vec2::new(x as f32, z as f32) * (period / 8.0);
-            let triangles: usize = settings
-                .rings
-                .iter()
-                .enumerate()
-                .map(|(index, _)| {
-                    let scale = reference_scale();
-                    ring_cells(index, focus, REFERENCE_REACH, &settings).len()
-                        * blades_per_chunk(
-                            index,
-                            REFERENCE_DENSITY,
-                            scale,
-                            REFERENCE_REACH,
-                            &settings,
-                        ) as usize
-                        * SUBMITTED_TRIANGLES_PER_BLADE
+            let triangles: usize = (0..GRASS_RING_COUNT)
+                .map(|ring| {
+                    ring_blades_in_view(
+                        ring,
+                        focus,
+                        REFERENCE_DENSITY,
+                        reference_scale(),
+                        REFERENCE_REACH,
+                        &settings,
+                    ) * SUBMITTED_TRIANGLES_PER_BLADE
                 })
                 .sum();
             worst = worst.max(triangles);
@@ -757,19 +1192,16 @@ fn worst_case_blades() -> usize {
 /// Blades standing around a camera at `focus`.
 #[cfg(test)]
 fn neighbourhood_blades(focus: Vec2, settings: &GrassRendererSettings) -> usize {
-    settings
-        .rings
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            ring_cells(index, focus, REFERENCE_REACH, settings).len()
-                * blades_per_chunk(
-                    index,
-                    REFERENCE_DENSITY,
-                    reference_scale(),
-                    REFERENCE_REACH,
-                    settings,
-                ) as usize
+    (0..GRASS_RING_COUNT)
+        .map(|ring| {
+            ring_blades_in_view(
+                ring,
+                focus,
+                REFERENCE_DENSITY,
+                reference_scale(),
+                REFERENCE_REACH,
+                settings,
+            )
         })
         .sum()
 }
@@ -781,25 +1213,55 @@ fn neighbourhood_blades(focus: Vec2, settings: &GrassRendererSettings) -> usize 
 /// nivel es un **superconjunto** del que sigue, así que al cruzar una frontera la
 /// brizna no se reemplaza: la dibuja el otro, en el mismo lugar. De ahí que los
 /// niveles puedan ser **coronas** y no discos.
+/// El rango de un tier corta en **su propio** borde interno — el del anillo
+/// para el único tier de los anillos 1/2, el de su banda para cada uno de los
+/// `RING0_TIERS` del anillo 0. Un tier lejano del anillo 0 pide un rango más
+/// chico, porque su borde interno es mayor y la escalera ya bajó para cuando
+/// llega ahí.
 fn tile_ranges(
     dial: f32,
     scale: f32,
     reach_scale: f32,
     settings: &GrassRendererSettings,
-) -> Vec<std::ops::Range<u32>> {
+) -> [[std::ops::Range<u32>; MAX_TIERS]; GRASS_RING_COUNT] {
     let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale, settings);
     let total = u32::try_from(ladder.len()).unwrap_or(u32::MAX);
-    (0..GRASS_RING_COUNT)
-        .map(|index| {
-            let inner = band_inner(index, reach_scale, settings);
-            let last = ladder
-                .iter()
-                .position(|blade_reach| blade_reach.floor() < inner)
-                .and_then(|end| u32::try_from(end).ok())
-                .unwrap_or(total);
-            0..last.min(total)
-        })
-        .collect()
+    let cutoff = |inner: f32| -> u32 {
+        ladder
+            .iter()
+            .position(|blade_reach| blade_reach.floor() < inner)
+            .and_then(|end| u32::try_from(end).ok())
+            .unwrap_or(total)
+            .min(total)
+    };
+    std::array::from_fn(|ring| {
+        if ring == 0 {
+            let bounds = ring0_tier_bounds(reach_scale, settings);
+            std::array::from_fn(|tier| {
+                if tier < RING0_TIERS {
+                    // La histéresis (`ring0_tier_with_hysteresis`) retiene un chunk
+                    // en este tier hasta que su punto más cercano baja a
+                    // `bounds[tier] - KEEP_SLACK_M`, no sólo hasta `bounds[tier]`.
+                    // Presupuestar para `bounds[tier]` a secas dejaba un chunk
+                    // retenido sin las briznas que su borde real exige — un agujero
+                    // de densidad que se veía al acercarse a una frontera de tier
+                    // (encontrado auditando el 2026-08-13, nunca lo cubrió ningún
+                    // test porque probaban la asignación limpia, no la retenida).
+                    let budgeted_bound = if tier == 0 {
+                        bounds[tier]
+                    } else {
+                        (bounds[tier] - KEEP_SLACK_M).max(bounds[0])
+                    };
+                    0..cutoff(budgeted_bound)
+                } else {
+                    0..0
+                }
+            })
+        } else {
+            let range = 0..cutoff(band_inner(ring, reach_scale, settings));
+            std::array::from_fn(|tier| if tier == 0 { range.clone() } else { 0..0 })
+        }
+    })
 }
 
 /// Cuántas baldosas de mundo entran en un chunk de este nivel, por lado.
@@ -819,17 +1281,21 @@ fn tiles_per_side(chunk_m: f32) -> u32 {
     u32::try_from((chunk_m / grass_tiles::TILE_M).round().max(1.0) as i64).unwrap_or(1)
 }
 
-/// Blades in one chunk of `ring` at a given dial setting. Rounded once, here, so
-/// the count on screen and the count in the budget are the same number.
+/// Blades in one chunk of `(ring, tier)` at a given dial setting. Rounded
+/// once, here, so the count on screen and the count in the budget are the
+/// same number.
 fn blades_per_chunk(
     index: usize,
+    tier: usize,
     dial: f32,
     scale: f32,
     reach_scale: f32,
     settings: &GrassRendererSettings,
 ) -> u32 {
-    let per_tile = tile_ranges(dial, scale, reach_scale, settings)
+    let ranges = tile_ranges(dial, scale, reach_scale, settings);
+    let per_tile = ranges
         .get(index)
+        .and_then(|tiers| tiers.get(tier))
         .map_or(0, |range| range.end - range.start);
     let side = tiles_per_chunk_side(index, settings);
     per_tile.saturating_mul(side).saturating_mul(side)
@@ -874,14 +1340,19 @@ fn ring_cells_with_slack(
     settings: &GrassRendererSettings,
 ) -> Vec<IVec2> {
     let ring = &settings.rings[index];
-    let reach_m = ring_reach(index, reach_scale, settings) + slack;
+    let base_reach_m = ring_reach(index, reach_scale, settings) + slack;
     let inner_reach = index
         .checked_sub(1)
         .map_or(0.0, |i| ring_reach(i, reach_scale, settings));
     let half = ring.chunk_m * 0.5;
-    // One cell of slack: a chunk can touch the ring while its centre sits
-    // outside it.
-    let span = (reach_m / ring.chunk_m).ceil() as i32 + 1;
+    // Un cupo de holgura, más el tope del ruido de frontera si está prendido
+    // — si no, una celda que sólo entra por el ruido nunca se visita en el
+    // loop de abajo. Gateado por la misma función que decide el jitter en
+    // sí, para que nunca puedan discrepar sobre cuánto puede correr esta
+    // celda (y para no agrandar el radio de búsqueda cuando el ruido está
+    // apagado, el caso por default).
+    let jitter_cap = ring_boundary_jitter_cap_m(index, settings);
+    let span = ((base_reach_m + jitter_cap) / ring.chunk_m).ceil() as i32 + 1;
     let base = (focus / ring.chunk_m).floor().as_ivec2();
 
     let mut cells = Vec::new();
@@ -894,12 +1365,18 @@ fn ring_cells_with_slack(
             // muertas para él. La esquina de un cuadrado está a √2 de su lado, y
             // de ahí salían chunks que se iban con briznas vivas adentro y un
             // borde de anillo que se veía cuadrado.
-            let nearest = (offset - Vec2::splat(half)).max(Vec2::ZERO).length();
+            let nearest = chunk_nearest_m(cell, ring.chunk_m, focus);
             let farthest = (offset + Vec2::splat(half)).length();
             // El borde interno de la corona: desde que los niveles se anidan, el
             // de adentro dibuja *las mismas briznas* hasta su alcance, así que
             // este no tiene nada que hacer ahí. Sólo el `slack` de histéresis.
+            // **Sin ruido**, a propósito: el anillo de adentro nunca cubre menos
+            // que su alcance limpio (el ruido sólo suma), así que excluir hasta
+            // ahí sigue siendo seguro sin importar si el de afuera tiene ruido.
             let handover = (inner_reach - slack).max(0.0);
+            // El corte exterior sí lleva el ruido — es la frontera que se ve
+            // como un círculo perfecto, y la que Técnica 2 rompe.
+            let reach_m = base_reach_m + ring_boundary_jitter_m(cell, index, settings);
             if nearest > reach_m || farthest <= handover {
                 continue;
             }
@@ -956,36 +1433,57 @@ pub(super) fn init_meadow_material(
     settings: Res<GrassRendererSettings>,
     perf: Res<crate::perf::PerfToggles>,
 ) {
-    // Un buffer y un material por nivel. El buffer arranca con un registro de
-    // relleno porque un `ShaderBuffer` vacío no es un binding válido, y el
-    // material no puede declararlo opcional: el macro de `AsBindGroup` no pasa
-    // por `Option`.
-    let records = std::array::from_fn(|_| {
-        // `default()` y no `RENDER_WORLD`: con este último Bevy suelta el dato de
-        // CPU en cuanto lo sube, y este buffer se reescribe cada vez que la
-        // grilla rueda.
-        RingRecords::new(buffers.add(ShaderBuffer::new(
-            &[0_u8; RECORD_BYTES],
-            RenderAssetUsages::default(),
-        )))
+    // Un buffer y un material **por tier** — un material sólo puede tener un
+    // buffer bindeado a la vez, así que dos tiers no pueden compartir uno
+    // aunque compartan anillo. Los anillos sin más de un tier (`tier_count`)
+    // sólo usan el casillero 0; el resto queda creado pero sin chunk que lo
+    // use nunca, un desperdicio de unos pocos handles vacíos, no de GPU.
+    // El buffer arranca con un registro de relleno porque un `ShaderBuffer`
+    // vacío no es un binding válido, y el material no puede declararlo
+    // opcional: el macro de `AsBindGroup` no pasa por `Option`.
+    let records: [[RingRecords; MAX_TIERS]; GRASS_RING_COUNT] = std::array::from_fn(|_ring| {
+        std::array::from_fn(|_tier| {
+            // `default()` y no `RENDER_WORLD`: con este último Bevy suelta el
+            // dato de CPU en cuanto lo sube, y este buffer se reescribe cada
+            // vez que la grilla rueda. El segundo buffer (nacimiento) es el
+            // mismo trato, sólo que un `f32` por casillero en vez de por
+            // brizna.
+            RingRecords::new(
+                buffers.add(ShaderBuffer::new(
+                    &[0_u8; RECORD_BYTES],
+                    RenderAssetUsages::default(),
+                )),
+                buffers.add(ShaderBuffer::new(
+                    &0_f32.to_le_bytes(),
+                    RenderAssetUsages::default(),
+                )),
+            )
+        })
     });
-    // Una sola textura compartida por los tres materiales: no agrega batches y
-    // cubre las briznas del anillo lejano que, por distancia individual, aún
-    // están construidas como hoja o púa.
+    // Una sola textura compartida por todos los materiales: no agrega batches
+    // y cubre las briznas del anillo lejano que, por distancia individual,
+    // aún están construidas como hoja o púa.
     let card_albedo = asset_server.load(card_albedo_path(perf.grass_card_candidate_label()));
-    let materials = std::array::from_fn(|ring| {
-        let mut material = grass_material(&settings);
-        material.extension.blade_records = records[ring].buffer.clone();
-        material.extension.card_albedo = Some(card_albedo.clone());
-        if shape_for_ring(ring, reference_scale(), REFERENCE_REACH, &settings).faces_camera() {
-            // Recomendado por Bevy para foliage: borde antialiaseado por
-            // cobertura de MSAA en vez de un corte binario, sin el costo de
-            // ordenar que tiene `Blend`. Necesita MSAA prendido — si no,
-            // Bevy la hace caer a comportarse como `Mask` sola.
-            material.base.alpha_mode = AlphaMode::AlphaToCoverage;
-        }
-        materials.add(material)
-    });
+    let materials: [[Handle<GrassMaterial>; MAX_TIERS]; GRASS_RING_COUNT] =
+        std::array::from_fn(|ring| {
+            std::array::from_fn(|tier| {
+                let mut material = grass_material(&settings);
+                material.extension.blade_records = records[ring][tier].buffer.clone();
+                material.extension.chunk_born_at = records[ring][tier].born_buffer.clone();
+                material.extension.card_albedo = Some(card_albedo.clone());
+                if shape_for_ring(ring, reference_scale(), REFERENCE_REACH, &settings)
+                    .faces_camera()
+                {
+                    // Recomendado por Bevy para foliage: borde antialiaseado
+                    // por cobertura de MSAA en vez de un corte binario, sin el
+                    // costo de ordenar que tiene `Blend`. Necesita MSAA
+                    // prendido — si no, Bevy la hace caer a comportarse como
+                    // `Mask` sola.
+                    material.base.alpha_mode = AlphaMode::AlphaToCoverage;
+                }
+                materials.add(material)
+            })
+        });
     commands.insert_resource(GrassField {
         materials,
         records,
@@ -1011,7 +1509,7 @@ pub(super) fn apply_card_candidate(
     }
     field.card_candidate_step = perf.grass_card_candidate_step;
     let card_albedo = asset_server.load(card_albedo_path(perf.grass_card_candidate_label()));
-    for handle in &field.materials {
+    for handle in field.materials.iter().flatten() {
         if let Some(mut material) = materials.get_mut(handle) {
             material.extension.card_albedo = Some(card_albedo.clone());
         }
@@ -1031,11 +1529,21 @@ pub(super) fn upload_meadow_records(
     if !field.is_changed() {
         return;
     }
-    for ring in &mut field.records {
-        ring.upload(&mut buffers);
+    for tier in field.records.iter_mut().flatten() {
+        tier.upload(&mut buffers);
     }
-    memory.bytes = field.records.iter().map(RingRecords::buffer_bytes).sum();
-    memory.chunks = field.records.iter().map(RingRecords::chunks).sum();
+    memory.bytes = field
+        .records
+        .iter()
+        .flatten()
+        .map(RingRecords::buffer_bytes)
+        .sum();
+    memory.chunks = field
+        .records
+        .iter()
+        .flatten()
+        .map(RingRecords::chunks)
+        .sum();
 }
 
 /// Lo que la pradera tiene en buffers de registros. **El inventario de la escena
@@ -1109,9 +1617,10 @@ fn grass_material(settings: &GrassRendererSettings) -> GrassMaterial {
             },
             interaction_map: None,
             card_albedo: None,
-            // El campo lo llena `init_meadow_material`, que es quien tiene el
+            // Los dos los llena `init_meadow_material`, que es quien tiene el
             // `Assets<ShaderBuffer>`.
             blade_records: Handle::default(),
+            chunk_born_at: Handle::default(),
         },
     }
 }
@@ -1128,7 +1637,7 @@ type MeadowRebuildDials = (usize, usize, usize, usize, GrassRendererSettings);
 /// neighbourhood that needs blades, not the player's.
 #[expect(
     clippy::too_many_arguments,
-    reason = "rolling owns ECS entities, mesh assets, field state and terrain sampling"
+    reason = "rolling owns ECS entities, mesh assets, field state, terrain sampling and now the clock a freshly baked chunk stamps itself with"
 )]
 pub(super) fn roll_meadow_grid(
     mut commands: Commands,
@@ -1139,6 +1648,7 @@ pub(super) fn roll_meadow_grid(
     scene: Res<State<crate::scene::AppState>>,
     terrain: TerrainAccess,
     camera: Option<Single<&GlobalTransform, With<Camera3d>>>,
+    time: Res<Time>,
     mut dial: Local<Option<MeadowRebuildDials>>,
 ) {
     let Some(camera) = camera else {
@@ -1156,8 +1666,8 @@ pub(super) fn roll_meadow_grid(
             commands.entity(*entity).despawn();
         }
         field.live.clear();
-        for ring in &mut field.records {
-            ring.reset();
+        for tier in field.records.iter_mut().flatten() {
+            tier.reset();
         }
     }
 
@@ -1192,34 +1702,55 @@ pub(super) fn roll_meadow_grid(
         // La malla índice tiene tantos vértices como briznas lleva un chunk, así
         // que una perilla que cambia esa cuenta la invalida entera — igual que
         // invalida los chunks horneados.
-        for ring in &mut field.records {
-            ring.reset();
+        for tier in field.records.iter_mut().flatten() {
+            tier.reset();
         }
     }
 
-    // Una malla índice por nivel, creada una vez por configuración. Es lo que
-    // hace que sus chunks batcheen: Bevy exige el mismo `Handle<Mesh>`, y todos
-    // los chunks de un nivel llevan la misma cantidad de briznas.
+    // Una malla índice por (nivel, tier), creada una vez por configuración. Es
+    // lo que hace que sus chunks batcheen entre sí: Bevy exige el mismo
+    // `Handle<Mesh>`, y todos los chunks de un mismo tier llevan la misma
+    // cantidad de briznas — la razón de ser de partir el buffer en tiers.
     for ring in 0..GRASS_RING_COUNT {
-        let blades = blades_per_chunk(ring, density, scale, reach_scale, &settings);
-        if field.records[ring].mesh.is_none() && planted_ring(&perf, ring) && blades > 0 {
-            // **Dos triángulos para todos, no el de la forma del nivel** — salvo
-            // que el banco fuerce "solo púa" (`submitted_triangles_per_blade`):
-            // ahí no hay mezcla de formas que proteger. Fuera de eso, la forma
-            // la decide la distancia, y con un solo triángulo indexado una
-            // brizna cercana de un nivel de púas salía **media hoja**. La púa no
-            // paga el segundo: sus esquinas 2 y 3 caen en la punta y degenera.
-            field.records[ring].mesh = Some(meshes.add(ring_index_mesh(
-                blades,
-                submitted_triangles_per_blade(&perf),
-            )));
-            field.records[ring].stride = blades;
+        for tier in 0..tier_count(ring) {
+            let blades = blades_per_chunk(ring, tier, density, scale, reach_scale, &settings);
+            if field.records[ring][tier].mesh.is_none() && planted_ring(&perf, ring) && blades > 0 {
+                // **Dos triángulos para todos, no el de la forma del nivel** —
+                // salvo que el banco fuerce "solo púa"
+                // (`submitted_triangles_per_blade`): ahí no hay mezcla de
+                // formas que proteger. Fuera de eso, la forma la decide la
+                // distancia, y con un solo triángulo indexado una brizna
+                // cercana de un nivel de púas salía **media hoja**. La púa no
+                // paga el segundo: sus esquinas 2 y 3 caen en la punta y
+                // degenera.
+                field.records[ring][tier].mesh = Some(meshes.add(ring_index_mesh(
+                    blades,
+                    submitted_triangles_per_blade(&perf),
+                )));
+                field.records[ring][tier].stride = blades;
+            }
         }
     }
 
     let planted = |ring: usize| planted_ring(&perf, ring);
 
+    // El tier de un chunk del anillo 0 sale de su punto más cercano al foco,
+    // con histéresis contra lo que ya está vivo (`ring0_tier_with_hysteresis`)
+    // — `wanted` y `keep_set` tienen que llamar exactamente a la misma
+    // función, o podrían acordar tiers distintos para el mismo chunk y
+    // duplicar su geometría (ver el comentario de esa función).
     let settings_value = settings;
+    let field_ref: &GrassField = &field;
+    let chunk_key = move |ring: usize, cell: IVec2| -> ChunkKey {
+        let tier = if ring == 0 {
+            let nearest = chunk_nearest_m(cell, settings_value.rings[0].chunk_m, focus);
+            ring0_tier_with_hysteresis(field_ref, cell, nearest, reach_scale, &settings_value)
+        } else {
+            0
+        };
+        ChunkKey { ring, tier, cell }
+    };
+
     let wanted: HashSet<ChunkKey> = settings_value
         .rings
         .iter()
@@ -1229,7 +1760,7 @@ pub(super) fn roll_meadow_grid(
             ring_cells(ring, focus, reach_scale, &settings)
                 .into_iter()
                 .filter(move |cell| grass_chunk_has_growth(*cell, ring, terrain, &settings_value))
-                .map(move |cell| ChunkKey { ring, cell })
+                .map(move |cell| chunk_key(ring, cell))
         })
         .collect();
 
@@ -1244,7 +1775,7 @@ pub(super) fn roll_meadow_grid(
             ring_cells_with_slack(ring, focus, KEEP_SLACK_M, reach_scale, &settings)
                 .into_iter()
                 .filter(move |cell| grass_chunk_has_growth(*cell, ring, terrain, &settings_value))
-                .map(move |cell| ChunkKey { ring, cell })
+                .map(move |cell| chunk_key(ring, cell))
         })
         .collect();
 
@@ -1257,8 +1788,19 @@ pub(super) fn roll_meadow_grid(
         }
         keep
     });
-    for key in dropped {
-        field.records[key.ring].release(key.cell);
+    // Una celda del anillo 0 que se soltó por un cambio de tier —no porque
+    // salió de la grilla— tiene que volver **este mismo cuadro**, no esperar
+    // su turno. Es la misma celda migrando de buffer, y el jugador la ve como
+    // parte del mismo campo; hacerla esperar el presupuesto de chunks nuevos
+    // es lo que hacía desaparecer cuadrados enteros al cruzar una frontera de
+    // tier con varios juntos — el bug que encontró jugando el 2026-08-13.
+    let reassigned_cells: HashSet<IVec2> = dropped
+        .iter()
+        .filter(|key| key.ring == 0)
+        .map(|key| key.cell)
+        .collect();
+    for key in &dropped {
+        field.records[key.ring][key.tier].release(key.cell);
     }
 
     // An empty grid is being filled, not rolled: bake it whole rather than
@@ -1268,17 +1810,29 @@ pub(super) fn roll_meadow_grid(
     } else {
         CHUNKS_BAKED_PER_FRAME
     };
-    // Collected before the loop so the bake can borrow the field mutably.
-    let missing: Vec<ChunkKey> = wanted
+    let is_reassignment = |key: &ChunkKey| key.ring == 0 && reassigned_cells.contains(&key.cell);
+    // Las reasignadas entran todas, sin presupuesto — hornear es "casi nulo"
+    // (ver el log de abajo) y son pocas por cuadro salvo un salto de cámara
+    // grande. Las genuinamente nuevas siguen esperando su turno.
+    let mut missing: Vec<ChunkKey> = wanted
         .iter()
-        .filter(|key| !field.live.contains_key(*key))
-        .take(budget)
+        .filter(|key| !field.live.contains_key(*key) && is_reassignment(key))
         .copied()
         .collect();
+    missing.extend(
+        wanted
+            .iter()
+            .filter(|key| !field.live.contains_key(*key) && !is_reassignment(key))
+            .take(budget)
+            .copied(),
+    );
     // El único trabajo por frame que este sistema tiene. Desde el Paso 2 no
     // hornea geometría: sortea las briznas y escribe sus registros, que es lo que
     // convirtió "conviene instancing" de opinión en decisión.
     let bake_started = std::time::Instant::now();
+    // Sin wrap — ver el comentario de `GrassUniform::chunk_clock` sobre por
+    // qué el reloj del viento no sirve acá.
+    let now = time.elapsed_secs();
     // La escalera de alcances y el reparto de índices son del **campo**, no del
     // chunk: se arman una vez por tanda en vez de una por chunk, que es lo único
     // que este rediseño le agrega al horneado.
@@ -1296,20 +1850,34 @@ pub(super) fn roll_meadow_grid(
             &ChunkSpec {
                 centre,
                 chunk_m: ring.chunk_m,
-                blades: ranges.get(key.ring).cloned().unwrap_or(0..0),
+                blades: ranges
+                    .get(key.ring)
+                    .and_then(|tiers| tiers.get(key.tier))
+                    .cloned()
+                    .unwrap_or(0..0),
                 ladder: std::sync::Arc::clone(&ladder),
             },
             terrain,
             &settings,
         );
-        let slot = field.records[key.ring].slot_for(key.cell);
-        field.records[key.ring].write(slot, &planting.records);
+        let slot = field.records[key.ring][key.tier].slot_for(key.cell);
+        // Una reasignación de tier (anillo 0, histéresis) no es una brizna
+        // nueva: es la misma celda cambiando de casillero. Si arrancara el
+        // fundido de nuevo ahí, reabriría exactamente el pop que la
+        // histéresis ya tapa — el anillo 0 reasigna tier todo el tiempo al
+        // caminar cerca de una frontera. `ALREADY_GROWN_BORN_AT` lo salta.
+        let born_at = if is_reassignment(key) {
+            ALREADY_GROWN_BORN_AT
+        } else {
+            now
+        };
+        field.records[key.ring][key.tier].write(slot, &planting.records, born_at);
         let entity = commands
             .spawn((
                 DespawnOnExit(*scene.get()),
                 Name::new(format!(
-                    "GrassChunk_r{}_{}_{}",
-                    key.ring, key.cell.x, key.cell.y
+                    "GrassChunk_r{}t{}_{}_{}",
+                    key.ring, key.tier, key.cell.x, key.cell.y
                 )),
                 GrassChunk,
                 // Para que el inventario pueda decir cuánto pone la pradera, en
@@ -1321,9 +1889,14 @@ pub(super) fn roll_meadow_grid(
                 // watchdog de mallas pesadas es para assets, y el presupuesto de
                 // la pradera se cobra en `perf::budget`.
                 crate::visuals::budget::BakedByDesign,
-                Mesh3d(field.records[key.ring].mesh.clone().unwrap_or_default()),
+                Mesh3d(
+                    field.records[key.ring][key.tier]
+                        .mesh
+                        .clone()
+                        .unwrap_or_default(),
+                ),
                 MeshTag(slot),
-                MeshMaterial3d(field.materials[key.ring].clone()),
+                MeshMaterial3d(field.materials[key.ring][key.tier].clone()),
                 // **El AABB va a mano, y con `NoAutoAabb`.** Bevy lo deriva de
                 // las posiciones de la malla, que en una malla índice son todas
                 // cero — un punto en el origen, y el nivel entero culleado. Y no
@@ -1359,11 +1932,17 @@ pub(super) fn roll_meadow_grid(
         // Y de quién es la geometría, por anillo. El inventario atribuye por
         // sistema —pradera contra bosque— y eso no alcanza para decidir qué
         // anillo conviene reemplazar por otra técnica.
-        for (index, ring) in settings.rings.iter().enumerate() {
+        for index in 0..GRASS_RING_COUNT {
             let live = field.live.keys().filter(|key| key.ring == index).count();
-            let _ = ring;
-            let blades =
-                live * blades_per_chunk(index, density, scale, reach_scale, &settings) as usize;
+            // Suma el stride real de cada chunk vivo en vez de
+            // `chunks × blades_per_chunk`: con tiers, los chunks de un mismo
+            // anillo ya no llevan todos el mismo stride.
+            let blades: usize = field
+                .live
+                .keys()
+                .filter(|key| key.ring == index)
+                .map(|key| field.records[key.ring][key.tier].stride as usize)
+                .sum();
             debug!(
                 "[grass]   anillo {index}: {live} chunks, {blades} primitivas, {} tris",
                 blades * submitted_triangles_per_blade(&perf),
@@ -1402,6 +1981,7 @@ pub(super) fn track_meadow_focus(
     >,
     ambient: Res<GlobalAmbientLight>,
     perf: Res<crate::perf::PerfToggles>,
+    growth_override: Res<GrowthRampOverride>,
     settings: Res<GrassRendererSettings>,
     time: Res<Time>,
 ) {
@@ -1424,10 +2004,14 @@ pub(super) fn track_meadow_focus(
         }
     });
     let reach_scale = perf.grass_reach_scale();
+    // Forma, índice de anillo y borde interno son del **anillo**, no del
+    // tier — un tier es sólo cómo se parte el buffer, invisible para el
+    // shader. El stride sí es de cada tier, y se pisa por separado abajo:
+    // `layouts[ring].x` queda en 0 acá porque ningún tier lo comparte.
     let layouts: Vec<UVec4> = (0..GRASS_RING_COUNT)
         .map(|ring| {
             UVec4::new(
-                field.records[ring].stride,
+                0,
                 shape_for_ring(ring, scale, reach_scale, &settings).shader_index(),
                 // **Qué nivel es, del material y no de una tabla.** Desde que
                 // cada brizna lleva su propio alcance, buscar el nivel entre los
@@ -1450,17 +2034,24 @@ pub(super) fn track_meadow_focus(
             sun.as_ref().map(|sun| **sun),
             &ambient,
             &perf,
+            &growth_override,
             &time,
             scale,
             &settings,
         )
     });
-    for (ring, handle) in field.materials.iter().enumerate() {
-        if let Some(mut material) = materials.get_mut(handle) {
+    for (ring, layout) in layouts.iter().enumerate() {
+        for tier in 0..tier_count(ring) {
+            let handle = &field.materials[ring][tier];
+            let Some(mut material) = materials.get_mut(handle) else {
+                continue;
+            };
             if let Some(data) = &data {
                 material.extension.grass_data = GrassUniform { ..*data };
             }
-            material.extension.grass_data.record_layout = layouts[ring];
+            let mut layout = *layout;
+            layout.x = field.records[ring][tier].stride;
+            material.extension.grass_data.record_layout = layout;
             material.base.alpha_mode =
                 if shape_for_ring(ring, scale, reach_scale, &settings).faces_camera() {
                     AlphaMode::AlphaToCoverage
@@ -1473,11 +2064,17 @@ pub(super) fn track_meadow_focus(
 
 /// El uniform de la pradera, armado una vez para los dos materiales: separado
 /// del sistema para que no haya forma de escribir uno y olvidar el otro.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "arma el uniform entero a partir de todo lo que `track_meadow_focus` ya leyó; \
+              partirlo no reduce nada, sólo mueve el conteo a un struct intermedio"
+)]
 fn meadow_uniform(
     camera: &GlobalTransform,
     sun: Option<(&GlobalTransform, &DirectionalLight)>,
     ambient: &GlobalAmbientLight,
     perf: &crate::perf::PerfToggles,
+    growth_override: &GrowthRampOverride,
     time: &Time,
     screen_scale: f32,
     settings: &GrassRendererSettings,
@@ -1485,7 +2082,11 @@ fn meadow_uniform(
     let mut uniform = grass_material(settings).extension.grass_data;
     let data = &mut uniform;
     data.focus_xz = camera.translation().xz();
-    data.growth_ramp = growth_band(perf);
+    data.growth_ramp = growth_band(perf, growth_override);
+    // Sin wrap — el mismo reloj que estampó `chunk_born_at` al hornear. Ver
+    // el comentario de `GrassUniform::chunk_clock`.
+    data.chunk_clock = time.elapsed_secs();
+    data.chunk_fade_in_s = CHUNK_FADE_IN_S;
     data.spike_from_m = spike_from_m(screen_scale, settings);
     data.card_from_m = card_from_m(screen_scale, settings);
     let (a, b) = ring_reaches(perf.grass_reach_scale(), settings);
@@ -1568,8 +2169,11 @@ pub(super) fn ring_facts(
             reach_m: ring_reach(slot, reach_scale, settings),
             chunk_m: ring.chunk_m,
             // Lo que el chunk plantó dividido por su área: el redondeo a briznas
-            // enteras la aparta un poco de la tabla.
-            density: blades_per_chunk(slot, dial, scale, reach_scale, settings) as f32
+            // enteras la aparta un poco de la tabla. Tier 0 siempre pide el
+            // rango **entero** del anillo (su borde interno es el del anillo),
+            // así que describe la ley de densidad del anillo, no la partición
+            // de su buffer en tiers.
+            density: blades_per_chunk(slot, 0, dial, scale, reach_scale, settings) as f32
                 / (ring.chunk_m * ring.chunk_m),
             triangles_per_blade: submitted_triangles_per_blade(perf),
             planted: perf.grass_only_ring().is_none_or(|only| only == slot),
@@ -1598,6 +2202,45 @@ struct ChunkSpec {
 ///
 /// **Las filtradas no se saltan: se emiten con altura cero.** El casillero es un
 /// rango de stride fijo, así que saltear una correría de lugar a las siguientes.
+/// Cada (índice de baldosa, brizna) que le toca a un chunk — sin altura de
+/// terreno ni cobertura: sólo identidad y la brizna cruda de su baldosa. La
+/// comparte el horneado real (`build_chunk_records`) y el censo de vitalidad
+/// (`chunk_vitality`) para que los dos vean siempre el mismo conjunto de
+/// briznas — nunca dos recorridos que puedan divergir en cuál brizna existe
+/// en cuál chunk.
+fn chunk_blade_positions(
+    centre: Vec2,
+    chunk_m: f32,
+    blades: std::ops::Range<u32>,
+) -> impl Iterator<Item = (u32, grass_tiles::TileBlade)> {
+    let corner = centre - Vec2::splat(chunk_m * 0.5);
+    let first_tile = grass_tiles::tile_at(corner + Vec2::splat(grass_tiles::TILE_M * 0.5));
+    let side = i32::try_from(tiles_per_side(chunk_m)).unwrap_or(1);
+    (0..side).flat_map(move |row| {
+        let blades = blades.clone();
+        (0..side).flat_map(move |column| {
+            let tile = first_tile + IVec2::new(column, row);
+            blades
+                .clone()
+                .map(move |index| (index, grass_tiles::blade_in_tile(tile, index)))
+        })
+    })
+}
+
+/// El alcance que de verdad viaja al registro de una brizna: la parte entera
+/// del valor crudo de la escalera, nunca menor a un metro. **Única función que
+/// lo calcula** — el censo de vitalidad lo reusa para no clasificar viva una
+/// brizna que el shader ya mató por redondeo (`ladder[index]` sin `floor` se
+/// queda hasta un metro más lejos de lo que el registro realmente dice).
+fn baked_reach(ladder: &[f32], index: u32) -> f32 {
+    ladder
+        .get(index as usize)
+        .copied()
+        .unwrap_or(0.0)
+        .floor()
+        .max(1.0)
+}
+
 fn build_chunk_records(
     spec: &ChunkSpec,
     terrain: Option<&crate::world::Terrain>,
@@ -1609,46 +2252,31 @@ fn build_chunk_records(
         ref blades,
         ref ladder,
     } = *spec;
-    let corner = centre - Vec2::splat(chunk_m * 0.5);
-    let first_tile = grass_tiles::tile_at(corner + Vec2::splat(grass_tiles::TILE_M * 0.5));
     let side = tiles_per_side(chunk_m);
     let per_tile = blades.end - blades.start;
     let mut records = Vec::with_capacity(
         usize::try_from(per_tile.saturating_mul(side).saturating_mul(side)).unwrap_or(0),
     );
-    let side = i32::try_from(side).unwrap_or(1);
     let mut lowest = f32::MAX;
     let mut highest = f32::MIN;
-    for row in 0..side {
-        for column in 0..side {
-            let tile = first_tile + IVec2::new(column, row);
-            for index in blades.clone() {
-                let blade = grass_tiles::blade_in_tile(tile, index);
-                let xz = blade.xz;
-                let ground = terrain.map(|t| t.height_at(xz)).unwrap_or(0.0);
-                let slope = terrain.map(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
-                let kind = terrain
-                    .map(|t| t.kind_at(xz))
-                    .unwrap_or(crate::world::TerrainKind::Soil);
-                let cover = grass_cover::coverage(kind, slope);
-                let height = (settings.blade_height_min_m
-                    + blade.height_unit
-                        * (settings.blade_height_max_m - settings.blade_height_min_m))
-                    * cover;
-                // **El alcance es de la brizna, no del anillo**, y viaja en la
-                // parte entera igual que antes. Es lo que le saca al shader la
-                // ley `1/d` y el hash: cada brizna muere donde su índice dice.
-                let reach = ladder
-                    .get(index as usize)
-                    .copied()
-                    .unwrap_or(0.0)
-                    .floor()
-                    .max(1.0);
-                records.push(blade_record(xz, ground, reach + height));
-                lowest = lowest.min(ground);
-                highest = highest.max(ground);
-            }
-        }
+    for (index, blade) in chunk_blade_positions(centre, chunk_m, blades.clone()) {
+        let xz = blade.xz;
+        let ground = terrain.map(|t| t.height_at(xz)).unwrap_or(0.0);
+        let slope = terrain.map(|t| t.slope_deg_at(xz)).unwrap_or(0.0);
+        let kind = terrain
+            .map(|t| t.kind_at(xz))
+            .unwrap_or(crate::world::TerrainKind::Soil);
+        let cover = grass_cover::coverage(kind, slope);
+        let height = (settings.blade_height_min_m
+            + blade.height_unit * (settings.blade_height_max_m - settings.blade_height_min_m))
+            * cover;
+        // **El alcance es de la brizna, no del anillo**, y viaja en la parte
+        // entera igual que antes. Es lo que le saca al shader la ley `1/d` y
+        // el hash: cada brizna muere donde su índice dice.
+        let reach = baked_reach(ladder, index);
+        records.push(blade_record(xz, ground, reach + height));
+        lowest = lowest.min(ground);
+        highest = highest.max(ground);
     }
     // Un chunk sin briznas —todo roca, o densidad cero— no tiene rango que
     // informar; su caja vale lo que valga, porque no va a dibujar nada.
@@ -1675,6 +2303,60 @@ mod tests {
 
     fn settings() -> GrassRendererSettings {
         GrassRendererSettings::default()
+    }
+
+    /// Réplica en CPU de `chunk_time_fade` (`grass.wgsl`), para poder probar
+    /// la matemática del fundido sin GPU.
+    fn chunk_time_fade(now: f32, born_at: f32, fade_in_s: f32) -> f32 {
+        ((now - born_at) / fade_in_s.max(0.001)).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn chunk_time_fade_rises_from_zero_to_one_over_the_fade_window() {
+        let born_at = 100.0;
+        assert_eq!(chunk_time_fade(born_at, born_at, CHUNK_FADE_IN_S), 0.0);
+        let midpoint = chunk_time_fade(born_at + CHUNK_FADE_IN_S * 0.5, born_at, CHUNK_FADE_IN_S);
+        assert!(
+            midpoint > 0.0 && midpoint < 1.0,
+            "a mitad de camino el fundido tiene que estar entre 0 y 1, no {midpoint}",
+        );
+        assert!(
+            (chunk_time_fade(born_at + CHUNK_FADE_IN_S, born_at, CHUNK_FADE_IN_S) - 1.0).abs()
+                < 1e-4,
+            "al borde de la ventana el fundido tiene que estar completo",
+        );
+    }
+
+    #[test]
+    fn chunk_time_fade_saturates_past_its_window_and_never_goes_negative() {
+        let born_at = 100.0;
+        assert_eq!(
+            chunk_time_fade(born_at + CHUNK_FADE_IN_S * 100.0, born_at, CHUNK_FADE_IN_S),
+            1.0,
+        );
+        // Antes de nacer no debería poder pasar, pero si pasara, el fundido no
+        // tiene que devolver un número negativo que después restara altura.
+        assert_eq!(
+            chunk_time_fade(born_at - 5.0, born_at, CHUNK_FADE_IN_S),
+            0.0
+        );
+    }
+
+    /// El centinela de reasignación de tier tiene que dar fundido completo
+    /// **sin importar el reloj**, incluso a `now = 0.0` (el instante del
+    /// arranque) — si dependiera de que `now` ya fuera grande, un chunk
+    /// reasignado en los primeros milisegundos de la escena arrancaría
+    /// desvanecido, reabriendo el mismo pop que este centinela existe para
+    /// evitar.
+    #[test]
+    fn the_already_grown_sentinel_fades_in_fully_regardless_of_the_clock() {
+        for now in [0.0, 1.0, 100.0, 1.0e6] {
+            assert_eq!(
+                chunk_time_fade(now, ALREADY_GROWN_BORN_AT, CHUNK_FADE_IN_S),
+                1.0,
+                "el centinela tiene que dar 1.0 en now={now}, no fundido a medias",
+            );
+        }
     }
 
     #[test]
@@ -1968,16 +2650,30 @@ mod tests {
                 &settings,
             ));
             assert_eq!(
-                ranges[0].end, expected,
+                ranges[0][0].end, expected,
                 "con la perilla en {dial} la baldosa entera no es la que la ley pide"
             );
             // **Anidados, no partidos**: cada nivel es un prefijo del anterior, y
             // por eso la misma brizna pasa de uno a otro al cruzar la frontera en
-            // vez de ser reemplazada.
-            for pair in ranges.windows(2) {
+            // vez de ser reemplazada. El tier 0 de un anillo es su rango entero
+            // — el mismo prefijo que antes de que existieran los tiers.
+            let ring_ranges: Vec<std::ops::Range<u32>> = (0..GRASS_RING_COUNT)
+                .map(|ring| ranges[ring][0].clone())
+                .collect();
+            for pair in ring_ranges.windows(2) {
                 assert!(
                     pair[1].end <= pair[0].end && pair[1].start == 0,
                     "los niveles dejaron de anidar: {pair:?}"
+                );
+            }
+            // Y dentro del anillo 0, cada tier también anida contra el
+            // anterior: el tier más lejano nunca pide más índices que uno más
+            // cercano — es la propiedad que hace que escalonar el buffer no
+            // pueda dejar una brizna sin casillero.
+            for pair in ranges[0].windows(2) {
+                assert!(
+                    pair[1].end <= pair[0].end && pair[1].start == 0,
+                    "los tiers del anillo 0 dejaron de anidar: {pair:?}"
                 );
             }
         }
@@ -1995,7 +2691,7 @@ mod tests {
         // tres contaría dos veces a las que dos niveles comparten desde que se
         // anidan.
         let per_tile = |dial: f32| -> f64 {
-            f64::from(tile_ranges(dial, scale, REFERENCE_REACH, &settings)[0].end)
+            f64::from(tile_ranges(dial, scale, REFERENCE_REACH, &settings)[0][0].end)
         };
         let full = per_tile(REFERENCE_DENSITY);
         for sparse in [
@@ -2062,10 +2758,32 @@ mod tests {
     #[test]
     fn the_growth_band_follows_the_knob() {
         let mut perf = crate::perf::PerfToggles::default();
-        let first = growth_band(&perf);
+        let no_override = GrowthRampOverride::default();
+        let first = growth_band(&perf, &no_override);
         perf.set_knob_step(bof_domain::perf::PerfKnob::GrassGrowth, 2);
-        assert_ne!(growth_band(&perf), first);
-        assert_eq!(growth_band(&perf), bof_domain::perf::GRASS_GROWTH_STEPS[2]);
+        assert_ne!(growth_band(&perf, &no_override), first);
+        assert_eq!(
+            growth_band(&perf, &no_override),
+            bof_domain::perf::GRASS_GROWTH_STEPS[2]
+        );
+    }
+
+    /// El ajuste de F9 gana sobre la perilla F1, y no tener ninguno puesto
+    /// devuelve exactamente el comportamiento de siempre.
+    #[test]
+    fn the_growth_override_wins_over_the_knob_when_set() {
+        let perf = crate::perf::PerfToggles::default();
+        assert_eq!(
+            growth_band(&perf, &GrowthRampOverride::default()),
+            perf.grass_growth(),
+            "sin ajuste, F9 no debe cambiar nada",
+        );
+        let overridden = GrowthRampOverride(Some(42.0));
+        assert_eq!(
+            growth_band(&perf, &overridden),
+            42.0,
+            "con un ajuste puesto, F9 tiene que ganarle a la perilla",
+        );
     }
 
     /// **Ningún nivel se queda sin chunk dentro de su corona.** Es el contrato
@@ -2121,7 +2839,8 @@ mod tests {
                 // El nivel sólo planta hasta su propio alcance: más allá no tiene
                 // chunks, y sus briznas no existen aunque su escalera llegue.
                 .filter(|(index, _)| ring_reach(*index, REFERENCE_REACH, &settings) >= distance)
-                .map(|(_, range)| {
+                .map(|(_, tiers)| {
+                    let range = &tiers[0];
                     ladder[range.start as usize..range.end as usize]
                         .iter()
                         .filter(|reach| reach.floor() >= distance)
@@ -2166,9 +2885,9 @@ mod tests {
     /// de cobertura de arriba verifica que no queden huecos; nadie había
     /// verificado lo contrario, que es igual de caro. Medido, la tabla y por qué
     /// queda como deuda en vez de arreglarse: `BOTWGrass.md`.
-    #[test]
-    fn no_patch_of_ground_is_planted_by_more_than_two_rings() {
-        let settings = settings();
+    fn worst_rings_over_ground(
+        settings: &GrassRendererSettings,
+    ) -> (usize, Vec2, Vec2, Vec<usize>) {
         let mut worst = (0usize, Vec2::ZERO, Vec2::ZERO, Vec::new());
         for focus in [Vec2::ZERO, Vec2::new(3.7, -11.2), Vec2::new(137.0, -488.0)] {
             let mut along = -40.0;
@@ -2176,7 +2895,7 @@ mod tests {
                 let mut across = -40.0;
                 while across <= 40.0 {
                     let point = focus + Vec2::new(along, across);
-                    let rings = rings_covering(point, focus, &settings);
+                    let rings = rings_covering(point, focus, settings);
                     if rings.len() > worst.0 {
                         worst = (rings.len(), focus, point, rings);
                     }
@@ -2185,12 +2904,43 @@ mod tests {
                 along += 3.1;
             }
         }
+        worst
+    }
+
+    #[test]
+    fn no_patch_of_ground_is_planted_by_more_than_two_rings() {
+        let settings = settings();
+        let worst = worst_rings_over_ground(&settings);
         assert!(
             worst.0 <= RINGS_OVER_THE_SAME_GROUND,
             "con la cámara en {:?}, el punto {:?} lo plantan {} anillos ({:?}), \
              por encima de los {RINGS_OVER_THE_SAME_GROUND} que este archivo declara \
              como deuda: esa densidad multiplicada se paga entera en overdraw y pone \
              briznas de anillo lejano en primer plano",
+            worst.1,
+            worst.2,
+            worst.0,
+            worst.3,
+        );
+    }
+
+    /// El ruido de frontera (F9) extiende el borde exterior de un anillo hasta
+    /// `ragged_ring_boundary_max_m`, que por default coincide con el gap mínimo
+    /// que `AdjustFrontier` fuerza entre anillos vecinos. El `handover` que
+    /// excluye al anillo de adentro sigue anclado a su alcance limpio (nunca al
+    /// jitterado), así que el solape debería quedar confinado al par de anillos
+    /// adyacentes — pero esa es justo la clase de invariante que el test de
+    /// arriba sólo cubre con el ruido apagado. Auditoría del 2026-08-13.
+    #[test]
+    fn no_patch_of_ground_is_planted_by_more_than_two_rings_with_ragged_boundary_on() {
+        let mut settings = settings();
+        settings.ragged_ring_boundary_enabled = true;
+        let worst = worst_rings_over_ground(&settings);
+        assert!(
+            worst.0 <= RINGS_OVER_THE_SAME_GROUND,
+            "con el ruido de frontera prendido, la cámara en {:?}, el punto {:?} lo \
+             plantan {} anillos ({:?}), por encima de los {RINGS_OVER_THE_SAME_GROUND} \
+             que este archivo declara como deuda",
             worst.1,
             worst.2,
             worst.0,
@@ -2348,5 +3098,385 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn chunk_blade_positions_yields_every_tile_times_index_pair() {
+        let chunk_m = grass_tiles::TILE_M * 3.0;
+        let blades = 0..5u32;
+        let count = chunk_blade_positions(Vec2::new(10.0, -4.0), chunk_m, blades.clone()).count();
+        assert_eq!(count, 3 * 3 * blades.len());
+    }
+
+    #[test]
+    fn baked_reach_floors_and_never_drops_below_one_metre() {
+        let ladder = [30.7, 0.4, 0.0];
+        assert_eq!(baked_reach(&ladder, 0), 30.0);
+        assert_eq!(
+            baked_reach(&ladder, 1),
+            1.0,
+            "menos de un metro se satura a un metro"
+        );
+        assert_eq!(baked_reach(&ladder, 2), 1.0);
+        assert_eq!(
+            baked_reach(&ladder, 99),
+            1.0,
+            "un índice fuera de la escalera no revienta, se satura"
+        );
+    }
+
+    /// Con un alcance enorme y el foco en el centro del chunk, ninguna brizna
+    /// puede caer fuera de rango: prueba el caso "nada muere" sin depender de
+    /// posiciones exactas del hash.
+    #[test]
+    fn chunk_vitality_counts_everyone_alive_when_the_reach_is_generous() {
+        let centre = Vec2::new(50.0, 50.0);
+        let chunk_m = grass_tiles::TILE_M;
+        let ladder = vec![1000.0; 32];
+        let (resident, alive) = chunk_vitality(centre, chunk_m, 0..8, &ladder, 0.0, centre);
+        assert_eq!(resident, 8, "una sola baldosa con 8 índices son 8 briznas");
+        assert_eq!(
+            alive, resident,
+            "con un alcance enorme y el foco en el centro nadie debería morir"
+        );
+    }
+
+    /// El mismo chunk, visto desde 10 km — nadie puede seguir viva sin
+    /// importar el hash.
+    #[test]
+    fn chunk_vitality_kills_everyone_far_beyond_reach() {
+        let centre = Vec2::new(50.0, 50.0);
+        let chunk_m = grass_tiles::TILE_M;
+        let ladder = vec![5.0; 32];
+        let far_focus = centre + Vec2::splat(10_000.0);
+        let (resident, alive) = chunk_vitality(centre, chunk_m, 0..8, &ladder, 0.0, far_focus);
+        assert_eq!(resident, 8);
+        assert_eq!(alive, 0, "a 10 km del chunk nadie debería seguir viva");
+    }
+
+    /// Y un borde interno más lejano que cualquier punto del chunk mata a
+    /// todos aunque el alcance individual sea generoso — el nivel de adentro
+    /// se las está dibujando.
+    #[test]
+    fn chunk_vitality_kills_everyone_inside_the_inner_edge() {
+        let centre = Vec2::new(50.0, 50.0);
+        let chunk_m = grass_tiles::TILE_M;
+        let ladder = vec![1000.0; 32];
+        let (resident, alive) = chunk_vitality(centre, chunk_m, 0..8, &ladder, 1000.0, centre);
+        assert_eq!(resident, 8);
+        assert_eq!(
+            alive, 0,
+            "un borde interno más lejano que cualquier brizna real las mata a todas"
+        );
+    }
+
+    /// El censo de un campo con un solo chunk residente tiene que pagar
+    /// exactamente su stride — si `dial`/`scale`/`reach_scale` no coinciden
+    /// con lo que hornea `roll_meadow_grid`, este número deja de cerrar
+    /// contra `blades_per_chunk` sin que nada más lo avise.
+    #[test]
+    fn grass_vitality_resident_total_matches_the_baked_stride() {
+        let settings = settings();
+        let dial = REFERENCE_DENSITY;
+        let reach_scale = REFERENCE_REACH;
+        let scale = reference_scale();
+        let ring = 0usize;
+        let tier = 0usize;
+        let key = ChunkKey {
+            ring,
+            tier,
+            cell: IVec2::new(2, -1),
+        };
+        let field = GrassField {
+            materials: std::array::from_fn(|_| std::array::from_fn(|_| Handle::default())),
+            records: std::array::from_fn(|_| std::array::from_fn(|_| RingRecords::default())),
+            live: HashMap::from_iter([(key, Entity::PLACEHOLDER)]),
+            card_candidate_step: 0,
+        };
+        // Lejísimos: a esta prueba no le importa quién está viva, sólo cuánto
+        // paga el buffer.
+        let focus = Vec2::splat(1_000_000.0);
+        let vitality = grass_vitality(&field, focus, dial, reach_scale, &settings);
+        let expected = blades_per_chunk(ring, tier, dial, scale, reach_scale, &settings) as usize;
+        assert_eq!(
+            vitality.resident_blades[ring], expected,
+            "un solo chunk residente tiene que pagar exactamente su stride"
+        );
+    }
+
+    /// El invariante central del escalonado: ninguna brizna que debería
+    /// seguir viva a una distancia queda fuera del rango de índices que su
+    /// tier reservó. Si esto falla, aparece un parche de pasto faltante — la
+    /// misma clase de bug que costó el `vertex_index` de 2026-08-07.
+    #[test]
+    fn no_tier_boundary_strands_a_blade_that_should_be_alive() {
+        let settings = settings();
+        let scale = reference_scale();
+        let reach_scale = REFERENCE_REACH;
+        let dial = REFERENCE_DENSITY;
+        let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale, &settings);
+        let ranges = tile_ranges(dial, scale, reach_scale, &settings);
+        let bounds = ring0_tier_bounds(reach_scale, &settings);
+        for tier in 0..RING0_TIERS {
+            let (lo, hi) = (bounds[tier], bounds[tier + 1]);
+            for sample in [lo, f32::midpoint(lo, hi), (hi - 0.01).max(lo)] {
+                let range = &ranges[0][tier];
+                for (index, reach) in ladder.iter().enumerate() {
+                    if reach.floor() >= sample {
+                        assert!(
+                            u32::try_from(index).unwrap_or(u32::MAX) < range.end,
+                            "tier {tier} a {sample} m no incluye el índice {index} \
+                             (alcance {reach}), que debería estar vivo",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// La histéresis retiene un chunk en su tier hasta que su punto más
+    /// cercano baja a `bounds[tier] - KEEP_SLACK_M`, no sólo hasta
+    /// `bounds[tier]` — el presupuesto de índices tiene que cubrir ese caso
+    /// retenido, no sólo la asignación limpia que prueba el test de arriba.
+    /// Si esto falla, un chunk acercándose a una frontera de tier pierde
+    /// briznas que deberían seguir vivas mientras la histéresis lo retiene
+    /// (encontrado auditando el 2026-08-13: el test de arriba sólo probaba
+    /// `bounds[tier]`, nunca el peor caso que la histéresis realmente
+    /// permite).
+    #[test]
+    fn no_tier_boundary_strands_a_blade_retained_by_hysteresis() {
+        let settings = settings();
+        let scale = reference_scale();
+        let reach_scale = REFERENCE_REACH;
+        let dial = REFERENCE_DENSITY;
+        let ladder = grass_tiles::reach_ladder(dial, scale, reach_scale, &settings);
+        let ranges = tile_ranges(dial, scale, reach_scale, &settings);
+        let bounds = ring0_tier_bounds(reach_scale, &settings);
+        for tier in 1..RING0_TIERS {
+            let retained_worst_case = (bounds[tier] - KEEP_SLACK_M).max(bounds[0]);
+            let range = &ranges[0][tier];
+            for (index, reach) in ladder.iter().enumerate() {
+                if reach.floor() >= retained_worst_case {
+                    assert!(
+                        u32::try_from(index).unwrap_or(u32::MAX) < range.end,
+                        "tier {tier} retenido hasta {retained_worst_case} m (histéresis) no \
+                         incluye el índice {index} (alcance {reach}), que debería estar vivo",
+                    );
+                }
+            }
+        }
+    }
+
+    /// Ningún tier del anillo 0 queda sin territorio a la densidad de
+    /// referencia — un tier vacío dibujaría una banda entera de nada.
+    #[test]
+    fn no_ring0_tier_is_empty_at_reference_density() {
+        let settings = settings();
+        let ranges = tile_ranges(
+            REFERENCE_DENSITY,
+            reference_scale(),
+            REFERENCE_REACH,
+            &settings,
+        );
+        for (tier, range) in ranges[0].iter().enumerate() {
+            assert!(
+                range.end > 0,
+                "el tier {tier} del anillo 0 no reserva ningún índice a la densidad de referencia",
+            );
+        }
+    }
+
+    /// El último borde de tier tiene que seguir al alcance **vigente** del
+    /// anillo 0, no a un valor fijo en metros — si no, la perilla
+    /// `grass-reach` (o `AdjustFrontier` desde F9) puede dejar un chunk sin
+    /// tier válido.
+    #[test]
+    fn ring0_tier_bounds_track_a_scaled_reach() {
+        let settings = settings();
+        for reach_scale in [1.0, 0.75, 0.5] {
+            let bounds = ring0_tier_bounds(reach_scale, &settings);
+            assert_eq!(
+                *bounds.last().unwrap(),
+                ring_reach(0, reach_scale, &settings),
+                "el último borde de tier tiene que seguir al alcance vigente, no a un valor fijo",
+            );
+        }
+    }
+
+    /// Lo mismo, pero por el otro camino de entrada: `AdjustFrontier` mueve
+    /// `reach_m` del anillo 0 en vivo desde F9, sin pasar por ninguna perilla
+    /// de perf. Ningún chunk que `ring_cells` seleccione puede quedar más
+    /// allá del último borde de tier.
+    #[test]
+    fn moving_the_ring0_frontier_live_keeps_every_selected_chunk_inside_its_tiers() {
+        let mut settings = settings();
+        settings.rings[0].reach_m = 30.0;
+        let bounds = ring0_tier_bounds(REFERENCE_REACH, &settings);
+        let last_bound = *bounds.last().unwrap();
+        assert_eq!(last_bound, ring_reach(0, REFERENCE_REACH, &settings));
+        let focus = Vec2::ZERO;
+        for cell in ring_cells(0, focus, REFERENCE_REACH, &settings) {
+            let nearest = chunk_nearest_m(cell, settings.rings[0].chunk_m, focus);
+            assert!(
+                nearest <= last_bound + 0.01,
+                "un chunk que ring_cells seleccionó ({cell}) quedó más allá \
+                 del último borde de tier ({nearest} > {last_bound})",
+            );
+        }
+    }
+
+    /// Un cruce chico de frontera —dentro del margen de histéresis— no
+    /// reasigna el tier de un chunk ya vivo; uno sólido sí. Sin esto, un
+    /// chunk en el borde entre dos tiers se rehornearía cada cuadro.
+    #[test]
+    fn ring0_tier_hysteresis_does_not_flip_right_at_the_boundary() {
+        let settings = settings();
+        let reach_scale = REFERENCE_REACH;
+        let bounds = ring0_tier_bounds(reach_scale, &settings);
+        let cell = IVec2::new(3, -2);
+        let field = GrassField {
+            materials: std::array::from_fn(|_| std::array::from_fn(|_| Handle::default())),
+            records: std::array::from_fn(|_| std::array::from_fn(|_| RingRecords::default())),
+            live: HashMap::from_iter([(
+                ChunkKey {
+                    ring: 0,
+                    tier: 0,
+                    cell,
+                },
+                Entity::PLACEHOLDER,
+            )]),
+            card_candidate_step: 0,
+        };
+        let nearest_inside_slack = bounds[1] + KEEP_SLACK_M * 0.5;
+        assert_eq!(
+            ring0_tier_with_hysteresis(&field, cell, nearest_inside_slack, reach_scale, &settings),
+            0,
+            "un cruce chico dentro del margen no debería reasignar el tier",
+        );
+        // A mitad de camino entre "recién pasado el margen" y la frontera
+        // siguiente — no un múltiplo fijo de `KEEP_SLACK_M`, que con más
+        // tiers (bandas más angostas) podía saltar de largo el tier 1 y caer
+        // en el 2, rompiendo el propio test en vez de probar la histéresis.
+        assert!(
+            bounds[1] + KEEP_SLACK_M < bounds[2],
+            "con este RING0_TIERS la banda del tier 1 es más angosta que el margen de \
+             histéresis; el test necesita revisarse, no sólo el valor de prueba",
+        );
+        let nearest_past_slack = f32::midpoint(bounds[1] + KEEP_SLACK_M, bounds[2]);
+        assert_eq!(
+            ring0_tier_with_hysteresis(&field, cell, nearest_past_slack, reach_scale, &settings),
+            1,
+            "un cruce sólido, más allá del margen, tiene que reasignar el tier",
+        );
+    }
+
+    #[test]
+    fn ring_boundary_jitter_is_zero_when_disabled_and_never_negative_when_on() {
+        let mut settings = settings();
+        for ring in 0..GRASS_RING_COUNT {
+            for x in -20..20 {
+                for z in -20..20 {
+                    let cell = IVec2::new(x, z);
+                    assert_eq!(
+                        ring_boundary_jitter_m(cell, ring, &settings),
+                        0.0,
+                        "apagado, el ruido no puede mover nada",
+                    );
+                }
+            }
+        }
+        settings.ragged_ring_boundary_enabled = true;
+        for ring in 0..GRASS_RING_COUNT - 1 {
+            for x in -20..20 {
+                for z in -20..20 {
+                    let cell = IVec2::new(x, z);
+                    let jitter = ring_boundary_jitter_m(cell, ring, &settings);
+                    assert!(
+                        jitter >= 0.0,
+                        "el ruido en {cell} (anillo {ring}) valió {jitter}, tiene que ser >= 0 siempre",
+                    );
+                    assert!(
+                        jitter <= settings.ragged_ring_boundary_max_m,
+                        "el ruido en {cell} (anillo {ring}) valió {jitter}, se pasó de la amplitud",
+                    );
+                }
+            }
+        }
+    }
+
+    /// El último anillo no tiene a quién prestarle territorio — más allá de
+    /// `farthest_reach()` no vive ninguna brizna de toda la pradera, así que
+    /// un chunk que sólo existiera por el ruido ahí saldría vacío. El tope
+    /// tiene que ser cero para ese anillo sin importar la configuración.
+    #[test]
+    fn ring_boundary_jitter_never_touches_the_outermost_ring() {
+        let mut settings = settings();
+        settings.ragged_ring_boundary_enabled = true;
+        settings.ragged_ring_boundary_max_m = 50.0;
+        let last = GRASS_RING_COUNT - 1;
+        assert_eq!(ring_boundary_jitter_cap_m(last, &settings), 0.0);
+        for x in -20..20 {
+            for z in -20..20 {
+                let cell = IVec2::new(x, z);
+                assert_eq!(ring_boundary_jitter_m(cell, last, &settings), 0.0);
+            }
+        }
+    }
+
+    /// **La propiedad de seguridad completa.** Prender el ruido nunca puede
+    /// hacer que un anillo pierda una celda que la asignación limpia le
+    /// daba — sólo puede sumar. Si esto fallara, un chunk quedaría con menos
+    /// cobertura de la que su punto más cercano real exige: el mismo bug que
+    /// costó `vertex_index` (2026-08-07).
+    #[test]
+    fn ring_boundary_jitter_never_shrinks_the_selected_cells() {
+        let mut settings = settings();
+        let reach_scale = REFERENCE_REACH;
+        let focus = Vec2::new(37.0, -11.0);
+        for ring in 0..GRASS_RING_COUNT - 1 {
+            settings.ragged_ring_boundary_enabled = false;
+            let clean: HashSet<IVec2> =
+                ring_cells_with_slack(ring, focus, KEEP_SLACK_M, reach_scale, &settings)
+                    .into_iter()
+                    .collect();
+            settings.ragged_ring_boundary_enabled = true;
+            let ragged: HashSet<IVec2> =
+                ring_cells_with_slack(ring, focus, KEEP_SLACK_M, reach_scale, &settings)
+                    .into_iter()
+                    .collect();
+            for cell in &clean {
+                assert!(
+                    ragged.contains(cell),
+                    "anillo {ring}: la celda {cell} existía sin ruido y desapareció con \
+                     el ruido prendido",
+                );
+            }
+        }
+    }
+
+    /// El ruido de frontera puede extender la selección del anillo 0 más
+    /// allá de su propio borde limpio — `ring0_tier_for` tiene que seguir
+    /// saturando de forma segura ahí, no sólo cuando nadie lo empuja.
+    #[test]
+    fn ring0_tier_saturates_safely_past_its_own_clean_edge_when_the_ring_boundary_is_jittered() {
+        let settings = settings();
+        let reach_scale = REFERENCE_REACH;
+        let clean_edge = ring_reach(0, reach_scale, &settings);
+        let past_edge = clean_edge + 3.0;
+        assert_eq!(
+            ring0_tier_for(past_edge, reach_scale, &settings),
+            RING0_TIERS - 1,
+            "más allá del borde limpio del anillo 0 tiene que saturar al último tier",
+        );
+        // Y ese último tier de verdad reserva territorio: sigue habiendo
+        // índices vivos ahí (los de alcance largo, hasta `farthest_reach()`),
+        // no un rango vacío que dibuje una banda de nada.
+        let dial = REFERENCE_DENSITY;
+        let scale = reference_scale();
+        let ranges = tile_ranges(dial, scale, reach_scale, &settings);
+        assert!(
+            ranges[0][RING0_TIERS - 1].end > 0,
+            "el último tier del anillo 0 no puede quedar vacío",
+        );
     }
 }

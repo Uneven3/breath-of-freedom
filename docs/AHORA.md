@@ -3,6 +3,8 @@
 Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 `ARCHITECTURE.md`, visión en `NORTE.md`; visuales en `TEXTURES.md`, `BOTWGrass.md`,
 `GraphicalTechniques.md`, `BOTWMovements.md` y `CHARACTER_ANIMATION_IK.md`.
+Números crudos de rendimiento, repetidos y con su contexto exacto, en
+`GRASS_PERF_DATA.md` — no remedir lo que ya está ahí.
 
 ## Cómo trabajar en este repo
 
@@ -31,6 +33,17 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
   shader** y todo lo demás sigue reportando: el 2026-08-07 una corrida así sacó
   una foto de puro cielo declarando 691.200 triángulos de pradera al 95% del
   cuadro. La foto y la tabla ahora avisan, porque el caso ocurrió.
+- **Un shader que no compila no dispara ningún guardia — sigue siendo mitigación
+  manual (auditado 2026-08-13, sin cerrar a propósito).** `warn_on_broken_assets`
+  sólo escucha `UntypedAssetLoadFailedEvent` (fallos de *carga*); un error de
+  compilación de pipeline en Bevy 0.19 sólo sale por `error!()` de `tracing`
+  (`bevy_render::render_resource::pipeline_cache::process_queue`, verificado
+  contra la fuente), sin ningún `Event` enganchable. Existe un hook genérico
+  (`LogPlugin::custom_layer`) para contar cualquier `ERROR` de la corrida, pero
+  un contador así de amplio marcaría una foto como inválida por un `error!()`
+  sin relación con lo que se está fotografiando — cambiaría un guardia tipado
+  por ruido de falsos positivos. Se descarta a propósito: **grepear `ERROR`
+  además de las líneas `[shot]`** sigue siendo el único chequeo.
 - **Contar píxeles: lo hace la misma corrida** (`BOF_KNOBS=grass-view=6`). El
   informe sale en el log junto a la foto: cobertura, reparto por nivel y perfil
   por distancia en metros. **Omite el perfil y dice por qué** cuando la fila de
@@ -566,6 +579,152 @@ warnings`/tests en verde (190 + 15 + 265 + 53, tres tests nuevos sobre el
 recorte a `MAX_MATERIAL_ROWS`). Falta jugar: correr "Material breakdown" en
 Acciones y confirmar que la pestaña Materiales muestra colores reales que
 coinciden con lo que dice el log.
+
+## El anillo 0 se parte en tiers de buffer (2026-08-13)
+
+`grass_vitality` (sesión anterior) midió que el anillo 0 desperdicia 91,7% de
+lo que envía — casi todo chunk lejos del foco reserva el mismo rango de
+índices que uno pegado a la cámara, porque todos los chunks de un anillo
+comparten una sola malla índice. Dos rondas de crítica (`iterate-safely`)
+antes de tocar código: la primera encontró que la asignación de tier tiene
+que salir del punto **más cercano** del chunk, no su centro; la segunda
+encontró que `chunk_m=8` (la config que parecía mejor en una corrida
+exploratoria) casi agotaba `perf::budget::MOBILE_DRAWS` (99 contra el límite
+de 100, y subestimado — el conteo de chunks ya no es proxy de draws cuando
+cada tier tiene su propio material) y que los límites de tier no pueden ser
+metros fijos, porque `AdjustFrontier` mueve el alcance del anillo 0 en vivo
+desde F9.
+
+**Implementado con `chunk_m=12` sin cambios (cero riesgo de presupuesto) y 3
+tiers**, límites como fracción del alcance vigente, histéresis igual que la
+que ya usa el borde de un anillo. `ChunkKey` gana `tier`; `GrassField.records`/
+`.materials` pasan a `[[X; MAX_TIERS]; GRASS_RING_COUNT]` — un material por
+tier porque un `GrassMaterial` sólo puede tener un buffer bindeado a la vez.
+Detalle de diseño completo y los números, en `GRASS_PERF_DATA.md`.
+
+**Medido en vivo, `BOF_SHOT=grass`:** el anillo 0 pasa de 1.107.648 a 357.552
+triángulos residentes — **3,1×**, cerca de lo que predijo la corrida
+exploratoria. El desperdicio baja de 91,7% a 76,2%, no a cero — esperado, un
+chunk sigue necesitando el rango completo si el jugador puede pararse encima
+de cualquiera de sus briznas. F9 y `BOF_SHOT` muestran el desglose por tier
+del anillo 0, pedido explícito de la sesión.
+
+Validado: `cargo fmt`/`clippy -D warnings`/los tres suites en verde
+(202+15+265+53, cinco tests nuevos — el invariante de que ninguna brizna que
+debería seguir viva queda sin casillero, histéresis, y que los bordes de tier
+siguen al alcance vigente en vez de un valor fijo). **Falta jugar la caja
+Pasto**: ningún test puede garantizar al 100% que un borde de tier no dejó un
+parche de pasto faltante, y ésa es la clase de bug que ya costó una sesión
+entera antes (`vertex_index`, 2026-08-07).
+
+**Jugado esa misma noche: sí había un bug real, encontrado y arreglado.**
+Cambiar de tier hoy suelta el chunk viejo en el mismo cuadro pero lo rehornea
+recién cuando le toca su turno (`CHUNKS_BAKED_PER_FRAME = 1`) — alcanzaba
+para las fronteras de anillo (anchas, raras) pero no para las de tier
+(angostas, tres veces más frecuentes en el mismo territorio): varios chunks
+cruzando juntos —caminando en línea recta hacia el foco— desaparecían todos
+ese cuadro y volvían de a uno. Arreglado: una celda que se suelta por cambio
+de tier (no por salir de la grilla) entra a hornear sin esperar el
+presupuesto, ese mismo cuadro. Validado en frío otra vez; falta la
+confirmación jugada de que el síntoma se fue.
+
+## Sesión de la noche del 2026-08-13: ancho gradual planeado (no ejecutado),
+## rampa de crecimiento medida (sin arreglo), F9 gana un control
+
+El usuario se frustró explícitamente por escuchar "eso ya está documentado"
+en vez de ver la técnica construida — pedido de cambio de rumbo: actuar, no
+anunciar. Se investigaron tres cosas con `/iterate-safely` y datos reales,
+mientras dormía:
+
+1. **Ancho gradual por distancia (delgada cerca, ancha lejos), NO ejecutado
+   a propósito.** Antes, un experimento de validación (doblar `blade_width_m`
+   global, sin gradiente) confirmó que la ley de densidad responde bien —
+   mitad de triángulos de toda la pradera, cobertura igual o mejor,
+   `BOF_SHOT` medido. Revertido tras validar (quedó sin commitear y sin
+   documentar un rato — corregido). El plan de la versión gradual pasó por
+   crítica y encontró **dos bugs de corrección reales antes de escribir
+   código**: la carta perdería cobertura en silencio si el factor no se gatea
+   por forma, y escalar `waist` en el shader corrompería la altura de la
+   cintura, no el ancho. Sumado a que está montado sobre el escalonado de
+   tiers de esta misma noche, sin confirmar jugado — demasiado riesgo para
+   tocar el shader sin que el usuario pueda mirar la pantalla. Plan corregido,
+   completo, en `docs/GRASS_PERF_DATA.md`, listo para retomar.
+2. **El bug de los chunks apareciendo de golpe (reportado jugando, mismo
+   día), diagnosticado con capturas F7 + diff de ImageMagick.** Causa real:
+   `growth_ramp` suaviza la muerte de una brizna individual, no el nacimiento
+   de un chunk entero — con `chunk_m=64` en el anillo 2, la mayoría de las
+   briznas de un chunk recién horneado aparecen a altura completa. Se agregó
+   un control en F9 para mover `growth_ramp` en vivo (fuera de
+   `GrassRendererSettings` a propósito, para no disparar un rehorneado
+   completo por cada click). **Medido, no es el arreglo**: agrandar la rampa
+   baja la cobertura en *todas* las bandas, no sólo la lejana — la mayoría de
+   las briznas tienen alcance individual corto y pasan más tiempo
+   desvaneciéndose. El control queda para explorar en vivo; el arreglo real
+   —sospecha: achicar `chunk_m` del anillo 2— sigue sin probarse.
+3. **Borde de tier con ruido (Técnica 2, 2026-08-09), implementado y
+   apagado por default.** El usuario aclaró que "ameba" no era literal — el
+   concepto es ruido en el límite, no una forma nueva. Implementado con la
+   misma disciplina que ya costó un bug real esta noche: el ruido sólo puede
+   empujar hacia *más* cobertura, nunca menos (`tier_boundary_jitter_m`,
+   siempre `<= 0`), con un test que lo barre sobre 900 celdas. Control en F9
+   ("Borde de tier: ruido on/off"), apagado por default — con el toggle
+   apagado, `BOF_SHOT` da los mismos números exactos que antes, cero
+   regresión. **Sin verificar jugando**: si el ruido rompe la lectura
+   circular es una pregunta visual, no numérica.
+
+Validado en frío tras cada pieza: `cargo fmt`/`clippy -D warnings`/los tres
+suites en verde (206+15+265+53 al cierre). Nada de esto reemplaza que el
+usuario juegue la caja Pasto — hay tres cambios de esta noche (el arreglo del
+bug de tiers, el control de F9, el ruido de borde) que nunca se vieron en
+pantalla.
+
+4. **Jugado a la mañana siguiente: el ruido estaba en el borde equivocado, y
+   auditar encontró un bug real distinto.** El usuario reportó que el toggle
+   de ruido "no hacía nada" y que seguían viéndose cuadrados aislando un
+   anillo. Investigando: el ruido perturba el tier **interno** de ring0
+   (diseñado para ser invisible por construcción — sólo cambia cuántos
+   índices se someten, nunca lo que se ve), no la frontera **entre anillos**
+   (0→1→2), que es la que de verdad cambia densidad y forma de golpe y se lee
+   como un círculo. Confirmado con tres `BOF_SHOT` (cada anillo aislado,
+   cámara fija, modo normal): campo continuo, sin costuras — el ruido nunca
+   tuvo nada visible que romper. Pendiente: mover la Técnica 2 a la frontera
+   real de anillos.
+
+   En su lugar se pidió `/iterate-safely` con foco en auditar el código
+   completo (`grass.rs`, `grass_tiles.rs`, `grass.wgsl`) buscando fallas
+   lógicas — un subagente sin contexto previo encontró que
+   `ring0_tier_with_hysteresis` retiene un chunk en su tier hasta 3 m más
+   cerca (`KEEP_SLACK_M`) de lo que `tile_ranges` presupuestaba para ese
+   tier, dejando sin sus briznas de borde a cualquier chunk retenido cerca de
+   una frontera — reproducible en juego normal, sin necesitar el ruido, y
+   nunca cubierto por los tests existentes (probaban la asignación limpia,
+   no la retenida). Arreglado: el presupuesto de cada tier ahora contempla
+   el peor caso que la histéresis realmente permite. Test nuevo
+   (`no_tier_boundary_strands_a_blade_retained_by_hysteresis`), los cuatro
+   suites en verde (207+15+265+53). Detalle completo en
+   `GRASS_PERF_DATA.md`. **Sin verificar jugando** — el bug sólo se
+   manifiesta en movimiento, una captura estática no lo prueba.
+
+5. **El ruido se movió a la frontera real de anillos.** Pedido explícito:
+   arreglar todo lo que encontró el audit más el error ya conocido del ruido
+   mal targeteado. Otra vuelta de `/iterate-safely` — la crítica encontró que
+   el plan original habría desperdiciado draws enteros en el borde exterior
+   del anillo 2 (más allá de `farthest_reach()`=128 m no vive ninguna brizna
+   de toda la pradera, un chunk ahí saldría vacío), dejado un string de F9
+   mintiendo ("borde de tier" cuando ahora es de anillo — la misma confusión
+   de recién), y agrandado el radio de búsqueda de celdas sin gatear cuando
+   el ruido está apagado. Los tres corregidos antes de escribir código.
+   `ring_boundary_jitter_m` (signo `>= 0`, opuesto al de los tiers) ahora
+   perturba el corte **exterior** de `ring_cells_with_slack` para los
+   anillos 0 y 1 — nunca el 2, nunca el `handover` interior (que sigue
+   anclado al alcance limpio, así que nunca deja un hueco). El mecanismo
+   viejo (ruido en el tier interno, invisible) se eliminó por completo, sin
+   dejar código muerto — se reusaron los mismos campos y el mismo botón de
+   F9, renombrados. Cuatro tests nuevos, los cuatro suites en verde
+   (209+15+265+53). Apagado por default es un no-op algebraico (no sólo
+   medido: `ring_boundary_jitter_cap_m` da 0 antes de calcular nada).
+   **Sin verificar jugando** — si el ruido activado realmente rompe la
+   lectura circular es una pregunta visual. Detalle en `GRASS_PERF_DATA.md`.
 
 ## Escenas: cajas de prueba + mundo
 

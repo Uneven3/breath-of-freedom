@@ -64,6 +64,11 @@ struct GrassUniform {
     sun_direction: vec3<f32>,
     sss_amount: f32,
     time: f32,
+    /// Sin wrap, a diferencia de `time` — ver `chunk_born_at` y
+    /// `total_growth`. Mismo orden que `GrassUniform::chunk_clock` en
+    /// `grass_material.rs`.
+    chunk_clock: f32,
+    chunk_fade_in_s: f32,
     focus_xz: vec2<f32>,
     growth_ramp: f32,
     spike_from_m: f32,
@@ -280,6 +285,26 @@ fn blade_growth(world_xz: vec2<f32>, blade_reach: f32) -> f32 {
     return 1.0 - smoothstep(blade_reach - grass_data.growth_ramp, blade_reach, distance);
 }
 
+/// Cuánto de su fundido por tiempo lleva el chunk de este casillero. `1.0` en
+/// cuanto pasaron `chunk_fade_in_s` segundos desde que se horneó —
+/// `chunk_born_at` ya viene con el centinela "ya creció" para reasignaciones
+/// de tier, así que acá no hay caso especial que distinguir.
+fn chunk_time_fade(chunk_slot: u32) -> f32 {
+    let age = grass_data.chunk_clock - chunk_born_at[chunk_slot];
+    return saturate(age / max(grass_data.chunk_fade_in_s, 0.001));
+}
+
+/// El desvanecimiento real de una brizna: el mínimo entre "qué tan cerca está
+/// de su propio alcance" (`blade_growth`, por distancia) y "cuánto hace que su
+/// chunk nació" (`chunk_time_fade`, por tiempo). Ninguno de los dos puede
+/// hacer que una brizna se vea más crecida de lo que el otro permite — el
+/// primero evita que un chunk recién horneado plante brizna a pleno donde ya
+/// debería estar muerta; el segundo evita que aparezca a pleno de golpe donde
+/// sí le toca vivir.
+fn total_growth(world_xz: vec2<f32>, blade_reach: f32, chunk_slot: u32) -> f32 {
+    return min(blade_growth(world_xz, blade_reach), chunk_time_fade(chunk_slot));
+}
+
 /// Ruido barato y determinista, para la ráfaga.
 fn value_noise(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
@@ -410,20 +435,25 @@ fn debug_colour(
     blade_hash: f32,
     blade_height: f32,
     metres_per_pixel: f32,
+    chunk_slot: u32,
 ) -> vec3<f32> {
     let view = grass_data.debug_view;
     if view == DEBUG_OFF || view == DEBUG_MEASURE || view == DEBUG_SHAPE_MEASURE {
         return base;
     }
-    let slot = ring_slot();
+    // Ojo: esto es el índice del **anillo** (`record_layout.z`), no el
+    // casillero del chunk — `chunk_slot`, el parámetro nuevo de arriba, es
+    // el otro "slot" que hace falta para `total_growth`. Mismo nombre,
+    // preguntas distintas; no confundirlos indexa el buffer equivocado.
+    let ring = ring_slot();
     var tint = vec3<f32>(1.0);
     if view == DEBUG_RING {
-        tint = grass_data.ring_colors[slot].rgb;
+        tint = grass_data.ring_colors[ring].rgb;
     } else if view == DEBUG_CHUNK {
         // Una celda es una malla y un draw call: esta vista es también el mapa
         // de draws de la pradera.
-        let cell = floor(world_xz / ring_chunk_m(slot));
-        tint = pastel(cell * 13.0 + f32(slot) * 101.0, 0.45);
+        let cell = floor(world_xz / ring_chunk_m(ring));
+        tint = pastel(cell * 13.0 + f32(ring) * 101.0, 0.45);
     } else if view == DEBUG_BLADE {
         // **La semilla es la altura, no el hash.** `blade_hash` sale de
         // `abs(uv1.x)`, que lleva el lado del quad en el signo: en el *vértice*
@@ -442,8 +472,11 @@ fn debug_colour(
         tint = pastel(vec2<f32>(per_blade * 813.0, per_blade * 271.0), 0.0);
     } else if view == DEBUG_GROWTH {
         // Dos entradas de la paleta y no dos colores nuevos: el shader no
-        // inventa colores, los recibe.
-        let grown = blade_growth(world_xz, blade_reach);
+        // inventa colores, los recibe. `total_growth` y no `blade_growth` a
+        // secas: esta vista tiene que mostrar lo que el jugador realmente ve,
+        // que desde el fundido por tiempo ya no es sólo el criterio de
+        // distancia.
+        let grown = total_growth(world_xz, blade_reach, chunk_slot);
         tint = mix(
             grass_data.ring_colors[0].rgb,
             grass_data.ring_colors[3].rgb,
@@ -505,6 +538,11 @@ struct BladeRecord {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(103)
 var<storage, read> blade_records: array<BladeRecord>;
+
+/// Un `f32` por **casillero**, no por brizna: cuándo nació (`chunk_clock` de
+/// ese momento) el chunk que ocupa ese casillero. Ver `total_growth`.
+@group(#{MATERIAL_BIND_GROUP}) @binding(106)
+var<storage, read> chunk_born_at: array<f32>;
 
 /// Las tres formas, en el orden de `BladeShape` de `grass.rs`.
 const SHAPE_LEAF: u32 = 0u;
@@ -764,7 +802,7 @@ fn build_blade(instance_index: u32, address: vec2<f32>) -> BuiltBlade {
     world_position.y = mix(
         ground_y - grass_data.growth_sink,
         world_position.y,
-        blade_growth(world_position.xz, blade_reach),
+        total_growth(world_position.xz, blade_reach, slot),
     );
 
     // **La carta cambia lo que lleva en `uv_b.x`**: en vez del hash con el lado
@@ -1020,6 +1058,7 @@ fn fragment(
             blade_hash,
             in.uv_b.y,
             metres_per_pixel,
+            mesh_functions::get_tag(in.instance_index),
         ),
         colour.a,
     );

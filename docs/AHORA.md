@@ -6,6 +6,42 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 Números crudos de rendimiento, repetidos y con su contexto exacto, en
 `GRASS_PERF_DATA.md` — no remedir lo que ya está ahí.
 
+## 2026-08-14 — evaluando volver a Godot para el frontend; el movimiento no está en duda
+
+Nace `../whispers-of-freedom/` (Godot 4.7.1), hermano de este repo en
+`~/Programming/uneven/`. **No es un abandono decidido de Bevy** — es una
+evaluación en curso, arrancada por la fricción del día: la capa de
+instancias del editor F5 (commit `20c52e6`) tardó una sesión entera en
+cablear a mano lo que `apply_authored_lod`/`AuthoredVisualRoot` ya resuelven
+para árboles, y las dos semanas de pelea con el pasto procedural (`c075c8a`
+y anteriores) son la misma fricción de fondo: cero herramientas de motor
+para terreno/vegetación/LOD, todo construido a mano acá.
+
+**Lo que NO está en duda: el sistema de movimiento.** `Brain → Broker →
+Motors → Body` con arbitraje por prioridad se diseñó y probó originalmente
+en Godot (`fbeltran/zelda-druid-godot`, "Druid: Shape-Shifter's Ritual" —
+un juego distinto, no éste). Lo que hay en `crates/simulation/src/movement`
+es un port directo de ese diseño, afinado acá después. Volver a Godot para
+el frontend no reabre esa parte — está resuelta y probada de los dos lados.
+
+**Investigado hoy, con fuentes, no de memoria:** Terrain3D (terreno +
+foliage instancing con hasta 10 niveles de LOD integrado, Godot 4.4–4.6+,
+reseñas mixtas en rendimiento/export — no un cheque en blanco) y el addon
+Blender-Godot Pipeline (colliders/multimesh/materiales desde Blender,
+mantenido, actualizado enero 2026) — cubren buena parte de lo que
+`build.rs`/`schema.rs` valida a mano en este repo. Godot 4.7.1 está en el
+repo `extra` de Arch, al día, ya instalado.
+
+**Estado de `whispers-of-freedom/`:** tiene el `graybox-prototype/` de
+Godot completo (motor de movimiento, 55 scripts, 26 escenas) en la raíz, y
+`docs/from-breath-of-freedom/` + `docs/from-druid-godot/` con la
+documentación de ambos proyectos — sin el sistema de `workflow/`
+(stages/personas de IA), que hoy pesa más como bloqueo que como ayuda.
+
+**Todavía no decidido:** si este repo se pausa, se retira, o sigue en
+paralelo. La próxima señal es jugable — si Godot destraba terreno/pasto de
+verdad, ahí se decide qué pasa con éste.
+
 ## Cómo trabajar en este repo
 
 - Validación mínima antes de terminar: `cargo fmt` + `cargo clippy
@@ -725,6 +761,46 @@ pantalla.
    medido: `ring_boundary_jitter_cap_m` da 0 antes de calcular nada).
    **Sin verificar jugando** — si el ruido activado realmente rompe la
    lectura circular es una pregunta visual. Detalle en `GRASS_PERF_DATA.md`.
+
+6. **Jugado de nuevo, corrección clave: el pop no es del anillo lejano —
+   es del cercano y el mediano.** El arreglo de `chunk_m` (abajo) atacaba
+   el bug equivocado. Mismo mecanismo de fondo, pero el anillo 0
+   (`chunk_m=12`, `reach_m=24`) cruza su frontera todo el tiempo al
+   caminar y cada chunk nuevo ocupa gran parte de la pantalla por estar
+   cerca — el lejano se cruza rara vez, por eso costó tanto detectarlo
+   antes con capturas F7. Confirmado: sólo caminando, nunca parado, con
+   `growth_ramp` ya en su default (no un efecto residual de haberla
+   bajado a mano).
+   - `chunk_m` del anillo 2, 64→48: mitiga (no elimina) el pop lejano ya
+     conocido, con margen real de draws medido antes de elegir el valor
+     (32, el que daría 4× menos brizna por pop, rompe el presupuesto).
+   - **El arreglo real para anillo 0/1**: una segunda dimensión de
+     desvanecimiento, por tiempo desde que el chunk nació
+     (`total_growth = min(blade_growth, chunk_time_fade)`), independiente
+     del desvanecimiento por distancia existente. Un chunk nuevo tarda
+     0,35 s en llegar a la altura que le corresponde en vez de aparecer de
+     golpe. Nuevo buffer chico por nivel (`chunk_born_at`, un `f32` por
+     casillero) y un reloj de uniform sin wrap aparte del que usa el
+     viento — reusar el reloj con wrap habría dado una edad negativa
+     permanente para un chunk horneado justo antes de una vuelta. Las
+     reasignaciones de tier del anillo 0 (histéresis) están exentas por un
+     centinela, para no reabrir el pop que la histéresis ya tapa.
+   - Un subagente de crítica revirtió sus propios tests de prueba con
+     `git checkout --` durante este trabajo, lo que borró **todo** el
+     trabajo sin commitear del archivo (no sólo lo suyo). Recuperado sin
+     pérdida desde el historial de versiones interno de Claude Code
+     (`~/.claude/file-history/`, independiente de git) — confirmado byte a
+     byte por los cuatro suites. Lección: pedirle a un subagente que
+     revierta con el editor, nunca con git, si hay trabajo sin commitear
+     de otra sesión en el árbol.
+   - Panel de F9 ensanchado (430→560 px): las líneas de estadística por
+     anillo/tier se estaban partiendo por falta de ancho.
+   - Validado en frío: los cuatro suites en verde (213+15+265+53). Ningún
+     test compila el WGSL — la única verificación de que el shader
+     compila es una corrida real (`BOF_SHOT=grass`), hecha dos veces.
+     **Sin verificar jugando todavía** si el fundido de 0,35 s alcanza —
+     una captura estática no puede mostrarlo. Todo esto commiteado
+     (`c075c8a`). Detalle completo en `GRASS_PERF_DATA.md`.
 
 ## Escenas: cajas de prueba + mundo
 

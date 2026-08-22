@@ -148,6 +148,74 @@ documentación de ambos proyectos — sin el sistema de `workflow/`
 paralelo. La próxima señal es jugable — si Godot destraba terreno/pasto de
 verdad, ahí se decide qué pasa con éste.
 
+## Pedido abierto: un inspector de sólo lectura, en su propio crate (2026-08-22)
+
+**Decidido por el usuario, no empezado.** Es un proyecto aparte del juego: se
+anota acá para no perderlo y para no repetir la investigación que ya se hizo.
+
+**La ley del pedido, textual:** *"que no contamine el código nuestro, sino que
+toda la pega la haga ese crate"*. El juego no se llena de código de inspector;
+como mucho instala un plugin. Y **sólo lectura**: mirar, nunca escribir.
+
+**Por qué sólo lectura, y no es una limitación tímida.** `Health` tiene los
+campos privados a propósito (*"only `apply_damage`/`heal_full` mutate it"*), y
+`LocomotionState`/`CombatState` tienen **un único escritor** —el árbitro— por
+diseño. Un panel que escribe esos campos fabrica estados que ningún sistema
+sabe producir: bugs que no existen en el juego, sólo en la herramienta.
+
+### Lo ya investigado, para no volver a hacerlo
+
+| Qué se quiere ver | ¿Contamina el juego? |
+|---|---|
+| Árbol de entidades, nombres y jerarquía padre/hijo | **No.** `Name`, `ChildOf` y `Children` los registra Bevy solo |
+| Qué componentes tiene cada entidad (el nombre del tipo) | **No.** `World::inspect_entity()` los da sin reflection — verificado en `bevy_ecs 0.19` |
+| Los **valores** dentro de esos componentes | **Sí**: pide `#[derive(Reflect)]` + `register_type` en los 219 componentes, que hoy tienen **cero** |
+
+**La tensión del pedido está en la tercera fila**, y tiene salida: el derive
+puede colgarse de `#[cfg_attr(feature = "dev", derive(Reflect))]`, y en
+`--release` el compilador lo borra del árbol sintáctico antes del type-check —
+no queda en el binario ni en el sistema de tipos. Sigue siendo código escrito en
+los archivos del juego, así que **cuánta contaminación es aceptable es la
+decisión que abre este proyecto**, no un detalle de implementación.
+
+Dato que ayuda: `crates/domain/Cargo.toml` ya declara `bevy_reflect` sin usarlo,
+y `bevy_reflect` no es `bevy` ni `bevy_render` — derivarlo en `bof_domain` no
+violaría §20.
+
+### Cómo se conecta el crate al juego, tres caminos
+
+1. **Plugin in-process.** El juego agrega un `add_plugins` y el crate dibuja su
+   panel. Una línea de contaminación, pero comparte proceso y ventana.
+2. **BRP** (`bevy_remote`, feature de Bevy 0.19 que este repo no activa). El
+   juego expone su World por JSON-RPC y el inspector es otro proceso. Cero
+   acoplamiento de tipos — pero `bevy/query` sólo devuelve lo reflejado.
+3. **Jackdaw** (`github.com/jbuehler23/jackdaw`). Compatible: su `main` pide
+   **bevy 0.19 y avian 0.7**, las de acá. Su `jackdaw_remote` snapshotea el
+   World de un juego lanzado como proceso hijo, y su `migrate.rs` convierte un
+   proyecto bin-only en lib con `GamePlugin`. Su snapshot también es
+   reflect-based, así que hereda la misma pregunta. No probado todavía.
+
+**Corrección registrada:** este documento y la conversación afirmaron el
+2026-08-22 que Jackdaw estaba en bevy 0.18 y era inservible acá. **Era falso** —
+salía de leer crates.io (`0.4.1`, publicado en mayo) en vez del repo. Antes de
+descartarlo de nuevo, mirar `main`.
+
+### Nombre, cuando se cree
+
+El workspace padre exige nombres globalmente únicos con prefijo de proyecto y
+prohíbe los genéricos. Si nace como herramienta compartida entre los juegos de
+`uneven/`, el patrón existente es `uneven_multiplayer_bevy` →
+`uneven_bevy_inspector`; si es sólo de este juego, `breath_of_freedom_inspector`
+con `[lib] name = "bof_inspector"`.
+
+### Lo que ya existe y quizá alcance
+
+Antes de construir nada, dos herramientas que ya funcionan y no costaron una
+dependencia: `cargo doc --no-deps --document-private-items --open` (1971 páginas
+del código propio, con buscador y fuente enlazada) y el volcado de
+`fixed_update.dot`. El prototipo de árbol de escenas que motivó este pedido está
+publicado como artifact, hecho a mano desde `scene/mod.rs`.
+
 ## Cómo trabajar en este repo
 
 - Validación mínima antes de terminar: `cargo fmt` + `cargo clippy

@@ -305,6 +305,13 @@ funde con el cielo o está escrito que no es el objetivo.
 
 ---
 
+## Fuera de esta lista por ser otro proyecto
+
+- **El inspector de sólo lectura** (pedido el 2026-08-22). No es un MVP del
+  juego: vive en su propio crate y su ley es no contaminar este código. No
+  compite con la lista de arriba ni bloquea ningún MVP. Contrato, investigación
+  previa y los tres caminos de conexión, en `AHORA.md`.
+
 ## Lo que deliberadamente no está en esta lista
 
 - **Billboards, cartas de grupo y shell texturing** para el pasto: descartados

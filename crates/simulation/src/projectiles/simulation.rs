@@ -20,6 +20,11 @@ const TRAIL_EMIT_INTERVAL: f32 = 0.016;
 pub(super) fn init_pool(mut commands: Commands) {
     for slot in 0..ARROW_POOL_SIZE {
         commands.spawn((
+            // Nombradas por su casillero: el pool son 32 entidades que
+            // viven todo el proceso y aparecen en cualquier consulta, así
+            // que sin nombre son 32 filas de `Entity 137v1` en cualquier
+            // volcado o inspector.
+            Name::new(format!("Arrow_{slot}")),
             Arrow::pooled(),
             ProjectileState::default(),
             ArrowPoolSlot(slot),

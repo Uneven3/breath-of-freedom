@@ -30,3 +30,18 @@ bevy_transform = "0.19"
 bof_domain = { package = "breath_of_freedom_domain", path = "../domain" }
 ron = "0.12"
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Vuelca el grafo de sistemas (`mod scheduling_audit`). Dev-dep a propósito: lo
+# que este crate tiene prohibido declarar son dev-deps *suyas*, así que no
+# entran al árbol de acá, y el binario del juego no lo ve nunca.
+#
+# Ojo al describirlo: `simulation_has_no_render_dependencies` lee este archivo
+# como texto plano, comentarios incluidos, así que nombrar acá los crates
+# prohibidos rompe el test aunque nadie los declare. Pasó al escribir esta
+# misma línea.
+bevy_mod_debugdump = { version = "0.16", default-features = false }
+# Sin `debug` los nombres de sistema del grafo salen como placeholders, así que
+# el volcado no serviría para leer el orden. Declararlo acá lo enciende para los
+# tests y no para el juego, que es donde cuesta.
+bevy_ecs = { version = "0.19", features = ["debug"] }

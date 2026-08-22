@@ -150,7 +150,7 @@ mod tests {
 mod scheduling_audit {
     use bevy_app::{App, FixedUpdate, TaskPoolPlugin};
     use bevy_ecs::prelude::*;
-    use bevy_ecs::schedule::Schedules;
+    use bevy_ecs::schedule::{ScheduleLabel, Schedules};
     use bevy_time::TimePlugin;
     use bevy_transform::TransformPlugin;
 
@@ -257,5 +257,89 @@ mod scheduling_audit {
             "bajaron de {FIXED_UPDATE_AMBIGUITIES} a {found} — actualizá la \
              constante para que el logro no se pueda perder"
         );
+    }
+
+    /// Un test unitario no recibe `CARGO_TARGET_TMPDIR`, así que la ruta se
+    /// arma desde el manifiesto: `target/schedule` del proyecto, que es a donde
+    /// `.cargo/config.toml` apunta el `target-dir`.
+    fn dump_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/schedule")
+            .canonicalize()
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/schedule")
+            })
+    }
+
+    /// Los quince motores publican todos una función `propose`: con el nombre
+    /// corto que trae la librería, `GatherProposals` sale como quince cajas
+    /// idénticas, y son justo las que concentran 78 de los 113 pares ambiguos.
+    fn two_segment_name(system: &bevy_ecs::system::ScheduleSystem) -> String {
+        let full = system.name().to_string();
+        let mut segments = full.rsplit("::");
+        match (segments.next(), segments.next()) {
+            (Some(last), Some(parent)) => format!("{parent}::{last}"),
+            (Some(last), None) => last.to_owned(),
+            _ => full,
+        }
+    }
+
+    /// Volca el orden de ejecución de `FixedUpdate`, que es lo único que
+    /// `ambiguities` y `FIXED_UPDATE_AMBIGUITIES` no dicen. Corre como test
+    /// normal, no ignorado, para que no se pudra en silencio.
+    ///
+    /// `App` propio: `ambiguities` le saca `FixedUpdate` al mundo para poder
+    /// inicializarlo, así que reusar el suyo volcaría un schedule ausente.
+    ///
+    /// Rationale largo y las dos trampas que costó (§15): `docs/AHORA.md`.
+    #[test]
+    fn the_schedule_graph_is_dumped_to_graphviz() {
+        let mut app = simulation_app();
+        app.finish();
+        let dot = bevy_mod_debugdump::schedule_graph_dot(
+            &mut app,
+            FixedUpdate.intern(),
+            &bevy_mod_debugdump::schedule_graph::Settings {
+                system_name: Box::new(two_segment_name),
+                // `LeftRight` (el default) deja el grafo de 8579x2535
+                // pt: al ajustarlo a una ventana cada nodo mide 2 px
+                // sobre fondo oscuro y se ve una pantalla negra.
+                // Vertical se scrollea, que es como se lee un pipeline.
+                style: bevy_mod_debugdump::schedule_graph::settings::Style {
+                    schedule_rankdir:
+                        bevy_mod_debugdump::schedule_graph::settings::RankDir::TopDown,
+                    ..bevy_mod_debugdump::schedule_graph::settings::Style::dark_github()
+                },
+                remove_transitive_edges: true,
+                // Las barreras de sincronización de Bevy son diez cajas
+                // sueltas arriba del grafo que no dicen nada del diseño.
+                include_system: Some(Box::new(|system: &bevy_ecs::system::ScheduleSystem| {
+                    !system.name().to_string().contains("apply_deferred")
+                })),
+                ..bevy_mod_debugdump::schedule_graph::Settings::default()
+            },
+        );
+
+        assert!(dot.contains("digraph"), "el volcado no es un grafo Graphviz");
+        // Sin la feature `debug` de `bevy_ecs` los nodos salen con nombres
+        // genéricos: el archivo se ve perfecto y no se puede leer.
+        assert!(
+            dot.contains("bof_simulation"),
+            "los nodos no llevan nombres reales: falta la feature `debug` de \
+             `bevy_ecs` en `[dev-dependencies]`"
+        );
+        // Piso de nodos: volcar `Update` desde acá daba cuatro, o sea un
+        // archivo que aparentaba ser el grafo del juego sin serlo.
+        let nodes = dot.matches("\"label\"=").count();
+        assert!(
+            nodes > 100,
+            "el grafo salió con {nodes} nodos: `FixedUpdate` lleva el orden \
+             entero de la simulación, así que esto es un volcado vacío"
+        );
+
+        let directory = dump_dir();
+        std::fs::create_dir_all(&directory).expect("target/schedule debe poder crearse");
+        std::fs::write(directory.join("fixed_update.dot"), dot)
+            .unwrap_or_else(|error| panic!("no se pudo escribir el volcado: {error}"));
     }
 }

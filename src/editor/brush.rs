@@ -25,6 +25,9 @@ const SMOOTH_RATE: f32 = 6.0;
 const FLATTEN_RATE: f32 = 3.0;
 const RAMP_RATE: f32 = 3.0;
 const TERRACE_RATE: f32 = 2.0;
+/// Metros por segundo del corte a pico. Igual que `SCULPT_RATE`: lo que cambia
+/// no es la velocidad, es que nada lo relaja después.
+const CLIFF_RATE: f32 = 1.5;
 /// Metres of noise amplitude added per second.
 const NOISE_RATE: f32 = 0.6;
 /// Height of one terrace shelf, in metres. Roughly a body height, so a terrace
@@ -52,16 +55,18 @@ pub(crate) enum BrushKind {
     Ramp,
     Noise,
     Terrace,
+    Cliff,
 }
 
 impl BrushKind {
-    pub const ALL: [BrushKind; 6] = [
+    pub const ALL: [BrushKind; 7] = [
         BrushKind::Sculpt,
         BrushKind::Smooth,
         BrushKind::Flatten,
         BrushKind::Ramp,
         BrushKind::Noise,
         BrushKind::Terrace,
+        BrushKind::Cliff,
     ];
 
     /// The number key that selects it — its index in [`BrushKind::ALL`], 1-based.
@@ -73,6 +78,7 @@ impl BrushKind {
             BrushKind::Ramp => KeyCode::Digit4,
             BrushKind::Noise => KeyCode::Digit5,
             BrushKind::Terrace => KeyCode::Digit6,
+            BrushKind::Cliff => KeyCode::Digit7,
         }
     }
 
@@ -84,6 +90,7 @@ impl BrushKind {
             BrushKind::Ramp => "Rampa",
             BrushKind::Noise => "Rugosidad",
             BrushKind::Terrace => "Terrazas",
+            BrushKind::Cliff => "Acantilado",
         }
     }
 
@@ -96,6 +103,7 @@ impl BrushKind {
             BrushKind::Ramp => "LMB arrastra: pendiente recta del inicio al cursor",
             BrushKind::Noise => "LMB agrega rugosidad orgánica",
             BrushKind::Terrace => "LMB escalona en repisas de 2 m",
+            BrushKind::Cliff => "LMB corta a pico · Ctrl+LMB levanta pared",
         }
     }
 }
@@ -228,6 +236,12 @@ pub(super) fn sculpt_terrain(
         }
         (_, BrushKind::Noise) => {
             terrain.noise_area(center, radius, NOISE_RATE * step, NOISE_SEED);
+        }
+        (Stroke::Apply, BrushKind::Cliff) => {
+            terrain.carve_area(center, radius, -CLIFF_RATE * step);
+        }
+        (Stroke::Invert, BrushKind::Cliff) => {
+            terrain.carve_area(center, radius, CLIFF_RATE * step);
         }
         (_, BrushKind::Terrace) => {
             terrain.terrace_area(center, radius, TERRACE_STEP, (TERRACE_RATE * step).min(1.0));

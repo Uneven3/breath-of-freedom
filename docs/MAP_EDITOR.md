@@ -84,7 +84,7 @@ guardarán aparte del `TerrainFile`.
 
 | Capa | Con qué | Dónde termina el dato |
 |---|---|---|
-| **Relieve** | Seis brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`), radio con la rueda, fuerza con Shift+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 128×128 celdas |
+| **Relieve** | Siete brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`, `Acantilado`), radio con F+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 128×128 celdas |
 | **Semántica** | Un brush que pinta `TerrainKind` (Soil, ShortGrass, TallGrass, Rock, Sand) | `kinds: Vec<TerrainKind>` sobre las celdas, run-length en el archivo |
 | **Persistencia** | `Ctrl+S` / `Ctrl+L`, escritura atómica (temporal + `rename`) | Un `.ron` por escena (`assets/game/world/*.ron`) |
 | **Deshacer** | Una entrada por trazo, hasta 32, cubriendo las dos capas | Snapshots en memoria (~2,7 MB de historial) |
@@ -359,6 +359,49 @@ Cada una costó una sesión y ninguna es obvia leyendo el código:
   que moleste.
 
 ---
+
+## El pincel Acantilado, y por qué hacía falta (2026-08-22)
+
+Tres síntomas reportados jugando —no se podían cavar pozos hondos, no se podían
+escalar las paredes, y la sospecha de que la malla no ganaba topología— resultaron
+ser **un solo mecanismo**. Medido antes de tocar nada, sosteniendo el trazo diez
+segundos a fuerza máxima:
+
+| radio | fondo con `raise_area` | pared más empinada | con `carve_area` |
+|---:|---:|---:|---:|
+| 2 m | −0,17 m | 4,0° | −45 m · 86,8° |
+| 6 m (default) | −1,90 m | 22,1° | −45 m · 84,2° |
+| 12 m | −5,83 m | 39,3° | −45 m · 79,8° |
+| 25 m | −16,76 m | 46,4° | — |
+| 40 m | −26,21 m | 45,2° | — |
+
+**Escalar pide una pared de ≥60°** (`sensing.climb_wall_angle_max_deg` son 30°
+medidos contra la normal). El pincel de relieve topaba en 46°, así que **el
+jugador no podía escalar nada que el editor supiera construir**.
+
+**El culpable era el auto-relax de `raise_area`**, que suaviza en cada
+aplicación —60 veces por segundo al sostener el botón— y pelea contra el corte.
+No se tocó: ese suavizado existe para que un domo sostenido salga redondo en vez
+de una carpa con pico, está jugado, y `a_held_raise_stays_rounder_than_the_raw_falloff`
+lo defiende. Lo que se agregó es su gemelo duro, `carve_area`, sin relax y con
+borde sin falloff.
+
+**Dos hipótesis que la medición descartó**, y conviene que queden escritas para
+que nadie las vuelva a perseguir:
+
+- **No era `MIN_HEIGHT`.** El piso está en −60 m, lejísimos de los −1,9 m
+  alcanzables.
+- **No era la máscara de colisión.** El terreno no lleva `NonClimbable` —sólo se
+  lo pone `layout.rs` a las escaleras y al perímetro— y `spawn_terrain` lo deja
+  en `GameLayer::Default` justamente *"where ledge sensing can see it"*. El
+  sensor podía verlo perfectamente; lo que no había era pared.
+
+**Y la respuesta a la tercera:** la malla **no** gana topología. `CELLS = 128`
+sobre `WORLD_SIZE = 320` da **2,5 m entre puntos, siempre**; un cambio violento
+sólo empina el tramo entre dos puntos que ya existían. Eso deja un techo real —
+una pared siempre tendrá 2,5 m de transición horizontal—, pero 86° alcanza de
+sobra para escalar. Subir `CELLS` cuadruplicaría grilla y collider, y el rebuild
+completo ya está anotado como el techo de esta herramienta.
 
 ## Dos contextos, no un modo: `BOF_MODE=editor` (2026-08-22)
 

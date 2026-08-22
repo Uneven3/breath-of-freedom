@@ -1,4 +1,4 @@
-//! Autoría del relieve y de la semántica: los seis pinceles y su maquinaria.
+//! Autoría del relieve y de la semántica: los siete pinceles y su maquinaria.
 //!
 //! `Terrain` es dueño del **cómo** cambia la grilla —un método por pincel sobre
 //! `brush_stroke`, que toma un *segmento*, porque un círculo es una cápsula de
@@ -23,6 +23,24 @@ impl Terrain {
         if relax > 0.0 {
             self.smooth_area(center, radius, relax);
         }
+    }
+
+    /// Corta la grilla con borde vertical y **sin relajarla**: acantilados,
+    /// pozos y paredes que se puedan escalar.
+    ///
+    /// Es el gemelo duro de [`Terrain::raise_area`], y existe porque el
+    /// suavizado de aquélla es incondicional. Medido el 2026-08-22, sosteniendo
+    /// diez segundos a fuerza máxima: `raise_area` toca fondo a **1,9 m** con
+    /// una pared de **22°**, mientras el sensor de escalada pide **60°**
+    /// (`sensing.climb_wall_angle_max_deg`, medido contra la normal). Sin
+    /// relax y con borde duro, el mismo trazo llega a 45 m y **86°**.
+    ///
+    /// El borde no tiene falloff a propósito: con el degradado, el radio grande
+    /// se queda en 80° porque reparte el corte entre puntos vecinos.
+    pub fn carve_area(&mut self, center: Vec2, radius: f32, delta: f32) {
+        self.brush(center, radius, |_grid, _idx, falloff| {
+            if falloff > 0.0 { delta } else { 0.0 }
+        });
     }
 
     /// Relax the grid around `center` toward each point's neighbour average, to

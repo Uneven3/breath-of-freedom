@@ -414,6 +414,71 @@ mod tests {
         assert!(near_rim > 0.0, "the falloff should still reach the rim");
     }
 
+    /// La inclinación más empinada entre dos puntos vecinos, en grados.
+    fn steepest_face_degrees(terrain: &Terrain) -> f32 {
+        let spacing = WORLD_SIZE / CELLS as f32;
+        let mid = terrain.points() / 2;
+        (1..terrain.points())
+            .map(|col| {
+                let drop = (terrain.height(mid, col) - terrain.height(mid, col - 1)).abs();
+                (drop / spacing).atan().to_degrees()
+            })
+            .fold(0.0_f32, f32::max)
+    }
+
+    /// Diez segundos de trazo a fuerza máxima, que es el peor caso que el
+    /// editor permite pedir.
+    fn hold_for_ten_seconds(carve: bool, radius: f32) -> Terrain {
+        let mut terrain = Terrain::flat();
+        let per_step = -1.5 * 3.0 / 60.0;
+        for _ in 0..600 {
+            if carve {
+                terrain.carve_area(Vec2::ZERO, radius, per_step);
+            } else {
+                terrain.raise_area(Vec2::ZERO, radius, per_step);
+            }
+        }
+        terrain
+    }
+
+    /// **El motivo de que `carve_area` exista**, y por eso es diferencial: el
+    /// número solo no dice nada, lo que importa es que `raise_area` no llega.
+    ///
+    /// 60° es el umbral real de `sensing.climb_wall_angle_max_deg` (30° contra
+    /// la normal). Medido el 2026-08-22: cavando con `raise_area` la pared más
+    /// empinada posible era de 22° al radio por defecto, así que el jugador no
+    /// podía escalar nada de lo que el editor sabía construir.
+    #[test]
+    fn only_the_cliff_brush_carves_a_climbable_wall() {
+        const CLIMB_THRESHOLD_DEGREES: f32 = 60.0;
+        let relaxed = steepest_face_degrees(&hold_for_ten_seconds(false, 6.0));
+        let carved = steepest_face_degrees(&hold_for_ten_seconds(true, 6.0));
+
+        assert!(
+            relaxed < CLIMB_THRESHOLD_DEGREES,
+            "`raise_area` llegó a {relaxed}°: si ahora alcanza el umbral, este \
+             pincel dejó de hacer falta y hay que borrarlo"
+        );
+        assert!(
+            carved > CLIMB_THRESHOLD_DEGREES,
+            "`carve_area` sólo llegó a {carved}°, y escalar pide \
+             {CLIMB_THRESHOLD_DEGREES}°: el pincel no cumple su único trabajo"
+        );
+    }
+
+    /// El otro síntoma del mismo día: no se podían cavar pozos hondos.
+    #[test]
+    fn the_cliff_brush_digs_far_deeper_than_the_relaxing_one() {
+        let mid = Terrain::flat().points() / 2;
+        let relaxed = hold_for_ten_seconds(false, 6.0).height(mid, mid);
+        let carved = hold_for_ten_seconds(true, 6.0).height(mid, mid);
+        assert!(
+            carved < relaxed * 10.0,
+            "el pozo a pico ({carved} m) tiene que ser mucho más hondo que el \
+             relajado ({relaxed} m)"
+        );
+    }
+
     #[test]
     fn a_held_raise_stays_rounder_than_the_raw_falloff() {
         // The feel fix, stated as a test: integrating many small applications

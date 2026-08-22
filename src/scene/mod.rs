@@ -28,6 +28,9 @@
 //! authoring** and `Ctrl+S` writes to that scene's file.
 
 pub mod menu;
+mod mode;
+
+pub use mode::{AppMode, EDITOR_DEFAULT_SCENE, configured_app_mode, in_game_mode};
 
 use bevy::prelude::*;
 use bof_domain::scene::SceneScoped;
@@ -318,8 +321,19 @@ pub fn scene_allows(wants: fn(&Authoring) -> bool) -> impl Fn(Res<State<AppState
 /// existan los recursos que ese `OnEnter` da por sentados — `reset_meadow`
 /// murió buscando `GrassField`. Pidiéndolo acá la transición ocurre en el frame
 /// siguiente, por exactamente el mismo camino que un clic en el menú.
-fn enter_configured_boot_scene(mut next: ResMut<NextState<AppState>>) {
-    if let Some(id) = configured_boot_scene() {
+///
+/// **El modo editor nunca se queda en el menú.** Un World Lab que abre en una
+/// pantalla de título no autora nada, así que sin `BOF_SCENE` cae en
+/// `EDITOR_DEFAULT_SCENE`. `BOF_SCENE` sigue mandando cuando está: pedir
+/// `Pasto` y recibir `Terreno` sería el mismo error de arriba.
+fn enter_configured_boot_scene(mode: Res<AppMode>, mut next: ResMut<NextState<AppState>>) {
+    let requested = configured_boot_scene();
+    let id = match (requested, *mode) {
+        (Some(id), _) => Some(id),
+        (None, AppMode::Editor) => Some(EDITOR_DEFAULT_SCENE),
+        (None, AppMode::Game) => None,
+    };
+    if let Some(id) = id {
         next.set(AppState::Scene(id));
     }
 }
@@ -342,6 +356,10 @@ pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
+        // `main` es el dueño del modo: lo resuelve antes de componer el App para
+        // decidir si el editor existe. Acá sólo se garantiza que el recurso
+        // esté, para que este plugin siga armándose solo en un test.
+        app.init_resource::<AppMode>();
         app.init_state::<AppState>();
         // `BOF_SCENE=Pasto cargo run` arranca dentro de la caja en vez del menú.
         // Trabajar un sistema es entrar a su caja decenas de veces al día, y el
@@ -366,7 +384,11 @@ impl Plugin for ScenePlugin {
             app.add_systems(
                 OnEnter(AppState::Scene(id)),
                 (
-                    bof_simulation::player::spawn_player,
+                    // Sin jugador en modo editor: el World Lab autora, no juega.
+                    // La cámara no queda huérfana porque arranca en freecam
+                    // (`camera::spawn_camera`), y `follow_player` es un
+                    // `Single` que simplemente no corre sin su objetivo.
+                    bof_simulation::player::spawn_player.run_if(in_game_mode),
                     request_scene_enemies.run_if(scene_has(|c| c.enemies)),
                     request_scene_horse.run_if(scene_has(|c| c.horse)),
                 )
@@ -596,6 +618,7 @@ mod tests {
     fn scene_scoped_content_dies_before_the_sandbox_starts() {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
+        app.init_resource::<AppMode>();
         app.init_state::<AppState>();
         app.add_systems(PostUpdate, bind_scene_scoped_entities);
 

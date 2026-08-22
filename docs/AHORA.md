@@ -6,6 +6,112 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 Números crudos de rendimiento, repetidos y con su contexto exacto, en
 `GRASS_PERF_DATA.md` — no remedir lo que ya está ahí.
 
+## 2026-08-22 — el editor se separó del juego, y el orden de sistemas se puede leer
+
+Sesión de vuelta después de una semana. El usuario trajo tres planes (editor a
+crate propio, pasto sin alfa con oclusión, Jackdaw como visor) y lo que se
+ejecutó salió de criticarlos, no de hacerlos como venían.
+
+**Lo construido, dos cosas:**
+
+- **`BOF_MODE=editor`** — dos contextos, no un modo: en modo juego
+  `EditorPlugin` **no se instala**. El editor abre sin menú ni F5, sin
+  jugador y con la cámara volando. Contrato completo en `MAP_EDITOR.md`.
+- **`target/schedule/fixed_update.dot`** — el grafo de sistemas de `FixedUpdate`
+  a Graphviz, con nombres reales. Es lo único del proyecto que muestra **quién
+  corre antes que quién**: `ambiguities()` da un número y
+  `FIXED_UPDATE_AMBIGUITIES` lo congela, pero ninguno de los dos dice el orden.
+
+### Jackdaw: no era la herramienta, y el problema era otro
+
+`jackdaw 0.4.1` (11 de mayo de 2026) depende de **bevy ^0.18 y avian3d ^0.6**;
+acá hay 0.19 y 0.7. Los tipos no son intercambiables y el `Cargo.lock` es
+compartido por los 8 proyectos del workspace. Su integración pide que el juego
+dependa de `jackdaw_runtime`, o sea de bevy 0.18: imposible. Su "play from
+inside the editor" es **frames streameados a un panel** — video, no estado — y
+su inspector refleja su propio `App`, no el tuyo.
+
+Lo que el usuario pedía no era un editor de escenas: era **ver el flujo**. Son
+dos herramientas distintas, y sólo una de las dos entró.
+
+### El bloqueo que mató al inspector, y de paso a BRP
+
+**El proyecto no tiene reflection.** Medido: **219 `#[derive(Component…)]`** en
+`domain` + `simulation` + `src`, **cero** con `Reflect`, **cero**
+`register_type::<T>()`. Los tres `Reflect` que hay son materiales, y están
+porque `AsBindGroup` lo exige.
+
+`bevy-inspector-egui` resuelve cada componente contra el `AppTypeRegistry`: sin
+eso, el árbol de entidades se ve y **cada fila dice "not registered"**. Y `bevy/
+query`/`bevy/get` del BRP devuelven exactamente lo mismo: entidades vacías. Las
+dos herramientas se descartaron por el mismo motivo, y **no vuelven a estar
+sobre la mesa hasta decidir si se paga `Reflect` en 219 componentes** — muchos
+con campos de Avian y arrays fijos que necesitarían `#[reflect(ignore)]`, y
+tocando `bof_domain`, que es la capa que §19 quiere más limpia.
+
+Detalle suelto: `crates/domain/Cargo.toml:25` declara `bevy_reflect = "0.19"` y
+**no lo usa en ninguna línea**. Dependencia muerta desde que se escribió.
+
+### `Name`: la deuda era mucho más chica de lo que parecía
+
+La crítica midió "8 `Name::new` en simulation contra 219 componentes" y pidió
+nombrar todo. **Ese cociente compara tipos con entidades y no significa nada.**
+Revisado spawn por spawn: `Player`, `Horse`, `Terrain`, los enemigos, los chunks
+de pradera, las luces, el rig de cámara, `SculptFocus`, los árboles y el probe
+**ya estaban nombrados**. Lo único de mundo sin nombre era el **pool de flechas**
+(32 entidades que viven todo el proceso), y quedó nombrado por casillero.
+
+No se nombraron: los nodos de UI (son jerarquías de widgets, y nombrarlas es
+ruido en un volcado) ni las piezas de geometría del arco en
+`visuals/player.rs` — ese modelo es temporal y lo reemplaza `Mi_mesh.blend`.
+
+### El segundo binario, evaluado y descartado
+
+`cargo run --bin bof-editor` era el plan hasta que la crítica lo desarmó: sin
+`lib.rs` un `src/bin/` no ve los módulos; `PerfPlugin` **no es opcional** (30
+sitios piden `PerfToggles` en cámara, mundo y visuales); `ScenePlugin` **es** el
+menú y **es** `spawn_player`; el `cfg_attr` de tests es de crate y vive en
+`main.rs`; `tests/architecture.rs` escanea `src/` recursivo; y
+`std::env::set_var` es `unsafe` en edición 2024 contra `unsafe_code = "forbid"`.
+El razonamiento completo quedó en `MAP_EDITOR.md`, no acá.
+
+### El grafo se veía negro, y por qué
+
+Primera versión: **8579×2535 pt**, horizontal. Cualquier visor lo ajusta a
+la ventana y cada nodo queda de ~2 px sobre fondo `#0d1117` — o sea una
+pantalla negra con el grafo entero adentro. Tres cambios lo arreglaron:
+vertical (`RankDir::TopDown`, 3881×2479), `remove_transitive_edges`, y
+filtrar los diez `apply_deferred`, que son barreras de sincronización y no
+dicen nada del diseño. Quedan **156 nodos** legibles.
+
+**Para mirarlo, un navegador, no un visor de imágenes**: el SVG necesita
+zoom y desplazamiento reales.
+
+### La separación de contextos la pidió el usuario, y estaba bien pedida
+
+La primera versión dejaba `EditorPlugin` instalado siempre y sólo apagaba
+el jugador. Su corrección: *"que el modo editor sea solo en el modo editor,
+y en el juego solo se pueda hacer debug. Son contextos distintos"*. Tenía
+razón y el diseño quedó **más limpio**: `in_editor_mode` se volvió código
+muerto y se borró, porque cuando el plugin no existe no hace falta
+preguntar. La separación vive en `main.rs` —composición— y la congela
+`the_editor_is_installed_only_in_editor_mode`.
+
+### Sin jugar todavía
+
+Los tests pasan y el volcado se miró renderizado: 165 nodos con el pipeline
+entero y sus flechas. **`BOF_MODE=editor` no se jugó** — §10: eso lo cierra el
+usuario, no una corrida verde. `graphviz` se instaló el mismo día (`pacman -S
+graphviz`), así que el `.dot` ya es mirable.
+
+**Dos instrumentos rotos, encontrados y arreglados en el acto** — es la lección
+de siempre: una herramienta rota no da error, da un archivo creíble.
+1. El volcado de `Update` salía con **cuatro** nodos: sus sistemas viven en el
+   binario, no en simulación. Se retiró, y quedó un canario de piso de nodos.
+2. Los quince motores salían como quince cajas idénticas llamadas `propose`,
+   que son justo los que concentran 78 de los 113 pares ambiguos. Arreglado con
+   nombres de dos segmentos.
+
 ## 2026-08-14 — evaluando volver a Godot para el frontend; el movimiento no está en duda
 
 Nace `../whispers-of-freedom/` (Godot 4.7.1), hermano de este repo en
@@ -57,6 +163,45 @@ verdad, ahí se decide qué pasa con éste.
   primera corrida**: el 2026-08-06 tres barridos dieron 10,89 / 11,88 / 3,83 ms
   para el mismo pasto con Blender y Firefox arriba. Detalle en "La suite de
   medición".
+- **Autorar sin jugar: `BOF_MODE=editor cargo run`** abre el World Lab —sin
+  jugador, cámara volando, pincel activo— en `Terreno` o en la caja que diga
+  `BOF_SCENE`. **En modo juego el editor no se instala**: no hay F5, ni HUD de
+  pincel, ni sus recursos. Un valor que no se entiende avisa y cae a juego. Contrato
+  completo en `MAP_EDITOR.md`.
+- **Leer el orden de los sistemas: `cargo test -p breath_of_freedom_simulation
+  the_schedule_graph`** deja `target/schedule/fixed_update.dot`, y
+  `dot -Tsvg target/schedule/fixed_update.dot -o /tmp/fu.svg` lo hace mirable
+  **en un navegador** (`firefox /tmp/fu.svg`) — un visor de imágenes lo ajusta a
+  la ventana y se ve una pantalla negra
+  (graphviz instalado el 2026-08-22). Son **156 nodos**: el pipeline entero
+  `Request → ApplyExternal → ReadIntents → SenseWorld → GatherProposals →
+  Arbitrate → TickActiveMotor → … → DeathCleanup`, con sus flechas reales.
+  Dos cosas que hacen la diferencia entre un grafo y un adorno, y están
+  hechas: la feature `debug` de `bevy_ecs` en `[dev-dependencies]` (sin ella
+  los nodos salen como placeholders) y nombres de **dos segmentos**
+  (`sneak::propose`, `climb::propose`) — con el nombre corto por default los
+  quince motores salían como quince cajas idénticas llamadas `propose`,
+  justo las que concentran 78 de los 113 pares ambiguos.
+
+  **Cómo se lee** (sin esto el archivo no dice nada):
+  - **Caja gris grande con título** = un *system set*, o sea una fase del tick.
+    Son los mismos que `ARCHITECTURE.md` lista en prosa: `ReadIntents`,
+    `SenseWorld`, `GatherProposals`, `Arbitrate`, `TickActiveMotor`…
+  - **Caja clara chica** = un sistema, o sea una función que corre cada tick.
+  - **Flecha** = "este corre antes que este". **Los colores no significan
+    nada**: sólo separan flechas que se cruzan.
+  - **Arriba-izquierda → abajo-derecha** = el orden del tick, principio a fin.
+  - Lo que **no** muestra: qué datos toca cada sistema, y los 113 pares
+    ambiguos. Dos cajas sin flecha entre ellas pueden correr en cualquier
+    orden, y el grafo no dice si eso importa — eso lo dice
+    `FIXED_UPDATE_AMBIGUITIES`.
+
+  Leído así, el grafo **es** `Brain → Broker → Motors → Body` dibujado: los
+  brains publican en `ReadIntents`, los servicios miran el mundo en
+  `SenseWorld`, los quince motores proponen en `GatherProposals`, el árbitro
+  elige uno en `Arbitrate`, y **sólo el ganador** mueve el cuerpo en
+  `TickActiveMotor`.
+
 - **Ver sin jugar: `BOF_SHOT=<suite> cargo run`** deja un PNG y su registro RON
   en `target/shots/` y sale; `BOF_SHOT_POSE="x,y,z:dx,dy,dz"` reproduce un
   encuadre y `BOF_KNOBS="grass-view=5,msaa=1"` fija perillas desde el arranque.

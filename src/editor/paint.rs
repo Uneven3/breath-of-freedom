@@ -3,7 +3,7 @@
 //! The sibling of `brush`, and deliberately much smaller, because the hard parts
 //! are already solved elsewhere and reused here rather than copied:
 //! [`Terrain::paint_area`](crate::world::Terrain::paint_area) owns *how* a cell
-//! changes, and `brush`'s [`pointer_state`] owns the question of whose click this
+//! changes, and `brush`'s [`pointer_is_ours`] owns the question of whose click this
 //! is — the one piece of this tool that has actually bitten us, when the sculpt
 //! brush used to dig craters behind open UI panels.
 //!
@@ -16,7 +16,7 @@ use avian3d::prelude::SpatialQuery;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use super::brush::{Pointer, cursor_terrain_hit, pointer_state};
+use super::brush::{cursor_terrain_hit, pointer_is_ours};
 use super::{EditorTool, SculptFocus, ToolLayer, history::SculptHistory};
 use crate::camera::CameraRig;
 use crate::input::ModalInputFocus;
@@ -46,8 +46,7 @@ pub(super) fn paint_terrain(
     if !tool.active || tool.layer != ToolLayer::Meaning {
         return;
     }
-    let painting = buttons.pressed(MouseButton::Left)
-        && pointer_state(&focus, &owner, &rig) != Pointer::Theirs;
+    let painting = buttons.pressed(MouseButton::Left) && pointer_is_ours(&focus, &owner, &rig);
     if !painting {
         // Same rule as sculpting: losing the pointer to a panel *closes* the
         // stroke rather than pausing it. What you painted before reaching for the

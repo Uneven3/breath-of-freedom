@@ -1,6 +1,7 @@
 # El editor de mapas — qué autora, qué le falta y cómo se completa
 
-La herramienta de autoría dentro del juego (`src/editor/`, F5). Documento
+La herramienta de autoría (`src/editor/`), que desde el 2026-08-22 vive en su
+propio contexto: `BOF_MODE=editor`, no F5 dentro del juego. Documento
 abierto el **2026-08-05**: describe la técnica que ya usa, analiza lo que no
 puede autorar todavía, y propone el código que falta. Incluye la investigación
 sobre **BSN** y dónde encaja de verdad.
@@ -68,7 +69,7 @@ recursos de la escena activa y pregunta sólo por su capacidad:
 
 | Capacidad | Dueño | Escenas iniciales |
 |---|---|---|
-| `terrain_editing` | editor F5 | Traversal, Combate, Pasto, Terreno, Mundo |
+| `terrain_editing` | el editor (modo editor) | Traversal, Combate, Pasto, Terreno, Mundo |
 | `grass_lab` | futuro laboratorio de renderer | Pasto |
 
 `Terreno` sigue siendo el lienzo de relieve y biomas. `Pasto` es el encuadre
@@ -313,7 +314,7 @@ escrito abajo, porque se descubrieron recién al construirlo:
 
 ### Paso 5: Cámara de autoría
 
-- **Lógica.** Que F5 pueda encuadrar el mapa: una vista orbital alta con el
+- **Lógica.** Que el editor pueda encuadrar el mapa: una vista orbital alta con el
   cursor proyectado al terreno. La freecam ya existe; falta que el editor la
   gobierne en vez de ser un modo paralelo.
 - **Se hace cuando duela**, y va a doler exactamente cuando el Paso 2 permita
@@ -347,9 +348,107 @@ Cada una costó una sesión y ninguna es obvia leyendo el código:
 
 - **Escribir `.bsn` desde el editor.** No existe serializador, y aunque
   existiera, el nivel no debe contener presentación.
-- **Un editor fuera del juego.** La herramienta vive dentro del motor porque
-  autorar contra la física y la cámara reales es la mitad de su valor.
+- **Un editor que no sea este motor.** Un proceso aparte, o una herramienta que
+  reimplemente el terreno, pierde exactamente lo que hace valiosa a ésta:
+  autorar contra la física, la cámara y los catálogos reales. Lo que **sí**
+  entró el 2026-08-22 es un modo de arranque —ver abajo—, que es otra cosa:
+  mismo binario, misma simulación, sin el juego encima.
 - **Chunking del terreno.** Deferido hasta que la resolución o el tamaño del
   mundo lo exijan; hoy el rebuild completo es más simple y alcanza.
 - **Undo infinito.** 32 pasos, ~2,7 MB. Subirlo es cambiar una constante el día
   que moleste.
+
+---
+
+## Dos contextos, no un modo: `BOF_MODE=editor` (2026-08-22)
+
+```sh
+BOF_MODE=editor cargo run                    # abre Terreno, editando
+BOF_SCENE=Pasto BOF_MODE=editor cargo run    # otra caja, editando
+cargo run                                    # el juego, sin editor de ninguna clase
+```
+
+**La decisión, y es la que importa: `BOF_MODE` no apaga el editor, decide si
+existe.** En modo juego `main` no instala `EditorPlugin`, así que no hay
+`EditorTool`, ni `SculptHistory`, ni HUD de pincel, ni `SculptFocus`, ni F5. El
+juego conserva sólo sus herramientas de diagnóstico —F1, F3, F7—, que son otra
+cosa: miran, no autoran.
+
+Un modo que sólo desactivara sistemas habría dejado el estado vivo y la tecla
+respondiendo. La separación real es la composición, y por eso vive en `main.rs`
+y no en un `run_if`. `the_editor_is_installed_only_in_editor_mode`
+(`tests/architecture.rs`) la congela: si alguien "limpia" ese `if`, el test
+falla nombrando lo que se perdió.
+
+| Pieza | Modo juego | Modo editor | Por qué |
+|---|---|---|---|
+| `EditorPlugin` | **no se instala** | se instala | Son contextos distintos, no un panel que se abre |
+| F5 | **libre** | — | La tecla queda disponible en el juego |
+| Jugador | se spawnea | **no** | El World Lab autora; no hay a quién mover |
+| Cámara | órbita siguiendo al jugador | **freecam, a 45 m mirando abajo** | `follow_player` es un `Single` sobre el jugador: en órbita y sin él, la cámara se queda clavada. Y abrir a 3 m la dejaba **bajo el terreno** |
+| Escena inicial | menú, salvo `BOF_SCENE` | `Terreno`, salvo `BOF_SCENE` | Un World Lab que abre en una pantalla de título no autora nada |
+| Pincel | no existe | **activo al entrar** | Es a lo que se vino |
+
+**Por qué un modo y no un segundo binario.** Se evaluó `cargo run --bin
+bof-editor` y se descartó con la crítica en la mano: el paquete no tiene
+`lib.rs`, así que un `src/bin/` no ve los módulos; `PerfPlugin` no es opcional
+—cámara, mundo y visuales piden `PerfToggles` en 30 sitios—; `ScenePlugin`
+**es** el menú y **es** el spawn del jugador, así que "incluirlo sin ellos" no
+era posible sin editarlo (§2); el `cfg_attr` de tests vive en `main.rs` y es de
+crate; `tests/architecture.rs` escanea `src/` recursivo, o sea que `src/bin/`
+entra en `HARDWARE_DEBT` y en la exención que sólo cubre `main.rs`; el editor es
+`pub(crate)` y `std::env::set_var` es `unsafe` en la edición 2024, prohibido por
+`unsafe_code = "forbid"`. Un modo de arranque no paga nada de eso y separa los
+contextos igual de fuerte.
+
+### Los controles son los de Blender (2026-08-22)
+
+El esquema anterior pedía combinaciones para todo y no tenía zoom, y el mismo
+botón derecho hacía dos cosas según un estado invisible. Se adoptó el estándar
+que cualquiera que use Blender ya tiene en los dedos:
+
+**La ley: los botones de la cámara y los del pincel son disjuntos.** Es lo que
+arregló el bug del 2026-08-22 —girar con RMB hundía el terreno bajo el cursor,
+porque RMB era *mirar* y *invertir* a la vez—. El pincel vive entero en el botón
+izquierdo y se modifica con teclas; el derecho y el central son de la cámara y
+de nadie más.
+
+| Gesto | Qué hace |
+|---|---|
+| **WASD** | Mover en el plano de la vista |
+| **E / Q** | Subir / bajar, siempre a plomo |
+| **Shift** (con WASD) | Acelerar el vuelo |
+| **Rueda** | Zoom sobre la línea de vista |
+| **MMB arrastrar** | Girar la vista |
+| **Shift + MMB** | Pan — el mundo sigue al cursor |
+| **RMB arrastrar** | Girar la vista |
+| **LMB** | Aplicar el pincel (elevar / pintar / colocar) |
+| **Ctrl + LMB** | Invertir (bajar / borrar la instancia) |
+| **Shift + LMB** | Suavizar (sólo relieve) |
+| **F + rueda** | Radio del pincel |
+| **Ctrl + rueda** | Calibrar la sensibilidad de giro (el HUD la muestra) |
+| **Shift + F + rueda**, `[`, `]` | Fuerza del pincel |
+
+**El cambio que se nota: la rueda ya no es el radio, es el zoom.** En un editor
+3D la rueda es zoom y pelearse con eso cuesta más que aprender un modificador;
+`F` es el mismo dedo que Blender usa para el radio del pincel. `camera::freecam`
+exporta `RADIUS_MODIFIER` y calla su zoom mientras esa tecla está abajo, así que
+hay **un solo** dueño de la decisión y no dos lecturas que puedan discrepar.
+
+**La cámara de autoría gira más despacio que la del juego, y a propósito.**
+`input::MOUSE_SENSITIVITY` (0,003 rad/px) es sensibilidad de tercera persona:
+media vuelta en 1047 px de arrastre. Mirar quiere respuesta; encuadrar un mapa
+quiere puntería, así que `camera::LookSensitivity` arranca en 0,0004 —calibrado
+jugando el 2026-08-22: unos **15.700 px por vuelta**— y es un
+**recurso, no una constante** — cuán rápido se siente bien no se deduce, se
+calibra jugando con `Ctrl+rueda`, y el HUD muestra el número.
+
+**F3 no existe en el World Lab.** Alternar órbita↔freecam sólo tiene sentido con
+un jugador al que volver; `toggle_camera_mode` corre con `run_if(in_game_mode)`.
+Eso cierra el filo que este documento anotaba: ya no hay forma de dejar la cámara
+clavada en el origen.
+
+**Lo que el modo NO resuelve, y sigue siendo el Paso 5:** la freecam vuela, pero
+no hay vista cenital ni encuadre del mapa entero. Es el ítem que de verdad hace
+que la herramienta se sienta un editor, y sigue pendiente.
+

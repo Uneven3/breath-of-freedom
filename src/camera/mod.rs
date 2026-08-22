@@ -20,7 +20,8 @@ mod crosshair;
 mod data;
 mod freecam;
 
-pub use data::{CameraControl, CameraRig, CameraShake, Crosshair, CrosshairRing};
+pub use data::{CameraControl, CameraRig, CameraShake, Crosshair, CrosshairRing, LookSensitivity};
+pub(crate) use freecam::RADIUS_MODIFIER;
 
 const SPRING_LENGTH: f32 = 6.5;
 /// Free-orbit pivot height, camera feel only. While aiming the pivot blends
@@ -68,6 +69,7 @@ pub struct CameraPlugin;
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraShake>();
+        app.init_resource::<LookSensitivity>();
         app.add_systems(Startup, (spawn_camera, crosshair::spawn));
         // Orientation resolves in PreUpdate (see InputPlugin), so Update-time
         // camera systems always read the current frame's orientation.
@@ -78,7 +80,9 @@ impl Plugin for CameraPlugin {
         app.add_systems(
             Update,
             (
-                freecam::toggle_camera_mode,
+                // F3 alterna órbita↔freecam, y eso sólo tiene sentido con un
+                // jugador al que volver. El World Lab es freecam y nada más.
+                freecam::toggle_camera_mode.run_if(crate::scene::in_game_mode),
                 freecam::log_waypoint.run_if(freecam::in_freecam_mode),
                 camera_landing_dip.run_if(freecam::in_orbit_mode),
                 follow_player.run_if(freecam::in_orbit_mode),
@@ -101,15 +105,26 @@ fn spawn_camera(
     mut commands: Commands,
     time_of_day: Res<TimeOfDay>,
     perf: Res<crate::perf::PerfToggles>,
+    mode: Res<crate::scene::AppMode>,
 ) {
+    // El World Lab no spawnea jugador, y `follow_player` es un `Single` sobre
+    // él: en órbita la cámara se quedaría clavada en el origen. Vuela desde el
+    // arranque, encuadrando el mapa desde arriba.
+    let (camera_control, pose) = match *mode {
+        crate::scene::AppMode::Editor => (CameraControl::authoring(), authoring_pose()),
+        crate::scene::AppMode::Game => (
+            CameraControl::default(),
+            Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
+        ),
+    };
     commands.spawn((
         Name::new("CameraRig"),
         CameraRig::default(),
         // Camera mode and freecam look angles live on the camera entity, next to
         // the rest of its view state (`CameraRig`), not in a global resource.
-        CameraControl::default(),
+        camera_control,
         Camera3d::default(),
-        Transform::from_xyz(0.0, 3.0, 6.0).looking_at(Vec3::Y * 1.5, Vec3::Y),
+        pose,
         soft_distance_fog(atmosphere_color(time_of_day.hours)),
         crate::perf::data::profile_msaa(perf.profile),
         // Ambos juntos, no sólo `DepthPrepass`: con sólo depth, Bevy bindea un
@@ -121,6 +136,16 @@ fn spawn_camera(
         DepthPrepass,
         NormalPrepass,
     ));
+}
+
+/// Dónde nace la cámara de autoría, derivado de sus propios ángulos: a
+/// `AUTHORING_HEIGHT` sobre el origen y la distancia horizontal que hace que
+/// `AUTHORING_PITCH` apunte justo ahí. Calcularlo —en vez de escribir un
+/// `(0, 45, 53)` a mano— es lo que impide que tocar el ángulo deje la cámara
+/// mirando al costado del mapa.
+fn authoring_pose() -> Transform {
+    let distance = data::AUTHORING_HEIGHT / data::AUTHORING_PITCH.abs().tan();
+    Transform::from_xyz(0.0, data::AUTHORING_HEIGHT, distance).looking_at(Vec3::ZERO, Vec3::Y)
 }
 
 /// Applies the `RenderScale` knob to the one camera (§7: the owner of the
@@ -451,6 +476,30 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El bug del 2026-08-22: la cámara abría a 3 m mirando al horizonte, o sea
+    /// dentro del terreno. Se fija lo que importa —alto y mirando abajo— y que
+    /// la pose coincida con el ángulo que `fly_freecam` va a reconstruir; si se
+    /// separan, el primer movimiento del mouse tira el encuadre.
+    #[test]
+    fn the_authoring_camera_opens_above_the_map_looking_down() {
+        let pose = authoring_pose();
+        assert!(
+            pose.translation.y > 20.0,
+            "abrió a {} m: cualquier relieve la deja bajo tierra",
+            pose.translation.y
+        );
+        let (_, pitch, _) = pose.rotation.to_euler(EulerRot::YXZ);
+        assert!(
+            pitch < 0.0,
+            "la cámara de autoría tiene que mirar hacia abajo"
+        );
+        assert!(
+            (pitch - data::AUTHORING_PITCH).abs() < 0.01,
+            "la pose ({pitch}) y el ángulo sembrado ({}) se separaron",
+            data::AUTHORING_PITCH
+        );
+    }
 
     /// Distant and gradual (2026-08-09, reverted): clear right next to the
     /// player, ramping past the camera's own view arc rather than resolving

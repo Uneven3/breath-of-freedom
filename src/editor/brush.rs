@@ -109,42 +109,27 @@ enum Stroke {
     Smooth,
 }
 
-/// How much of the pointer the brush gets this frame.
+/// ¿El click de este frame es del pincel?
 ///
-/// The pointer is shared: the F1 hub and the inventory are operated by clicking,
-/// and the freecam turns with the right button held. All of them ride the same
-/// raw `ButtonInput`, so without this the brush answers their clicks too —
-/// clicking a hub button used to dig a crater in the ground behind the panel.
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub(super) enum Pointer {
-    /// Nothing else modal is up: all three buttons are the brush's.
-    Ours,
-    /// Sculpting from the air. The rig takes modal focus only in freecam, where
-    /// the right button means *look* — and while that drag holds the cursor, the
-    /// pick ray is frozen in place, so honouring it would grind a crater at one
-    /// spot while you turn. Left and middle still sculpt: authoring a mountain
-    /// should not require walking to it.
-    SharedWithFreecam,
-    /// A panel owns this click.
-    Theirs,
-}
-
-pub(super) fn pointer_state(
+/// El puntero se comparte: el hub F1 y el inventario se operan clickeando, y
+/// todos leen el mismo `ButtonInput` crudo. Sin esta pregunta el pincel contesta
+/// sus clicks — clickear un botón del hub cavaba un cráter en el suelo de atrás.
+///
+/// **Sólo mira paneles.** Hasta el 2026-08-22 también distinguía "la freecam
+/// tiene el puntero", porque el botón derecho significaba *mirar* y *bajar el
+/// terreno* a la vez: girar la cámara molía un cráter en el punto donde estaba
+/// el cursor. Eso ya no puede pasar — los botones de cámara y los del pincel son
+/// disjuntos (`MAP_EDITOR.md`), que es el arreglo de verdad y no un arbitraje.
+pub(super) fn pointer_is_ours(
     focus: &ModalInputFocus,
     owner: &Query<Entity, With<SculptFocus>>,
     rig: &Query<Entity, With<CameraRig>>,
-) -> Pointer {
+) -> bool {
     let Ok(owner) = owner.single() else {
-        return Pointer::Theirs;
+        return false;
     };
     let rig = rig.single().ok();
-    if !focus.owns_pointer(owner, |holder| Some(holder) == rig) {
-        return Pointer::Theirs;
-    }
-    match rig {
-        Some(rig) if focus.is_held_by(rig) => Pointer::SharedWithFreecam,
-        _ => Pointer::Ours,
-    }
+    focus.owns_pointer(owner, |holder| Some(holder) == rig)
 }
 
 /// While held: apply the selected brush under the cursor.
@@ -153,6 +138,7 @@ pub(super) fn sculpt_terrain(
     mut tool: ResMut<EditorTool>,
     mut history: ResMut<SculptHistory>,
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     spatial: SpatialQuery,
     focus: Res<ModalInputFocus>,
@@ -165,17 +151,23 @@ pub(super) fn sculpt_terrain(
     let Ok((entity, mut terrain)) = terrain.single_mut() else {
         return;
     };
-    let pointer = pointer_state(&focus, &owner, &rig);
-    let stroke = if !tool.active || tool.layer != ToolLayer::Relief || pointer == Pointer::Theirs {
+    // Los tres gestos del modo esculpir de Blender, sobre **un solo botón**:
+    // aplicar, invertir con Ctrl, suavizar con Shift. Que el pincel viva entero
+    // en el izquierdo es lo que deja el derecho y el central libres para la
+    // cámara — antes RMB era "invertir" *y* "girar", así que girar la vista
+    // hundía el terreno bajo el cursor.
+    let stroke = if !tool.active
+        || tool.layer != ToolLayer::Relief
+        || !pointer_is_ours(&focus, &owner, &rig)
+        || !buttons.pressed(MouseButton::Left)
+    {
         None
-    } else if buttons.pressed(MouseButton::Middle) {
+    } else if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
         Some(Stroke::Smooth)
-    } else if buttons.pressed(MouseButton::Left) {
-        Some(Stroke::Apply)
-    } else if buttons.pressed(MouseButton::Right) && pointer == Pointer::Ours {
+    } else if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
         Some(Stroke::Invert)
     } else {
-        None
+        Some(Stroke::Apply)
     };
     let Some(stroke) = stroke else {
         // Buttons up — or the pointer went to a panel, which ends the stroke
@@ -279,7 +271,7 @@ pub(super) fn draw_brush_gizmo(
 ) {
     // Hidden exactly when the brush is deaf, so the ring is an honest read of
     // whether the next click will bite.
-    if !tool.active || pointer_state(&focus, &owner, &rig) == Pointer::Theirs {
+    if !tool.active || !pointer_is_ours(&focus, &owner, &rig) {
         return;
     }
     let (Ok(window), Ok((camera, camera_transform))) = (window.single(), camera.single()) else {

@@ -8,14 +8,14 @@
 //! cursor; releasing it hands the pointer back to the hub. The freecam keeps its
 //! own yaw/pitch in `CameraControl` so flying never steers the character.
 
-use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 
-use crate::input::{MOUSE_SENSITIVITY, ModalInputFocusRequest, PointerCaptured, SetCursorGrab};
+use crate::input::{ModalInputFocusRequest, PointerCaptured, SetCursorGrab};
 use crate::visuals::PlayerVisual;
 
 use super::CameraRig;
-use super::data::{CameraControl, CameraMode};
+use super::data::{CameraControl, CameraMode, LookSensitivity};
 
 /// Toggles the debug freecam.
 const TOGGLE_KEY: KeyCode = KeyCode::F3;
@@ -24,6 +24,12 @@ const CAPTURE_KEY: KeyCode = KeyCode::F4;
 /// Metres per second at rest; multiplied while boosting.
 const FREECAM_SPEED: f32 = 12.0;
 const FREECAM_BOOST: f32 = 4.0;
+/// Metros que recorre el zoom por muesca de rueda.
+const ZOOM_METRES_PER_NOTCH: f32 = 4.0;
+/// Metros de desplazamiento por píxel arrastrado en el pan.
+const PAN_METRES_PER_PIXEL: f32 = 0.05;
+/// Mantenida, la rueda deja de hacer zoom y pasa a ser del pincel (Blender).
+pub(crate) const RADIUS_MODIFIER: KeyCode = KeyCode::KeyF;
 /// Matches the player-look clamp so the freecam cannot flip over the poles.
 const PITCH_LIMIT: f32 = 1.54;
 
@@ -74,12 +80,20 @@ pub(super) fn toggle_camera_mode(
 /// Flies the camera each frame while in freecam mode. Reads the keyboard
 /// directly (debug tier, bypassing the intent system, which is frozen anyway),
 /// and rotates only while the right mouse button is held.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "un sistema de cámara libre necesita teclado, ratón, sus dos \
+              acumuladores de movimiento, el reloj, el estado del cursor, el rig \
+              y el canal de agarre; partirlo movería el conteo a un struct"
+)]
 pub(super) fn fly_freecam(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
     time: Res<Time>,
     captured: Res<PointerCaptured>,
+    mut sensitivity: ResMut<LookSensitivity>,
     cam: Single<(&mut Transform, &mut CameraControl), With<CameraRig>>,
     mut grab: MessageWriter<SetCursorGrab>,
 ) {
@@ -96,13 +110,16 @@ pub(super) fn fly_freecam(
     // loose cursor that slides across the screen instead of turning the camera.
     // Comparing against `PointerCaptured` also keeps this from writing a message
     // every frame, so the window is not told to re-grab 60 times a second.
-    let want_grab = mouse.pressed(MouseButton::Right);
+    let panning = mouse.pressed(MouseButton::Middle) && keys.pressed(KeyCode::ShiftLeft);
+    let turning =
+        mouse.pressed(MouseButton::Right) || (mouse.pressed(MouseButton::Middle) && !panning);
+    let want_grab = turning || panning;
     if captured.0 != want_grab {
         grab.write(SetCursorGrab(want_grab));
     }
-    if mouse.pressed(MouseButton::Right) && motion.delta != Vec2::ZERO {
-        control.freecam_yaw -= motion.delta.x * MOUSE_SENSITIVITY;
-        control.freecam_pitch = (control.freecam_pitch - motion.delta.y * MOUSE_SENSITIVITY)
+    if turning && motion.delta != Vec2::ZERO {
+        control.freecam_yaw -= motion.delta.x * sensitivity.0;
+        control.freecam_pitch = (control.freecam_pitch - motion.delta.y * sensitivity.0)
             .clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
 
@@ -110,6 +127,39 @@ pub(super) fn fly_freecam(
         Quat::from_rotation_y(control.freecam_yaw) * Quat::from_rotation_x(control.freecam_pitch);
     let forward = rotation * Vec3::NEG_Z;
     let right = rotation * Vec3::X;
+
+    // Pan: desplazar la vista en su propio plano, sin girarla. El signo va
+    // invertido porque el gesto arrastra *la escena*, no la cámara — es lo que
+    // hace que el mundo siga al cursor, como en Blender.
+    if panning && motion.delta != Vec2::ZERO {
+        let up = rotation * Vec3::Y;
+        transform.translation +=
+            (right * -motion.delta.x + up * motion.delta.y) * PAN_METRES_PER_PIXEL;
+    }
+
+    // La rueda tiene tres dueños, y cada uno se identifica por su modificador:
+    // sin nada es zoom, con `RADIUS_MODIFIER` es el pincel (`editor::mod`), y
+    // con Ctrl calibra esta sensibilidad. Se calibra en caliente porque cuán
+    // rápido "se siente bien" no se deduce de un número: se prueba.
+    let radius_held = keys.pressed(RADIUS_MODIFIER);
+    let calibrating = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if scroll.delta.y != 0.0 && calibrating {
+        let factor = LookSensitivity::MULTIPLIER_PER_NOTCH.powf(scroll.delta.y);
+        sensitivity.0 =
+            (sensitivity.0 * factor).clamp(LookSensitivity::SLOWEST, LookSensitivity::FASTEST);
+        info!(
+            "[camera] sensibilidad de giro: {:.4} rad/px ({:.0} px por media vuelta)",
+            sensitivity.0,
+            std::f32::consts::PI / sensitivity.0
+        );
+    }
+
+    // Zoom: avanzar sobre la línea de vista. En un editor la rueda es zoom y no
+    // otra cosa (el radio del pincel vive en F+rueda, `editor::adjust_brush`),
+    // porque es el gesto que todo el mundo trae aprendido de Blender.
+    if scroll.delta.y != 0.0 && !radius_held && !calibrating {
+        transform.translation += forward * scroll.delta.y * ZOOM_METRES_PER_NOTCH;
+    }
 
     let mut direction = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) {
@@ -125,10 +175,14 @@ pub(super) fn fly_freecam(
         direction -= right;
     }
     // Vertical on world up, so ascent/descent stay level regardless of pitch.
-    if keys.pressed(KeyCode::Space) {
+    //
+    // **E/Q y no Espacio/Ctrl**: Ctrl es el modificador que invierte el pincel
+    // (`editor::brush`), y mantenerlo para bajar el terreno hacía descender la
+    // cámara al mismo tiempo. E/Q es además lo que usa el modo walk de Blender.
+    if keys.pressed(KeyCode::KeyE) {
         direction += Vec3::Y;
     }
-    if keys.pressed(KeyCode::ControlLeft) {
+    if keys.pressed(KeyCode::KeyQ) {
         direction -= Vec3::Y;
     }
 

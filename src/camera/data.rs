@@ -78,3 +78,66 @@ pub struct CameraControl {
     pub(super) freecam_yaw: f32,
     pub(super) freecam_pitch: f32,
 }
+
+/// Encuadre inicial del World Lab. Abrir a la altura de un jugador dejaba la
+/// cámara **dentro** del terreno (2026-08-22); la distancia se deriva de estos
+/// dos para que no puedan desincronizarse (`camera::authoring_pose`).
+pub(super) const AUTHORING_HEIGHT: f32 = 45.0;
+pub(super) const AUTHORING_PITCH: f32 = -0.7;
+
+impl CameraControl {
+    /// Los ángulos van sembrados —no en cero— porque `fly_freecam` reconstruye
+    /// la rotación desde ellos: en cero, el primer movimiento del mouse tiraría
+    /// el encuadre inicial.
+    pub(super) fn authoring() -> Self {
+        Self {
+            mode: CameraMode::Freecam,
+            freecam_yaw: 0.0,
+            freecam_pitch: AUTHORING_PITCH,
+        }
+    }
+}
+
+/// Radianes por píxel en la freecam. Aparte de la del jugador y ajustable en
+/// caliente con `Ctrl+rueda`: el número cómodo se calibra (`MAP_EDITOR.md`).
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct LookSensitivity(pub f32);
+
+impl LookSensitivity {
+    pub(super) const SLOWEST: f32 = 0.0001;
+    pub(super) const FASTEST: f32 = 0.006;
+    pub(super) const MULTIPLIER_PER_NOTCH: f32 = 1.15;
+}
+
+/// Calibrado jugando el 2026-08-22: ~15.700 px por vuelta.
+impl Default for LookSensitivity {
+    fn default() -> Self {
+        Self(0.0004)
+    }
+}
+
+#[cfg(test)]
+mod sensitivity_tests {
+    use super::*;
+
+    /// Es la diferencia entre mirar y apuntar, y el motivo de existir aparte.
+    #[test]
+    fn authoring_look_is_gentler_than_the_players() {
+        assert!(LookSensitivity::default().0 < crate::input::MOUSE_SENSITIVITY);
+    }
+
+    /// Multiplicativo: subir y bajar lo mismo tiene que volver al inicio.
+    #[test]
+    fn calibrating_up_and_back_down_returns_to_the_start() {
+        let start = LookSensitivity::default().0;
+        let up = start * LookSensitivity::MULTIPLIER_PER_NOTCH.powf(3.0);
+        let back = up * LookSensitivity::MULTIPLIER_PER_NOTCH.powf(-3.0);
+        assert!((back - start).abs() < 1.0e-6, "{start} → {up} → {back}");
+    }
+
+    #[test]
+    fn the_default_sits_inside_its_own_range() {
+        let default = LookSensitivity::default().0;
+        assert!(default > LookSensitivity::SLOWEST && default < LookSensitivity::FASTEST);
+    }
+}

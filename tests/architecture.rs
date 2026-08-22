@@ -581,3 +581,34 @@ fn no_material_is_registered_outside_the_registry() {
          `add_instrumented_material::<M>()` o eximirlos con su razón: {escapes:#?}"
     );
 }
+
+/// El editor y el juego son **contextos distintos**: en modo juego
+/// `EditorPlugin` no se instala, así que no existen sus recursos, su HUD ni F5.
+///
+/// Se verifica sobre el texto de `main.rs` porque armar la app real pide una
+/// ventana, igual que el test de arriba. Lo que se busca es que el único
+/// `add_plugins` del editor viva detrás de la comparación con el modo: un
+/// `add_plugins(editor::EditorPlugin)` suelto —que es como estaba antes del
+/// 2026-08-22, y como quedaría al "limpiar" el `if`— vuelve a meter la
+/// herramienta de autoría dentro del juego sin que nada avise.
+#[test]
+fn the_editor_is_installed_only_in_editor_mode() {
+    let main = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
+        .expect("main.rs must be readable");
+    let production = production_source(&main);
+
+    let installs: Vec<&str> = production
+        .lines()
+        .filter(|line| line.contains("editor::EditorPlugin"))
+        .collect();
+    assert_eq!(
+        installs.len(),
+        1,
+        "`editor::EditorPlugin` tiene que instalarse en un solo sitio: {installs:#?}"
+    );
+    assert!(
+        production.contains("if mode == scene::AppMode::Editor"),
+        "`main` dejó de separar los contextos: el editor se instala sin \
+         preguntar por el modo, o sea que el juego volvió a tener F5"
+    );
+}

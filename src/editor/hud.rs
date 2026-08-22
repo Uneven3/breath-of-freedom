@@ -115,6 +115,7 @@ pub(super) fn spawn_hud(mut commands: Commands) {
 pub(super) fn update_hud(
     tool: Res<EditorTool>,
     history: Res<SculptHistory>,
+    sensitivity: Res<crate::camera::LookSensitivity>,
     mut panel: Query<&mut Visibility, With<SculptHud>>,
     mut brush_line: LineText<BrushLine, KnobLine, LegendLine>,
     mut knob_line: LineText<KnobLine, BrushLine, LegendLine>,
@@ -172,7 +173,7 @@ pub(super) fn update_hud(
                 )
             }
             ToolLayer::Instances => format!(
-                "{}: {} — LMB esparce · RMB borra dentro del círculo",
+                "{}: {} — LMB esparce · Ctrl+LMB borra dentro del círculo",
                 ToolLayer::Instances.label(),
                 tool.prop_kind.label(),
             ),
@@ -196,7 +197,13 @@ pub(super) fn update_hud(
             }
             ToolLayer::Instances => " · sin deshacer todavía".to_string(),
         };
-        **text = format!("radio {:.0} m{strength}{history_note}", tool.radius);
+        // La sensibilidad de giro vive acá y no en su propia línea porque se
+        // calibra mirando: `Ctrl+rueda` la mueve y este número la confirma.
+        **text = format!(
+            "radio {:.0} m{strength}{history_note} · giro {:.0} px/vuelta",
+            tool.radius,
+            std::f32::consts::TAU / sensitivity.0
+        );
     }
     if let Ok(mut text) = legend_line.single_mut() {
         let palette = match tool.layer {
@@ -220,18 +227,19 @@ pub(super) fn update_hud(
                 .join(" · "),
         };
         let layer_keys = match tool.layer {
-            ToolLayer::Relief => "MMB suaviza siempre · rueda: radio · Shift+rueda o [ ]: fuerza\n",
-            ToolLayer::Meaning => "LMB pinta · para borrar, pintá Tierra encima · rueda: radio\n",
+            ToolLayer::Relief => "LMB aplica · Ctrl+LMB invierte · Shift+LMB suaviza\n",
+            ToolLayer::Meaning => "LMB pinta · para borrar, pintá Tierra encima\n",
             ToolLayer::Instances => {
-                "LMB esparce dentro del círculo · RMB borra todo dentro del círculo · rueda: \
-                 radio · Ctrl+L sin guardar pierde instancias sin deshacer\n"
+                "LMB esparce dentro del círculo · Ctrl+LMB borra lo que caiga adentro \
+                 · Ctrl+L sin guardar pierde instancias sin deshacer\n"
             }
         };
         **text = format!(
             "{palette}\n\
              {layer_keys}\
              F6 cambia de capa · Ctrl+Z/Ctrl+Y deshacer · Ctrl+S guardar · Ctrl+L recargar · F5 salir\n\
-             En freecam (F3) el RMB mira, no baja · con un panel abierto el pincel calla"
+             Cámara: WASD mover · E/Q subir/bajar · rueda zoom · MMB girar · Shift+MMB pan\n\
+             F+rueda radio · Shift+F+rueda fuerza · Ctrl+rueda sensibilidad de giro"
         );
     }
 }

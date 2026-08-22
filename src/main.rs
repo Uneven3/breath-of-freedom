@@ -32,9 +32,18 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bof_simulation::SimulationPlugin;
 
+/// **El editor y el juego son contextos distintos, y se separan acá.**
+///
+/// `BOF_MODE` no apaga el editor: decide si existe. En modo juego
+/// `EditorPlugin` no se instala, así que no hay recursos de autoría, ni HUD de
+/// pincel, ni F5 — el juego sólo tiene sus herramientas de diagnóstico (F1, F3,
+/// F7). Un modo que sólo desactivara sistemas dejaría el estado igual y la
+/// tecla viva; no instalarlo es lo que hace la separación real.
 fn main() -> AppExit {
-    App::new()
-        .add_plugins(DefaultPlugins)
+    let mode = scene::configured_app_mode();
+    let mut app = App::new();
+    app.insert_resource(mode);
+    app.add_plugins(DefaultPlugins)
         // `presentation::theme::ThemePlugin` (dentro de `PresentationPlugin`,
         // más abajo) inserta el `UiTheme` real, parchado con la paleta del
         // juego — tiene que registrarse después de `FeathersPlugins` para
@@ -54,10 +63,12 @@ fn main() -> AppExit {
             presentation::PresentationPlugin,
             sfx::SfxPlugin,
             perf::PerfPlugin,
-            editor::EditorPlugin,
             scene::ScenePlugin,
-        ))
-        .run()
+        ));
+    if mode == scene::AppMode::Editor {
+        app.add_plugins(editor::EditorPlugin);
+    }
+    app.run()
 }
 
 #[cfg(test)]

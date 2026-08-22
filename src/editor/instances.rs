@@ -14,7 +14,7 @@ use avian3d::prelude::SpatialQuery;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use super::brush::{Pointer, cursor_terrain_hit, pointer_state};
+use super::brush::{cursor_terrain_hit, pointer_is_ours};
 use super::{EditorTool, SculptFocus, ToolLayer};
 use crate::camera::CameraRig;
 use crate::input::ModalInputFocus;
@@ -31,6 +31,7 @@ pub(super) fn place_or_clear_instances(
     tool: Res<EditorTool>,
     mut attempt: Local<u32>,
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     spatial: SpatialQuery,
     focus: Res<ModalInputFocus>,
     owner: Query<Entity, With<SculptFocus>>,
@@ -45,12 +46,14 @@ pub(super) fn place_or_clear_instances(
     if !tool.active || tool.layer != ToolLayer::Instances {
         return;
     }
-    let pointer = pointer_state(&focus, &owner, &rig);
-    if pointer == Pointer::Theirs {
+    if !pointer_is_ours(&focus, &owner, &rig) {
         return;
     }
-    let placing = buttons.pressed(MouseButton::Left);
-    let clearing = !placing && buttons.pressed(MouseButton::Right) && pointer == Pointer::Ours;
+    // Ctrl invierte, igual que en el relieve: el botón derecho es de la cámara.
+    let held = buttons.pressed(MouseButton::Left);
+    let inverting = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let placing = held && !inverting;
+    let clearing = held && inverting;
     if !placing && !clearing {
         return;
     }

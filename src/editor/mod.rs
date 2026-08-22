@@ -172,6 +172,10 @@ impl Plugin for EditorPlugin {
         );
         for id in crate::scene::SceneId::ALL {
             app.add_systems(OnExit(AppState::Scene(id)), leave_sculpting);
+            app.add_systems(
+                OnEnter(AppState::Scene(id)),
+                open_world_lab.run_if(scene_allows(|tools| tools.terrain_editing)),
+            );
         }
     }
 }
@@ -195,6 +199,28 @@ fn leave_sculpting(
     if let Ok(owner) = owner.single() {
         focus.write(ModalInputFocusRequest::Release(owner));
     }
+}
+
+/// Abre la escena con el pincel ya activo (`MAP_EDITOR.md`).
+///
+/// `OnEnter` y no `Startup`: el dueño del foco lo spawnea `Startup`, y
+/// `leave_sculpting` apaga la herramienta al salir de cada escena. No toca el
+/// foco de la cámara — `owns_pointer` ya acepta al rig como co-dueño.
+fn open_world_lab(
+    mut tool: ResMut<EditorTool>,
+    owner: Query<Entity, With<SculptFocus>>,
+    mut focus: MessageWriter<ModalInputFocusRequest>,
+) {
+    let Ok(owner) = owner.single() else {
+        return;
+    };
+    if tool.active {
+        return;
+    }
+    tool.active = true;
+    tool.anchor = None;
+    focus.write(ModalInputFocusRequest::Acquire(owner));
+    info!("[editor] World Lab: abierto en modo edición (BOF_MODE=editor)");
 }
 
 fn spawn_focus_owner(mut commands: Commands) {
@@ -236,14 +262,14 @@ fn toggle_sculpt(
 /// both things — switched the layer *and* opened a panel over the terrain, which
 /// silences the brush by design — so the layer changed and painting stayed dead.
 ///
-/// The F row is this project's tool row (F1 hub, F3 freecam, F4 waypoint, F5 this
-/// editor, F8 horse, F10 menu), and F6 sits next to the key that opened the tool.
+/// The F row is this project's tool row (F1 hub, F3 freecam, F4 waypoint, F7
+/// captura, F9 grass lab, F10 menu), and F6 sits next to F5, the key that opens
+/// the tool. Since 2026-08-22 both only exist in editor mode, so they no longer
+/// compete with anything the game binds.
 ///
 /// The general problem is bigger than this binding: several layers read the
-/// keyboard directly, so nothing arbitrates a collision and the next one will be
-/// found the same way — by a developer wondering why a key does nothing. That is
-/// the open C2 finding, and it wants one owner in `input`, not another
-/// hand-checked constant here.
+/// The F row is this project's tool row (F1 hub, F4 waypoint, F7 captura, F9
+/// grass lab, F10 menu). F5/F6 only exist in editor mode since 2026-08-22.
 const SWITCH_LAYER_KEY: KeyCode = KeyCode::F6;
 
 /// F6 moves between authoring layers.
@@ -318,7 +344,10 @@ fn digit_key(index: usize) -> KeyCode {
     DIGITS.get(index).copied().unwrap_or(KeyCode::Digit0)
 }
 
-/// Scroll resizes the brush; Shift+scroll (or `[` / `]`) changes its strength.
+/// **F+rueda** cambia el radio; **Shift+F+rueda** (o `[` / `]`) la fuerza.
+///
+/// La rueda sola era el radio hasta el 2026-08-22 y se la quedó el zoom de la
+/// cámara (`MAP_EDITOR.md`). `camera::freecam` es el dueño de `RADIUS_MODIFIER`.
 fn adjust_brush(
     keys: Res<ButtonInput<KeyCode>>,
     mut tool: ResMut<EditorTool>,
@@ -335,7 +364,7 @@ fn adjust_brush(
     if keys.just_pressed(KeyCode::BracketLeft) {
         strength_notches -= 1.0;
     }
-    if scroll.delta.y != 0.0 {
+    if scroll.delta.y != 0.0 && keys.pressed(crate::camera::RADIUS_MODIFIER) {
         if shift {
             strength_notches += scroll.delta.y;
         } else {

@@ -103,6 +103,32 @@ plano de la cara (`up_along_face`), que mantiene el contacto sin tocar la
 velocidad. **Sin este tercero los dos primeros no se ven jugando**: el jugador
 se pega, sube treinta centímetros y se suelta.
 
+**Jugado el 2026-08-22: escala.** Palabras del usuario: *"ahora sí escala, no es
+perfecto, pero por lo menos ahora sí está escalando"*. Los tres arreglos se
+validan como un solo cambio — el bug se reprodujo y dejó de reproducirse.
+
+**Lo que quedó abierto, y es lo próximo de este tema: no siempre entra en
+`Climb`.** El enganche es intermitente sobre la misma pared. Tres hipótesis, en
+orden de sospecha y **ninguna verificada todavía**:
+
+1. **La normal salta entre triángulos vecinos.** El terreno es un heightfield de
+   2,5 m por celda cortado por su diagonal, así que dos triángulos del mismo
+   cañón devuelven normales distintas: moviéndose de lado, `faces_the_wall` y
+   `leans_back_out_of_reach` pueden alternar entre ticks aunque la pared se vea
+   igual. Es la que mejor explica "a veces sí, a veces no" en el mismo sitio.
+2. **La cintura tiene que golpear, y es un solo cast.** Todo `can_climb` cuelga
+   de `hits[2]`; sobre una cara irregular, medio metro de diferencia en dónde se
+   para el actor decide si ese cast encuentra superficie.
+3. **`is_vaultable` compitiendo.** El discriminador nuevo se apaga cuando el
+   sensor cree ver un obstáculo bajo, y en un cañón el down-cast de mantle mide
+   contra una rampa, no contra una repisa.
+
+**Y el terreno es un caso borde, no el caso normal** (observación del usuario).
+Una pared autorada en Blender llega vertical y plana; el heightfield da caras de
+2,5 m con normales por triángulo. Vale la pena arreglar la intermitencia, pero
+el listón es "una pendiente orgánica se escala", no "cada triángulo se comporta
+como un cuboide".
+
 **Efectos colaterales conocidos, a mirar en el checkpoint jugado.** Que una
 ladera de 60-70° pase a `can_climb` toca tres motores que consultan ese hecho:
 `sprint` se abstiene con `can_climb && climb.requested` (subir corriendo con la

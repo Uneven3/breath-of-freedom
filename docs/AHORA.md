@@ -148,6 +148,39 @@ documentación de ambos proyectos — sin el sistema de `workflow/`
 paralelo. La próxima señal es jugable — si Godot destraba terreno/pasto de
 verdad, ahí se decide qué pasa con éste.
 
+## El terreno esculpido ya se puede escalar (2026-08-22, jugado)
+
+Tres síntomas reportados jugando el World Lab —no se cavaban pozos hondos, no se
+escalaban las paredes, y la sospecha de que la malla no ganaba topología— eran
+**dos mecanismos**, ninguno el que se sospechaba.
+
+**El primero, en el editor:** `raise_area` se auto-suaviza sesenta veces por
+segundo, así que la pared más empinada que sabía construir era de 22° al radio
+por defecto. Pincel `Acantilado` (tecla 7), sin relax y con borde duro: 86°.
+Números y el porqué en `MAP_EDITOR.md`.
+
+**El segundo, en movimiento, y fueron tres bugs encadenados:** el cono de
+guiñada se lo comía la inclinación de la cara, `head_hit` era inalcanzable en
+pendiente (umbral efectivo ~77° contra los 60 declarados), y el motor subía en
+vertical pura, así que aun arreglando el sensor el actor se despegaba a los 32
+cm. Detalle en `BOTWMovements.md`.
+
+**Lo que destapó todo fue una comparación, no un análisis:** *"en la escena
+traversal funciona inmediatamente en la pared"*. Esa pared es un
+`Collider::cuboid` vertical; el terreno da caras de 67-81°. Tener un caso que
+funciona al lado de uno que no vale más que cualquier cantidad de lectura de
+código — dos hipótesis mías (la máscara `NonClimbable`, y `MIN_HEIGHT`) ya
+habían muerto contra los datos antes de eso.
+
+**Abierto:** el enganche a `Climb` es intermitente sobre la misma pared. Tres
+hipótesis sin verificar en `BOTWMovements.md`; la principal es que el heightfield
+da una normal distinta por triángulo. **El terreno es un caso borde**, no el
+caso normal: una pared autorada llega vertical y plana.
+
+**También abierto, de la sesión anterior y sin tocar:** `BOF_MODE=editor` con los
+controles de Blender no se jugó entero, y el pivote del pasto (malla base `.glb`,
+2 LOD, fuera el billboard, fuera MSAA) sigue donde quedó antes de la pausa.
+
 ## Pedido abierto: un inspector de sólo lectura, en su propio crate (2026-08-22)
 
 **Decidido por el usuario, no empezado.** Es un proyecto aparte del juego: se

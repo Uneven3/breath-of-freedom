@@ -379,6 +379,10 @@ segundos a fuerza máxima:
 medidos contra la normal). El pincel de relieve topaba en 46°, así que **el
 jugador no podía escalar nada que el editor supiera construir**.
 
+**Jugado el 2026-08-22:** el acantilado autorado con este pincel llegó a 81° y
+se escala. El pincel cumple; lo que quedó abierto es del lado del movimiento
+(`BOTWMovements.md`), no de la herramienta.
+
 **El culpable era el auto-relax de `raise_area`**, que suaviza en cada
 aplicación —60 veces por segundo al sostener el botón— y pelea contra el corte.
 No se tocó: ese suavizado existe para que un domo sostenido salga redondo en vez

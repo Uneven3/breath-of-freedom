@@ -173,16 +173,22 @@ pub(crate) fn snap_to_ground(
 /// style). Sweeping the raw horizontal vector into an incline instead makes
 /// `move_and_slide` re-project it every tick, taxing speed by `sin²(slope)`
 /// per tick — the "stuck at the foot of the ramp" crawl.
+///
+/// **Sólo la componente de subida se realinea.** Renormalizar el vector entero
+/// convertía la desviación en deriva: contra una cara al límite caminable la
+/// proyección mide la mitad, así que el factor de reescalado duplicaba lo que
+/// iba de costado. Medido el 2026-08-23 caminando paralelo al acantilado, con
+/// una dirección de input fija de `(1.00, 0.00, 0.05)`: en once ticks el avance
+/// en X se fue a cero y todo el desplazamiento terminó siendo lateral. Lo que
+/// va por la curva de nivel es exactamente lo que pidió el jugador y no se toca.
 pub(crate) fn align_with_floor(planar: Vec3, floor_normal: Vec3) -> Vec3 {
-    let speed = planar.length();
-    if speed <= f32::EPSILON {
+    let Ok(uphill) = Dir3::new(Vec3::new(-floor_normal.x, 0.0, -floor_normal.z)) else {
         return planar;
-    }
-    let tangent = (planar - floor_normal * planar.dot(floor_normal)).normalize_or_zero();
-    if tangent == Vec3::ZERO {
-        return planar;
-    }
-    tangent * speed
+    };
+    let climbing_speed = planar.dot(*uphill);
+    let along_contour = planar - *uphill * climbing_speed;
+    let uphill_tangent = (*uphill - floor_normal * uphill.dot(floor_normal)).normalize_or_zero();
+    along_contour + uphill_tangent * climbing_speed
 }
 
 /// Advance one actor through a flat-ground locomotion mode.
@@ -423,6 +429,31 @@ mod tests {
     #[test]
     fn align_zero_velocity_is_untouched() {
         assert_eq!(align_with_floor(Vec3::ZERO, ramp_normal()), Vec3::ZERO);
+    }
+
+    /// **La deriva del 2026-08-23.** Caminando casi de frente contra la
+    /// pendiente, renormalizar el vector entero duplicaba la desviación
+    /// lateral, y a los pocos ticks el jugador terminaba caminando paralelo al
+    /// acantilado en vez de hacia donde apuntaba.
+    #[test]
+    fn align_never_amplifies_the_sideways_component() {
+        let planar = Vec3::new(5.0, 0.0, 0.25);
+        let out = align_with_floor(planar, ramp_normal());
+        assert!(
+            (out.z - planar.z).abs() < 1e-4,
+            "lo que va por la curva de nivel es del jugador: {} debería seguir siendo {}",
+            out.z,
+            planar.z
+        );
+    }
+
+    /// Caminar exactamente por la curva de nivel no sube, no baja y no se
+    /// desvía: la pendiente no tiene nada que decir sobre esa dirección.
+    #[test]
+    fn align_along_the_contour_is_identity() {
+        let planar = Vec3::new(0.0, 0.0, 5.0);
+        let out = align_with_floor(planar, ramp_normal());
+        assert!((out - planar).length() < 1e-4);
     }
 
     #[test]

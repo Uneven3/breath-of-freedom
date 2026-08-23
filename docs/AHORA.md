@@ -172,10 +172,17 @@ funciona al lado de uno que no vale más que cualquier cantidad de lectura de
 código — dos hipótesis mías (la máscara `NonClimbable`, y `MIN_HEIGHT`) ya
 habían muerto contra los datos antes de eso.
 
-**Abierto:** el enganche a `Climb` es intermitente sobre la misma pared. Tres
-hipótesis sin verificar en `BOTWMovements.md`; la principal es que el heightfield
-da una normal distinta por triángulo. **El terreno es un caso borde**, no el
-caso normal: una pared autorada llega vertical y plana.
+**Abierto, y no archivable:** el enganche a `Climb` es intermitente sobre la
+misma pared. Tres hipótesis sin verificar en `BOTWMovements.md`; la principal es
+que el heightfield da una normal distinta por triángulo.
+
+**El caso borde es esta prueba, no el terreno.** El objetivo es simular un
+Zelda, donde las paredes tienen ángulos distintos entre sí: terreno de ángulo
+variado y escalable **es** el caso normal de este juego. Lo borde es el cañón de
+prueba, esculpido a martillazos y más irregular que cualquier ladera que el
+juego vaya a tener — y esa irregularidad puede venir del borde duro del pincel
+`Acantilado`, no sólo del sensor.
+
 
 **También abierto, de la sesión anterior y sin tocar:** `BOF_MODE=editor` con los
 controles de Blender no se jugó entero, y el pivote del pasto (malla base `.glb`,

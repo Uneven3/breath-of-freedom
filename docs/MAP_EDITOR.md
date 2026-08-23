@@ -380,8 +380,12 @@ medidos contra la normal). El pincel de relieve topaba en 46°, así que **el
 jugador no podía escalar nada que el editor supiera construir**.
 
 **Jugado el 2026-08-22:** el acantilado autorado con este pincel llegó a 81° y
-se escala. El pincel cumple; lo que quedó abierto es del lado del movimiento
-(`BOTWMovements.md`), no de la herramienta.
+se escala. Pero el pincel puede ser **parte** de lo que quedó abierto: su borde
+sin falloff deja un escalón vertical del ancho del pincel en cada aplicación, y
+el enganche intermitente a `Climb` sospecha de normales que saltan entre
+triángulos vecinos (`BOTWMovements.md`). Si esa hipótesis se confirma, la
+palanca puede estar acá — un falloff mínimo, o suavizado **espacial** que no
+toque el gradiente — y no sólo en el sensor.
 
 **El culpable era el auto-relax de `raise_area`**, que suaviza en cada
 aplicación —60 veces por segundo al sostener el botón— y pelea contra el corte.

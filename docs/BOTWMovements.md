@@ -123,11 +123,26 @@ orden de sospecha y **ninguna verificada todavía**:
    sensor cree ver un obstáculo bajo, y en un cañón el down-cast de mantle mide
    contra una rampa, no contra una repisa.
 
-**Y el terreno es un caso borde, no el caso normal** (observación del usuario).
-Una pared autorada en Blender llega vertical y plana; el heightfield da caras de
-2,5 m con normales por triángulo. Vale la pena arreglar la intermitencia, pero
-el listón es "una pendiente orgánica se escala", no "cada triángulo se comporta
-como un cuboide".
+**Qué es el caso borde acá, con precisión** (corrección del usuario, 2026-08-22).
+No es "el terreno no es pared": **el objetivo es simular un Zelda, y ahí las
+paredes tienen ángulos distintos entre sí**. Terreno de ángulo variado y
+escalable *es* el caso normal de este juego, no una concesión. Lo que resultó
+borde es **esta prueba en particular**: un cañón esculpido a martillazos, mucho
+más irregular que cualquier ladera que el juego vaya a tener.
+
+Eso reordena la prioridad: la intermitencia del enganche **no se archiva como
+"pasa sólo en terreno"**, porque el terreno es adonde va el juego. Lo que sí se
+puede descontar es la irregularidad extrema de este nivel de prueba.
+
+**Y una sospecha sobre el origen de esa irregularidad**, sin verificar: el
+pincel `Acantilado` corta con **borde duro, sin falloff** — es lo que le da los
+86° y lo que arregló el síntoma original, pero también significa que cada
+aplicación deja un escalón vertical del ancho del pincel. Una pared autorada con
+él queda más dentada que una ladera natural. Si la intermitencia resulta ser la
+normal saltando entre triángulos, la palanca puede estar en el pincel (un
+falloff mínimo, o una pasada de suavizado *espacial* que no toque el gradiente)
+tanto como en el sensor.
+
 
 **Efectos colaterales conocidos, a mirar en el checkpoint jugado.** Que una
 ladera de 60-70° pase a `can_climb` toca tres motores que consultan ese hecho:

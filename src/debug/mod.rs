@@ -63,6 +63,43 @@ pub struct DebugConfig {
     pub log_fact_flips: bool,
 }
 
+impl DebugConfig {
+    /// `BOF_DEBUG=flips,transitions cargo run` — the channels the hub toggles,
+    /// asked for before the window exists. A name nobody answers to is an
+    /// error naming the valid ones, never a silent nothing (same rule as
+    /// `BOF_SCENE`).
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        let Ok(raw) = std::env::var("BOF_DEBUG") else {
+            return config;
+        };
+        for key in raw.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+            match channel::DebugChannel::from_env_key(key) {
+                Some(channel) => config.enable(channel),
+                None => error!(
+                    "[debug] BOF_DEBUG={key} no nombra ningún canal; hay: {}",
+                    channel::DebugChannel::env_keys()
+                ),
+            }
+        }
+        config
+    }
+
+    fn enable(&mut self, channel: channel::DebugChannel) {
+        use channel::DebugChannel as C;
+        let flag = match channel {
+            C::Colliders => &mut self.show_colliders,
+            C::Casts => &mut self.show_casts,
+            C::LogPerfSamples => &mut self.log_perf_samples,
+            C::LogStateChanges => &mut self.log_state_changes,
+            C::LogTransitions => &mut self.log_transitions,
+            C::LogVerbose => &mut self.log_verbose,
+            C::LogFactFlips => &mut self.log_fact_flips,
+        };
+        *flag = true;
+    }
+}
+
 /// Fixed-tick counter so log lines from the same tick can be correlated.
 #[derive(Resource, Default)]
 pub struct SimTick(pub u64);
@@ -76,7 +113,7 @@ pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DebugConfig>();
+        app.insert_resource(DebugConfig::from_env());
         app.init_resource::<SimTick>();
         app.init_resource::<snapshot::DebugSnapshot>();
         app.init_resource::<snapshot::HudVisibility>();

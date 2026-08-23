@@ -77,6 +77,30 @@ impl DebugChannel {
         }
     }
 
+    /// The name this channel answers to in `BOF_DEBUG`, so a playtest can be
+    /// launched already listening instead of relying on the hub being visited.
+    pub fn env_key(self) -> &'static str {
+        match self {
+            DebugChannel::Colliders => "colliders",
+            DebugChannel::Casts => "casts",
+            DebugChannel::LogPerfSamples => "perf",
+            DebugChannel::LogStateChanges => "state",
+            DebugChannel::LogTransitions => "transitions",
+            DebugChannel::LogVerbose => "verbose",
+            DebugChannel::LogFactFlips => "flips",
+        }
+    }
+
+    pub fn from_env_key(key: &str) -> Option<DebugChannel> {
+        DebugChannel::ALL
+            .into_iter()
+            .find(|channel| channel.env_key() == key)
+    }
+
+    pub fn env_keys() -> String {
+        DebugChannel::ALL.map(DebugChannel::env_key).join(", ")
+    }
+
     /// What the channel costs, so an operator can tell a free toggle from one
     /// that will distort the very frame time they are measuring.
     pub fn hint(self) -> &'static str {

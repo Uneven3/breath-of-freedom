@@ -13,8 +13,10 @@ use std::fmt::Write;
 use super::{DebugConfig, ProposalTrace, SimTick};
 use bof_domain::movement::diag::{CastKind, CastTrace};
 use bof_domain::movement::facts::{BodyContact, GroundFacts, LadderFacts, LedgeFacts, StairsFacts};
+use bof_domain::movement::intents::Intents;
 use bof_domain::movement::proposal::ProposalBuffer;
 use bof_domain::movement::sensing::GroundSensing;
+use bof_domain::movement::stamina::Stamina;
 use bof_domain::movement::state::LocomotionState;
 use bof_domain::movement::{Actor, BodyVelocity};
 
@@ -236,6 +238,8 @@ pub(super) fn log_verbose_tick(
             Option<&StairsFacts>,
             Option<&LadderFacts>,
             Option<&LedgeFacts>,
+            Option<&Stamina>,
+            Option<&Intents>,
             Option<&Name>,
         ),
         With<Actor>,
@@ -244,14 +248,16 @@ pub(super) fn log_verbose_tick(
     if !config.log_verbose {
         return;
     }
-    for (state, transform, vel, ground, contact, stairs, ladder, ledge, name) in &q {
+    for (state, transform, vel, ground, contact, stairs, ladder, ledge, stamina, intents, name) in
+        &q
+    {
         let who = name
             .map(|n| n.as_str().to_owned())
             .unwrap_or("actor".into());
         let p = transform.translation;
         let facing = transform.rotation * Vec3::NEG_Z;
         info!(
-            "[t{:06}] {who} {:?} pos=({:.2},{:.2},{:.2}) face=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) gnd={}({},{},{:.2}) slide_wall={} stairs={} ladder={} climb={}/{} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2}",
+            "[t{:06}] {who} {:?} pos=({:.2},{:.2},{:.2}) face=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) gnd={}({},{},{:.2}) slide_wall={} stairs={} ladder={} climb={}/{} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} stam={:.1} climb_held={}",
             tick.0,
             state,
             p.x,
@@ -278,6 +284,8 @@ pub(super) fn log_verbose_tick(
             ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).y,
             ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).z,
             ledge.map(|l| l.lip_height).unwrap_or(0.0),
+            stamina.map(|s| s.current()).unwrap_or(0.0),
+            intents.map(|i| i.climb.requested).unwrap_or(false),
         );
     }
 }

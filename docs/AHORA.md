@@ -6,6 +6,38 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 Números crudos de rendimiento, repetidos y con su contexto exacto, en
 `GRASS_PERF_DATA.md` — no remedir lo que ya está ahí.
 
+## 2026-08-23 — la escalada dejó de fallar, y el instrumento dejó de depender de la memoria
+
+Tres sesiones jugadas seguidas, cada una leyendo el log de la anterior. El
+detalle del movimiento está en `BOTWMovements.md`; acá queda lo transversal.
+
+**`BOF_DEBUG` — lanzar el juego ya escuchando.** La primera corrida volvió con
+el log vacío: los canales arrancan apagados y la ventana se abrió antes de que
+el usuario leyera qué encender. `DebugConfig::from_env()` lee
+`BOF_DEBUG=flips,transitions,verbose,casts` con las mismas claves que el hub
+F1, y un nombre que nadie contesta es un error que nombra los válidos, igual
+que `BOF_SCENE`. **Y `BOF_SCENE` espera la etiqueta visible, no el nombre del
+`enum`**: es `Terreno`, no `Sandbox`.
+
+**Estamina y el latch de escalar entraron a la traza.** Un desenganche
+(t002576) tenía `can_continue_climb` en true y ningún flip de hechos; las dos
+únicas guardas que quedaban —`stamina.is_exhausted()` y
+`!intents.climb.requested`— **no estaban en ningún canal de log**. Una
+herramienta que no puede distinguir dos causas no es que falle: da un dato
+creíble. Ahora la línea verbosa cierra con `stam=` y `climb_held=`.
+
+**Lo que se arregló, medido y jugado:** un borde de vault o mantle sólo cuenta
+si su superficie es pisable; seguir escalando acepta rodilla, cintura o pecho
+en vez de un solo cast; la normal de la pared va filtrada antes de escribir la
+orientación; y `align_with_floor` dejó de amplificar la componente lateral. Las
+tres primeras juntas llevaron la sesión de 314 transiciones a 38 y las tres
+escaladas de terminar en `Fall` a terminar en `Mantle`.
+
+**Lo que quedó abierto y es lo próximo:** el zumbido `Walk↔Fall` sobre terreno
+esculpido, y debajo de él la observación del usuario —*"el player cae hacia el
+triángulo de la malla en vez de hacia el centro de la tierra"*— que él mismo
+marcó como conversación aparte. Sin verificar.
+
 ## 2026-08-22 — el editor se separó del juego, y el orden de sistemas se puede leer
 
 Sesión de vuelta después de una semana. El usuario trajo tres planes (editor a
@@ -23,6 +55,12 @@ ejecutó salió de criticarlos, no de hacerlos como venían.
   `FIXED_UPDATE_AMBIGUITIES` lo congela, pero ninguno de los dos dice el orden.
 
 ### Jackdaw: no era la herramienta, y el problema era otro
+
+> **Este párrafo estaba mal y se corrige más abajo** (ver "el inspector de sólo
+> lectura"). Lo que sigue salió de leer `crates.io` en vez del repo: `jackdaw`
+> en `main` pide **bevy 0.19 y avian 0.7**, las de acá, y su `jackdaw_remote`
+> sí snapshotea el World del juego. Queda escrito para que el error no se
+> vuelva a heredar.
 
 `jackdaw 0.4.1` (11 de mayo de 2026) depende de **bevy ^0.18 y avian3d ^0.6**;
 acá hay 0.19 y 0.7. Los tipos no son intercambiables y el `Cargo.lock` es

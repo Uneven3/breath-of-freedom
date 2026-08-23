@@ -107,21 +107,39 @@ se pega, sube treinta centímetros y se suelta.
 perfecto, pero por lo menos ahora sí está escalando"*. Los tres arreglos se
 validan como un solo cambio — el bug se reprodujo y dejó de reproducirse.
 
-**Lo que quedó abierto, y es lo próximo de este tema: no siempre entra en
-`Climb`.** El enganche es intermitente sobre la misma pared. Tres hipótesis, en
-orden de sospecha y **ninguna verificada todavía**:
+**Las tres hipótesis del enganche intermitente, resueltas el 2026-08-23.** Una
+sesión jugada con `BOF_DEBUG=flips,transitions,verbose,casts` las zanjó a las
+tres. Quedan escritas con su veredicto porque el orden de sospecha estaba
+invertido: la que parecía la peor era la tercera.
 
-1. **La normal salta entre triángulos vecinos.** El terreno es un heightfield de
-   2,5 m por celda cortado por su diagonal, así que dos triángulos del mismo
-   cañón devuelven normales distintas: moviéndose de lado, `faces_the_wall` y
-   `leans_back_out_of_reach` pueden alternar entre ticks aunque la pared se vea
-   igual. Es la que mejor explica "a veces sí, a veces no" en el mismo sitio.
-2. **La cintura tiene que golpear, y es un solo cast.** Todo `can_climb` cuelga
-   de `hits[2]`; sobre una cara irregular, medio metro de diferencia en dónde se
-   para el actor decide si ese cast encuentra superficie.
-3. **`is_vaultable` compitiendo.** El discriminador nuevo se apaga cuando el
-   sensor cree ver un obstáculo bajo, y en un cañón el down-cast de mantle mide
-   contra una rampa, no contra una repisa.
+1. **La normal salta entre triángulos vecinos — CIERTA, pero no era la causa
+   del enganche.** Escalando, `climb_normal` ciclaba entre tres valores cada
+   tick (73°, 77°, 80°), con la guiñada siguiéndola: **20,6° de dispersión**.
+   Era un lazo cerrado — el motor escribía la orientación desde la normal
+   cruda, eso movía el origen de los casts, y el sensor elegía otro triángulo.
+   Se corta filtrando la entrada (`NORMAL_SMOOTHING_TAU`, τ = 0,08 s), no
+   bajando la velocidad. Explicaba el temblor, no el "no engancha".
+2. **La cintura tiene que golpear, y es un solo cast — CIERTA, y era la causa
+   de que se soltara.** t001759 y t002805: `can_continue_climb` pasaba a false
+   y el arbitraje caía a `Fall` **en el mismo tick**, y al tick siguiente la
+   pared volvía a estar. La continuación ahora acepta rodilla, cintura o pecho
+   (`hits[2].or(hits[3]).or(hits[1])`). Empezar sigue exigiendo la cintura.
+3. **`is_vaultable` compitiendo — CIERTA, y era la causa de que no enganchara.**
+   La que estaba tercera en la lista. Ticks t001100–t001108, el jugador parado
+   al pie del acantilado: cara de **74,3°** (normal `(-0.80, 0.27, -0.54)`,
+   muy por encima de los 60° caminables), tobillo/rodilla/cintura pegando,
+   pecho/límite/cabeza no. El down-cast de vault encontraba superficie a
+   **0,93 m sobre los pies**, dentro del rango de bordillo (0,3–1,4), así que
+   `is_vaultable` se encendía y `leans_back_out_of_reach` —que lo exige
+   apagado— dejaba `can_climb` en false. Como el jugador no apretaba vault, y
+   `auto_vault` sólo actúa si se aprieta, **no pasaba nada**: se quedaba
+   zumbando entre Walk y Fall al pie de la pared.
+
+   **El defecto de fondo era que `detect_vault` nunca comprobaba que la
+   superficie encontrada fuera pisable.** La "repisa" del acantilado tenía la
+   normal de la propia cara de 74°. El arreglo escribe la regla del usuario una
+   sola vez: un borde de vault o de mantle sólo cuenta si su normal pasa
+   `FLOOR_MIN_UP_DOT`, el mismo umbral que separa caminar de caer.
 
 **Qué es el caso borde acá, con precisión** (corrección del usuario, 2026-08-22).
 No es "el terreno no es pared": **el objetivo es simular un Zelda, y ahí las
@@ -143,6 +161,76 @@ normal saltando entre triángulos, la palanca puede estar en el pincel (un
 falloff mínimo, o una pasada de suavizado *espacial* que no toque el gradiente)
 tanto como en el sensor.
 
+
+**Jugado el 2026-08-23, con los tres arreglos juntos.** Misma escena, mismo
+cañón, canales idénticos:
+
+| | antes | después |
+| --- | --- | --- |
+| transiciones de estado en la sesión | 314 | **38** |
+| rebotes `Walk↔Fall` | ~300 | **12** |
+| escaladas | 3, todas terminadas en `Climb → Fall` | 3, **todas en `Climb → Mantle`** |
+| duración de la escalada | 17, 65 y 189 ticks | 219, 960 y **964 ticks (16 s)** |
+| normal de la pared | 3 valores por tick | **idéntica 9 ticks seguidos** |
+
+Cero desenganches. Y la banda sin `mantle` cerca de la cresta que se temía al
+dejar de fijarse `lip_height` en ladera **no apareció**: las tres escaladas
+coronaron.
+
+**Lo que quedó sin probar, y hay que probar antes de darlo por cerrado:** los
+cuatro props de vault de la escena `Traversal` (`AutoVaultSingleBlock`,
+`WideRail`, `NarrowPost`, `TallBlocker`). Miden 0,5 m de fondo y el down-cast
+cae a 0,2 m del frente con una esfera de 0,1 — si aterriza en la arista, la
+normal no es vertical y el gate nuevo puede matar un vault legítimo. Es la única
+superficie de regresión del cambio.
+
+### La deriva al caminar, y lo que el usuario ve debajo
+
+Con la escalada estable apareció otra cosa, **preexistente y no causada por
+estos cambios**: caminando paralelo a una pared, el cuerpo se iba acercando a
+ella. Medido el 2026-08-23 con dirección de input fija en `(1.00, 0.00, 0.05)`,
+ticks t014558–t014588: el avance en X se fue a cero y **todo el desplazamiento
+terminó siendo lateral**.
+
+La causa estaba en `align_with_floor`: proyectaba la velocidad sobre el plano
+del piso y después **renormalizaba el vector entero** a la velocidad original.
+Caminando casi de frente contra una pendiente, la proyección mide poco —al
+límite caminable, la mitad— así que el reescalado **duplicaba la componente que
+iba de costado**, cada tick. Ahora sólo se realinea la componente de subida; lo
+que va por la curva de nivel es exactamente lo que pidió el jugador y no se
+toca. La propiedad que el código quería conservar (subir una rampa a velocidad
+plena, sin el arrastre de "atascado al pie") sigue en pie y sus cuatro tests
+pasan sin tocarlos.
+
+Medido sobre todos los ticks caminando, el desvío entre hacia dónde mira el
+cuerpo y hacia dónde se mueve bajó de **11,7°** (n=2521) a **5,5°** (n=3589), y
+los ticks con desvío mayor a 45° de 1,4% a 0,4%. **Pero el caso exacto no quedó
+verificado**: filtrando sólo los ticks caminando con la pared bajo el sensor,
+esa corrida tiene **2 muestras**. Dos. No alcanza para afirmar nada.
+
+**Y el usuario ve algo más grande debajo, sin verificar** (2026-08-23, palabras
+suyas): *"el player cae hacia el triángulo de la malla en vez de hacia el centro
+de la tierra"*. Dicho de otro modo: sospecha que la caída no es vertical sino
+normal a la cara que tiene debajo. Si eso es cierto, `align_with_floor` era un
+síntoma y no la enfermedad, y el tema a mirar es cómo se compone la gravedad con
+la resolución de contacto en `body_move_and_slide` sobre un heightfield. **Es
+una conversación aparte, no una tarea abierta de este lote.**
+
+**El zumbido `Walk↔Fall` sigue abierto.** `grounded` prende y apaga cada 1–4
+ticks sobre el terreno esculpido; en la sesión del 2026-08-23 dedicada a
+caminar hubo 79 rebotes. Se dejó afuera a propósito: tocarlo cambia el feel de
+todo lo que camina, y merece su propio lote. Es el candidato siguiente, y muy
+probablemente el mismo tema que la observación del párrafo anterior.
+
+**La gracia de escalada quedó explícitamente diferida.** La revisión encontró
+que una ventana de gracia sin cachear `has_wall_left`/`has_wall_right`
+dispararía un `EdgeLeap` espurio: `update_lateral_walls` sólo corre dentro del
+bloque de continuación, así que en un tick parpadeado ambas paredes laterales
+figuran ausentes, y `edge_leap` pide exactamente eso más salto y dirección, con
+la prioridad más alta de la tabla. Hoy el parpadeo saca al jugador de `Climb` y
+eso es lo que lo protege. Si con la evidencia ampliada del punto 2 todavía se
+suelta, la gracia entra **con las paredes laterales cacheadas** y con la
+constante en 4–6 ticks, no en los 12 de `STAIRS_EXIT_GRACE`.
 
 **Efectos colaterales conocidos, a mirar en el checkpoint jugado.** Que una
 ladera de 60-70° pase a `can_climb` toca tres motores que consultan ese hecho:

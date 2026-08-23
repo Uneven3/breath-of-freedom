@@ -67,6 +67,51 @@ PostUpdate   [ Animación e IK ] ──► bevy::animation::animate_targets ─�
 
 ---
 
+### Escalar en pendiente orgánica: la ley y sus dos bugs (2026-08-22)
+
+**La ley, declarada por el usuario:** *si no se puede caminar y es escalable, se
+puede escalar*. Caminar topa en 60° (`FLOOR_MIN_UP_DOT`), así que a partir de
+ahí escalar tiene que estar disponible. No lo estaba: un cañón esculpido con
+caras de 67-81° dejaba al jugador atascado en el fondo, sin poder caminar ni
+escalar. Una caja vertical de la escena Traversal sí se escalaba, y esa
+diferencia fue la que destapó los dos bugs.
+
+**Bug 1 — el cono de guiñada se lo comía la inclinación.** `can_climb` medía
+`facing.angle_between(-waist.normal)`, que mezcla dos cosas: cuánto se desvía el
+actor y cuán inclinada está la cara. Para una cara de θ encarada de frente ese
+ángulo vale exactamente `90 − θ`, o sea que a 60° gastaba los 30° de
+`climb_wall_angle_max_deg` **enteros** en la inclinación y no dejaba ni un grado
+de tolerancia de guiñada. La regla de arriba era matemáticamente inalcanzable.
+Ahora la guiñada se mide contra la normal aplanada al plano horizontal
+(`faces_the_wall`), y la inclinación se juzga aparte.
+
+**Bug 2 — `head_hit` era inalcanzable en pendiente.** Los seis casts salen del
+eje del cuerpo con alcance fijo (`wall_detection_reach`, 0,65 m), así que en una
+cara inclinada la superficie se aleja `Δaltura / tan θ` y el cast de la cabeza
+—1,2 m por encima del de la rodilla— falla. El umbral **efectivo** para
+`head_hit` resulta ser **~77°**, aunque la configuración declare 60. Se
+reemplaza por `leans_back_out_of_reach`, que usa `is_vaultable` como
+discriminador: separa cara alta de bordillo igual que `head_hit`, así que el
+contrato de vault no se afloja y no cuesta un solo cast nuevo.
+
+**Bug 3, en el motor y no en el sensor — la escalada subía en vertical pura.**
+`v.y = ±speed` sin componente en el plano: contra una cara de 70° la superficie
+huye a 0,9 m/s mientras el actor sube, contra los 0,5 de `wall_approach_speed`,
+que además sólo corre cuando el sensor **ya perdió** la pared. El actor se
+despegaba a los ~32 cm de ascenso y caía. La subida ahora se proyecta sobre el
+plano de la cara (`up_along_face`), que mantiene el contacto sin tocar la
+velocidad. **Sin este tercero los dos primeros no se ven jugando**: el jugador
+se pega, sube treinta centímetros y se suelta.
+
+**Efectos colaterales conocidos, a mirar en el checkpoint jugado.** Que una
+ladera de 60-70° pase a `can_climb` toca tres motores que consultan ese hecho:
+`sprint` se abstiene con `can_climb && climb.requested` (subir corriendo con la
+tecla apretada corta el sprint), `glide` degrada su prioridad en la misma
+condición, y `wall_jump`/`edge_leap` sólo exigen estar en `Climb` — desde una
+ladera, `launch_normal` tiene Y grande (0,34 a 70°), así que el impulso sale con
+más lift del que se afinó contra pared vertical. Ninguno es un bug hoy; son las
+tres cosas que hay que jugar antes de dar esto por cerrado (§10).
+
 ## 2. Catálogo de Motores de Locomoción
 
 ### A. Motores Implementados y Validados (13)

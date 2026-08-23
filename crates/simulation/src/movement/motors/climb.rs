@@ -102,12 +102,25 @@ pub fn tick_body(
             }
         }
 
-        let mut v = row.velocity.0;
-        v.y = match row.intents.climb.vertical {
-            ClimbVerticalIntent::Up => movement.speed,
-            ClimbVerticalIntent::Down => -movement.speed,
-            ClimbVerticalIntent::Neutral => 0.0,
+        // Subir **a lo largo de la cara**, no en vertical pura.
+        //
+        // Con `v.y = ±speed` y nada en el plano, una cara inclinada se aleja a
+        // `speed / tan(θ)` mientras el actor sube: a 70° son 0,9 m/s de fuga
+        // contra los 0,5 de `wall_approach_speed`, que además sólo corre cuando
+        // el sensor ya perdió la pared. Medido el 2026-08-22: el actor se
+        // despegaba a los ~32 cm de ascenso y caía. Proyectar la subida sobre el
+        // plano de la cara mantiene el contacto sin tocar la velocidad.
+        let up_along_face = (Vec3::Y - climb_normal * Vec3::Y.dot(climb_normal))
+            .try_normalize()
+            .unwrap_or(Vec3::Y);
+        let climb_vel = match row.intents.climb.vertical {
+            ClimbVerticalIntent::Up => up_along_face * movement.speed,
+            ClimbVerticalIntent::Down => -up_along_face * movement.speed,
+            ClimbVerticalIntent::Neutral => Vec3::ZERO,
         };
+
+        let mut v = row.velocity.0;
+        v.y = climb_vel.y;
 
         // Lateral movement, gated by side-wall presence.
         let lateral_input = match row.intents.climb.lateral {
@@ -135,8 +148,8 @@ pub fn tick_body(
                 wall_stick = to_wall.normalize() * movement.wall_approach_speed;
             }
         }
-        v.x = lateral_vel.x + wall_stick.x;
-        v.z = lateral_vel.z + wall_stick.z;
+        v.x = climb_vel.x + lateral_vel.x + wall_stick.x;
+        v.z = climb_vel.z + lateral_vel.z + wall_stick.z;
 
         // Soft ceiling: cap climb just below the lip so the player can't climb
         // over — forces a Mantle.

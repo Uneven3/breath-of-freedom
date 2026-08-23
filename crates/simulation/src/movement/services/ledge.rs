@@ -15,6 +15,7 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::LedgeFacts;
 use crate::movement::lod::SensingLod;
+use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
 use crate::movement::sensing::{LedgeCastShape, LedgeSensing};
 use crate::movement::state::LocomotionState;
 use crate::world::{GameLayer, NonClimbable};
@@ -237,7 +238,9 @@ fn sense_ledges(
             facts.can_continue_climb = true;
             update_lateral_walls(spatial, &filter, facts, &actor, waist.normal, trace);
         }
-        if climbable && angle <= sensing.climb_wall_angle_max_deg && knee_hit && head_hit {
+        if climbable && faces_the_wall(facing, waist.normal, &sensing) && knee_hit
+            && (head_hit || leans_back_out_of_reach(waist.normal, facts))
+        {
             facts.can_climb = true;
         }
     }
@@ -246,6 +249,42 @@ fn sense_ledges(
     if let Some(h) = down_hit {
         facts.lip_height = h.point1.y - feet_y;
     }
+}
+
+/// ¿El actor mira la pared? **Sólo guiñada**, con la normal aplanada al plano
+/// horizontal.
+///
+/// `facing.angle_between(-normal)` mezcla dos cosas distintas: cuánto se
+/// desvía el actor y cuán inclinada está la cara. Para una cara de θ perfecta
+/// encarada de frente ese ángulo vale `90 - θ`, así que a 60° gastaba los 30°
+/// de cono enteros en la inclinación y no dejaba **ni un grado** de tolerancia
+/// de guiñada. Separarlos es lo que hace alcanzable la regla "si no se puede
+/// caminar, se puede escalar".
+fn faces_the_wall(facing: Vec3, normal: Vec3, sensing: &LedgeSensing) -> bool {
+    let Some(into_wall) = Dir3::new(Vec3::new(-normal.x, 0.0, -normal.z)).ok() else {
+        // Normal vertical: es piso o techo, no una pared que encarar.
+        return false;
+    };
+    facing.angle_between(*into_wall).to_degrees() <= sensing.climb_wall_angle_max_deg
+}
+
+/// La cara se inclina hacia atrás lo suficiente como para que el cast de la
+/// cabeza no pueda alcanzarla, y no es un obstáculo bajo.
+///
+/// Los seis casts salen del eje del cuerpo con alcance fijo, así que en una
+/// cara inclinada la superficie se aleja `Δaltura / tan(θ)` y el de la cabeza
+/// falla: medido el 2026-08-22, el umbral efectivo para `head_hit` es ~77°
+/// aunque la configuración declare 60. Sin esto, todo el terreno esculpido —que
+/// llega a 67-81°— quedaba imposible de escalar aunque también fuera imposible
+/// de caminar.
+///
+/// `lip_height` es el discriminador que reemplaza al cast que falta: viene del
+/// down-cast de mantle un metro adelante, y separa una cara alta de un bordillo
+/// igual que `head_hit` lo hacía. Por eso no se afloja el contrato de vault.
+fn leans_back_out_of_reach(normal: Vec3, facts: &LedgeFacts) -> bool {
+    let up = normal.y.clamp(-1.0, 1.0);
+    let too_steep_to_walk = up < FLOOR_MIN_UP_DOT;
+    too_steep_to_walk && up >= 0.0 && !facts.is_vaultable
 }
 
 fn can_continue_climb(
@@ -381,5 +420,90 @@ mod tests {
             0.0,
             LedgeSensing::PLAYER,
         ));
+    }
+}
+
+#[cfg(test)]
+mod sloped_wall_tests {
+    use super::*;
+
+    /// Normal de una cara inclinada `degrees` sobre la horizontal, encarada
+    /// hacia -Z (el actor mira a -Z por defecto).
+    fn face_normal(degrees: f32) -> Vec3 {
+        let t = degrees.to_radians();
+        Vec3::new(0.0, t.cos(), t.sin())
+    }
+
+    fn tall_face() -> LedgeFacts {
+        LedgeFacts {
+            is_vaultable: false,
+            ..LedgeFacts::default()
+        }
+    }
+
+    /// **El bug del 2026-08-22.** El cono de guiñada se gastaba entero en la
+    /// inclinación: `facing.angle_between(-normal)` vale `90 - θ`, así que a
+    /// 60° daba exactamente los 30° del límite y no quedaba **ni un grado**
+    /// para desviarse. Es diferencial a propósito — el predicado nuevo tiene
+    /// que aceptar la cara inclinada *y* seguir rechazando la guiñada.
+    #[test]
+    fn a_sloped_face_no_longer_eats_the_whole_yaw_cone() {
+        let sensing = LedgeSensing::PLAYER;
+        let facing = Vec3::NEG_Z;
+        for degrees in [60.0_f32, 65.0, 70.0, 80.0, 90.0] {
+            assert!(
+                faces_the_wall(facing, face_normal(degrees), &sensing),
+                "una cara de {degrees}° encarada de frente tiene que contar como pared"
+            );
+        }
+    }
+
+    #[test]
+    fn looking_away_from_the_wall_still_fails() {
+        let sensing = LedgeSensing::PLAYER;
+        let sideways = Vec3::new(1.0, 0.0, 0.0);
+        assert!(
+            !faces_the_wall(sideways, face_normal(90.0), &sensing),
+            "mirando 90° al costado no se engancha una pared"
+        );
+    }
+
+    /// Piso y techo no son paredes por más que la guiñada dé.
+    #[test]
+    fn a_flat_surface_is_never_a_wall_to_face() {
+        let sensing = LedgeSensing::PLAYER;
+        assert!(!faces_the_wall(Vec3::NEG_Z, Vec3::Y, &sensing));
+        assert!(!faces_the_wall(Vec3::NEG_Z, Vec3::NEG_Y, &sensing));
+    }
+
+    /// El reemplazo de `head_hit` sólo entra donde el cast no podía llegar: la
+    /// cara ya es demasiado empinada para caminarla, y no es un bordillo.
+    #[test]
+    fn the_head_hit_stand_in_only_covers_unwalkable_faces() {
+        assert!(
+            leans_back_out_of_reach(face_normal(70.0), &tall_face()),
+            "70° no se camina y no es bordillo: tiene que poder escalarse"
+        );
+        assert!(
+            !leans_back_out_of_reach(face_normal(45.0), &tall_face()),
+            "45° se camina: no debe convertirse en pared"
+        );
+    }
+
+    /// El contrato de vault no se afloja: un obstáculo bajo sigue siendo vault
+    /// aunque su cara sea vertical.
+    #[test]
+    fn a_vaultable_obstacle_never_becomes_a_wall() {
+        let vaultable = LedgeFacts {
+            is_vaultable: true,
+            ..LedgeFacts::default()
+        };
+        assert!(!leans_back_out_of_reach(face_normal(85.0), &vaultable));
+    }
+
+    /// Un techo (normal apuntando hacia abajo) no es cara escalable.
+    #[test]
+    fn an_overhang_is_not_a_climbable_face() {
+        assert!(!leans_back_out_of_reach(Vec3::NEG_Y, &tall_face()));
     }
 }

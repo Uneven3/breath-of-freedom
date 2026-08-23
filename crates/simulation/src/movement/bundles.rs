@@ -84,13 +84,13 @@ impl SneakMovementBundle {
 mod tests {
     use super::*;
     use crate::movement::abilities::{
-        ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LedgeTraversal, SneakMovement,
-        SprintMovement, StairsMovement, WallJumpMovement,
+        ClimbMovement, GlideMovement, GroundMovement, JumpMovement, LadderMovement, LedgeTraversal,
+        SneakMovement, SprintMovement, StairsMovement, WallJumpMovement,
     };
     use crate::movement::facts::{LadderFacts, LedgeFacts, StairsFacts};
     use crate::movement::motors::{
-        auto_vault::VaultState, edge_leap::EdgeLeapState, glide::GlideLocal, jump::JumpLocal,
-        jump::JumpPhase, mantle::MantleState, sneak::Crouched, sprint::SprintLock,
+        auto_vault::VaultState, climb::ClimbLocal, edge_leap::EdgeLeapState, glide::GlideLocal,
+        jump::JumpLocal, jump::JumpPhase, mantle::MantleState, sneak::Crouched, sprint::SprintLock,
         stairs::StairsGrace, stairs::StairsLocal, wall_jump::WallJumpState,
     };
     // Los trae `Actor` por `#[require]`, no este bundle: el test comprueba
@@ -189,6 +189,7 @@ mod tests {
                 GlideMovement::PLAYER,
                 LedgeTraversal::PLAYER,
                 WallJumpMovement::PLAYER,
+                ClimbMovement::PLAYER,
             ))
             .id();
         let actor = world.entity(entity);
@@ -207,10 +208,12 @@ mod tests {
         assert!(actor.contains::<LedgeTraversal>());
         assert!(actor.contains::<MantleState>());
         assert!(actor.contains::<VaultState>());
+        assert!(actor.contains::<ClimbMovement>());
+        assert!(actor.contains::<ClimbLocal>());
         assert!(actor.contains::<WallJumpMovement>());
         assert!(actor.contains::<WallJumpState>());
         assert!(actor.contains::<EdgeLeapState>());
         assert!(!actor.contains::<Actor>());
-        assert!(!actor.contains::<ClimbMovement>());
+        assert!(!actor.contains::<LadderMovement>());
     }
 }

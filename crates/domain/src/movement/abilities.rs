@@ -265,6 +265,7 @@ impl GlideMovement {
 
 /// Enables wall climbing and configures its movement profile for one actor.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(facts::LedgeFacts, motor_state::ClimbLocal)]
 pub struct ClimbMovement {
     pub speed: f32,
     pub stamina_cost_per_sec: f32,

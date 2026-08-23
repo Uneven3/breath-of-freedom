@@ -63,6 +63,12 @@ pub struct StairsLocal(pub Option<StairsFacts>);
 #[derive(Component, Default)]
 pub struct StairsGrace(pub u32);
 
+/// Normal de pared suavizada mientras Climb está activo. El heightfield da una
+/// normal distinta por triángulo, y escribirla cruda en la guiñada sacude el
+/// cuerpo ~20° por tick.
+#[derive(Component, Default)]
+pub struct ClimbLocal(pub Option<Vec3>);
+
 /// Máquina de fases del mantle.
 #[derive(Component, Default)]
 pub struct MantleState {

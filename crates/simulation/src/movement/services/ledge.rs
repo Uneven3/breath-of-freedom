@@ -205,7 +205,7 @@ fn sense_ledges(
     detect_vault(facts, &actor, facing, &hits, feet_y, vault_down_hit);
 
     // --- Mantle detection ---
-    if let Some(h) = down_hit {
+    if let Some(h) = down_hit.filter(|h| is_standable(h.normal1)) {
         let mantle_rel_y = h.point1.y - feet_y;
         if mantle_rel_y > 0.0 && mantle_rel_y <= sensing.mantle_max_height {
             facts.mantle_ledge_point = Some(h.point1);
@@ -220,35 +220,56 @@ fn sense_ledges(
         }
     }
 
-    // --- Climb detection (waist hit = index 2) ---
+    // --- Climb detection ---
     let knee_hit = hits[1].is_some();
     let head_hit = hits[5].is_some();
     facts.has_head_hit = head_hit;
-    if let Some(waist) = hits[2] {
-        facts.wall_point = Some(waist.point);
-        let angle = facing.angle_between(-waist.normal).to_degrees();
-        let climbable = non_climbable.get(waist.entity).is_err();
+
+    // Seguir escalando acepta **cualquier** cast del torso, no sólo la cintura.
+    // Colgar la continuación de un único cast hacía que una arista del
+    // heightfield soltara la escalada entera: medido el 2026-08-23, la cintura
+    // fallaba un tick, el arbitraje caía a Fall, y al tick siguiente la pared
+    // volvía a estar ahí. Empezar sigue exigiendo la cintura.
+    if let Some(torso) = hits[2].or(hits[3]).or(hits[1]) {
+        facts.wall_point = Some(torso.point);
+        let angle = facing.angle_between(-torso.normal).to_degrees();
+        let climbable = non_climbable.get(torso.entity).is_err();
         // Initial attachment must face the wall, but an actor already in Climb
         // owns a wall-facing yaw in the motor. Do not drop that attachment just
         // because a curved surface or a lateral move briefly makes the sampled
-        // normal fall outside the entry cone: a waist hit on climbable geometry
-        // is sufficient evidence to continue.
+        // normal fall outside the entry cone.
         if can_continue_climb(state, climbable, angle, sensing) {
-            facts.climb_normal = Some(waist.normal);
+            facts.climb_normal = Some(torso.normal);
             facts.can_continue_climb = true;
-            update_lateral_walls(spatial, &filter, facts, &actor, waist.normal, trace);
+            update_lateral_walls(spatial, &filter, facts, &actor, torso.normal, trace);
         }
-        if climbable && faces_the_wall(facing, waist.normal, &sensing) && knee_hit
-            && (head_hit || leans_back_out_of_reach(waist.normal, facts))
-        {
-            facts.can_climb = true;
-        }
+    }
+    if let Some(waist) = hits[2]
+        && non_climbable.get(waist.entity).is_err()
+        && faces_the_wall(facing, waist.normal, &sensing)
+        && knee_hit
+        && (head_hit || leans_back_out_of_reach(waist.normal, facts))
+    {
+        facts.can_climb = true;
     }
 
     // --- Lip height ---
-    if let Some(h) = down_hit {
+    if let Some(h) = down_hit.filter(|h| is_standable(h.normal1)) {
         facts.lip_height = h.point1.y - feet_y;
     }
+}
+
+/// Un borde sólo cuenta como vault o mantle si su superficie **se puede
+/// pisar**. Es la misma frontera que separa caminar de caer
+/// ([`FLOOR_MIN_UP_DOT`]), escrita una sola vez.
+///
+/// Sobre una ladera continua el down-cast devuelve la propia cara, no un
+/// techo: medido el 2026-08-23 sobre una de 74°, daba una "repisa" a 0,93 m de
+/// los pies con la normal de la pared. Eso encendía `is_vaultable`, que a su
+/// vez veta la escalada en [`leans_back_out_of_reach`], y dejaba al actor sin
+/// caminar, sin escalar y sin nada que saltar.
+fn is_standable(normal: Vec3) -> bool {
+    normal.y > FLOOR_MIN_UP_DOT
 }
 
 /// ¿El actor mira la pared? **Sólo guiñada**, con la normal aplanada al plano
@@ -278,9 +299,9 @@ fn faces_the_wall(facing: Vec3, normal: Vec3, sensing: &LedgeSensing) -> bool {
 /// llega a 67-81°— quedaba imposible de escalar aunque también fuera imposible
 /// de caminar.
 ///
-/// `lip_height` es el discriminador que reemplaza al cast que falta: viene del
-/// down-cast de mantle un metro adelante, y separa una cara alta de un bordillo
-/// igual que `head_hit` lo hacía. Por eso no se afloja el contrato de vault.
+/// El discriminador que reemplaza al cast que falta es `is_vaultable`, y por
+/// eso [`is_standable`] tiene que valer: mientras una ladera contara como
+/// bordillo, este veto se comía toda la pared.
 fn leans_back_out_of_reach(normal: Vec3, facts: &LedgeFacts) -> bool {
     let up = normal.y.clamp(-1.0, 1.0);
     let too_steep_to_walk = up < FLOOR_MIN_UP_DOT;
@@ -323,8 +344,7 @@ fn detect_vault(
 
     if let Some(h) = vault_down_hit {
         let lip = h.point1;
-        let rel_y = lip.y - feet_y;
-        if (actor.sensing.vault_min_height..=actor.sensing.vault_detection_range).contains(&rel_y) {
+        if is_vaultable_lip(lip.y - feet_y, h.normal1, &actor.sensing) {
             facts.is_vaultable = true;
             // "Step-up" vault: place the body slightly over the lip.
             let vault_forward = actor.body.radius * actor.sensing.vault_forward_radius_multiplier;
@@ -334,6 +354,13 @@ fn detect_vault(
             facts.vault_target_position = Some(target);
         }
     }
+}
+
+/// Separada de [`detect_vault`] porque `ShapeHitData` no se puede construir en
+/// un test: acá entra el par (altura, normal) que decide todo.
+fn is_vaultable_lip(rel_y: f32, normal: Vec3, sensing: &LedgeSensing) -> bool {
+    is_standable(normal)
+        && (sensing.vault_min_height..=sensing.vault_detection_range).contains(&rel_y)
 }
 
 fn update_lateral_walls(
@@ -505,5 +532,34 @@ mod sloped_wall_tests {
     #[test]
     fn an_overhang_is_not_a_climbable_face() {
         assert!(!leans_back_out_of_reach(Vec3::NEG_Y, &tall_face()));
+    }
+
+    /// **El bug del 2026-08-23.** El down-cast de vault sobre una ladera
+    /// continua devuelve la propia cara, y a 74° la altura cae dentro del rango
+    /// de bordillo. Sin mirar la normal, el acantilado entero se declaraba
+    /// saltable y la escalada quedaba vetada.
+    #[test]
+    fn a_slope_is_not_a_vaultable_lip() {
+        let sensing = LedgeSensing::PLAYER;
+        assert!(
+            !is_vaultable_lip(0.93, face_normal(74.0), &sensing),
+            "la cara de 74° medida en el cañón no es un bordillo"
+        );
+    }
+
+    /// Un bordillo de verdad sigue siéndolo: techo plano, altura en rango.
+    #[test]
+    fn a_flat_topped_obstacle_is_still_vaultable() {
+        let sensing = LedgeSensing::PLAYER;
+        assert!(is_vaultable_lip(0.93, Vec3::Y, &sensing));
+        assert!(!is_vaultable_lip(0.1, Vec3::Y, &sensing), "demasiado bajo");
+        assert!(!is_vaultable_lip(2.0, Vec3::Y, &sensing), "demasiado alto");
+    }
+
+    /// La frontera de "pisable" es la misma que la de caminar, no una nueva.
+    #[test]
+    fn the_standable_limit_is_the_walkable_limit() {
+        assert!(is_standable(face_normal(59.0)));
+        assert!(!is_standable(face_normal(61.0)));
     }
 }

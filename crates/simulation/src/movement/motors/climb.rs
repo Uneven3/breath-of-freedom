@@ -16,8 +16,20 @@ use crate::movement::motors::MotorCore;
 use crate::movement::proposal::{Priority, ProposalBuffer, TransitionProposal, weight};
 use crate::movement::stamina::Stamina;
 use crate::movement::state::LocomotionState;
+pub use bof_domain::movement::motor_state::ClimbLocal;
 
 const MIN_DIR_SQ: f32 = 0.001;
+/// Constante de tiempo del filtro sobre la normal de la pared.
+///
+/// Medido el 2026-08-23 escalando el cañón: la normal cicla entre tres
+/// triángulos del heightfield cada tick (73°, 77°, 80°), la guiñada la sigue,
+/// eso mueve el origen de los casts y el sensor elige otro triángulo. El lazo
+/// se corta filtrando la entrada, no bajando la velocidad.
+///
+/// `wall_jump` y `edge_leap` siguen despegando con la normal cruda de
+/// `LedgeFacts`: la diferencia es el temblor que este filtro quita, y se acepta
+/// como deuda antes que cablear la normal suavizada por dos motores más.
+const NORMAL_SMOOTHING_TAU: f32 = 0.08;
 
 type ProposeQuery<'a> = (
     &'a GroundFacts,
@@ -65,6 +77,7 @@ type TickQuery<'a> = (
     MotorCore,
     &'a ClimbMovement,
     &'a LedgeFacts,
+    &'a mut ClimbLocal,
     Option<&'a mut Stamina>,
 );
 
@@ -73,14 +86,17 @@ pub fn tick_body(
     mas: MoveAndSlide,
     time: Res<Time>,
 ) {
-    for (mut row, movement, ledge, mut stamina) in &mut actors {
+    for (mut row, movement, ledge, mut local, mut stamina) in &mut actors {
         if *row.state != LocomotionState::Climb {
+            local.0 = None;
             continue;
         }
-        let Some(climb_normal) = ledge.climb_normal else {
+        let Some(sensed_normal) = ledge.climb_normal else {
             continue;
         };
         let dt = time.delta_secs();
+        let climb_normal = smooth_toward(local.0, sensed_normal, dt);
+        local.0 = Some(climb_normal);
 
         let near_apex =
             row.ground.grounded && !ledge.has_head_hit && ledge.mantle_ledge_point.is_some();
@@ -169,6 +185,17 @@ pub fn tick_body(
             stamina.drain(movement.stamina_cost_per_sec * dt);
         }
     }
+}
+
+fn smooth_toward(previous: Option<Vec3>, sensed: Vec3, dt: f32) -> Vec3 {
+    let Some(previous) = previous else {
+        return sensed;
+    };
+    let blend = 1.0 - (-dt / NORMAL_SMOOTHING_TAU).exp();
+    previous
+        .lerp(sensed, blend)
+        .try_normalize()
+        .unwrap_or(sensed)
 }
 
 #[cfg(test)]

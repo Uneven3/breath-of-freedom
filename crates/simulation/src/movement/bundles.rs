@@ -12,6 +12,7 @@ use super::abilities::SneakMovement;
 use super::body::{BodyDimensions, crouched_collider, standing_collider};
 use super::motors::sneak::{CrouchCollider, Crouched, SneakLock, StandClearance, StandCollider};
 use super::sensing::GroundSensing;
+use super::services::ground::GroundLatch;
 use super::{Actor, ActorId};
 use crate::physics::GameLayer;
 
@@ -32,6 +33,9 @@ pub struct KinematicActorBundle {
     pub collision_layers: CollisionLayers,
     pub dimensions: BodyDimensions,
     pub ground_sensing: GroundSensing,
+    /// Ships with the sensing profile: the latch is that profile's memory
+    /// between ticks, so an actor cannot have one without the other.
+    pub ground_latch: GroundLatch,
 }
 
 impl KinematicActorBundle {
@@ -53,6 +57,7 @@ impl KinematicActorBundle {
             collision_layers: CollisionLayers::new(GameLayer::Actor, LayerMask::ALL),
             dimensions,
             ground_sensing: sensing,
+            ground_latch: GroundLatch::default(),
         }
     }
 }

@@ -18,9 +18,14 @@ pub type ProposalBuffer =
 /// (`arbitration_matrix::co_proposing_motors_never_tie_on_priority_and_weight`
 /// pins it, allowing an explicit list of mutually-exclusive exceptions).
 pub mod weight {
-    /// Default: WALK beats FALL — a grounded actor prefers walking.
+    /// Default: WALK beats FALL — a grounded actor prefers walking. SLIDE sits
+    /// between them: it only proposes while the probe is touching a face too
+    /// steep to stand on, which is exactly when FALL would otherwise claim a
+    /// body that is not airborne. WALK still outranks it, so the instant the
+    /// surface passes the slope filter the body walks.
     pub const FALL: u32 = 0;
-    pub const WALK: u32 = 1;
+    pub const SLIDE: u32 = 1;
+    pub const WALK: u32 = 2;
 
     /// PlayerRequested: a climb start beats gaits and a glide hand-off
     /// (`glide` downgrades to PlayerRequested on a climbable wall exactly so
@@ -48,7 +53,8 @@ pub mod weight {
     // can co-propose. An accidental reorder fails the build, not a play test.
     const _: () = {
         // Default category.
-        assert!(WALK > FALL);
+        assert!(SLIDE > FALL);
+        assert!(WALK > SLIDE);
         // PlayerRequested category.
         assert!(SNEAK > GLIDE);
         assert!(SPRINT > SNEAK);
@@ -99,6 +105,13 @@ mod arbitration_matrix {
             name: "fall",
             state: Fall,
             emits: &[(Default, weight::FALL)],
+        },
+        // slide owns the band between them: a face the probe touches but the
+        // slope filter rejects. Same category as fall, above it in weight.
+        Motor {
+            name: "slide",
+            state: Slide,
+            emits: &[(Default, weight::SLIDE)],
         },
         Motor {
             name: "sprint",

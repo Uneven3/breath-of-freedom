@@ -28,7 +28,6 @@ const HORSE_SPAWN: Vec3 = Vec3::new(3.5, 1.55, 0.0);
 const MOUNT_RANGE: f32 = 2.5;
 pub(super) const SADDLE_OFFSET: Vec3 = Vec3::new(0.0, 1.65, 0.0);
 pub(super) const DISMOUNT_DISTANCE: f32 = 1.9;
-pub(super) const FLOOR_MIN_UP_DOT: f32 = 0.5;
 
 pub fn spawn_horse_bundle() -> impl Bundle {
     (

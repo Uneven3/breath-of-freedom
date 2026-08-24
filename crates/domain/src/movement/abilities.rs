@@ -384,3 +384,36 @@ impl WallJumpMovement {
         },
     };
 }
+
+/// Configures how a body behaves on a face too steep to walk.
+///
+/// A profile rather than three constants because the numbers are a *feel*
+/// decision the play sessions kept moving, and because a horse has no business
+/// sharing the player's grip.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct SlideMovement {
+    /// Fraction of gravity that pulls the body down the face. Small on purpose:
+    /// the wall is meant to stop you, not carry you.
+    pub gravity_factor: f32,
+    /// Terminal speed of the seep, in m/s. Below a walk, so leaving is always
+    /// faster than sliding and no route runs through here.
+    pub max_speed: f32,
+    /// How fast sideways motion across the face dies, in 1/s. Without it the
+    /// contour component survives untouched and the player strolls across a
+    /// face they are not allowed to stand on.
+    pub contour_friction: f32,
+}
+
+impl SlideMovement {
+    pub const PLAYER: Self = Self {
+        gravity_factor: 0.18,
+        max_speed: 2.0,
+        contour_friction: 6.0,
+    };
+
+    /// The horse has not been ridden down a cliff yet, so it borrows the
+    /// player's feel rather than pretending to a measured one. What it must
+    /// not do is fall back to `Fall`, which throws a body up the ramp it just
+    /// walked into.
+    pub const HORSE: Self = Self::PLAYER;
+}

@@ -15,6 +15,7 @@ pub mod glide;
 pub mod jump;
 pub mod ladder;
 pub mod mantle;
+pub mod slide;
 pub mod sneak;
 pub mod sprint;
 pub mod stairs;

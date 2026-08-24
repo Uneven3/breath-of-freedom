@@ -819,7 +819,8 @@ mod tests {
             let labelled_as_grass = knob.label().starts_with("grass-");
             let categorised_as_grass = knob.category() == PerfKnobCategory::Grass;
             assert_eq!(
-                labelled_as_grass, categorised_as_grass,
+                labelled_as_grass,
+                categorised_as_grass,
                 "{}: el nombre y la categoría no coinciden",
                 knob.label()
             );

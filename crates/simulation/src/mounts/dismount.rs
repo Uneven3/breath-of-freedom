@@ -3,9 +3,10 @@ use bevy_ecs::prelude::*;
 use bevy_math::prelude::*;
 use bevy_transform::prelude::*;
 
-use super::lifecycle::{DISMOUNT_DISTANCE, FLOOR_MIN_UP_DOT};
+use super::lifecycle::DISMOUNT_DISTANCE;
 use crate::movement::body::BodyDimensions;
 use crate::movement::link::DetachSafety;
+use crate::movement::motor_common::is_walkable_floor;
 
 #[derive(Clone, Copy)]
 pub(super) struct DismountPose {
@@ -53,7 +54,7 @@ pub(super) fn find_dismount_pose(
             ) else {
                 continue;
             };
-            if hit.normal1.y < FLOOR_MIN_UP_DOT {
+            if !is_walkable_floor(hit.normal1) {
                 continue;
             }
             let position = start - Vec3::Y * hit.distance + Vec3::Y * 0.02;

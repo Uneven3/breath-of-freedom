@@ -26,6 +26,9 @@ pub enum LocomotionState {
     Sneak,
     WallJump,
     EdgeLeap,
+    /// Touching a surface too steep to walk, without the player asking to
+    /// climb it. Not airborne — the body is on the face, sliding down it.
+    Slide,
 }
 
 impl Default for LocomotionState {
@@ -39,7 +42,7 @@ impl LocomotionState {
     /// Every variant, for exhaustive audits (see the `arbitration_matrix` tests
     /// in `proposal.rs`). The compile-time guard below fails to build if a
     /// variant is added without being listed here, so those audits can trust it.
-    pub const ALL: [LocomotionState; 13] = [
+    pub const ALL: [LocomotionState; 14] = [
         LocomotionState::Walk,
         LocomotionState::Sprint,
         LocomotionState::Fall,
@@ -53,6 +56,7 @@ impl LocomotionState {
         LocomotionState::Sneak,
         LocomotionState::WallJump,
         LocomotionState::EdgeLeap,
+        LocomotionState::Slide,
     ];
 }
 
@@ -73,7 +77,8 @@ const _: () = {
             | LocomotionState::Glide
             | LocomotionState::Sneak
             | LocomotionState::WallJump
-            | LocomotionState::EdgeLeap => {}
+            | LocomotionState::EdgeLeap
+            | LocomotionState::Slide => {}
         }
     }
     let _ = assert_all_is_exhaustive;

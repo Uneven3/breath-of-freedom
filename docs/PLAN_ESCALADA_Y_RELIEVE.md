@@ -258,7 +258,11 @@ Lo que falta, y es el trabajo real de esta fase:
 - **No copia el promedio de normales de la referencia sin filtrar.** Él promedia
   todos los hits porque sus superficies escalables son objetos separados del
   suelo; sobre terreno eso mezcla la normal de la pared con la del piso.
-- **No revierte `CELLS = 640`.** Su justificación —poder autorar una repisa de
-  vault de 0,3–1,4 m— no depende de que el terreno sea escalable.
+- ~~**No revierte `CELLS = 640`.**~~ **Enmendado el 2026-08-24: sí lo revierte,
+  a 320.** El argumento de acá era que la repisa de vault no dependía de la
+  escalada; lo que no se vio es que una cara que no se camina es geometría
+  muerta en un terreno no escalable, y que 0,3 m sobre una celda de 0,5 m son
+  31°, o sea que la repisa baja nunca fue autorable. La derivación nueva, con
+  `MIN_RADIUS` movido junto, está en `MAP_EDITOR.md`.
 - **No toca la deriva al caminar** (7,1° de desvío, 85,6% del avance), que sigue
   abierta y sin causa confirmada.

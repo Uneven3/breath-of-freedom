@@ -176,4 +176,28 @@ mod tests {
             "a drawn triangle sits {worst} m off the walkable surface"
         );
     }
+
+    /// La malla dibuja **la grilla de la simulación**, no una propia. Reportado
+    /// jugando el 2026-08-24 —"veo la misma cantidad de celdas que antes"—, que
+    /// resultó ser un binario viejo; esto lo habría contestado sin relanzar.
+    #[test]
+    fn the_drawn_grid_is_the_simulation_grid() {
+        let terrain = crate::world::Terrain::flat_for_test();
+        let cells = terrain.points() - 1;
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
+        write_terrain_mesh(&terrain, true, &mut mesh);
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the mesh must have float3 positions");
+        };
+        assert_eq!(
+            positions.len(),
+            cells * cells * 6,
+            "the drawn mesh stopped following the grid the body walks on"
+        );
+    }
 }

@@ -35,25 +35,28 @@ use bof_domain::world::WORLD_SIZE;
 ///
 /// **The number that matters is metres per cell, and it comes from the body
 /// that walks on it — not from how big the world is.** At `WORLD_SIZE / CELLS`
-/// = 0.5 m, two constraints already in this codebase are what fix it:
+/// = 1 m, three things fix it, and one of them died on 2026-08-24:
 ///
-/// - `editor::MIN_RADIUS` is 2 m, the smallest brush. A brush needs about four
-///   points across to shape anything; below that it moves one or two vertices
-///   and produces the spiky tents that ruled out `CELLS = 64`.
+/// - `editor::MIN_RADIUS` is 3 m, the smallest brush, and it was raised with
+///   this constant. A brush needs about four points across to shape anything;
+///   at 2 m it would have covered three, which is the spiky tent that ruled out
+///   `CELLS = 64`. The two constants only mean something together.
 /// - `Terrain::slope_deg_at` takes its finite difference over a fixed 0.5 m.
-///   That step has to stay at or under one cell, or the function silently stops
-///   estimating the local gradient and starts estimating a cell-to-cell
-///   difference — and it feeds grass seeding, so the change would show up as
-///   the meadow moving.
+///   Under one cell it samples inside a quad, so it reports the gradient of the
+///   triangle the foot is on instead of a cell-to-cell average — and it feeds
+///   grass seeding, so a change here shows up as the meadow moving.
+/// - **What died: authoring a vault ledge.** 0.5 m was set to sculpt relief of
+///   0.3–1.4 m, and the terrain stopped being climbable on 2026-08-23: a face
+///   the player cannot walk is dead ground here, and what needs a wall is a
+///   placed object. The low end never worked anyway — 0.3 m across a 0.5 m cell
+///   is 31°, under the walkable limit, so it was a slope you walk up.
 ///
-/// The old 2.5 m was set against a flat graybox, where nothing needed detail
-/// finer than the brush. It made a vault ledge (0.3–1.4 m of relief)
-/// impossible to author at all.
-///
-/// The cost is declared, not hidden: 819,200 triangles, unchunked and without
-/// LOD, always in frame. It has its own ceiling in `perf::budget`, out of the
-/// per-scene sum, for the same reason the meadow left it.
-const CELLS: usize = 640;
+/// The cost is declared, not hidden: 204,800 triangles and one mesh of ~32 MB
+/// that lives in VRAM *and* in RAM, unchunked and without LOD, so it is always
+/// whole in frame — see `docs/MAP_EDITOR.md` for the chunking debt. It has its
+/// own ceiling in `perf::budget`, out of the per-scene sum, for the same reason
+/// the meadow left it.
+const CELLS: usize = 320;
 
 // Each scene names its own heightmap. **That file is the level**: the editor
 // writes it and `spawn_terrain` loads it on entry, so a scene starts on the
@@ -79,7 +82,7 @@ const RELAX_PER_METRE: f32 = 6.0;
 /// the area it was meant to lift.
 const MAX_RELAX_PER_STEP: f32 = 0.3;
 
-/// World size of one value-noise cell, in metres. Bigger than the 2.5 m grid
+/// World size of one value-noise cell, in metres. Bigger than the grid
 /// spacing on purpose: per-vertex randomness reads as salt-and-pepper, while
 /// interpolating over ~12 m reads as terrain.
 const NOISE_CELL: f32 = 12.0;
@@ -837,8 +840,8 @@ mod tests {
         let mut checked = 0;
         for i in 0..60 {
             for j in 0..60 {
-                // 2.51 m step against 2.5 m cells: the sample drifts across the
-                // cell instead of landing on the same spot of every one.
+                // A step that is no multiple of the cell size: the sample drifts
+                // across the cell instead of landing on the same spot of every one.
                 let xz = Vec2::new(-75.0 + i as f32 * 2.51, -75.0 + j as f32 * 2.51);
                 let ray =
                     avian3d::parry::query::Ray::new(Vec3::new(xz.x, 500.0, xz.y), Vec3::NEG_Y);
@@ -995,8 +998,8 @@ mod tests {
         //
         // Both load paths, because `apply_ron` branches on whether the file's
         // resolution matches the current one and the real files take the branch a
-        // small hand-written fixture does not: `sandbox.ron` on disk today is
-        // `points: 129, extent: 320.0` with no `kinds`.
+        // small hand-written fixture does not: an authored level keeps the
+        // resolution it was last saved at, which need not be the current one.
         let resampled = "(\n    points: 3,\n    extent: 320.0,\n    heights: [0.0, 1.0, 2.0, \
                          3.0, 4.0, 5.0, 6.0, 7.0, 8.0],\n)\n";
         let native = format!(
@@ -1285,11 +1288,11 @@ mod tests {
 
     /// Reads the surface the way the ground probe does — off the collider, not
     /// off the grid — and reports how the authored relief is distributed across
-    /// the 60° line that separates floor from not-floor.
+    /// the 45° line that separates floor from not-floor.
     ///
     /// The number that matters is not "how steep is the canyon". It is **how
     /// often a walking body crosses that line**: a slope that is uniformly 70°
-    /// is a wall and reads as one, but walkable ground speckled with 63°
+    /// is a wall and reads as one, but walkable ground speckled with 48°
     /// triangles flips `grounded` every time a foot lands on one, which is the
     /// `Walk`↔`Fall` buzz. So the transect count below walks in a straight line
     /// at one tick's worth of distance per sample and counts sign changes.

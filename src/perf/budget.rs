@@ -40,6 +40,17 @@ impl SceneInventory {
         self.subject(subject).meshes as f32 / self.visible_meshes as f32
     }
 
+    /// Los triángulos que la escena declara, **sin el suelo**. El conteo
+    /// estático ya sacaba el terreno de la suma por escena —es la misma grilla
+    /// en las seis, y la resolución la decide la locomoción, no el contenido—,
+    /// pero el aviso en vivo lo seguía sumando: gritaba al entrar a cualquier
+    /// escena, dijera lo que dijera el contenido, que es el único caso que un
+    /// aviso no puede darse el lujo de tener. El terreno tiene su propio techo.
+    pub(crate) fn scene_triangles(&self) -> usize {
+        self.triangles
+            .saturating_sub(self.subject(Subject::Terrain).triangles)
+    }
+
     /// Y la misma pregunta en triángulos, que es la que se compara contra el
     /// presupuesto.
     pub(crate) fn triangle_share_of(&self, subject: Subject) -> f32 {
@@ -70,7 +81,7 @@ impl SceneBudgetGrade {
 }
 
 pub(crate) fn scene_budget_grade(scene: &SceneInventory) -> SceneBudgetGrade {
-    let load = (scene.triangles as f64 / MOBILE_TRIANGLES as f64)
+    let load = (scene.scene_triangles() as f64 / MOBILE_TRIANGLES as f64)
         .max(scene.draws as f64 / MOBILE_DRAWS as f64)
         .max(scene.materials as f64 / MOBILE_MATERIALS as f64);
     if load > 1.5 {
@@ -113,10 +124,11 @@ pub(crate) fn warn_scene_budget(
     let grade = scene_budget_grade(&scene);
     match budget_transition(warning.0, grade) {
         BudgetTransition::Exceeded(grade) => warn!(
-            "[budget/mobile] scene {}: tris={}/{} draws~={}/{} mats={}/{} — reduce visible detail, lots, or material variants",
+            "[budget/mobile] scene {}: tris={}/{} (+{} de terreno, fuera de la suma) draws~={}/{} mats={}/{} — reduce visible detail, lots, or material variants",
             grade.label(),
-            scene.triangles,
+            scene.scene_triangles(),
             MOBILE_TRIANGLES,
+            scene.subject(Subject::Terrain).triangles,
             scene.draws,
             MOBILE_DRAWS,
             scene.materials,
@@ -126,7 +138,7 @@ pub(crate) fn warn_scene_budget(
             info!(
                 "[budget/mobile] scene recovered to {}: tris={} draws~={} mats={}",
                 grade.label(),
-                scene.triangles,
+                scene.scene_triangles(),
                 scene.draws,
                 scene.materials,
             );
@@ -163,9 +175,9 @@ pub(crate) mod static_cost {
     }
 
     /// The ground: two triangles per grid cell, always on screen, in every
-    /// scene. At 128 cells that is a third of the whole mobile budget spent
-    /// before anything is placed on it — which is why raising `CELLS` is a
-    /// budget decision, not a quality knob.
+    /// scene. At 640 cells it was eight times the whole mobile budget spent
+    /// before anything is placed on it — which is why `CELLS` is a budget
+    /// decision, not a quality knob.
     pub(crate) fn terrain_triangles(points: usize) -> usize {
         let cells = points - 1;
         cells * cells * 2
@@ -201,12 +213,11 @@ mod tests {
     /// Y como la pradera: **el número que manda hoy no es éste.** El frame se
     /// midió *fill-bound* (`AHORA.md`), o sea que lo que se paga son los
     /// píxeles; el conteo es guardrail contra el crecimiento silencioso, no un
-    /// veto previo. La deuda queda declarada: a 640 celdas el terreno pide
-    /// 819.200 triángulos, y **no está chunkeado ni tiene LOD**, así que está
-    /// entero en frame siempre. Bajarlo es trabajo de optimización, y va después
-    /// de que la locomoción sobre relieve esté resuelta — que es para lo que la
-    /// resolución subió.
-    const TERRAIN_TRIANGLES: usize = 1_000_000;
+    /// veto previo. El techo deja 22% de aire sobre las 320 celdas de hoy: el
+    /// próximo escalón de resolución no entra sin discutirlo. Que el terreno
+    /// siga entero en frame, sin chunks ni LOD, es deuda declarada en
+    /// `docs/MAP_EDITOR.md`.
+    const TERRAIN_TRIANGLES: usize = 250_000;
 
     #[test]
     fn the_terrain_fits_its_own_budget() {

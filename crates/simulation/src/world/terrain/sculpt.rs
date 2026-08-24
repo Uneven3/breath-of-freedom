@@ -135,7 +135,7 @@ impl Terrain {
     /// keeps happening, unlike every sculpt brush.
     ///
     /// The consequence to know about: the edge of a painted patch is the cell
-    /// grid, 2.5 m at the current resolution. Fine detail is not available at
+    /// grid, one metre at the current resolution. Fine detail is not available at
     /// this resolution and pretending otherwise with a soft brush would only
     /// hide it.
     pub fn paint_area(&mut self, centre: Vec2, radius: f32, kind: TerrainKind) -> bool {
@@ -264,8 +264,8 @@ impl Terrain {
 
 /// How far the relax kernel reaches, in **metres** and not in grid steps: a
 /// radius counted in steps shrinks with the cell, so on a finer grid the same
-/// held stroke would spike where it used to dome. 2.5 m keeps today's
-/// behaviour byte-for-byte at today's spacing.
+/// held stroke would spike where it used to dome. Rounded to whole steps, so
+/// the reach lands on 3 m at a 1 m cell and on 2.5 m at a 0.5 m one.
 const RELAX_REACH_METRES: f32 = 2.5;
 /// Average of the grid points within `RELAX_REACH_METRES` of `idx`, along the
 /// four axes. Falls back to the point itself when nothing is in reach.
@@ -372,10 +372,10 @@ mod tests {
         assert!(neighbour_average(&fine, 41, 0.5, fine_neighbour) > 0.0);
     }
 
-    /// At today's spacing the metre-based kernel must be the four-neighbour
-    /// average it replaces, or every tuned brush number silently changes.
+    /// At the 2.5 m spacing it was written against, the metre-based kernel must
+    /// be the four-neighbour average it replaced, or the brush numbers moved.
     #[test]
-    fn at_todays_spacing_the_kernel_is_the_old_four_neighbour_average() {
+    fn at_two_and_a_half_metres_the_kernel_is_the_old_four_neighbour_average() {
         let grid = spiked(9);
         let centre = 9 / 2 * 9 + 9 / 2;
         // The four points around the spike each see it once out of four.

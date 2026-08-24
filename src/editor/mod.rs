@@ -36,8 +36,8 @@ use crate::world::{PropKind, TerrainAccess, TerrainKind};
 use brush::BrushKind;
 use history::SculptHistory;
 
-/// Brush radius bounds (metres) for the scroll-wheel resize.
-const MIN_RADIUS: f32 = 2.0;
+/// Brush radius bounds (metres); the floor moves with `CELLS` — see MAP_EDITOR.md.
+const MIN_RADIUS: f32 = 3.0;
 const MAX_RADIUS: f32 = 40.0;
 /// Radius change per scroll notch.
 const RADIUS_STEP: f32 = 1.5;

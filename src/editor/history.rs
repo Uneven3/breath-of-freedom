@@ -2,9 +2,9 @@
 //!
 //! Per stroke, not per frame: a two-second drag is one thing you did, so it
 //! should be one thing you can take back. The unit of history is a full
-//! [`TerrainSnapshot`] — 129² heights plus 128² kinds is 83 KB, and at
-//! [`MAX_STEPS`] that is ~2.7 MB for the whole history, which is cheaper than
-//! the bookkeeping a diff would need.
+//! [`TerrainSnapshot`], and it scales with the square of the grid: at 320 cells
+//! that is 0.5 MB a stroke and ~16 MB across [`MAX_STEPS`], still cheaper than
+//! the bookkeeping a diff would need. At 640 it was 2 MB and ~66 MB.
 //!
 //! One stack for both authoring layers, not one each. Undo means "take back the
 //! last thing I did", and a developer who paints a patch and then sculpts a hill

@@ -84,10 +84,10 @@ guardarán aparte del `TerrainFile`.
 
 | Capa | Con qué | Dónde termina el dato |
 |---|---|---|
-| **Relieve** | Siete brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`, `Acantilado`), radio con F+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 640×640 celdas (0,5 m por celda) |
+| **Relieve** | Siete brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`, `Acantilado`), radio con F+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 320×320 celdas (1 m por celda) |
 | **Semántica** | Un brush que pinta `TerrainKind` (Soil, ShortGrass, TallGrass, Rock, Sand) | `kinds: Vec<TerrainKind>` sobre las celdas, run-length en el archivo |
 | **Persistencia** | `Ctrl+S` / `Ctrl+L`, escritura atómica (temporal + `rename`) | Un `.ron` por escena (`assets/game/world/*.ron`) |
-| **Deshacer** | Una entrada por trazo, hasta 32, cubriendo las dos capas | Snapshots en memoria (~2,7 MB de historial) |
+| **Deshacer** | Una entrada por trazo, hasta 32, cubriendo las dos capas | Snapshots en memoria (~16 MB de historial) |
 | **Verificación** | `TerrainDebugView` en el hub F1: Tipo, Escalable, Inflamable, Cortable | — |
 
 Y tres propiedades del diseño que conviene nombrar porque son las que hacen que
@@ -204,14 +204,48 @@ tercera persona. Hay freecam (F3), pero es un modo aparte que el editor no
 conoce: no hay vista cenital, ni encuadre del mapa entero, ni forma de ver los
 320×320 m que se están autorando.
 
-### 6. Cada edición reconstruye el terreno entero
+### 6. Cada edición reconstruye el terreno entero, y el terreno es una sola malla
 
-Malla y collider se regeneran completos con cada trazo. **A 640 celdas ese techo
-dejó de ser teórico**: son 819.200 triángulos de malla sin indexar y un
-heightfield de 411k alturas por frame de pincel, más ~640 allocations en
-`rebuild_terrain_collider` (la deuda C1, que escaló con la grilla). Si el pincel
-se siente pesado, el chunking dejó de ser opcional — y esa es la medición que
-falta, no una sospecha.
+Malla y collider se regeneran completos con cada trazo: a 320 celdas son 204.800
+triángulos sin indexar y un heightfield de 103k alturas por frame de pincel, más
+~320 allocations en `rebuild_terrain_collider` (la deuda C1, que escala con la
+grilla). A 640 eran el cuádruple, y por eso bajar `CELLS` el 2026-08-24 fue
+también un arreglo del editor.
+
+**Pero el costo que no se arregla bajando la resolución es que el terreno es una
+única entidad.** Bevy descarta lo que la cámara no ve *por entidad*, así que con
+los 320 m en una malla, mirar al norte no ahorra un vértice del sur, y cada
+cascada de sombra los vuelve a transformar. Partirlo en parches es lo que
+habilita el descarte; el conteo de triángulos es consecuencia, no causa.
+
+**Qué trae Bevy 0.19 para esto, leído en las fuentes del registry (2026-08-24):**
+
+- **Terreno y chunking: nada.** Partir la malla y elegir el tamaño de parche lo
+  escribe uno.
+- **`VisibilityRange`** (`bevy_camera/src/visibility/range.rs`) — LOD por
+  distancia a la cámara, con margen y *dithering* para que el cambio de nivel no
+  aparezca de golpe. **No genera** las mallas de menos detalle: se proveen, y en
+  una grilla eso es tomar uno de cada N puntos. No se hereda a los hijos. **Ya se
+  usa en este proyecto** (`visuals/foliage.rs`, y `debug/collect.rs` cuenta
+  `ranged_culled`), así que el instrumental para medirlo existe.
+- **Frustum culling por entidad**: ya funciona vía `Aabb`, y `calculate_bounds`
+  reacciona a `Changed<Mesh3d>`, así que el refresco en sitio del terreno no lo
+  desincroniza. Es justamente lo que hoy no puede hacer nada por él.
+- **Meshlets** (`bevy_pbr/src/meshlet`) — LOD continuo por GPU, descartado por
+  tres razones y no sólo por móvil: sólo Vulkan y Metal, **incompatible con MSAA**
+  (que acá está en 4× en móvil y 2× en desktop), y exige preprocesar la malla,
+  que en un terreno esculpible en vivo es una contradicción.
+- **Occlusion culling GPU** (`bevy_render/src/occlusion_culling`) — aplicable,
+  porque este proyecto ya monta `DepthPrepass`; pero Bevy dice que sólo se
+  encienda si se mide una mejora, y con una sola entidad no descarta nada, igual
+  que el frustum culling.
+
+**El orden, cuando llegue el momento:** primero parches (el culling se gana
+solo), después `VisibilityRange` con dos o tres niveles por parche. Y no antes de
+que el frame deje de ser *fill-bound*: la medición del 2026-08-06 dice que hoy
+se pagan los píxeles, no los vértices, así que esto compra memoria y tiempo de
+pincel, no cuadros por segundo.
+
 ---
 
 ## Cómo se completa
@@ -355,7 +389,7 @@ Cada una costó una sesión y ninguna es obvia leyendo el código:
   mismo binario, misma simulación, sin el juego encima.
 - **Chunking del terreno.** Deferido hasta que la resolución o el tamaño del
   mundo lo exijan; hoy el rebuild completo es más simple y alcanza.
-- **Undo infinito.** 32 pasos, ~2,7 MB. Subirlo es cambiar una constante el día
+- **Undo infinito.** 32 pasos, ~16 MB (0,5 MB por trazo, y escala con `CELLS`²). Subirlo es cambiar una constante el día
   que moleste.
 
 ---
@@ -408,6 +442,30 @@ que nadie las vuelva a perseguir:
 fuerte; el espaciado es el que es, y un cambio violento sólo empina el tramo
 entre dos puntos que ya existían.
 
+
+**Y se volvió a corregir el 2026-08-24, a 1 m** (`CELLS` 640 → 320), porque la
+razón que justificaba 0,5 m se murió: el terreno dejó de ser escalable el día
+anterior, así que una cara que el jugador no puede caminar es geometría muerta
+acá, y lo que necesita pared es un objeto colocado. La repisa de vault, además,
+nunca entró del todo: 0,3 m de desnivel sobre una celda de 0,5 m son 31°, que se
+suben caminando.
+
+**La derivación que queda, y las dos constantes se mueven juntas:** `slope_deg_at`
+mide sobre un paso fijo de 0,5 m, que tiene que caber en una celda —eso pone el
+piso—, y el pincel más chico necesita ~4 puntos de ancho —eso pone el techo—.
+`brush_stroke` descarta el borde exactamente en el radio, así que a 1 m de celda
+un `MIN_RADIUS` de 2 m cubría **tres** puntos y hacía una tienda: por eso el
+mínimo subió a 3 m en el mismo cambio. Una sola de las dos constantes movida es
+la púa que ya descartó `CELLS = 64`.
+
+**Lo que se midió el 2026-08-24, antes y después, con los mismos tests:** el
+tramo empinado que produce elevar sostenido diez segundos baja de 1,53 m a 1,05 m
+a radio 6, y de 7,56 m a 2,39 m a radio 12 —o sea el pincel de todos los días
+ahora deja terreno caminable en un rango más ancho, que es lo que se quiere de
+un terreno que ya no se escala—. `carve_area` sigue dando 45 m a cualquier
+radio. Sobre `sandbox.ron` el relieve casi no se movió: de 55.696 muestras, la
+banda 30-40° pasó de 116 a 106 y la única muestra sobre 40° desapareció, así que
+los umbrales del pasto (35° y 45°) ven prácticamente lo mismo.
 **Ese espaciado se corrigió el 2026-08-23: de 2,5 m a 0,5 m** (`CELLS` 128 →
 640). El párrafo de arriba lo trataba como un techo aceptable porque 86° alcanza
 para escalar, y eso sigue siendo cierto — pero no era el único costo. A 2,5 m una
@@ -530,8 +588,8 @@ sección decía *"ninguna diferencia de altura entre puntos vecinos sobre medio
 metro"*, y estaba mal por dar por muerto todo lo empinado. **Vault y mantle
 existen**: `LedgeSensing::PLAYER` pasa caras de 0,3 a 1,4 m saltando y hasta 2,5 m
 mantleando. Una contrahuella empinada no es geometría muerta — se sube. Y la
-regla vieja habría **destruido el pincel de Terrazas**, que a 0,5 m de celda
-convierte un escalón de 2 m en una rampa de 45°.
+regla vieja habría **destruido el pincel de Terrazas**, que existe para hacer
+contrahuellas empinadas con huellas planas.
 
 Lo muerto no es lo empinado: es lo empinado **y alto**.
 

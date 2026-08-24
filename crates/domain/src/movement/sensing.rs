@@ -4,12 +4,24 @@ use bevy_ecs::prelude::Component;
 pub struct GroundSensing {
     pub probe_distance: f32,
     pub ascend_epsilon: f32,
+    /// Extra dot the floor must lose before the body is declared off it. Zero
+    /// is a single threshold, which chatters whenever the terrain hovers around
+    /// the walkable limit — measured on the sculpted canyon, 210 Slide runs of
+    /// 1 to 3 ticks in one session. Widening the band costs nothing on ground
+    /// that is clearly one thing or the other.
+    pub slope_hysteresis_dot: f32,
+    /// Ticks without valid floor the body tolerates before it counts as
+    /// airborne. Covers the probe missing between stair treads or across a
+    /// facet seam without every motor needing its own special case.
+    pub ground_grace_ticks: u8,
 }
 
 impl GroundSensing {
     pub const PLAYER: Self = Self {
         probe_distance: 0.2,
         ascend_epsilon: 0.1,
+        slope_hysteresis_dot: 0.0,
+        ground_grace_ticks: 0,
     };
 }
 

@@ -21,11 +21,37 @@ use super::stamina::Stamina;
 use super::state::LocomotionState;
 use crate::physics::GameLayer;
 
+/// The steepest slope a body can stand on, in degrees. **45°**, which is what
+/// Unity and Unreal ship as their default walkable angle.
+///
+/// It was 60° while the ground was a flat graybox, where the value never came
+/// up. On sculpted relief it did: measured on the canyon, 68% of everything
+/// past the limit sat in the 60-70° band, so the line fell right where the
+/// terrain piles up.
+pub(crate) const WALKABLE_LIMIT_DEG: f32 = 45.0;
+
 /// A surface counts as floor if its normal is within this dot of straight up.
-/// `cos(60°) = 0.5` matches `GroundService`'s `max_slope_angle_deg = 60`.
-/// Shared with `services::ground` (the downward grounded probe) as the single
-/// 60° slope source of truth.
-pub(crate) const FLOOR_MIN_UP_DOT: f32 = 0.5;
+/// The single definition of "you can stand here", shared by the grounded probe,
+/// the ledge sensor, the ground snap and the dismount search.
+///
+/// Read it through [`is_walkable_floor`], never by comparing directly: the four
+/// call sites used to spell the comparison themselves and two of them used `<`
+/// where the others used `>`, so a face at exactly the limit was neither
+/// standable nor climbable. Harmless at 60°, where nothing landed on it
+/// exactly; not at 45°, which is the value the test fixtures produce.
+pub(crate) const FLOOR_MIN_UP_DOT: f32 = 0.70710677;
+
+const _: () = {
+    // El dot y los grados son el mismo umbral escrito dos veces, y `cos` no es
+    // `const`: si alguien mueve uno sin el otro, el build lo dice.
+    let cos_of_limit = 0.70710677_f32;
+    assert!(WALKABLE_LIMIT_DEG == 45.0 && FLOOR_MIN_UP_DOT == cos_of_limit);
+};
+/// Whether a surface with this normal can be stood on.
+pub(crate) fn is_walkable_floor(normal: Vec3) -> bool {
+    normal.y >= FLOOR_MIN_UP_DOT
+}
+
 /// A surface counts as wall if it is nearly vertical (`|n.y|` small).
 const WALL_MAX_UP_DOT: f32 = 0.2;
 
@@ -159,7 +185,7 @@ pub(crate) fn snap_to_ground(
 
     // `normal1` is already in world space (avian docs) — no rotation needed.
     let normal = hit.normal1;
-    if normal.y <= FLOOR_MIN_UP_DOT {
+    if !is_walkable_floor(normal) {
         return;
     }
 

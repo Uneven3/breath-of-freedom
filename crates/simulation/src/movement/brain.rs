@@ -175,7 +175,13 @@ pub fn reset_climb_toggle(
             | LocomotionState::Stairs
             | LocomotionState::Ladder
             | LocomotionState::Glide
-            | LocomotionState::Sneak => {}
+            | LocomotionState::Sneak
+            // Slide is neutral on the latch. It used to clear it, on the theory
+            // that landing on a face means letting go of the wall — but Slide
+            // flickers on and off in 1-3 tick runs next to a climbable face,
+            // so clearing it there made the wall unclimbable exactly where the
+            // player reaches for it (measured: 63 ticks holding climb, 0 grabs).
+            | LocomotionState::Slide => {}
         }
     }
 }
@@ -381,5 +387,67 @@ mod tests {
         assert!(intents.planar.local.x < 0.0);
         // Translation is left relative to the body's facing (-Z forward → -X).
         assert!(intents.planar.direction.x < 0.0);
+    }
+
+    /// Escalar es un **toggle**, y un toggle que arranca encendido es un juego
+    /// que empieza agarrado a una pared. El default tiene que estar apagado, y
+    /// el jugador tiene que recibir ese default y no otro.
+    #[test]
+    fn climb_starts_off_and_the_player_gets_that_default() {
+        assert!(!ClimbInputState::default().0, "el latch arranca apagado");
+        let spawn = include_str!("../player/mod.rs");
+        assert!(
+            spawn.contains("ClimbInputState::default()"),
+            "el jugador tiene que recibir el default del latch, no un valor propio"
+        );
+    }
+
+    /// Corre `read_intents` un frame y devuelve el latch, con o sin la acción
+    /// de escalar disparada.
+    fn latch_after_a_frame(start: bool, toggle_pressed: bool) -> bool {
+        let mut world = World::new();
+        let mut actions = ActiveActions::default();
+        if toggle_pressed {
+            actions.trigger(LOCAL_INPUT_SOURCE, IntentAction::ClimbToggle);
+        }
+        world.insert_resource(actions);
+        let actor = world
+            .spawn((
+                Actor,
+                InputControlledBy(LOCAL_INPUT_SOURCE),
+                ControlOrientation::default(),
+                Intents::default(),
+                ClimbInputState(start),
+                InputConsumeCursor::default(),
+                FacingSource::default(),
+                Transform::default(),
+            ))
+            .id();
+        world.run_system_once(read_intents).unwrap();
+        world.entity(actor).get::<ClimbInputState>().unwrap().0
+    }
+
+    /// Y nada lo enciende sin que la acción se consuma: un frame sin input deja
+    /// el latch como estaba.
+    ///
+    /// **Es diferencial a propósito.** La versión anterior de este test escribía
+    /// `latch.0 = latch.0` y comprobaba que no había cambiado: no podía fallar,
+    /// y nunca corría `read_intents`. Un test que no puede fallar tampoco puede
+    /// avisar, así que la mitad con `toggle` es el canario — si el sistema
+    /// dejara de tocar el latch por cualquier motivo, esa mitad se cae.
+    #[test]
+    fn a_frame_without_input_never_flips_the_latch() {
+        for start in [false, true] {
+            assert_eq!(
+                latch_after_a_frame(start, false),
+                start,
+                "sin pulsar escalar el latch tiene que sobrevivir el frame"
+            );
+            assert_eq!(
+                latch_after_a_frame(start, true),
+                !start,
+                "y pulsando escalar tiene que invertirse: si no, el test de arriba pasa por ciego"
+            );
+        }
     }
 }

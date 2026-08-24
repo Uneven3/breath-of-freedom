@@ -18,7 +18,7 @@ use bevy_transform::prelude::*;
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::GroundFacts;
 use crate::movement::lod::SensingLod;
-use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
+use crate::movement::motor_common::{FLOOR_MIN_UP_DOT, is_walkable_floor};
 use crate::movement::sensing::GroundSensing;
 use crate::movement::state::LocomotionState;
 use crate::movement::{Actor, BodyVelocity};
@@ -49,6 +49,26 @@ fn is_ascending(velocity: Vec3, floor_normal: Vec3, ascend_epsilon: f32) -> bool
     velocity.y > ascend_epsilon && velocity.dot(floor_normal) > ascend_epsilon
 }
 
+/// Whether the probed face still counts as floor, given last tick's verdict.
+/// One threshold read raw chatters on ground that hovers around the limit; the
+/// exit sits `slope_hysteresis_dot` below the entry, so leaving the floor costs
+/// more than never having been on it.
+fn holds_the_floor(normal: Vec3, was_grounded: bool, sensing: &GroundSensing) -> bool {
+    if was_grounded {
+        normal.y >= FLOOR_MIN_UP_DOT - sensing.slope_hysteresis_dot
+    } else {
+        is_walkable_floor(normal)
+    }
+}
+
+/// Per-actor state the grounded decision needs from the previous tick. Lives on
+/// the entity so two actors cannot share one latch (§6).
+#[derive(Component, Default)]
+pub struct GroundLatch {
+    /// Consecutive ticks the probe has found no valid floor.
+    airborne_ticks: u8,
+}
+
 type ServiceQuery<'a> = (
     Entity,
     &'a Transform,
@@ -56,6 +76,7 @@ type ServiceQuery<'a> = (
     &'a BodyVelocity,
     &'a GroundSensing,
     &'a mut GroundFacts,
+    &'a mut GroundLatch,
     &'a LocomotionState,
     Option<&'a SensingLod>,
 );
@@ -73,7 +94,8 @@ pub fn ground_service(
     terrains: TerrainAccess,
     mut trace: ResMut<CastTrace>,
 ) {
-    for (entity, transform, collider, velocity, sensing, mut facts, state, lod) in &mut q {
+    for (entity, transform, collider, velocity, sensing, mut facts, mut latch, state, lod) in &mut q
+    {
         if SensingLod::skips(lod) {
             continue;
         }
@@ -97,19 +119,29 @@ pub fn ground_service(
             hit.map(|h| (h.point1, h.normal1)),
         );
 
-        // A hit counts as floor only if its normal is within the 60° slope limit.
+        // A hit counts as floor only if it passes the slope limit, and staying
+        // on it is easier than getting on it (see `holds_the_floor`).
         // `normal1` is already in world space (avian docs) — no rotation needed.
         let floor_normal = hit.and_then(|hit| {
             let normal = hit.normal1;
-            (normal.y > FLOOR_MIN_UP_DOT).then_some(normal)
+            holds_the_floor(normal, facts.grounded, sensing).then_some(normal)
         });
 
         // Irrelevant when `floor_normal` is `None` (`grounded` is false either way
         // via the `&&` below), so the `Vec3::Y` fallback here is just "some finite
         // value".
         let normal = floor_normal.unwrap_or(Vec3::Y);
-        facts.grounded =
+        let has_floor_now =
             floor_normal.is_some() && !is_ascending(velocity.0, normal, sensing.ascend_epsilon);
+        // The probe misses for a tick or two all the time — between stair
+        // treads, across a facet seam, off the lip of a slope. It does **not**
+        // replace the Stairs hold below, which lasts as long as the state does.
+        if has_floor_now {
+            latch.airborne_ticks = 0;
+        } else {
+            latch.airborne_ticks = latch.airborne_ticks.saturating_add(1);
+        }
+        facts.grounded = has_floor_now || latch.airborne_ticks <= sensing.ground_grace_ticks;
         facts.floor_normal = normal;
         // The surface the probe stands on, for presentation (footstep audio).
         //
@@ -132,6 +164,8 @@ pub fn ground_service(
         // Diagnostic decomposition for the debug HUD/logs.
         facts.probe_hit = hit.is_some();
         facts.slope_ok = floor_normal.is_some();
+        facts.floor_gap = hit.map(|h| h.distance).unwrap_or_default();
+        facts.probe_normal = hit.map(|h| h.normal1).unwrap_or(Vec3::Y);
         facts.ascend_dot = if floor_normal.is_some() {
             velocity.0.dot(normal)
         } else {
@@ -153,6 +187,7 @@ mod tests {
     //! The velocity/normal pairs come from real play-session logs (2026-07-13):
     //! the slope-flicker regressions this check used to cause.
     use super::*;
+    use crate::movement::motor_common::WALKABLE_LIMIT_DEG;
 
     #[test]
     fn ground_probe_sees_world_but_not_actor_bodies() {
@@ -224,6 +259,87 @@ mod tests {
             GroundSensing::PLAYER.ascend_epsilon,
         ));
     }
+
+    /// The face measured on the played canyon (2026-08-23): 62.9°, just past
+    /// the 60° limit, and the one behind 100 of 102 `grounded` flips.
+    /// A face at `degrees` from horizontal, leaning back the way terrain does.
+    fn face_at(degrees: f32) -> Vec3 {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Vec3::new(-sin, cos, 0.0)
+    }
+
+    fn measured_canyon_face() -> Vec3 {
+        Vec3::new(-0.74, 0.456, -0.49).normalize()
+    }
+
+    fn with_hysteresis(dot: f32) -> GroundSensing {
+        GroundSensing {
+            slope_hysteresis_dot: dot,
+            ..GroundSensing::PLAYER
+        }
+    }
+
+    #[test]
+    fn without_hysteresis_the_threshold_is_the_same_in_both_directions() {
+        let sensing = GroundSensing::PLAYER;
+        assert_eq!(
+            sensing.slope_hysteresis_dot, 0.0,
+            "hoy el default es inerte"
+        );
+        let face = measured_canyon_face();
+        assert_eq!(
+            holds_the_floor(face, true, &sensing),
+            holds_the_floor(face, false, &sensing)
+        );
+    }
+
+    /// A band wide enough to cover a face just past the limit stops the
+    /// chatter: once the body is on it, it stays. The face is built **from the
+    /// threshold**, so this keeps testing the band and not a particular angle.
+    #[test]
+    fn hysteresis_keeps_a_body_on_the_face_it_was_already_standing_on() {
+        let just_past = face_at(WALKABLE_LIMIT_DEG + 2.0);
+        let sensing = with_hysteresis(0.06);
+        assert!(
+            !holds_the_floor(just_past, false, &sensing),
+            "sigue sin ser piso al que subirse"
+        );
+        assert!(
+            holds_the_floor(just_past, true, &sensing),
+            "pero si ya estaba parado ahí, no se lo tira"
+        );
+    }
+    #[test]
+    fn hysteresis_never_makes_a_wall_walkable() {
+        // Una cara de 80°: ninguna banda razonable debe recuperarla.
+        let wall = Vec3::new(-0.985, 0.174, 0.0).normalize();
+        assert!(!holds_the_floor(wall, true, &with_hysteresis(0.06)));
+    }
+
+    #[test]
+    fn flat_ground_is_floor_from_either_direction() {
+        for was_grounded in [true, false] {
+            assert!(holds_the_floor(
+                Vec3::Y,
+                was_grounded,
+                &GroundSensing::PLAYER
+            ));
+        }
+    }
+
+    /// The limit itself counts as floor. The four call sites used to spell the
+    /// comparison themselves and disagreed on `>` vs `<`, so a face at exactly
+    /// the limit was neither standable nor climbable.
+    #[test]
+    fn a_face_exactly_at_the_limit_is_floor() {
+        let at_limit = Vec3::new(
+            0.0,
+            FLOOR_MIN_UP_DOT,
+            (1.0 - FLOOR_MIN_UP_DOT * FLOOR_MIN_UP_DOT).sqrt(),
+        );
+        assert!(is_walkable_floor(at_limit));
+        assert!(holds_the_floor(at_limit, false, &GroundSensing::PLAYER));
+    }
 }
 
 /// Actors under their own locomotion — mounted riders are placed by their mount,
@@ -273,6 +389,7 @@ pub fn lift_actors_out_of_terrain(terrain: TerrainAccess, mut actors: WalkingAct
 #[cfg(test)]
 mod terrain_clearance_tests {
     use super::*;
+    use crate::movement::motor_common::WALKABLE_LIMIT_DEG;
     use bevy_app::{App, Update};
 
     use crate::movement::attachment::LocomotionEnabled;

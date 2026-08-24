@@ -6,6 +6,92 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 Números crudos de rendimiento, repetidos y con su contexto exacto, en
 `GRASS_PERF_DATA.md` — no remedir lo que ya está ahí.
 
+## Lo próximo, pedido el 2026-08-24 viendo el acantilado
+
+*"Quiero ser capaz de hacer eso en el editor"* — hoy la meseta la esculpe una
+herramienta que se corre a mano (`world::plateau`) y la roca vive en una tabla.
+Autorarlo con el mouse pide tres cosas, en este orden:
+
+1. **Collider en las instancias del editor.** Es el bloqueo viejo:
+   `visuals/instances.rs` es sólo visual y §20 impide que presentación arme
+   colliders; el dueño sería `src/world/`. Sin esto, colocar una roca no da nada
+   que escalar.
+2. **Aplanar la huella al colocar** (`flatten_area`), que es el punto 3 de la
+   agenda del 2026-08-23 y sigue pendiente.
+3. **Un pincel de meseta**, o al menos que Aplanar acepte una altura objetivo
+   tomada del terreno con un click — que es lo que `author_plateau` hace a mano.
+
+Lo que **no** hay que hacer: que un sistema esculpa al entrar a la escena. El
+`.ron` es el nivel y eso lo pisaría.
+
+## 2026-08-24 — la celda pasa a 1 m, y el pincel mínimo con ella
+
+**`CELLS` 640 → 320.** Es el punto 4 de la agenda de ayer, y se hizo primero
+porque el acantilado se construye encima: al revés, el remuestreo del archivo
+habría suavizado el relieve de aproximación recién autorado.
+
+**La derivación, que es lo que sobrevive al número:** el piso lo pone
+`slope_deg_at`, que mide sobre un paso fijo de 0,5 m y necesita que quepa en una
+celda; el techo lo pone el pincel más chico, que necesita ~4 puntos de ancho.
+`brush_stroke` descarta el borde exactamente en el radio, así que a 1 m de celda
+`MIN_RADIUS = 2 m` cubría **tres** puntos y hacía una tienda — la misma púa por
+la que se descartó `CELLS = 64`. Por eso **`MIN_RADIUS` subió a 3 m en el mismo
+cambio**: movida una sola de las dos constantes, la grilla nueva rompía el pincel.
+Eso no estaba en el plan y lo encontró la crítica antes de ejecutarlo.
+
+**Y la razón por la que 0,5 m existía ya no existe.** Se subió para poder
+esculpir una repisa de vault de 0,3–1,4 m; ayer el terreno dejó de ser escalable,
+así que una cara que no se camina es geometría muerta acá. Además el extremo bajo
+nunca fue autorable: 0,3 m sobre una celda de 0,5 m son 31°, y eso se sube
+caminando.
+
+**Medido, antes y después, con los mismos tests (67 en verde en las dos
+corridas):**
+
+| | 640 (0,5 m) | 320 (1 m) |
+| --- | --- | --- |
+| elevar 10 s, radio 6 | 1,53 m | 1,05 m |
+| elevar 10 s, radio 12 | 7,56 m (MURO) | **2,39 m (se cruza)** |
+| elevar 10 s, radio 40 | 21,37 m | 12,93 m |
+| `carve_area`, cualquier radio | 45 m | 45 m |
+| `sandbox.ron`, banda 30-40° | 116 muestras | 106 |
+| `sandbox.ron`, sobre 40° | 1 muestra | 0 |
+| los tests del crate | 4,99 s | 1,07 s |
+
+Lo que dice esa tabla: la grilla gruesa **empuja sola hacia terreno caminable**,
+que es lo que se quiere de un terreno que ya no se escala. Y el pasto no se
+mueve: los umbrales de siembra son 35° y 45°, y de 55.696 muestras sólo el 0,19%
+llega a esa zona.
+
+**Lo que este cambio NO compra, dicho antes de que alguien lo mida esperándolo:**
+cuadros por segundo. El frame está declarado *fill-bound* desde el 2026-08-06 —se
+pagan los píxeles, no los vértices—. Compra 614.400 triángulos menos, una malla
+de ~32 MB en vez de ~128 (y vive **duplicada**, en VRAM y en RAM, porque se crea
+con `RenderAssetUsages::default()`), ~16 MB de historial de undo en vez de ~66, y
+un cuarto del trabajo por frame de pincel. El aviso en vivo de presupuesto sigue
+gritando: cuenta el terreno contra `MOBILE_TRIANGLES` (100.000) y 204.800 lo
+excede igual.
+
+**Números viejos corregidos de paso, varios de los cuales ya mentían desde la
+grilla de 2,5 m:** el tamaño del historial en `editor/history.rs` (decía 83 KB
+por trazo y ~2,7 MB en total; eran 2 MB y ~66 MB), el techo del terreno en
+`perf/budget.rs` (1.000.000 → 250.000, que deja 22% de aire), el borde de una
+pincelada de pintura, `NOISE_CELL`, el paso del barrido del collider, la
+resolución de `sandbox.ron` citada en un test, el ángulo del reporte de
+pendientes (decía 60°, el límite es 45° desde ayer) y el nombre del test del
+kernel de relajación, que decía "at today's spacing" y probaba 2,5 m.
+
+**La deuda de chunking + LOD quedó escrita en `MAP_EDITOR.md`**, con lo que Bevy
+0.19 realmente trae: nada de terreno ni chunking, `VisibilityRange` para el LOD
+por distancia (que este proyecto ya usa en el follaje), frustum culling que hoy
+no puede hacer nada porque el terreno es **una sola entidad**, y meshlets
+descartados —sólo Vulkan y Metal, incompatibles con MSAA, y exigen preprocesar
+una malla que acá se esculpe en vivo—.
+
+**Falta jugarlo.** Ningún número de acá reemplaza caminar la misma ladera y decir
+si el pincel se siente peor.
+
+
 ## Próxima sesión — la agenda, elegida por el usuario el 2026-08-23
 
 Cerró la sesión con *"siento que los motores están bien, hay que calibrarlos
@@ -26,7 +112,8 @@ afinarlo y construir el primer acantilado de verdad.
    que el editor aplane su huella con `flatten_area`. Es la versión barata de lo
    que los motores grandes llaman *landscape blending*, y evita el defecto que
    más delata un prop puesto a mano — la roca flotando sobre una loma.
-4. **Quizás bajar `CELLS`**, ya que el terreno dejó de usarse para escalar.
+4. ~~**Quizás bajar `CELLS`**~~ — **hecho el 2026-08-24**, a 320 (celda de 1 m),
+   con `MIN_RADIUS` movido a 3 m en el mismo cambio. Ver la entrada de ese día.
 
 **Sobre el punto 4, antes de que alguien lo dé por fácil:** la justificación de
 `CELLS = 640` **no era la escalada**. Está escrita en `terrain/mod.rs` y sale de
@@ -129,17 +216,17 @@ metros; a 2,5 m es idéntico al anterior, y hay un test que lo fija.
 
 **`CELLS` 128 → 640 (celda de 0,5 m), y el criterio quedó escrito.** El número no
 sale del tamaño del mundo sino del cuerpo y de dos constantes que ya existían:
-`editor::MIN_RADIUS` es 2 m y un pincel necesita ~4 puntos de ancho para modelar
-algo; y `slope_deg_at` toma su diferencia sobre 0,5 m fijos, que tiene que quedar
-dentro de una celda o la función cambia de estimador en silencio —y alimenta la
-siembra de pasto—. A 2,5 m una repisa de vault (0,3–1,4 m) era **inesculpible**.
+`editor::MIN_RADIUS` y el paso fijo de 0,5 m de `slope_deg_at`. La razón que se
+dio —poder esculpir una repisa de vault de 0,3–1,4 m— **duró un día**: el
+2026-08-24 volvió a 320. Ver la entrada de ese día.
 
 **El presupuesto pasó a la unidad correcta, con el precedente de la pradera.** El
 terreno salió de la suma por escena: no es algo que un nivel declare —es la misma
 grilla en las seis escenas, y su resolución la decide la locomoción, no el
 contenido—, así que sumarlo hacía leer "seis escenas excedidas" cuando lo que
 cambió fue una constante compartida. Tiene su techo propio y **la deuda queda
-declarada**: 819.200 triángulos, sin chunkear y sin LOD, siempre en frame.
+declarada**: 819.200 triángulos, sin chunkear y sin LOD, siempre en frame. (A
+320 celdas son 204.800, y la deuda de chunking se mudó a `MAP_EDITOR.md`.)
 
 **`Slide` dejó de girar el cuerpo.** Al entrar rotaba al jugador para mirar
 cuesta abajo, lo que al rozar una cara empinada lo arrancaba de su dirección de

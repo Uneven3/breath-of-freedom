@@ -12,8 +12,13 @@ use bevy::prelude::*;
 
 pub mod crags;
 pub mod day_night;
+pub mod debris;
 pub mod forest;
 pub mod layout;
+// Herramienta de autoría: esculpe la meseta y reescribe el nivel en disco. No
+// es código de juego —el `.ron` es el nivel— así que vive con los tests.
+#[cfg(test)]
+pub mod plateau;
 mod spawn;
 
 pub use forest::TreeKind;
@@ -62,6 +67,7 @@ impl Plugin for WorldPlugin {
                     layout::setup_pickups.run_if(crate::scene::scene_has(|c| c.pickups)),
                     layout::setup_forest.run_if(crate::scene::scene_has(|c| c.forest)),
                     crags::setup_crags.run_if(crate::scene::scene_has(|c| c.crags)),
+                    debris::setup_debris.run_if(crate::scene::scene_has(|c| c.crags)),
                 )
                     // `Actors`, not `Ground`: every one of these reads the
                     // terrain to sit on it, and in `Ground` the terrain is a

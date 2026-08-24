@@ -29,16 +29,27 @@ const CRAG_MATERIAL: &str = "GrayboxProp";
 
 /// Subdivisiones del icosaedro base. Cada una cuadruplica los triángulos, así
 /// que 3 son 1.280 por peñasco: bastante para que la silueta tenga rasgos, poco
-/// para que la dirección low-poly siga leyéndose como facetas.
+/// para que la dirección low-poly siga leyéndose como facetas. Es el valor de
+/// las piezas de prueba; el acantilado pide una más porque es cuatro veces más
+/// largo y con ésta se le verían los triángulos.
 const SUBDIVISIONS: u32 = 3;
+
 #[cfg(test)]
-const TRIANGLES_PER_CRAG: usize = 20 * 4_usize.pow(SUBDIVISIONS);
+fn triangles_for(subdivisions: u32) -> usize {
+    20 * 4_usize.pow(subdivisions)
+}
 
 /// Una pieza escalable del curso de prueba.
+#[derive(Clone, Copy)]
 struct CragRow {
     name: &'static str,
-    /// Centro, con la `y` medida desde el suelo.
+    /// Centro. Cómo se lee su `y` lo dice `anchor`.
     pos: Vec3,
+    /// Las piezas de prueba se asientan sobre el suelo; el acantilado **no**.
+    /// Mide 18 m de frente sobre relieve que sube, y `Anchor::Ground` muestrea
+    /// un solo punto: entierra una punta y hace flotar la otra. Su altura se
+    /// declara, y sale de la mesa que tiene que coronar.
+    anchor: Anchor,
     /// Semiejes en metros: es lo que separa una roca de una pared.
     radii: Vec3,
     /// Cuánto sobresalen los bultos, **en metros y no como fracción del radio**.
@@ -50,6 +61,19 @@ struct CragRow {
     /// que agrega no depende del tamaño.
     bump_metres: f32,
     seed: u32,
+    /// Cuántas veces se subdivide el icosaedro base. Por fila y no global: la
+    /// densidad que hace ver a una roca de 3 m facetada deja al acantilado de
+    /// 18 m con triángulos del tamaño del cuerpo del jugador.
+    subdivisions: u32,
+    /// Qué fracción del semieje vertical mide la cúpula de arriba.
+    ///
+    /// **Es lo que separa una roca de un acantilado, y sin esto no había forma
+    /// de autorar el segundo.** `column` deja la mitad de abajo vertical y la de
+    /// arriba como cúpula, las dos de `radii.y`; como la pieza además se
+    /// entierra, la cúpula siempre le ganaba a la pared visible y toda pieza
+    /// grande salía con forma de papa. Aplastando la cúpula, la pared es la que
+    /// manda y arriba queda una repisa más plana, que el mantle agradece.
+    cap_share: f32,
 }
 
 /// Cada cuántos metros se repite un bulto. Junto con `bump_metres` fija la
@@ -67,6 +91,9 @@ const CRAGS: &[CragRow] = &[
         radii: Vec3::new(1.8, 1.4, 1.6),
         bump_metres: 0.45,
         seed: 0x51ed_0001,
+        subdivisions: SUBDIVISIONS,
+        cap_share: 1.0,
+        anchor: Anchor::Ground,
     },
     CragRow {
         name: "Pared",
@@ -74,6 +101,9 @@ const CRAGS: &[CragRow] = &[
         radii: Vec3::new(4.5, 3.8, 1.6),
         bump_metres: 0.55,
         seed: 0x51ed_0002,
+        subdivisions: SUBDIVISIONS,
+        cap_share: 1.0,
+        anchor: Anchor::Ground,
     },
     CragRow {
         name: "Acantilado",
@@ -81,15 +111,79 @@ const CRAGS: &[CragRow] = &[
         radii: Vec3::new(7.0, 6.8, 3.4),
         bump_metres: 0.7,
         seed: 0x51ed_0003,
+        subdivisions: SUBDIVISIONS,
+        cap_share: 1.0,
+        anchor: Anchor::Ground,
     },
+    CRAG_CLIFF,
 ];
+
+/// **El primer acantilado de verdad**, y es una sola pieza a propósito.
+///
+/// La versión que este archivo estuvo a punto de tener eran cuatro piezas
+/// solapadas, que es como se arma un acantilado con un catálogo de rocas. Acá
+/// no sirve, y la razón es del motor y no estética: cada costura entre dos
+/// elipsoides es un salto de la normal de la cara, medido entre 32° y 64°, y
+/// `motors::climb` filtra la normal con una constante calibrada contra una
+/// perturbación de **7°**. Escalar cruzando una costura sacudiría al cuerpo
+/// durante un cuarto de segundo — que es, palabra por palabra, uno de los dos
+/// defectos que él reportó jugando. Una pieza sola no tiene costuras.
+///
+/// La variedad de silueta la dan `seed` y `bump_metres`, que existen para eso,
+/// y una subdivisión más para que a 18 m de largo no se le vean las facetas.
+const CRAG_CLIFF: CragRow = CragRow {
+    name: "Acantilado del sur",
+    // Al sur del curso: el rincón libre más grande que queda entre las cajas de
+    // `layout` (z de -10 a +10) y las tres piezas de prueba (z de 12 a 16).
+    // `no_two_crags_overlap` cubre lo primero desde que esta fila está en la
+    // tabla; contra `layout` no hay test, y por eso el lugar se eligió mirando.
+    pos: Vec3::new(0.0, CLIFF_TOP - CLIFF_RADII.y * CLIFF_CAP_SHARE, -26.0),
+    radii: CLIFF_RADII,
+    bump_metres: 0.7,
+    seed: 0x51ed_0004,
+    subdivisions: SUBDIVISIONS + 1,
+    cap_share: CLIFF_CAP_SHARE,
+    anchor: Anchor::World,
+};
+
+/// Semiejes del acantilado: 18 m de frente y 6 de fondo. Los 13 de alto son el
+/// **largo de la columna**, no la altura de la pieza: sobre el llano deja 12 m
+/// de pared y entierra 3, y sobre el relieve de Terreno —que ya estaba a 4 o 5
+/// m— deja unos 8 y entierra el resto. Encima van 2,6 m de cúpula aplastada.
+const CLIFF_RADII: Vec3 = Vec3::new(9.0, 13.0, 3.0);
+
+/// Dónde corona el acantilado, en altura absoluta.
+///
+/// **Es la altura de la mesa que tapa** (`world::plateau`), más un margen: el
+/// que mantlea tiene que quedar parado sobre terreno, no sobre el aire de al
+/// lado. Enterrar el resto no es un truco de arte — evita la línea de contacto
+/// perfecta que el ojo lee como "objeto apoyado", el hueco que abre el LOD del
+/// terreno bajo una pieza apoyada, y tener que reasentarla al esculpir cerca.
+/// Detalle y medidas en `docs/CLIFFS.md`.
+const CLIFF_TOP: f32 = 12.4;
+/// Cuánto de la altura de la pieza es cúpula. Ver `CragRow::cap_share`.
+const CLIFF_CAP_SHARE: f32 = 0.2;
 
 /// Lo que el curso declara al presupuesto de triángulos, que es un guardarraíl
 /// de test: el contador de runtime califica lo que la cámara ve, no lo que la
 /// escena contiene.
 #[cfg(test)]
 pub(crate) fn triangle_count() -> usize {
-    CRAGS.len() * TRIANGLES_PER_CRAG
+    CRAGS
+        .iter()
+        .map(|row| triangles_for(row.subdivisions))
+        .sum::<usize>()
+        + super::debris::triangle_count()
+}
+
+/// Dónde toca cada peñasco el suelo: centro y semiejes horizontales. Es lo que
+/// el escombro necesita para caer sobre la línea de contacto y no sobre un
+/// círculo inventado — la huella de una elipse cambia con el azimut, y un radio
+/// fijo dejaría piedras flotando de un lado y enterradas del otro.
+pub(super) fn footprints() -> impl Iterator<Item = (Vec3, Vec2, u32)> {
+    CRAGS
+        .iter()
+        .map(|row| (row.pos, Vec2::new(row.radii.x, row.radii.z), row.seed))
 }
 
 pub(super) fn setup_crags(
@@ -102,7 +196,7 @@ pub(super) fn setup_crags(
     let scene = *state.get();
     let ground = Some(&ground);
     for row in CRAGS {
-        let mesh = crag_mesh(row.radii, row.bump_metres, row.seed);
+        let mesh = crag_mesh(row);
         let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
             warn!("[world] {} no produjo collider; se omite", row.name);
             continue;
@@ -112,11 +206,26 @@ pub(super) fn setup_crags(
             Name::new(row.name),
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(palette.handle(CRAG_MATERIAL)),
-            Transform::from_translation(settle(row.pos, Anchor::Ground, ground)),
+            Transform::from_translation(settle(row.pos, row.anchor, ground)),
             RigidBody::Static,
             collider,
         ));
     }
+}
+
+/// Una piedra suelta: la misma geometría, redonda y barata. Vive acá porque la
+/// forma de un peñasco la decide este módulo, y `debris` sólo la reparte.
+pub(super) fn small_stone_mesh(radius: f32, seed: u32) -> Mesh {
+    crag_mesh(&CragRow {
+        name: "Piedra",
+        pos: Vec3::ZERO,
+        radii: Vec3::splat(radius),
+        bump_metres: radius * 0.35,
+        seed,
+        subdivisions: 1,
+        cap_share: 1.0,
+        anchor: Anchor::Ground,
+    })
 }
 
 /// Una elipsoide facetada y abollada, con normales planas.
@@ -124,12 +233,28 @@ pub(super) fn setup_crags(
 /// Las normales planas no son sólo dirección artística: le dan al sensor una
 /// normal distinta por triángulo, que es el caso difícil de verdad — con
 /// normales suavizadas la superficie miente y se comporta mejor de lo que es.
-fn crag_mesh(radii: Vec3, bump_metres: f32, seed: u32) -> Mesh {
-    let (directions, indices) = icosphere(SUBDIVISIONS);
+pub(super) fn crag_mesh(row: &CragRow) -> Mesh {
+    let CragRow {
+        radii,
+        bump_metres,
+        seed,
+        subdivisions,
+        cap_share,
+        ..
+    } = *row;
+    let (directions, indices) = icosphere(subdivisions);
     let positions: Vec<Vec3> = directions
         .iter()
         .map(|dir| {
-            let surface = column(*dir) * radii;
+            // La cúpula se aplasta después de la columna y antes del bulto: es
+            // altura, no forma, y el desorden tiene que seguir la superficie ya
+            // proporcionada o la pared se recuesta.
+            let column = column(*dir) * radii;
+            let surface = if dir.y > 0.0 {
+                Vec3::new(column.x, column.y * cap_share, column.z)
+            } else {
+                column
+            };
             // El bulto empuja **hacia afuera en horizontal** mientras la
             // superficie es columna, y sólo se vuelve radial en la cúpula. Un
             // empujón radial en la parte vertical movería también la altura, y
@@ -315,7 +440,7 @@ mod tests {
     fn the_grabbing_band_is_mostly_wall_with_some_overhang() {
         println!("\n[crags] caras en la banda de agarre (0,5–2,0 m sobre la base)");
         for row in CRAGS {
-            let mesh = crag_mesh(row.radii, row.bump_metres, row.seed);
+            let mesh = crag_mesh(row);
             // Desde la **línea del suelo**, no desde el fondo de la malla: el
             // peñasco está hundido, y medir desde su punto más bajo era medir
             // geometría enterrada — la primera versión de este reporte daba
@@ -398,9 +523,15 @@ mod tests {
 
     #[test]
     fn the_declared_triangle_count_matches_the_mesh() {
-        let mesh = crag_mesh(Vec3::ONE, 0.3, 1);
-        let vertices = mesh.count_vertices();
-        assert_eq!(vertices, TRIANGLES_PER_CRAG * 3, "el presupuesto mentiría");
+        for row in CRAGS {
+            let mesh = crag_mesh(row);
+            assert_eq!(
+                mesh.count_vertices(),
+                triangles_for(row.subdivisions) * 3,
+                "{}: el presupuesto mentiría",
+                row.name
+            );
+        }
     }
 
     fn vertices_of(mesh: &Mesh) -> Vec<Vec3> {
@@ -417,10 +548,13 @@ mod tests {
     /// `bump_metres`, y alguno se aparta de verdad.
     #[test]
     fn the_bump_is_measured_in_metres_and_actually_lands() {
-        let radii = Vec3::new(4.5, 3.8, 1.6);
-        let bump = 0.55;
-        let bumpy = vertices_of(&crag_mesh(radii, bump, 0x51ed_0002));
-        let smooth = vertices_of(&crag_mesh(radii, 0.0, 0x51ed_0002));
+        let row = CRAGS[1];
+        let bump = row.bump_metres;
+        let bumpy = vertices_of(&crag_mesh(&row));
+        let smooth = vertices_of(&crag_mesh(&CragRow {
+            bump_metres: 0.0,
+            ..row
+        }));
         let offsets: Vec<f32> = bumpy
             .iter()
             .zip(&smooth)
@@ -442,7 +576,7 @@ mod tests {
     #[test]
     fn every_crag_produces_a_collider() {
         for row in CRAGS {
-            let mesh = crag_mesh(row.radii, row.bump_metres, row.seed);
+            let mesh = crag_mesh(row);
             assert!(
                 Collider::trimesh_from_mesh(&mesh).is_some(),
                 "{} no produjo collider",

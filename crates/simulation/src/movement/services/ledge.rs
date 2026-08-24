@@ -15,12 +15,23 @@ use crate::movement::body::BodyDimensions;
 use crate::movement::diag::CastTrace;
 use crate::movement::facts::LedgeFacts;
 use crate::movement::lod::SensingLod;
-use crate::movement::motor_common::FLOOR_MIN_UP_DOT;
+use crate::movement::motor_common::is_walkable_floor;
 use crate::movement::sensing::{LedgeCastShape, LedgeSensing};
 use crate::movement::state::LocomotionState;
 use crate::world::{GameLayer, NonClimbable};
 
 const MIN_DIR_SQ: f32 = 0.001;
+const WAIST_SAMPLE: usize = 2;
+const HEAD_SAMPLE: usize = 5;
+/// Los bits 0..5 de `climb_cast_hits` son los seis samples de perfil; éste dice
+/// que la cara se encontró **sólo** con el sondeo contra la cara, que es
+/// justamente lo que hay que poder distinguir al leer un tick que falló.
+const FACE_PROBE_HIT_BIT: u8 = 1 << 6;
+/// Por debajo de esto la cara es techo. No es cero porque `90f32.to_radians()`
+/// pasa π/2 y deja `cos` en el orden de −1e-7: una pared vertical exacta caería
+/// del lado equivocado de la comparación.
+const CEILING_NORMAL_Y: f32 = -1e-3;
+
 /// Debug labels for the profiling casts, index-aligned with
 /// `LedgeSensing::height_samples`.
 const H_CAST_LABELS: [&str; 6] = [
@@ -221,8 +232,16 @@ fn sense_ledges(
     }
 
     // --- Climb detection ---
+    facts.climb_cast_hits = hits
+        .iter()
+        .enumerate()
+        .filter_map(|(i, hit)| hit.map(|_| 1u8 << i))
+        .sum();
     let knee_hit = hits[1].is_some();
-    let head_hit = hits[5].is_some();
+    // Se queda con el cast de perfil crudo: `climb.rs` lo usa como veto de
+    // ápice (`near_apex`), no como señal de escalada, y ensancharlo ahí soltaría
+    // la escalada justo al coronar.
+    let head_hit = hits[HEAD_SAMPLE].is_some();
     facts.has_head_hit = head_hit;
 
     // Seguir escalando acepta **cualquier** cast del torso, no sólo la cintura.
@@ -244,13 +263,18 @@ fn sense_ledges(
             update_lateral_walls(spatial, &filter, facts, &actor, torso.normal, trace);
         }
     }
-    if let Some(waist) = hits[2]
+    if let Some(waist) = hits[WAIST_SAMPLE]
         && non_climbable.get(waist.entity).is_err()
         && faces_the_wall(facing, waist.normal, &sensing)
         && knee_hit
-        && (head_hit || leans_back_out_of_reach(waist.normal, facts))
     {
-        facts.can_climb = true;
+        facts.can_climb = head_hit || {
+            let found = probe_face_overhead(spatial, &filter, &actor, &waist, trace);
+            if found {
+                facts.climb_cast_hits |= FACE_PROBE_HIT_BIT;
+            }
+            found
+        };
     }
 
     // --- Lip height ---
@@ -261,15 +285,14 @@ fn sense_ledges(
 
 /// Un borde sólo cuenta como vault o mantle si su superficie **se puede
 /// pisar**. Es la misma frontera que separa caminar de caer
-/// ([`FLOOR_MIN_UP_DOT`]), escrita una sola vez.
+/// ([`is_walkable_floor`]), escrita una sola vez.
 ///
 /// Sobre una ladera continua el down-cast devuelve la propia cara, no un
 /// techo: medido el 2026-08-23 sobre una de 74°, daba una "repisa" a 0,93 m de
-/// los pies con la normal de la pared. Eso encendía `is_vaultable`, que a su
-/// vez veta la escalada en [`leans_back_out_of_reach`], y dejaba al actor sin
-/// caminar, sin escalar y sin nada que saltar.
+/// los pies con la normal de la pared. Eso encendía `is_vaultable`, y el motor
+/// de vault se comía una pared entera creyéndola bordillo.
 fn is_standable(normal: Vec3) -> bool {
-    normal.y > FLOOR_MIN_UP_DOT
+    is_walkable_floor(normal)
 }
 
 /// ¿El actor mira la pared? **Sólo guiñada**, con la normal aplanada al plano
@@ -289,23 +312,73 @@ fn faces_the_wall(facing: Vec3, normal: Vec3, sensing: &LedgeSensing) -> bool {
     facing.angle_between(*into_wall).to_degrees() <= sensing.climb_wall_angle_max_deg
 }
 
-/// La cara se inclina hacia atrás lo suficiente como para que el cast de la
-/// cabeza no pueda alcanzarla, y no es un obstáculo bajo.
+/// ¿La cara sigue existiendo a la altura de la cabeza?
 ///
-/// Los seis casts salen del eje del cuerpo con alcance fijo, así que en una
-/// cara inclinada la superficie se aleja `Δaltura / tan(θ)` y el de la cabeza
-/// falla: medido el 2026-08-22, el umbral efectivo para `head_hit` es ~77°
-/// aunque la configuración declare 60. Sin esto, todo el terreno esculpido —que
-/// llega a 67-81°— quedaba imposible de escalar aunque también fuera imposible
-/// de caminar.
+/// Los seis casts de perfil salen del **mismo eje vertical** con alcance fijo,
+/// así que en una cara reclinada la superficie se aleja `Δaltura / tan(θ)` y el
+/// de la cabeza no llega: medido el 2026-08-22, el umbral efectivo era ~77°
+/// aunque la configuración declarara 60.
 ///
-/// El discriminador que reemplaza al cast que falta es `is_vaultable`, y por
-/// eso [`is_standable`] tiene que valer: mientras una ladera contara como
-/// bordillo, este veto se comía toda la pared.
-fn leans_back_out_of_reach(normal: Vec3, facts: &LedgeFacts) -> bool {
-    let up = normal.y.clamp(-1.0, 1.0);
-    let too_steep_to_walk = up < FLOOR_MIN_UP_DOT;
-    too_steep_to_walk && up >= 0.0 && !facts.is_vaultable
+/// Sondear desde el contacto de la cintura **contra la normal de la cara** saca
+/// de la aritmética la inclinación y la guiñada: el punto a `rise` metros sobre
+/// el contacto queda exactamente `rise · normal.y` afuera del plano, que es un
+/// producto y no una tangente. Sin división, sin singularidad cerca del límite
+/// caminable, y con el alcance acotado por debajo del metro.
+fn probe_face_overhead(
+    spatial: &SpatialQuery,
+    filter: &SpatialQueryFilter,
+    actor: &LedgeActor,
+    waist: &Hit,
+    trace: &mut CastTrace,
+) -> bool {
+    let sensing = &actor.sensing;
+    let rise = sensing.height_samples[HEAD_SAMPLE] - sensing.height_samples[WAIST_SAMPLE];
+    let Some(probe) = probe_above_contact(sensing, waist, rise) else {
+        return false;
+    };
+    let hit = spatial.cast_shape(
+        actor.shape,
+        probe.origin,
+        Quat::IDENTITY,
+        probe.into_face,
+        &ShapeCastConfig::from_max_distance(probe.reach),
+        filter,
+    );
+    trace.record_shape(
+        actor.entity,
+        "ledge_face_overhead",
+        probe.origin,
+        *probe.into_face,
+        probe.reach,
+        hit.map(|h| (h.point1, h.normal1)),
+    );
+    hit.is_some()
+}
+
+/// Desde dónde, hacia dónde y cuánto sondear la cara por encima del contacto.
+struct FaceProbe {
+    origin: Vec3,
+    into_face: Dir3,
+    reach: f32,
+}
+
+/// `None` donde sondear sería incorrecto, no sólo inútil: una cara caminable
+/// convertida en pared dejaría escalable cualquier rampa, y un techo daría un
+/// alcance negativo.
+fn probe_above_contact(sensing: &LedgeSensing, waist: &Hit, rise: f32) -> Option<FaceProbe> {
+    if is_walkable_floor(waist.normal) || waist.normal.y < CEILING_NORMAL_Y {
+        return None;
+    }
+    let into_face = Dir3::new(-waist.normal).ok()?;
+    // El sondeo tiene que nacer fuera de la cara: por debajo del radio de la
+    // esfera el cast arranca penetrando y su resultado deja de significar nada.
+    let clearance = sensing.sphere_radius * 2.0;
+    let outside_the_plane = rise * waist.normal.y.max(0.0);
+    Some(FaceProbe {
+        origin: waist.point + Vec3::Y * rise + waist.normal * clearance,
+        into_face,
+        reach: outside_the_plane + clearance,
+    })
 }
 
 fn can_continue_climb(
@@ -453,19 +526,13 @@ mod tests {
 #[cfg(test)]
 mod sloped_wall_tests {
     use super::*;
+    use crate::movement::motor_common::{FLOOR_MIN_UP_DOT, WALKABLE_LIMIT_DEG};
 
     /// Normal de una cara inclinada `degrees` sobre la horizontal, encarada
     /// hacia -Z (el actor mira a -Z por defecto).
     fn face_normal(degrees: f32) -> Vec3 {
         let t = degrees.to_radians();
         Vec3::new(0.0, t.cos(), t.sin())
-    }
-
-    fn tall_face() -> LedgeFacts {
-        LedgeFacts {
-            is_vaultable: false,
-            ..LedgeFacts::default()
-        }
     }
 
     /// **El bug del 2026-08-22.** El cono de guiñada se gastaba entero en la
@@ -503,35 +570,102 @@ mod sloped_wall_tests {
         assert!(!faces_the_wall(Vec3::NEG_Z, Vec3::NEG_Y, &sensing));
     }
 
-    /// El reemplazo de `head_hit` sólo entra donde el cast no podía llegar: la
-    /// cara ya es demasiado empinada para caminarla, y no es un bordillo.
+    fn contact_at_origin(degrees: f32) -> Hit {
+        Hit {
+            entity: Entity::PLACEHOLDER,
+            point: Vec3::ZERO,
+            normal: face_normal(degrees),
+        }
+    }
+
+    const RISE: f32 = 0.8;
+
+    /// El sondeo sólo entra donde el cast de perfil no podía llegar. Una cara
+    /// caminable no se sondea: si se sondeara, cualquier rampa de 30° tendría
+    /// superficie "a la altura de la cabeza" y se volvería escalable.
     #[test]
-    fn the_head_hit_stand_in_only_covers_unwalkable_faces() {
+    fn a_walkable_face_is_never_probed() {
+        let sensing = LedgeSensing::PLAYER;
+        for degrees in [0.0_f32, 30.0, WALKABLE_LIMIT_DEG] {
+            assert!(
+                probe_above_contact(&sensing, &contact_at_origin(degrees), RISE).is_none(),
+                "{degrees}° se camina: no debe sondearse como pared"
+            );
+        }
         assert!(
-            leans_back_out_of_reach(face_normal(70.0), &tall_face()),
-            "70° no se camina y no es bordillo: tiene que poder escalarse"
-        );
-        assert!(
-            !leans_back_out_of_reach(face_normal(45.0), &tall_face()),
-            "45° se camina: no debe convertirse en pared"
+            probe_above_contact(&sensing, &contact_at_origin(WALKABLE_LIMIT_DEG + 1.0), RISE)
+                .is_some(),
+            "pasado el límite no se camina, y ahí el sondeo es la única salida"
         );
     }
 
-    /// El contrato de vault no se afloja: un obstáculo bajo sigue siendo vault
-    /// aunque su cara sea vertical.
+    /// Un techo daría un alcance negativo, así que se descarta antes.
     #[test]
-    fn a_vaultable_obstacle_never_becomes_a_wall() {
-        let vaultable = LedgeFacts {
-            is_vaultable: true,
-            ..LedgeFacts::default()
+    fn an_overhang_is_never_probed() {
+        let sensing = LedgeSensing::PLAYER;
+        let ceiling = Hit {
+            entity: Entity::PLACEHOLDER,
+            point: Vec3::ZERO,
+            normal: Vec3::NEG_Y,
         };
-        assert!(!leans_back_out_of_reach(face_normal(85.0), &vaultable));
+        assert!(probe_above_contact(&sensing, &ceiling, RISE).is_none());
     }
 
-    /// Un techo (normal apuntando hacia abajo) no es cara escalable.
+    /// **La trampa del float.** `90f32.to_radians()` pasa π/2, así que el coseno
+    /// de una vertical exacta da ~−7,5e-8. Con el umbral en cero, la pared más
+    /// escalable de todas caía del lado del techo.
     #[test]
-    fn an_overhang_is_not_a_climbable_face() {
-        assert!(!leans_back_out_of_reach(Vec3::NEG_Y, &tall_face()));
+    fn an_exactly_vertical_wall_is_still_probed() {
+        let sensing = LedgeSensing::PLAYER;
+        let probe = probe_above_contact(&sensing, &contact_at_origin(90.0), RISE)
+            .expect("una pared vertical tiene que sondearse");
+        let clearance = sensing.sphere_radius * 2.0;
+        assert!(
+            (probe.reach - clearance).abs() < 1e-4,
+            "en vertical la cara no se aleja: el alcance es sólo la holgura de salida"
+        );
+        assert!((probe.origin.y - RISE).abs() < 1e-4);
+    }
+
+    /// El sondeo llega a la cara, y no mucho más allá: el alcance vale
+    /// exactamente lo que el punto sondeado se separa del plano.
+    #[test]
+    fn the_probe_reaches_the_plane_it_asks_about() {
+        let sensing = LedgeSensing::PLAYER;
+        for degrees in [50.0_f32, 60.0, 74.0, 81.0, 90.0] {
+            let contact = contact_at_origin(degrees);
+            let probe = probe_above_contact(&sensing, &contact, RISE)
+                .expect("una cara no caminable se sondea");
+            // Distancia del origen al plano que pasa por el contacto, medida
+            // sobre la normal — que es la dirección en la que viaja el cast.
+            let to_plane = (probe.origin - contact.point).dot(contact.normal);
+            assert!(
+                to_plane > sensing.sphere_radius,
+                "a {degrees}° el sondeo nace penetrando la cara y no mide nada"
+            );
+            assert!(
+                probe.reach + sensing.sphere_radius >= to_plane,
+                "a {degrees}° el sondeo se queda corto y la pared se declara inexistente"
+            );
+        }
+    }
+
+    /// La cota que hace innecesaria una constante de tope: como sólo se sondean
+    /// caras no caminables, `normal.y` está por debajo de `FLOOR_MIN_UP_DOT` y
+    /// el alcance no puede crecer sin límite.
+    #[test]
+    fn the_walkable_gate_is_what_bounds_the_probe() {
+        let sensing = LedgeSensing::PLAYER;
+        let ceiling = RISE * FLOOR_MIN_UP_DOT + sensing.sphere_radius * 2.0;
+        for degrees in [45.1_f32, 50.0, 60.0, 74.0, 81.0, 90.0] {
+            let probe = probe_above_contact(&sensing, &contact_at_origin(degrees), RISE)
+                .expect("una cara no caminable se sondea");
+            assert!(
+                probe.reach <= ceiling,
+                "a {degrees}° el alcance {} pasó la cota {ceiling}",
+                probe.reach
+            );
+        }
     }
 
     /// **El bug del 2026-08-23.** El down-cast de vault sobre una ladera
@@ -556,10 +690,26 @@ mod sloped_wall_tests {
         assert!(!is_vaultable_lip(2.0, Vec3::Y, &sensing), "demasiado alto");
     }
 
-    /// La frontera de "pisable" es la misma que la de caminar, no una nueva.
+    /// La frontera de "pisable" es la misma que la de caminar, no una nueva —
+    /// y se escribe **relativa al umbral**, no con dos números: cuando el
+    /// límite bajó de 60° a 45°, la versión con literales afirmaba que 59° se
+    /// pisa, que había dejado de ser cierto.
     #[test]
     fn the_standable_limit_is_the_walkable_limit() {
-        assert!(is_standable(face_normal(59.0)));
-        assert!(!is_standable(face_normal(61.0)));
+        let limit = WALKABLE_LIMIT_DEG;
+        assert!(is_standable(face_normal(limit - 1.0)));
+        assert!(!is_standable(face_normal(limit + 1.0)));
+    }
+
+    /// El límite exacto cuenta como piso, en los dos lados de la frontera: es
+    /// la costura que `is_walkable_floor` unificó.
+    #[test]
+    fn the_limit_itself_is_standable_and_not_a_wall() {
+        let limit = WALKABLE_LIMIT_DEG;
+        assert!(is_standable(face_normal(limit)));
+        assert!(
+            probe_above_contact(&LedgeSensing::PLAYER, &contact_at_origin(limit), RISE).is_none(),
+            "el límite exacto es piso: no se sondea como pared"
+        );
     }
 }

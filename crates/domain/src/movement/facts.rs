@@ -26,11 +26,33 @@ pub struct GroundFacts {
     /// `velocity · floor_normal` — how fast the body moves *away from* the
     /// surface (only meaningful when `probe_hit && slope_ok`).
     pub ascend_dot: f32,
-    /// The surface under the probe this tick, read off the hit entity's
-    /// `world::Surface`. Defaults to `Grass` when the hit carries none.
+    /// Distance the probe travelled before touching floor; zero while resting
+    /// on it. Passing `probe_distance` is what turns `probe_hit` off.
+    pub floor_gap: f32,
+    /// The hit normal **before** the slope filter. `floor_normal` falls back to
+    /// `Vec3::Y` on rejection, which reads as flat ground to anyone who does not
+    /// also check `slope_ok`.
+    pub probe_normal: Vec3,
+    /// The surface under the probe, read off the hit entity’s `world::Surface`.
+    /// Defaults to `Grass` when the hit carries none.
     /// Presentation-only consumer today (`sfx` footsteps); simulation records
     /// it but never branches on it (§20).
     pub surface: SurfaceKind,
+}
+
+impl GroundFacts {
+    /// On a surface too steep to stand on: not floor, not air. The `Slide`
+    /// motor owns this case; treating it as airborne applies free fall to a
+    /// body that is resting on a slope.
+    pub fn on_steep_ground(&self) -> bool {
+        self.probe_hit && !self.slope_ok
+    }
+
+    /// Which way gravity pulls along the touched face; zero when it is level.
+    pub fn downhill(&self) -> Vec3 {
+        let n = self.probe_normal;
+        (Vec3::NEG_Y - n * Vec3::NEG_Y.dot(n)).normalize_or_zero()
+    }
 }
 
 /// Wall/ledge sensor state. Optional positions distinguish absence from origin.
@@ -51,6 +73,8 @@ pub struct LedgeFacts {
     pub mantle_ledge_point: Option<Vec3>,
     pub mantle_target_position: Option<Vec3>,
 
+    /// Wall hits by height sample, low bit = lowest; bit 6 = only the face probe.
+    pub climb_cast_hits: u8,
     pub is_vaultable: bool,
     pub vault_target_position: Option<Vec3>,
 }

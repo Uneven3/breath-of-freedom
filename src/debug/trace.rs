@@ -20,12 +20,20 @@ use bof_domain::movement::stamina::Stamina;
 use bof_domain::movement::state::LocomotionState;
 use bof_domain::movement::{Actor, BodyVelocity};
 
-/// the primary tool for "why did I fall?" investigations.
+/// The primary tool for "why did I fall?" investigations.
+///
+/// Carries `BodyContact` because a wall-classified contact is not a bystander
+/// here: it skips `snap_to_ground` entirely and makes the motor keep the
+/// slide's projected velocity instead of its own. On a heightfield built
+/// without `FIX_INTERNAL_EDGES`, an internal edge can answer with a
+/// near-horizontal pseudo-normal — so the line has to say whether that
+/// happened on the tick the body left the floor.
 type GroundFlipQuery<'a> = (
     Entity,
     &'a GroundFacts,
     &'a BodyVelocity,
     &'a GroundSensing,
+    &'a BodyContact,
     Option<&'a Name>,
 );
 
@@ -40,7 +48,7 @@ pub(super) fn log_ground_flips(
         return;
     }
     prev.retain(|e, _| entities.contains(*e));
-    for (entity, ground, vel, sensing, name) in &q {
+    for (entity, ground, vel, sensing, contact, name) in &q {
         let was = prev.insert(entity, ground.grounded);
         if was == Some(ground.grounded) {
             continue;
@@ -49,20 +57,25 @@ pub(super) fn log_ground_flips(
             .map(|n| n.as_str().to_owned())
             .unwrap_or(format!("{entity:?}"));
         info!(
-            "[t{:06}] {who} GROUNDED {} → {} | probe_hit={} slope_ok={} ascend_dot={:.3} (eps {}) vel=({:.2},{:.2},{:.2}) n=({:.2},{:.2},{:.2})",
+            "[t{:06}] {who} GROUNDED {} → {} | probe_hit={} slope_ok={} gap={:.4} ascend_dot={:.3} (eps {}) on_wall={} wall_n=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) n=({:.2},{:.2},{:.2})",
             tick.0,
             was.map(|b| b.to_string()).unwrap_or("∅".into()),
             ground.grounded,
             ground.probe_hit,
             ground.slope_ok,
+            ground.floor_gap,
             ground.ascend_dot,
             sensing.ascend_epsilon,
+            contact.on_wall,
+            contact.wall_normal.x,
+            contact.wall_normal.y,
+            contact.wall_normal.z,
             vel.0.x,
             vel.0.y,
             vel.0.z,
-            ground.floor_normal.x,
-            ground.floor_normal.y,
-            ground.floor_normal.z,
+            ground.probe_normal.x,
+            ground.probe_normal.y,
+            ground.probe_normal.z,
         );
     }
 }
@@ -257,7 +270,7 @@ pub(super) fn log_verbose_tick(
         let p = transform.translation;
         let facing = transform.rotation * Vec3::NEG_Z;
         info!(
-            "[t{:06}] {who} {:?} pos=({:.2},{:.2},{:.2}) face=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) gnd={}({},{},{:.2}) slide_wall={} stairs={} ladder={} climb={}/{} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} stam={:.1} climb_held={}",
+            "[t{:06}] {who} {:?} pos=({:.2},{:.2},{:.2}) face=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) gnd={}({},{},{:.2},gap{:.4}) slide_wall={} stairs={} ladder={} climb={}/{} side={}/{} n=({:.2},{:.2},{:.2}) lip={:.2} casts={:06b} stam={:.1} climb_held={}",
             tick.0,
             state,
             p.x,
@@ -273,6 +286,7 @@ pub(super) fn log_verbose_tick(
             ground.probe_hit,
             ground.slope_ok,
             ground.ascend_dot,
+            ground.floor_gap,
             contact.on_wall,
             stairs.map(|s| s.on_stairs).unwrap_or(false),
             ladder.map(|l| l.on_ladder).unwrap_or(false),
@@ -284,6 +298,7 @@ pub(super) fn log_verbose_tick(
             ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).y,
             ledge.and_then(|l| l.climb_normal).unwrap_or(Vec3::ZERO).z,
             ledge.map(|l| l.lip_height).unwrap_or(0.0),
+            ledge.map(|l| l.climb_cast_hits).unwrap_or(0),
             stamina.map(|s| s.current()).unwrap_or(0.0),
             intents.map(|i| i.climb.requested).unwrap_or(false),
         );

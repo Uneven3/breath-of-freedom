@@ -25,22 +25,28 @@ impl Terrain {
         }
     }
 
-    /// Corta la grilla con borde vertical y **sin relajarla**: acantilados,
-    /// pozos y paredes que se puedan escalar.
+    /// Corta la grilla con borde vertical y **sin relajarla**: el pincel de
+    /// telón de fondo.
+    ///
+    /// **Lo que produce no es un lugar.** El terreno no se escala, y una cara
+    /// empinada más alta que el alcance del mantle no se cruza de ninguna
+    /// forma, así que esto autora silueta —cañón visto de lejos, pared que
+    /// cierra el valle— y nunca terreno por donde el jugador vaya a pasar.
+    /// Medido el 2026-08-23: acumula 45 m de tramo empinado a cualquier radio,
+    /// contra 1,53 m de [`Terrain::raise_area`] al radio por defecto.
     ///
     /// Es el gemelo duro de [`Terrain::raise_area`], y existe porque el
-    /// suavizado de aquélla es incondicional. Medido el 2026-08-22, sosteniendo
-    /// diez segundos a fuerza máxima: `raise_area` toca fondo a **1,9 m** con
-    /// una pared de **22°**, mientras el sensor de escalada pide **60°**
-    /// (`sensing.climb_wall_angle_max_deg`, medido contra la normal). Sin
-    /// relax y con borde duro, el mismo trazo llega a 45 m y **86°**.
-    ///
-    /// El borde no tiene falloff a propósito: con el degradado, el radio grande
-    /// se queda en 80° porque reparte el corte entre puntos vecinos.
+    /// suavizado de aquélla es incondicional. El borde no tiene falloff a
+    /// propósito: con el degradado, el radio grande reparte el corte entre
+    /// puntos vecinos y la silueta se pierde.
     pub fn carve_area(&mut self, center: Vec2, radius: f32, delta: f32) {
-        self.brush(center, radius, |_grid, _idx, falloff| {
-            if falloff > 0.0 { delta } else { 0.0 }
-        });
+        self.brush(
+            center,
+            radius,
+            |_grid, _idx, falloff| {
+                if falloff > 0.0 { delta } else { 0.0 }
+            },
+        );
     }
 
     /// Relax the grid around `center` toward each point's neighbour average, to
@@ -49,8 +55,9 @@ impl Terrain {
     /// `brush` provides, so the pass has no directional bias.
     pub fn smooth_area(&mut self, center: Vec2, radius: f32, amount: f32) {
         let points = self.points;
+        let spacing = self.extent / self.cells() as f32;
         self.brush(center, radius, |grid, idx, falloff| {
-            (neighbour_average(grid, points, idx) - grid[idx]) * amount * falloff
+            (neighbour_average(grid, points, spacing, idx) - grid[idx]) * amount * falloff
         });
     }
 
@@ -255,24 +262,40 @@ impl Terrain {
     // ---- persistence -------------------------------------------------------
 }
 
-fn neighbour_average(grid: &[f32], points: usize, idx: usize) -> f32 {
+/// How far the relax kernel reaches, in **metres** and not in grid steps: a
+/// radius counted in steps shrinks with the cell, so on a finer grid the same
+/// held stroke would spike where it used to dome. 2.5 m keeps today's
+/// behaviour byte-for-byte at today's spacing.
+const RELAX_REACH_METRES: f32 = 2.5;
+/// Average of the grid points within `RELAX_REACH_METRES` of `idx`, along the
+/// four axes. Falls back to the point itself when nothing is in reach.
+pub(super) fn neighbour_average(grid: &[f32], points: usize, spacing: f32, idx: usize) -> f32 {
+    // El cociente de dos distancias positivas y acotadas cabe siempre en
+    // `usize`; el `max(1)` garantiza además que el kernel nunca sea vacío.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let reach = if spacing > 0.0 {
+        ((RELAX_REACH_METRES / spacing).round() as usize).max(1)
+    } else {
+        1
+    };
     let row = idx / points;
     let col = idx % points;
     let mut sum = 0.0;
     let mut count = 0.0;
-    let neighbours = [
-        row.checked_sub(1).map(|nr| (nr, col)),
-        (row + 1 < points).then_some((row + 1, col)),
-        col.checked_sub(1).map(|nc| (row, nc)),
-        (col + 1 < points).then_some((row, col + 1)),
-    ];
-    for (nr, nc) in neighbours.into_iter().flatten() {
-        sum += grid[nr * points + nc];
-        count += 1.0;
+    for step in 1..=reach {
+        let candidates = [
+            row.checked_sub(step).map(|nr| (nr, col)),
+            (row + step < points).then_some((row + step, col)),
+            col.checked_sub(step).map(|nc| (row, nc)),
+            (col + step < points).then_some((row, col + step)),
+        ];
+        for (nr, nc) in candidates.into_iter().flatten() {
+            sum += grid[nr * points + nc];
+            count += 1.0;
+        }
     }
     if count > 0.0 { sum / count } else { grid[idx] }
 }
-
 /// Distance from `point` to the segment `from → to`; the circle case falls out
 /// when the segment has zero length.
 fn distance_to_segment(point: Vec2, from: Vec2, to: Vec2) -> f32 {
@@ -302,4 +325,70 @@ fn value_noise(p: Vec2, seed: u32) -> f32 {
     let top = corner(0.0, 0.0).lerp(corner(1.0, 0.0), w.x);
     let bottom = corner(0.0, 1.0).lerp(corner(1.0, 1.0), w.x);
     top.lerp(bottom, w.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A grid where every point is 0 except a spike of 1 at the centre.
+    fn spiked(points: usize) -> Vec<f32> {
+        let mut grid = vec![0.0; points * points];
+        grid[points / 2 * points + points / 2] = 1.0;
+        grid
+    }
+
+    /// The kernel reaches the same **distance** whatever the spacing.
+    ///
+    /// This is what stops the brush from getting sharper as the grid gets
+    /// finer: a relax radius counted in grid steps shrinks with the cell, so
+    /// the same held stroke that makes a dome today would make a spike on a
+    /// finer grid — the failure that fixed the resolution here in the first
+    /// place.
+    #[test]
+    fn the_relax_kernel_covers_the_same_metres_at_any_spacing() {
+        // 2.5 m of reach: one step at 2.5 m spacing, five at 0.5 m.
+        let coarse = spiked(9);
+        let fine = spiked(41);
+        let coarse_centre = 9 / 2 * 9 + 9 / 2;
+        let fine_centre = 41 / 2 * 41 + 41 / 2;
+
+        // With the spike at the centre, its own neighbours average the ring
+        // around it: the count of contributing points is what changes, and the
+        // reach in metres is what must not.
+        let coarse_reach = ((RELAX_REACH_METRES / 2.5).round() as usize).max(1);
+        let fine_reach = ((RELAX_REACH_METRES / 0.5).round() as usize).max(1);
+        assert_eq!(coarse_reach, 1);
+        assert_eq!(fine_reach, 5);
+        assert!(
+            (coarse_reach as f32 * 2.5 - fine_reach as f32 * 0.5).abs() < 1e-5,
+            "los dos kernels deben cubrir los mismos metros"
+        );
+
+        // And both actually see the spike from one cell away in world terms.
+        let coarse_neighbour = coarse_centre - 1;
+        let fine_neighbour = fine_centre - 5;
+        assert!(neighbour_average(&coarse, 9, 2.5, coarse_neighbour) > 0.0);
+        assert!(neighbour_average(&fine, 41, 0.5, fine_neighbour) > 0.0);
+    }
+
+    /// At today's spacing the metre-based kernel must be the four-neighbour
+    /// average it replaces, or every tuned brush number silently changes.
+    #[test]
+    fn at_todays_spacing_the_kernel_is_the_old_four_neighbour_average() {
+        let grid = spiked(9);
+        let centre = 9 / 2 * 9 + 9 / 2;
+        // The four points around the spike each see it once out of four.
+        assert!((neighbour_average(&grid, 9, 2.5, centre - 1) - 0.25).abs() < 1e-6);
+        // The spike itself sees only zeros.
+        assert!(neighbour_average(&grid, 9, 2.5, centre).abs() < 1e-6);
+    }
+
+    /// A degenerate spacing must not divide by zero or reach nowhere.
+    #[test]
+    fn a_zero_spacing_still_averages_something() {
+        let grid = spiked(9);
+        let centre = 9 / 2 * 9 + 9 / 2;
+        assert!((neighbour_average(&grid, 9, 0.0, centre - 1) - 0.25).abs() < 1e-6);
+    }
 }

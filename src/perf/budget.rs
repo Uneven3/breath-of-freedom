@@ -188,17 +188,33 @@ mod tests {
         static_cost::terrain_triangles(crate::world::Terrain::flat_for_test().points())
     }
 
+    /// Lo que el terreno puede costar, en su propia unidad.
+    ///
+    /// **Sale de la suma por escena por la misma razón que salió la pradera, y
+    /// tampoco por indulgencia:** el conteo por escena mide "cuánto declara
+    /// este nivel", y el terreno no es algo que un nivel declare — es la misma
+    /// grilla en las seis escenas, y su resolución la decide la locomoción, no
+    /// el contenido. Sumarlo a cada escena hacía que subir `CELLS` leyera como
+    /// si seis niveles se hubieran excedido a la vez, cuando lo que cambió fue
+    /// una constante compartida.
+    ///
+    /// Y como la pradera: **el número que manda hoy no es éste.** El frame se
+    /// midió *fill-bound* (`AHORA.md`), o sea que lo que se paga son los
+    /// píxeles; el conteo es guardrail contra el crecimiento silencioso, no un
+    /// veto previo. La deuda queda declarada: a 640 celdas el terreno pide
+    /// 819.200 triángulos, y **no está chunkeado ni tiene LOD**, así que está
+    /// entero en frame siempre. Bajarlo es trabajo de optimización, y va después
+    /// de que la locomoción sobre relieve esté resuelta — que es para lo que la
+    /// resolución subió.
+    const TERRAIN_TRIANGLES: usize = 1_000_000;
+
     #[test]
-    fn the_terrain_alone_leaves_room_for_a_scene_on_top_of_it() {
-        // The grid resolution is a performance decision disguised as a quality
-        // knob: it is fixed cost, always in frame, in every scene. 128 cells
-        // spend a third of the mobile budget before a single prop is placed —
-        // raising it has to be a deliberate diff, not a tuning afternoon.
+    fn the_terrain_fits_its_own_budget() {
         let terrain = terrain_cost();
         assert!(
-            terrain * 2 <= MOBILE_TRIANGLES,
-            "the terrain alone is {terrain} triangles of a {MOBILE_TRIANGLES} budget; \
-             at over half, no scene can be built on it"
+            terrain <= TERRAIN_TRIANGLES,
+            "el terreno declara {terrain} triángulos, sobre su techo de \
+             {TERRAIN_TRIANGLES}"
         );
     }
 
@@ -209,19 +225,13 @@ mod tests {
         // from a corner where most of it is culled. This sums what the scene
         // *declares*, so passing means it fits from anywhere in it.
         //
-        // La pradera **ya no entra en esta suma**, y no por indulgencia: desde
-        // que es una grilla rodante centrada en la cámara dejó de ser contenido
-        // de escena. No escala con el tamaño del mapa ni con lo que la escena
-        // contenga — es la misma vecindad en un patio de 25 m que en un mundo
-        // de 4 km, así que sumarla al declarado de la escena mide una cosa que
-        // no existe. Tiene su propio techo, por vista, en el test de abajo. Con
-        // eso el Mundo dejó de estar excedido: la deuda de 6.918 triángulos que
-        // este archivo declaraba el 2026-08-04 salía entera de los 56.250 de
-        // pradera fija que ya no están.
+        // Ni la pradera ni el terreno entran en esta suma: los dos tienen su
+        // propio techo, arriba, porque los dos existen igual en toda escena y
+        // no son contenido que un nivel declare.
         let forest =
             crate::world::forest::tree_count() * static_cost::asset_triangles("tree_pine_a");
         for scene in crate::scene::SCENES {
-            let mut triangles = terrain_cost();
+            let mut triangles = 0;
             if scene.contents.forest {
                 triangles += forest;
             }

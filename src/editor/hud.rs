@@ -19,6 +19,7 @@ use crate::presentation::theme::{
     ACCENT, BORDER, PANEL, TEXT_BRIGHT, TEXT_MUTED, body_font, emoji_font, icon_font,
 };
 use crate::world::{PropKind, TerrainKind};
+use bof_domain::world::MAX_UNWALKABLE_RISE_METRES;
 
 /// `nf-md-terrain` from the Nerd Font symbol range (private use area, so it is
 /// only meaningful in that face).
@@ -139,8 +140,19 @@ pub(super) fn update_hud(
         **text = match tool.layer {
             ToolLayer::Relief => {
                 let brush: BrushKind = tool.brush;
+                // El tramo empinado sólo aparece cuando pasa el alcance del
+                // mantle. Mostrarlo siempre lo volvería otro número que se
+                // ignora; mostrarlo sólo al romperse lo vuelve un aviso.
+                let unreachable = if tool.worst_run_metres > MAX_UNWALKABLE_RISE_METRES {
+                    format!(
+                        " · ⚠ pared de {:.1} m: el jugador no puede subir acá",
+                        tool.worst_run_metres
+                    )
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{}: {} — {}",
+                    "{}: {} — {}{unreachable}",
                     ToolLayer::Relief.label(),
                     brush.label(),
                     brush.hint()
@@ -237,7 +249,7 @@ pub(super) fn update_hud(
         **text = format!(
             "{palette}\n\
              {layer_keys}\
-             F6 cambia de capa · Ctrl+Z/Ctrl+Y deshacer · Ctrl+S guardar · Ctrl+L recargar · F5 salir\n\
+             F6 cambia de capa · Ctrl+Z/Ctrl+Y deshacer · Ctrl+S guardar · Ctrl+L recargar · Ctrl+R dejar recorrible · F5 salir\n\
              Cámara: WASD mover · E/Q subir/bajar · rueda zoom · MMB girar · Shift+MMB pan\n\
              F+rueda radio · Shift+F+rueda fuerza · Ctrl+rueda sensibilidad de giro"
         );

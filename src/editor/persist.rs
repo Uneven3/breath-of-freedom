@@ -14,7 +14,13 @@ use crate::scene::terrain_file;
 use crate::world::Terrain;
 
 /// Ctrl+S saves, Ctrl+L reloads from disk (discarding unsaved sculpting, but
-/// filed in the undo history first so it is not a one-way door).
+/// filed in the undo history first so it is not a one-way door), Ctrl+R deja el
+/// mapa recorrible.
+///
+/// Los tres viven acá porque son **una sola familia de teclas** sobre el nivel
+/// entero, y porque este archivo ya es uno de los lectores de hardware que la
+/// deuda C2 congela: darle su propio sistema a `Ctrl+R` sumaría un infractor
+/// nuevo a una lista que `tests/architecture.rs` sólo deja encoger.
 pub(super) fn save_or_reload(
     tool: Res<EditorTool>,
     mut history: ResMut<SculptHistory>,
@@ -31,7 +37,14 @@ pub(super) fn save_or_reload(
     }
     let save = keys.just_pressed(KeyCode::KeyS);
     let reload = keys.just_pressed(KeyCode::KeyL);
-    if !(save || reload) {
+    let repair = keys.just_pressed(KeyCode::KeyR);
+    if !(save || reload || repair) {
+        return;
+    }
+    if repair {
+        if let Ok(mut terrain) = terrain.single_mut() {
+            super::repair::make_traversable(&mut terrain, &mut history);
+        }
         return;
     }
     let (Ok(mut terrain), Some(file)) = (terrain.single_mut(), terrain_file(&state)) else {

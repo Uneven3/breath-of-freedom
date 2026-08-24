@@ -26,16 +26,34 @@ use bevy_math::prelude::*;
 use bevy_transform::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::NonClimbable;
 use super::terrain_kind::TerrainKind;
 use bof_domain::props::Instance;
 use bof_domain::world::WORLD_SIZE;
 
-/// Grid cells per side; the heightfield has `CELLS + 1` points per side. Sized
-/// so the brush covers enough vertices to sculpt smooth domes (a coarser grid
-/// gives spiky tents) while the whole-terrain rebuild each edit stays cheap.
-/// Pushing this much higher is the point where per-edit *partial* rebuilds
-/// (chunking) start to matter — deferred for now.
-const CELLS: usize = 128;
+/// Grid cells per side; the heightfield has `CELLS + 1` points per side.
+///
+/// **The number that matters is metres per cell, and it comes from the body
+/// that walks on it — not from how big the world is.** At `WORLD_SIZE / CELLS`
+/// = 0.5 m, two constraints already in this codebase are what fix it:
+///
+/// - `editor::MIN_RADIUS` is 2 m, the smallest brush. A brush needs about four
+///   points across to shape anything; below that it moves one or two vertices
+///   and produces the spiky tents that ruled out `CELLS = 64`.
+/// - `Terrain::slope_deg_at` takes its finite difference over a fixed 0.5 m.
+///   That step has to stay at or under one cell, or the function silently stops
+///   estimating the local gradient and starts estimating a cell-to-cell
+///   difference — and it feeds grass seeding, so the change would show up as
+///   the meadow moving.
+///
+/// The old 2.5 m was set against a flat graybox, where nothing needed detail
+/// finer than the brush. It made a vault ledge (0.3–1.4 m of relief)
+/// impossible to author at all.
+///
+/// The cost is declared, not hidden: 819,200 triangles, unchunked and without
+/// LOD, always in frame. It has its own ceiling in `perf::budget`, out of the
+/// per-scene sum, for the same reason the meadow left it.
+const CELLS: usize = 640;
 
 // Each scene names its own heightmap. **That file is the level**: the editor
 // writes it and `spawn_terrain` loads it on entry, so a scene starts on the
@@ -238,6 +256,7 @@ pub mod instances;
 pub mod persist;
 pub mod query;
 pub mod sculpt;
+pub mod traversable;
 
 impl Terrain {
     fn flat() -> Self {
@@ -366,10 +385,32 @@ pub fn spawn_terrain(commands: &mut Commands, file: Option<&str>) {
         CollisionMargin(0.02),
         RigidBody::Static,
         Transform::default(),
+        // **El suelo no se escala.** Un heightmap no puede plegarse, así que no
+        // representa una vertical: lo que parecía pared siempre fue una rampa
+        // del ancho de una celda. Lo escalable son objetos colocados encima.
+        NonClimbable,
     ));
 }
 #[cfg(test)]
 mod tests {
+
+    /// **El suelo dejó de ser escalable el 2026-08-23.** Un heightmap no puede
+    /// plegarse, así que nunca pudo representar la pared que el sensor buscaba;
+    /// lo escalable son los peñascos colocados encima.
+    #[test]
+    fn the_ground_is_not_climbable() {
+        let mut world = World::new();
+        let mut queue = bevy_ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        spawn_terrain(&mut commands, None);
+        queue.apply(&mut world);
+        let mut terrains = world.query_filtered::<(), (With<Terrain>, With<NonClimbable>)>();
+        assert_eq!(
+            terrains.iter(&world).count(),
+            1,
+            "el terreno tiene que nacer con NonClimbable"
+        );
+    }
     use super::persist::{decode_kinds, encode_kinds};
     use super::*;
     use bevy_ecs::system::RunSystemOnce;
@@ -414,18 +455,6 @@ mod tests {
         assert!(near_rim > 0.0, "the falloff should still reach the rim");
     }
 
-    /// La inclinación más empinada entre dos puntos vecinos, en grados.
-    fn steepest_face_degrees(terrain: &Terrain) -> f32 {
-        let spacing = WORLD_SIZE / CELLS as f32;
-        let mid = terrain.points() / 2;
-        (1..terrain.points())
-            .map(|col| {
-                let drop = (terrain.height(mid, col) - terrain.height(mid, col - 1)).abs();
-                (drop / spacing).atan().to_degrees()
-            })
-            .fold(0.0_f32, f32::max)
-    }
-
     /// Diez segundos de trazo a fuerza máxima, que es el peor caso que el
     /// editor permite pedir.
     fn hold_for_ten_seconds(carve: bool, radius: f32) -> Terrain {
@@ -441,28 +470,113 @@ mod tests {
         terrain
     }
 
-    /// **El motivo de que `carve_area` exista**, y por eso es diferencial: el
-    /// número solo no dice nada, lo que importa es que `raise_area` no llega.
-    ///
-    /// 60° es el umbral real de `sensing.climb_wall_angle_max_deg` (30° contra
-    /// la normal). Medido el 2026-08-22: cavando con `raise_area` la pared más
-    /// empinada posible era de 22° al radio por defecto, así que el jugador no
-    /// podía escalar nada de lo que el editor sabía construir.
+    /// **Reporte, no aserción.** Qué tan alto es el tramo empinado que cada
+    /// pincel produce, para decidir con el número en la mano si el pincel tiene
+    /// que clampear o basta con avisar.
     #[test]
-    fn only_the_cliff_brush_carves_a_climbable_wall() {
-        const CLIMB_THRESHOLD_DEGREES: f32 = 60.0;
-        let relaxed = steepest_face_degrees(&hold_for_ten_seconds(false, 6.0));
-        let carved = steepest_face_degrees(&hold_for_ten_seconds(true, 6.0));
+    fn report_the_steep_runs_each_brush_can_author() {
+        let limit = bof_domain::world::MAX_UNWALKABLE_RISE_METRES;
+        println!("\n[terrain] tramo empinado por pincel (tope {limit} m)");
+        for radius in [2.0_f32, 6.0, 12.0, 25.0, 40.0] {
+            let raised = hold_for_ten_seconds(false, radius).steepest_run();
+            let carved = hold_for_ten_seconds(true, radius).steepest_run();
+            println!(
+                "  radio {radius:>4} m   elevar {:>6.2} m {}   acantilado {:>6.2} m {}",
+                raised.rise,
+                if raised.is_traversable() {
+                    "ok "
+                } else {
+                    "MURO"
+                },
+                carved.rise,
+                if carved.is_traversable() {
+                    "ok "
+                } else {
+                    "MURO"
+                },
+            );
+        }
+
+        let mut terraced = Terrain::flat();
+        for step in 0..600 {
+            let slope = step as f32 * 0.02;
+            terraced.raise_area(Vec2::new(slope, 0.0), 6.0, 0.05);
+        }
+        let before = terraced.steepest_run();
+        terraced.terrace_area(Vec2::ZERO, 40.0, 2.0, 1.0);
+        println!(
+            "  terrazas         antes {:>6.2} m   después {:>6.2} m",
+            before.rise,
+            terraced.steepest_run().rise
+        );
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/game/world/sandbox.ron"
+        );
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let mut authored = Terrain::flat();
+            authored
+                .apply_ron(&text)
+                .expect("the authored terrain parses");
+            let worst = authored.steepest_run();
+            println!(
+                "  sandbox.ron      peor tramo {:>6.2} m en {:?} — {}",
+                worst.rise,
+                worst.start,
+                if worst.is_traversable() {
+                    "transitable"
+                } else {
+                    "MURO"
+                }
+            );
+        }
+    }
+
+    /// **Los dos pinceles hacen cosas distintas, y por eso es diferencial.**
+    ///
+    /// La versión de este test que vivió hasta el 2026-08-23 medía **ángulos**
+    /// y pedía 60° para que el jugador pudiera escalar lo que el editor sabía
+    /// construir. Esa premisa murió dos veces: el terreno ya no se escala, y el
+    /// ángulo nunca fue la magnitud correcta —vault y mantle pasan una
+    /// contrahuella empinada; lo que no se pasa es una cara empinada **alta**.
+    ///
+    /// Medido el 2026-08-23 con `steepest_run`, sosteniendo diez segundos a
+    /// fuerza máxima: al radio por defecto `raise_area` acumula 1,53 m —bajo el
+    /// alcance del mantle, o sea terreno por el que se anda— y `carve_area`
+    /// llega a 45 m, que es telón de fondo y no un lugar.
+    #[test]
+    fn only_the_cliff_brush_authors_ground_the_player_cannot_cross() {
+        let relaxed = hold_for_ten_seconds(false, 6.0).steepest_run();
+        let carved = hold_for_ten_seconds(true, 6.0).steepest_run();
 
         assert!(
-            relaxed < CLIMB_THRESHOLD_DEGREES,
-            "`raise_area` llegó a {relaxed}°: si ahora alcanza el umbral, este \
-             pincel dejó de hacer falta y hay que borrarlo"
+            relaxed.is_traversable(),
+            "`raise_area` acumuló {} m de tramo empinado al radio por defecto: \
+             el pincel de todos los días no debería poder hacer una pared",
+            relaxed.rise
         );
         assert!(
-            carved > CLIMB_THRESHOLD_DEGREES,
-            "`carve_area` sólo llegó a {carved}°, y escalar pide \
-             {CLIMB_THRESHOLD_DEGREES}°: el pincel no cumple su único trabajo"
+            !carved.is_traversable(),
+            "`carve_area` sólo acumuló {} m, y con eso se cruza caminando: \
+             el pincel de acantilado no cumple su único trabajo",
+            carved.rise
+        );
+    }
+
+    /// **Y el pincel de todos los días sí puede hacer una pared si el radio es
+    /// grande.** Medido el 2026-08-23: 1,53 m a 6 m de radio, 7,56 m a 12 m,
+    /// 21,37 m a 40 m. No es un bug del pincel —a esa escala el autor está
+    /// modelando una montaña y sabe lo que hace— pero sí es lo que el editor
+    /// tiene que poder mostrarle mientras esculpe.
+    #[test]
+    fn a_wide_raise_can_still_author_a_wall() {
+        let wide = hold_for_ten_seconds(false, 40.0).steepest_run();
+        assert!(
+            !wide.is_traversable(),
+            "a 40 m de radio `raise_area` acumuló sólo {} m: si esto se volvió \
+             transitable, el aviso en vivo del editor dejó de tener sentido",
+            wide.rise
         );
     }
 
@@ -586,8 +700,16 @@ mod tests {
         a.noise_area(Vec2::ZERO, 40.0, 2.0, 7);
         b.noise_area(Vec2::ZERO, 40.0, 2.0, 7);
         assert_eq!(a.snapshot(), b.snapshot());
+        // La ventana va en **metros**, no en índices: `NOISE_CELL` mide 12 m, y
+        // un ancho contado en pasos de grilla se encoge con la resolución hasta
+        // caber dentro de una sola celda de ruido, donde todo tiene el mismo
+        // signo. El test seguiría pasando en verde sin mirar nada.
+        let spacing = WORLD_SIZE / CELLS as f32;
+        let half_window = (15.0 / spacing).round() as usize;
         let mid = a.points() / 2;
-        let window: Vec<f32> = (mid - 6..mid + 6).map(|row| a.height(row, mid)).collect();
+        let window: Vec<f32> = (mid - half_window..mid + half_window)
+            .map(|row| a.height(row, mid))
+            .collect();
         assert!(
             window.iter().any(|h| *h > 0.0) && window.iter().any(|h| *h < 0.0),
             "noise should push both up and down, got {window:?}"
@@ -1159,5 +1281,145 @@ mod tests {
         sloped_terrain.ramp_area(Vec2::ZERO, 0.0, Vec2::new(10.0, 0.0), 10.0, 5.0, 1.0);
         let slope = sloped_terrain.slope_deg_at(Vec2::new(5.0, 0.0));
         assert!(slope > 0.0, "slope on ramp should be positive, got {slope}");
+    }
+
+    /// Reads the surface the way the ground probe does — off the collider, not
+    /// off the grid — and reports how the authored relief is distributed across
+    /// the 60° line that separates floor from not-floor.
+    ///
+    /// The number that matters is not "how steep is the canyon". It is **how
+    /// often a walking body crosses that line**: a slope that is uniformly 70°
+    /// is a wall and reads as one, but walkable ground speckled with 63°
+    /// triangles flips `grounded` every time a foot lands on one, which is the
+    /// `Walk`↔`Fall` buzz. So the transect count below walks in a straight line
+    /// at one tick's worth of distance per sample and counts sign changes.
+    ///
+    /// Run it with:
+    /// `cargo test -p breath_of_freedom_simulation authored_relief -- --nocapture`
+    #[test]
+    fn report_how_often_the_authored_relief_crosses_the_walkable_limit() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/game/world/sandbox.ron"
+        );
+        let Ok(text) = std::fs::read_to_string(path) else {
+            eprintln!("[terrain] {path} missing — skipping the report");
+            return;
+        };
+        let mut terrain = Terrain::flat();
+        terrain
+            .apply_ron(&text)
+            .expect("the authored terrain parses");
+        let collider = terrain.to_collider();
+        let shape = collider.shape_scaled();
+
+        // Read, not spelled: a literal here would go on reporting the old
+        // line after the threshold moves, and this test only prints — it has
+        // no assertion that would catch it lying.
+        let walkable_limit_deg = crate::movement::motor_common::WALKABLE_LIMIT_DEG;
+        let normal_at = |xz: Vec2| {
+            let ray = avian3d::parry::query::Ray::new(Vec3::new(xz.x, 500.0, xz.y), Vec3::NEG_Y);
+            shape
+                .cast_local_ray_and_get_normal(&ray, 1000.0, true)
+                .map(|hit| Vec3::from(hit.normal))
+        };
+        let angle_at = |xz: Vec2| normal_at(xz).map(|n| n.y.clamp(-1.0, 1.0).acos().to_degrees());
+
+        // --- 1. Where the relief sits relative to the limit, over the whole map.
+        let mut buckets = [0_u32; 10]; // 0-10, 10-20, … 90+
+        let mut sampled = 0_u32;
+        let mut past_limit = 0_u32;
+        let mut in_the_treacherous_band = 0_u32; // 60-70°: not floor, not wall
+        let half = terrain.extent * 0.5;
+        let step = 1.0_f32;
+        let mut x = -half + step;
+        while x < half - step {
+            let mut z = -half + step;
+            while z < half - step {
+                if let Some(deg) = angle_at(Vec2::new(x, z)) {
+                    sampled += 1;
+                    buckets[((deg / 10.0) as usize).min(9)] += 1;
+                    if deg > walkable_limit_deg {
+                        past_limit += 1;
+                        if deg < 70.0 {
+                            in_the_treacherous_band += 1;
+                        }
+                    }
+                }
+                z += step;
+            }
+            x += step;
+        }
+
+        println!("\n[terrain] {sampled} samples, 1 m grid, read off the collider");
+        for (i, count) in buckets.iter().enumerate() {
+            let share = *count as f32 / sampled as f32 * 100.0;
+            println!(
+                "  {:>2}-{:>2}° {:>7} {:>5.2}% {}",
+                i * 10,
+                i * 10 + 10,
+                count,
+                share,
+                "#".repeat((share * 2.0).round() as usize)
+            );
+        }
+        println!(
+            "[terrain] past the {walkable_limit_deg}° limit: {past_limit} ({:.2}%), of which \
+             {in_the_treacherous_band} sit in the 60-70° band ({:.2}% of the map)",
+            past_limit as f32 / sampled as f32 * 100.0,
+            in_the_treacherous_band as f32 / sampled as f32 * 100.0,
+        );
+
+        // --- 2. How often a walking body crosses the limit.
+        // One tick of walking at 5 m/s over a 60 Hz fixed step.
+        let tick_step = 5.0 / 60.0;
+        let transect = |from: Vec2, to: Vec2, label: &str| {
+            let span = to - from;
+            let steps = (span.length() / tick_step) as usize;
+            let dir = span.normalize_or_zero();
+            let mut crossings = 0_u32;
+            let mut ticks_past_limit = 0_u32;
+            let mut previous: Option<bool> = None;
+            let mut counted = 0_u32;
+            for i in 0..steps {
+                let Some(deg) = angle_at(from + dir * (i as f32 * tick_step)) else {
+                    continue;
+                };
+                counted += 1;
+                let past = deg > walkable_limit_deg;
+                if past {
+                    ticks_past_limit += 1;
+                }
+                if previous.is_some_and(|was| was != past) {
+                    crossings += 1;
+                }
+                previous = Some(past);
+            }
+            println!(
+                "[terrain] {label}: {counted} ticks, {crossings} crossings of the limit, \
+                 {ticks_past_limit} ticks past it ({:.1}%)",
+                ticks_past_limit as f32 / counted.max(1) as f32 * 100.0
+            );
+            crossings
+        };
+
+        // The three places the played session actually buzzed, from the log.
+        transect(
+            Vec2::new(70.0, 32.0),
+            Vec2::new(95.0, 32.0),
+            "canyon x70→95 @z32",
+        );
+        transect(
+            Vec2::new(82.0, 20.0),
+            Vec2::new(82.0, 45.0),
+            "canyon z20→45 @x82",
+        );
+        transect(
+            Vec2::new(40.0, 0.0),
+            Vec2::new(60.0, 0.0),
+            "deep pit x40→60 @z0",
+        );
+
+        assert!(sampled > 0, "the authored terrain produced no samples");
     }
 }

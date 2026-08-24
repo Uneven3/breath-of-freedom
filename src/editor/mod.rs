@@ -16,7 +16,7 @@
 //! - `brush` — the relief brushes and the stroke that applies them.
 //! - `paint` — the semantic brush: what the ground *is*, cell by cell.
 //! - `history` — undo/redo, one entry per stroke, covering both layers.
-//! - `persist` — the level on disk.
+//! - `persist` — el nivel en disco, y `repair` dejarlo recorrible.
 //! - `hud` — what is on screen while authoring.
 
 mod brush;
@@ -25,6 +25,7 @@ mod hud;
 mod instances;
 mod paint;
 mod persist;
+mod repair;
 
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
@@ -108,6 +109,12 @@ pub(crate) struct EditorTool {
     /// there at press time. `Flatten` levels to that height and `Ramp` runs from
     /// it — both need the value *before* the stroke starts changing it.
     pub anchor: Option<StrokeAnchor>,
+    /// La subida empinada acumulada que el último trazo dejó bajo el cursor.
+    ///
+    /// El editor no impide pasarse: **lo muestra**. Un tramo empinado más alto
+    /// que el alcance del mantle es terreno al que el jugador no puede llegar,
+    /// y hasta ahora eso sólo se descubría jugando.
+    pub worst_run_metres: f32,
 }
 
 /// The frozen start of a stroke.
@@ -128,6 +135,7 @@ impl Default for EditorTool {
             paint_kind: TerrainKind::Rock,
             prop_kind: PropKind::ALL[0],
             anchor: None,
+            worst_run_metres: 0.0,
         }
     }
 }

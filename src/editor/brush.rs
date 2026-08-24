@@ -16,6 +16,7 @@ use super::{EditorTool, SculptFocus, StrokeAnchor, ToolLayer, history::SculptHis
 use crate::camera::CameraRig;
 use crate::input::ModalInputFocus;
 use crate::world::{GameLayer, Terrain, TerrainAccess};
+use bof_domain::world::MAX_UNWALKABLE_RISE_METRES;
 
 /// Metres of height change per second at the brush centre while raising.
 const SCULPT_RATE: f32 = 1.5;
@@ -247,6 +248,7 @@ pub(super) fn sculpt_terrain(
             terrain.terrace_area(center, radius, TERRACE_STEP, (TERRACE_RATE * step).min(1.0));
         }
     }
+    tool.worst_run_metres = terrain.steepest_run_near(center, radius).rise;
 }
 
 /// The world point under the cursor, but only when the ray lands on the terrain
@@ -303,6 +305,15 @@ pub(super) fn draw_brush_gizmo(
     // things to the level — and painting is silent on flat ground, so there would
     // be no other tell until you saved.
     let ring = match tool.layer {
+        // Rojo cuando lo último que se esculpió acá dejó un tramo empinado más
+        // alto que el alcance del mantle: terreno que se ve pero al que no se
+        // llega. El de acantilado lo hace a propósito, y avisarle sería ruido.
+        ToolLayer::Relief
+            if tool.brush != BrushKind::Cliff
+                && tool.worst_run_metres > MAX_UNWALKABLE_RISE_METRES =>
+        {
+            css::ORANGE_RED
+        }
         ToolLayer::Relief => css::YELLOW,
         ToolLayer::Meaning => css::AQUA,
         ToolLayer::Instances => css::MAGENTA,

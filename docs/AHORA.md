@@ -6,6 +6,306 @@ Trabajo vivo entre sesiones (≤500 líneas); lo cerrado queda en git. Reglas en
 Números crudos de rendimiento, repetidos y con su contexto exacto, en
 `GRASS_PERF_DATA.md` — no remedir lo que ya está ahí.
 
+## Próxima sesión — la agenda, elegida por el usuario el 2026-08-23
+
+Cerró la sesión con *"siento que los motores están bien, hay que calibrarlos
+mejor, y no sé cómo hacerlo"*. El curso de peñascos ya funciona; lo que sigue es
+afinarlo y construir el primer acantilado de verdad.
+
+**Lo que pidió, en su orden:**
+
+1. **Un acantilado con terreno y roca juntos.** El primero armado con la técnica
+   que quedó explicada: la roca **enterrada** en el relieve, no apoyada, y la
+   silueta del contacto rota con escombro. El terreno hace la planta, la roca
+   hace la pared.
+2. **Afinar los motores.** Las perillas ya existen (pestaña Locomoción del hub
+   F1, y `BOF_TUNING` para arrancar con valores puestos); lo que falta es el
+   **procedimiento** — qué mover, en qué orden, y contra qué se mira si mejoró.
+   Eso es lo que él dice no saber hacer, y es la parte a diseñar.
+3. **Que el terreno no pelee.** El caso concreto que salió: al colocar un prop,
+   que el editor aplane su huella con `flatten_area`. Es la versión barata de lo
+   que los motores grandes llaman *landscape blending*, y evita el defecto que
+   más delata un prop puesto a mano — la roca flotando sobre una loma.
+4. **Quizás bajar `CELLS`**, ya que el terreno dejó de usarse para escalar.
+
+**Sobre el punto 4, antes de que alguien lo dé por fácil:** la justificación de
+`CELLS = 640` **no era la escalada**. Está escrita en `terrain/mod.rs` y sale de
+otras dos cosas que siguen vigentes — `editor::MIN_RADIUS` de 2 m (un pincel
+necesita ~4 puntos de ancho para modelar algo) y el paso fijo de 0,5 m de
+`slope_deg_at`, que alimenta el sembrado del pasto. Y la razón original fue poder
+autorar una repisa de vault de 0,3–1,4 m, que tampoco depende de escalar. Bajarlo
+es posible, pero hay que rehacer esa derivación, no borrarla.
+
+### Lo que él no listó y está abierto
+
+- **Los dos edge cases de escalada que reportó jugando:** el jugador a veces no
+  se agarra, y a veces **sube más de lo que debería**. Son del sensor y del motor
+  —pasan sobre el peñasco, lejos de cualquier unión con el suelo—, no de cómo se
+  autora relieve. Entran en el punto 2.
+- **Las instancias del editor no tienen collider.** `src/visuals/instances.rs` es
+  sólo visual, y §20 impide que presentación arme colliders: el dueño sería
+  `src/world/`. **Esto bloquea el punto 1** si el acantilado se quiere *colocar*
+  en vez de declarar en una tabla como `crags.rs`.
+- **No hay dónde marcar "el jugador no va acá".** `TerrainKind` no tiene telón de
+  fondo, así que ninguna medición puede excluir el relieve inalcanzable
+  autorado a propósito, y por eso ninguna reparación global es segura.
+- **La deriva al caminar** — 7,1° de desvío con 85,6% del avance pedido, sin
+  causa confirmada; el camino obvio (`Ignore` en `MoveAndSlide`) ya se descartó.
+- **La gravedad hacia el triángulo** — su observación jugando, sin verificar.
+- **Slide está apagado, no borrado.**
+- **Nada de todo esto está commiteado**, y son ~40 archivos.
+- **Este archivo tiene 1.800 líneas contra un tope de 500**, y hace tres sesiones
+  que lo aviso sin podarlo — es su historial y no lo borro por mi cuenta.
+
+## 2026-08-23 (cierre) — el terreno no tiene que ser escalable
+
+**La conclusión que reordena todo lo demás de hoy**, y vive con su plan en
+`PLAN_ESCALADA_Y_RELIEVE.md`: un heightmap es `y = f(x,z)` y **no puede
+representar una vertical ni un saliente**, así que el "acantilado" esculpido
+nunca fue una pared — era una rampa del ancho de la celda. Lo escalable son
+objetos: paredes, rocas, columnas, que es lo que este juego ya escalaba antes.
+
+Toda la persecución del sensor sobre terreno esculpido de esta sesión
+—`casts=000000` en 1274 de 1286 ticks, la normal saltando 20,6°— atacaba el
+síntoma de tratar una rampa como pared. **Lo que sobrevive y no depende de esto:**
+los 45°, la constante unificada y su costura, la histéresis y el latch, el kernel
+del pincel en metros, y `clamp_against_face`.
+
+Las tres fases —alcance proporcional a la inclinación, límites de autoría del
+heightmap, y lo escalable como objeto con collider— están en el plan, con lo
+decidido y lo que falta decidir separado.
+
+## 2026-08-23 (noche) — perillas en vivo, la grilla a 0,5 m, y el presupuesto en su unidad
+
+**Las perillas, en F1 y desde el entorno.** Siete números que las mediciones
+pusieron en duda dejaron de ser constantes: la banda de histéresis del suelo, la
+gracia del latch, el alcance y el cono del sensor de escalada, y los tres de
+`Slide`. Pestaña **"Locomoción"** con `−` valor `+` por fila, y
+`BOF_TUNING="nombre=valor,..."` para fijarlas desde el arranque — que es lo que
+permite que una captura o un banco reproduzcan una configuración sin mouse. Cada
+valor tiene rango, y uno fuera de él **se rechaza nombrando el motivo**; un
+nombre que no existe lista los válidos. Cada click se loguea: una perilla movida
+sin registro es un experimento que nadie puede repetir.
+
+Dos detalles que no son cosméticos. La fila muestra **el valor vivo del actor**,
+no el del recurso: el recurso sólo guarda lo que alguien tocó, así que una
+perilla sin tocar mostraría vacío mientras el juego corre con un número
+perfectamente real. Y son dos botones en vez del click-que-avanza-un-paso del
+resto del panel, porque afinar es ir y volver alrededor de un valor.
+
+**El diseño se corrigió antes de escribirlo:** la primera versión era un recurso
+global que los motores leerían, y eso (a) aplanaba a un valor único perfiles que
+son **por actor** —tres de las siete ya eran campos de `LedgeSensing`— y (b)
+habría hecho panickear los tests headless de monturas, que arman su `App` sin
+`MovementPlugin`. La versión que quedó **escribe los componentes** desde
+`Update`: nada en el tick fijo gana un `Res<>`, y cada actor conserva su perfil.
+
+**Y tenía un bug que sólo un test encontró:** el recurso sólo está `is_changed()`
+el frame después de insertarse, pero el jugador nace al entrar a la escena —
+varios frames después. Las perillas se logueaban como aplicadas y **no alcanzaban
+a nadie**. Ahora también se aplican a un actor recién nacido, con su test.
+(El primer intento tampoco logueaba: parseaba antes de que Bevy instalara el
+`LogPlugin`.)
+
+**`FLOOR_MIN_UP_DOT` era dos constantes y dos convenciones.** Una copia vivía en
+`mounts/lifecycle.rs`, y de los cuatro lugares que la leían, dos comparaban con
+`>` y dos con `<`: una cara **exactamente** en el límite no era ni pisable ni
+escalable. Inofensivo a 60°, donde nada cae justo ahí; no a 45°, que es el valor
+que producen las fixtures de test. Hoy es una función, `is_walkable_floor`, con
+un test del borde.
+
+**Histéresis y latch, en `GroundSensing` (por actor).** Salir del piso cuesta
+`slope_hysteresis_dot` más que entrar; `ground_grace_ticks` tolera N ticks sin
+piso antes de declarar el cuerpo en el aire. **Los defaults los dejan inertes**,
+así que el comportamiento no cambió: se encienden con la perilla. El latch **no**
+reemplaza el forzado de escaleras — una gracia finita soltaría el cuerpo a mitad
+de una escalera larga.
+
+**El pincel dejó de depender de la resolución.** `neighbour_average` promediaba
+los 4 vecinos **en índices**, o sea con radio de una celda. A 0,5 m su alcance se
+habría encogido 5× y un trazo sostenido daría una **púa** donde hoy da un domo —
+el mismo fallo por el que se descartó `CELLS = 64`. Ahora el kernel está en
+metros; a 2,5 m es idéntico al anterior, y hay un test que lo fija.
+
+**`CELLS` 128 → 640 (celda de 0,5 m), y el criterio quedó escrito.** El número no
+sale del tamaño del mundo sino del cuerpo y de dos constantes que ya existían:
+`editor::MIN_RADIUS` es 2 m y un pincel necesita ~4 puntos de ancho para modelar
+algo; y `slope_deg_at` toma su diferencia sobre 0,5 m fijos, que tiene que quedar
+dentro de una celda o la función cambia de estimador en silencio —y alimenta la
+siembra de pasto—. A 2,5 m una repisa de vault (0,3–1,4 m) era **inesculpible**.
+
+**El presupuesto pasó a la unidad correcta, con el precedente de la pradera.** El
+terreno salió de la suma por escena: no es algo que un nivel declare —es la misma
+grilla en las seis escenas, y su resolución la decide la locomoción, no el
+contenido—, así que sumarlo hacía leer "seis escenas excedidas" cuando lo que
+cambió fue una constante compartida. Tiene su techo propio y **la deuda queda
+declarada**: 819.200 triángulos, sin chunkear y sin LOD, siempre en frame.
+
+**`Slide` dejó de girar el cuerpo.** Al entrar rotaba al jugador para mirar
+cuesta abajo, lo que al rozar una cara empinada lo arrancaba de su dirección de
+marcha — se leía como que el estado lo agarraba, no como una pared que lo frena.
+Y ahora el motor filtra por `SlideMovement`, no por `AirborneMovement`, así que
+tener el estado es una capacidad declarada; el caballo recibe el suyo (prestado
+del jugador, sin validar) para no volver a `Fall`, que lo lanzaba rampa arriba.
+
+### Lo que quedó abierto
+
+**`Slide` quedó apagado** (2026-08-23, decisión del usuario: *"apaga slide, no lo
+saques pero apagalo, porque no es como BOTW o genshin funciona. Si no se puede
+caminar en la pared, fall es lo correcto, a no ser que climb esté activado y
+estemos mirando hacia la pared"*). El apagado es la ausencia de `SlideMovement`
+en el spawn, no un flag: `propose` filtra por la capacidad. El motor queda, con
+su razón escrita, por si alguna vez se autora un resbalón de roca mojada o de
+estamina agotada.
+
+**Y apagarlo devolvía el rebote hacia arriba**, que era real y estaba medido: en
+`Fall`, `move_and_strip` proyecta la velocidad contra la cara y convierte el
+avance en altura (+1,26 m/s sobre una cara de 62,9°). Lo responde
+`fall::clamp_against_face`: sobre una cara no pisable, una proyección que sube es
+un artefacto y su componente vertical se va; lo que cruza la cara no se toca.
+Seis tests, incluido un barrido de 1080 aproximaciones.
+
+**Y el hallazgo que destapó la resolución, que hay que decidir.** Con celdas de
+0,5 m, `only_the_cliff_brush_carves_a_climbable_wall` **falla**: diez segundos de
+`raise_area` sostenido llegan a **61,88°**, donde a 2,5 m medían 22°. No es un
+bug del pincel ni del test: `steepest_face_degrees` mide entre vértices vecinos
+con el espaciado real, así que a 2,5 m promediaba el gradiente sobre 2,5 m y lo
+subestimaba. **El pincel de elevar siempre hizo caras así de empinadas; la grilla
+no podía mostrarlas.**
+
+La consecuencia es de diseño, no de código: `raise_area` ahora produce paredes
+escalables, que es justo lo que ese test dice que no debe hacer. Y su mensaje de
+error sugiere borrar `carve_area`, que sería la conclusión **equivocada**. Las
+dos salidas —hacer el relax más fuerte para que el domo vuelva a ser suave, o
+aceptar que elevar sostenido hace acantilados y `carve_area` sobra— son del
+usuario. **El test queda en rojo a propósito hasta que se decida**, porque
+pintarlo de verde escondería el hallazgo.
+
+**El límite caminable está en 45°**, el default de Unity y Unreal.
+`WALKABLE_LIMIT_DEG` y `FLOOR_MIN_UP_DOT` son el mismo umbral escrito dos veces
+—`cos` no es `const`— y un `const` assert rompe el build si alguien mueve uno
+sin el otro.
+
+Se demoró dos rondas de más: quedó como *"decidido pero sin aplicar"* esperando
+una confirmación que el usuario ya había dado dos veces, y mientras tanto él
+siguió caminando por caras de 60° preguntándose por qué no se arreglaba. **Un
+pendiente no se disfraza de decisión ajena.**
+
+Al aplicarlo rompieron los tres tests anunciados, y los tres por la misma razón:
+afirmaban **ángulos literales** en vez de escribirse contra el umbral.
+`the_standable_limit_is_the_walkable_limit` decía que 59° se pisa; el del cono
+decía *"45° se camina"*, que a 45° de límite ya no es cierto; y el reporte de
+pendientes horneaba 60.0 **y sólo imprime**, así que habría seguido midiendo la
+línea vieja sin fallar nunca. Ahora los tres leen `WALKABLE_LIMIT_DEG`, y hay uno
+nuevo para la costura que `is_walkable_floor` unificó: el límite exacto cuenta
+como piso de los dos lados.
+
+**Lo que el usuario tiene que ver jugando:** la superficie no caminable del
+sandbox pasa de 2,07% a 4,51%, y en el pozo profundo —medido antes de que él lo
+editara— 240 de 240 ticks quedaban sobre el límite: no se sale caminando.
+**Lo que `CELLS` no arregla, y conviene no esperar:** el relieve ya esculpido no
+mejora. El remuestreo es bilineal —correcto para subir resolución, no inventa
+nada—, pero subdividir cada faceta en sub-facetas deja los quiebres en las mismas
+costuras. La resolución nueva sirve para **lo que se esculpa después**.
+
+**Y lo que se canceló:** el plan de atacar la deriva devolviendo
+`MoveAndSlideHitResponse::Ignore` para planos de piso. Leído el algoritmo de
+Avian, `pull_back` devuelve 0 cuando el cuerpo ya está a distancia de piel, así
+que las iteraciones siguientes no consumen tiempo ni avanzan: **congela al
+jugador en una rampa**, y el callback es compartido por los once motores. La
+deriva sigue abierta (7,1° de desvío, 85,6% del avance) y necesita otro camino.
+
+## 2026-08-23 (tarde) — el zumbido no era del sensor: a la máquina le faltaba un estado
+
+Tres corridas jugadas por el usuario, con el juego lanzado desde la sesión y el
+log leído acá. Todo lo que sigue está **medido**, con el conteo al lado.
+
+**El desglose que nadie había leído.** `GroundFacts` ya guardaba `probe_hit` /
+`slope_ok` / `ascend_dot` por separado, y el log ya los imprimía en cada flip —
+pero bajo el canal `transitions`, no `flips` (`LogFactFlips` alimenta otro
+sistema). Una corrida bastó: de los 102 flips `grounded ON→OFF`, **100 eran
+`probe_hit=true slope_ok=false`**. El probe encontraba el suelo y lo rechazaba
+por pendiente. `on_wall=false` en los 206 flips y el hueco clavado en
+0,0203–0,0205 mataron de una vez las otras tres hipótesis, incluida la de las
+aristas internas del heightfield.
+
+**El instrumento mentía en un campo.** La línea imprimía `n=(0.00,1.00,0.00)`
+en todos esos flips porque `ground.rs` hace `floor_normal.unwrap_or(Vec3::Y)`:
+al rechazar la normal, el log mostraba el *fallback*. La normal real hubo que
+despejarla de la velocidad (`v_proj = v - (v·n)n`), y dio **62,9°** — una cara
+apenas por encima del límite de 60°. Ahora `GroundFacts::probe_normal` guarda la
+normal cruda y el log la usa.
+
+**El terreno explica por qué es la regla y no la excepción.** Leyendo el
+collider con rayos, 101.124 muestras en grilla de 1 m sobre el cañón autorado:
+el mapa es 80,4% plano, pero de todo lo que pasa los 60°, **el 68% cae en la
+banda 60–70°** (1423 de 2103 muestras). El test que lo mide vive en
+`world::terrain::tests::report_how_often_the_authored_relief_crosses_the_walkable_limit`.
+
+**El defecto de fondo: `Fall` reclamaba cuerpos que no estaban en el aire.** De
+869 ticks en `Fall`, **688 (79%) tenían el probe tocando superficie**. `Fall`
+aplica gravedad libre y control de aire, y deja que `move_and_slide` proyecte
+esa velocidad contra la cara — lo que **lanza el cuerpo rampa arriba**: el ciclo
+capturado entra a `Fall` subiendo a 1,26 m/s, con la velocidad derrumbándose de
+3,21 a 1,53 m/s en un tick. Ése era el zumbido, y también la deriva debajo.
+
+**El arreglo es un estado nuevo, `Slide`**, decidido por el usuario entre cuatro
+opciones. Reclama el cuerpo cuando el probe toca una cara que no pasa el filtro
+de 60°: gana a `Fall` en peso, pierde contra `Walk` en cuanto la superficie es
+pisable, y cede a `Climb` porque escalar es `PlayerRequested`. No se tocó el
+umbral de 60° ni nada validado el día anterior.
+
+| | antes | con `Slide` | con el latch arreglado |
+| --- | --- | --- | --- |
+| flips de `grounded` por 1000 ticks | 25,8 | 24,2 | **4,6** |
+| tiempo en `Fall` | 10,9% | 0,42% | **0,02%** |
+| ticks de `Slide` con velocidad hacia arriba | — | 0 de 1300 | 1 de 159 |
+
+**Dos errores propios que atraparon los tests, no el playtest.** El primero:
+la versión inicial de `slide_along_face` usaba la proyección `v - (v·n)n`, que
+es *exactamente* el mecanismo que lanza el cuerpo hacia arriba — habría
+reproducido el bug dentro del motor escrito para arreglarlo. El segundo:
+separaba la componente de contorno usando el descenso **ya recortado**, así que
+la parte cuesta arriba sobrevivía entera. Hoy hay un test que barre 1080
+aproximaciones (360 direcciones × 3 velocidades) y ninguna sale subiendo.
+
+**Y un tercero que sólo apareció jugando:** hacer que entrar en `Slide` limpiara
+el latch de escalar (por si una escalada sin estamina se reenganchaba sola)
+**rompió escalar por completo** — `Climb` cayó de 1829 ticks a 21. `Slide`
+parpadea en tramos de 1–3 ticks justo al pie de las paredes, así que borraba el
+latch precisamente donde el jugador lo usa. Revertido: `Slide` es neutral. La
+retención del latch pasó del 5% al 60% de los ticks de `Slide`.
+
+**Efecto colateral bueno.** El motor nuevo subía las ambigüedades de scheduling
+de 113 a 127, y la regla dice que subirlas se discute. Resultó que 78 de las 113
+eran los `propose` entre sí — una carrera que nunca existió, porque
+`arbitration_matrix` ya prohíbe los empates. Encadenándolos el número **bajó a
+36**, y la constante quedó ahí.
+
+### Lo que sigue abierto
+
+**`Slide → Climb` no engancha, y ya no es el latch.** Medido en la última
+corrida: el jugador apretó escalar en **96 de 159 ticks** de `Slide`, y
+`can_climb` fue **false en los 159**. El sensor no reconoce como iniciables las
+caras sobre las que se desliza — mismo patrón que el 2026-08-22, donde empezar
+exige la cintura y sólo la *continuación* acepta rodilla/cintura/pecho. La única
+entrada a `Climb` de la corrida salió de `Sprint`, con `slide` y `climb`
+co-proponiendo y `climb` ganando: la prioridad funciona, el sensor no llega.
+
+**La deriva al caminar sigue, y el instrumento la escondía.** Medido sobre 2639
+ticks: el desplazamiento real difiere **7,1°** de la velocidad que el motor
+pide, y sólo ocurre el **85,6%** del avance pedido. O sea la velocidad está bien
+y el cuerpo va a otro lado — no es `align_with_floor`. Descartados con datos:
+`snap_to_ground` (dispara en el 1% de los ticks; hueco medio 0,011 contra umbral
+0,02) y el contacto de pared (`on_wall=false` en el 100% de los ticks de
+`Walk`). Queda el sweep de `move_and_slide` proyectando contra planos de
+contacto cuya normal no es "pared" (`|n.y| ≥ 0,2`) y por eso nunca encienden
+`on_wall` — y como `on_wall` está apagado, `ground_drive_step` restaura la
+velocidad original y descarta la proyectada, así que **la velocidad reportada
+jura que el cuerpo va derecho mientras se va de costado**. Candidato a probar en
+banco, no en el juego: que el motor de piso devuelva
+`MoveAndSlideHitResponse::Ignore` para los planos que ya son piso caminable.
+
 ## 2026-08-23 — la escalada dejó de fallar, y el instrumento dejó de depender de la memoria
 
 Tres sesiones jugadas seguidas, cada una leyendo el log de la anterior. El

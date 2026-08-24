@@ -84,7 +84,7 @@ guardarán aparte del `TerrainFile`.
 
 | Capa | Con qué | Dónde termina el dato |
 |---|---|---|
-| **Relieve** | Siete brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`, `Acantilado`), radio con F+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 128×128 celdas |
+| **Relieve** | Siete brushes (`Elevar`, `Suavizar`, `Aplanar`, `Rampa`, `Rugosidad`, `Terrazas`, `Acantilado`), radio con F+rueda | `heights: Vec<f32>` sobre las esquinas de una grilla de 640×640 celdas (0,5 m por celda) |
 | **Semántica** | Un brush que pinta `TerrainKind` (Soil, ShortGrass, TallGrass, Rock, Sand) | `kinds: Vec<TerrainKind>` sobre las celdas, run-length en el archivo |
 | **Persistencia** | `Ctrl+S` / `Ctrl+L`, escritura atómica (temporal + `rename`) | Un `.ron` por escena (`assets/game/world/*.ron`) |
 | **Deshacer** | Una entrada por trazo, hasta 32, cubriendo las dos capas | Snapshots en memoria (~2,7 MB de historial) |
@@ -96,7 +96,7 @@ esto se pueda ampliar sin reescribirlo:
 - **La grilla es dueña de cómo cambia.** Cada brush es un método de `Terrain`; el
   editor sólo decide dónde y cuándo dispara. Un brush nuevo es una fila en
   `BrushKind` más un método — nunca un sistema nuevo.
-- **El archivo se remuestrea en espacio de mundo.** Guardado con `CELLS = 128` y
+- **El archivo se remuestrea en espacio de mundo.** Guardado con un `CELLS` y
   cargado con otro valor, las alturas se reinterpolan **en metros**, no en
   fracción de grilla. Cambiar la resolución no huerfaniza los niveles.
 - **La semántica nunca se interpola.** No hay valor entre "roca" y "pasto": al
@@ -206,12 +206,12 @@ conoce: no hay vista cenital, ni encuadre del mapa entero, ni forma de ver los
 
 ### 6. Cada edición reconstruye el terreno entero
 
-Malla y collider se regeneran completos con cada trazo. A 128 celdas está bien
-—y está anotado como decisión consciente en `terrain/mod.rs`— pero es el techo:
-subir la resolución o el tamaño del mundo hace que el chunking deje de ser
-opcional. También es donde vive la deuda C1 (~130 allocations por tick en
-`rebuild_terrain_collider`).
-
+Malla y collider se regeneran completos con cada trazo. **A 640 celdas ese techo
+dejó de ser teórico**: son 819.200 triángulos de malla sin indexar y un
+heightfield de 411k alturas por frame de pincel, más ~640 allocations en
+`rebuild_terrain_collider` (la deuda C1, que escaló con la grilla). Si el pincel
+se siente pesado, el chunking dejó de ser opcional — y esa es la medición que
+falta, no una sospecha.
 ---
 
 ## Cómo se completa
@@ -404,13 +404,24 @@ que nadie las vuelva a perseguir:
   en `GameLayer::Default` justamente *"where ledge sensing can see it"*. El
   sensor podía verlo perfectamente; lo que no había era pared.
 
-**Y la respuesta a la tercera:** la malla **no** gana topología. `CELLS = 128`
-sobre `WORLD_SIZE = 320` da **2,5 m entre puntos, siempre**; un cambio violento
-sólo empina el tramo entre dos puntos que ya existían. Eso deja un techo real —
-una pared siempre tendrá 2,5 m de transición horizontal—, pero 86° alcanza de
-sobra para escalar. Subir `CELLS` cuadruplicaría grilla y collider, y el rebuild
-completo ya está anotado como el techo de esta herramienta.
+**Y la respuesta a la tercera:** la malla **no** gana topología por esculpir más
+fuerte; el espaciado es el que es, y un cambio violento sólo empina el tramo
+entre dos puntos que ya existían.
 
+**Ese espaciado se corrigió el 2026-08-23: de 2,5 m a 0,5 m** (`CELLS` 128 →
+640). El párrafo de arriba lo trataba como un techo aceptable porque 86° alcanza
+para escalar, y eso sigue siendo cierto — pero no era el único costo. A 2,5 m una
+repisa de vault (0,3–1,4 m de relieve) **no se podía autorar**: no había puntos
+de grilla donde ponerla. El número nuevo sale de dos constantes de este
+documento y del sensor, no de una intuición: `MIN_RADIUS = 2 m` necesita ~4
+puntos de ancho para modelar algo, y `slope_deg_at` mide sobre un paso fijo de
+0,5 m que tiene que caber en una celda. Las dos dan celda ≤ 0,5 m.
+
+**Y hubo que arreglar el pincel primero.** `neighbour_average` promediaba los
+cuatro vecinos **en índices**, o sea con radio de una celda: a 0,5 m su alcance
+se habría encogido 5× y un trazo sostenido de elevar habría dado una **púa**
+donde antes daba un domo — el mismo fallo por el que se descartó `CELLS = 64`.
+Hoy el kernel se expresa en metros.
 ## Dos contextos, no un modo: `BOF_MODE=editor` (2026-08-22)
 
 ```sh
@@ -503,3 +514,63 @@ clavada en el origen.
 no hay vista cenital ni encuadre del mapa entero. Es el ítem que de verdad hace
 que la herramienta se sienta un editor, y sigue pendiente.
 
+
+## El heightmap no es donde van los acantilados (2026-08-23)
+
+**Decisión: el terreno no es escalable.** Lo escalable son objetos colocados.
+El plan de migración vive en `PLAN_ESCALADA_Y_RELIEVE.md`; acá queda lo que
+cambia para quien autora.
+
+**Por qué, en una línea:** un heightmap es `y = f(x,z)` y no puede plegarse sobre
+sí mismo, así que **no puede representar una vertical ni un saliente**. Lo que
+este documento llamó acantilado siempre fue una rampa del ancho de una celda.
+
+**La regla de autoría, corregida el mismo día.** La primera versión de esta
+sección decía *"ninguna diferencia de altura entre puntos vecinos sobre medio
+metro"*, y estaba mal por dar por muerto todo lo empinado. **Vault y mantle
+existen**: `LedgeSensing::PLAYER` pasa caras de 0,3 a 1,4 m saltando y hasta 2,5 m
+mantleando. Una contrahuella empinada no es geometría muerta — se sube. Y la
+regla vieja habría **destruido el pincel de Terrazas**, que a 0,5 m de celda
+convierte un escalón de 2 m en una rampa de 45°.
+
+Lo muerto no es lo empinado: es lo empinado **y alto**.
+
+> **Ningún tramo empinado continuo puede acumular más de
+> `MAX_UNWALKABLE_RISE_METRES` de subida** — el alcance del mantle, 2,5 m hoy.
+> "Tramo continuo" son celdas vecinas seguidas cuya pendiente pasa el límite
+> caminable; una huella caminable en el medio corta el tramo y lo vuelve a cero.
+
+Lo mide `Terrain::steepest_run` (`world/terrain/traversable.rs`), y una escalera
+de contrahuellas de 2 m la pasa entera porque cada escalón se cuenta solo.
+
+**Qué produce cada pincel**, medido el 2026-08-23 sosteniendo diez segundos a
+fuerza máxima:
+
+| pincel | radio 6 m | radio 40 m |
+| --- | --- | --- |
+| Elevar | 1,53 m — se anda | 21,37 m — **pared** |
+| Acantilado | 45 m — pared, a propósito | 45 m |
+| Terrazas sobre ladera | 1,98 m — se anda | — |
+
+**El editor avisa mientras esculpís, y repara cuando se lo pedís.**
+
+- El anillo del pincel se pone rojo y el HUD dice la altura del tramo en cuanto
+  el trazo pasa el tope. No clampea: al radio por defecto **no hace falta**
+  (1,53 m contra un tope de 2,5).
+- **`Ctrl+R` deja el mapa recorrible.** Derrite todo tramo intransitable hasta
+  que se pueda recorrer entero. Va al historial, así que `Ctrl+Z` lo devuelve, y
+  no guarda solo — decidís vos si el resultado te sirve antes de `Ctrl+S`.
+
+**Cómo funciona la reparación, porque el detalle importa:** la región afectada
+**crece sola**. Un desnivel de 40 m necesita 40 m de horizontal para volverse
+caminable, así que relajar sólo las celdas empinadas se estanca — la banda es más
+angosta que la ladera que hay que construir. Por eso lo marcado se acumula y se
+dilata una celda por pasada. Medido el 2026-08-23 sobre `sandbox.ron`: **35
+pasadas, 61.109 puntos, 68,83 m → 2,36 m**.
+
+Lo que ya se andaba sale intacto: una terraza o una loma nunca forman tramo
+intransitable, así que la reparación no las toca.
+
+**`carve_area` (el pincel Acantilado) se queda, con propósito nuevo:** telón de
+fondo. Lo que produce no es un lugar al que el jugador vaya, es silueta. Por eso
+es el único pincel que no dispara el aviso.

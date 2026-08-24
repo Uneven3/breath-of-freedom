@@ -89,10 +89,28 @@ Ahora la guiñada se mide contra la normal aplanada al plano horizontal
 eje del cuerpo con alcance fijo (`wall_detection_reach`, 0,65 m), así que en una
 cara inclinada la superficie se aleja `Δaltura / tan θ` y el cast de la cabeza
 —1,2 m por encima del de la rodilla— falla. El umbral **efectivo** para
-`head_hit` resulta ser **~77°**, aunque la configuración declare 60. Se
-reemplaza por `leans_back_out_of_reach`, que usa `is_vaultable` como
-discriminador: separa cara alta de bordillo igual que `head_hit`, así que el
-contrato de vault no se afloja y no cuesta un solo cast nuevo.
+`head_hit` resulta ser **~77°**, aunque la configuración declare 60.
+
+*Primer intento (2026-08-22), ya retirado:* `leans_back_out_of_reach`, que usaba
+`is_vaultable` como discriminador. No costaba un cast, pero **reemplazaba** al
+cast que fallaba en vez de arreglarlo: nunca comprobaba que hubiera superficie a
+la altura de la cabeza, así que una roca puntiaguda de 1 m —demasiado empinada
+para caminarla, con el tope no pisable, o sea tampoco bordillo— se declaraba
+escalable sin tener pared donde agarrarse.
+
+*Lo que hay desde el 2026-08-23:* `probe_face_overhead`. Un séptimo cast que sale
+**del contacto de la cintura y viaja contra la normal de la cara**, no del eje
+del cuerpo. Ese cambio de origen saca la trigonometría entera del problema: el
+punto a `Δaltura` sobre el contacto queda exactamente `Δaltura · normal.y` afuera
+del plano —un producto, no una tangente— y la guiñada deja de entrar porque el
+cast ya no viaja en la dirección en que mira el actor. Sin división, sin
+singularidad al acercarse al límite caminable, y con el alcance por debajo de
+0,77 m: **es el gate de caminabilidad el que lo acota**, porque una cara que no
+se camina tiene `normal.y < 0,707` por definición.
+
+El sondeo alimenta sólo `can_climb`. `has_head_hit` **se queda con el cast de
+perfil crudo** porque `climb.rs` lo usa como veto de ápice (`near_apex`), que es
+otra pregunta: ensancharlo ahí soltaría la escalada justo al coronar.
 
 **Bug 3, en el motor y no en el sensor — la escalada subía en vertical pura.**
 `v.y = ±speed` sin componente en el plano: contra una cara de 70° la superficie

@@ -10,6 +10,7 @@
 
 use bevy::prelude::*;
 
+pub mod crags;
 pub mod day_night;
 pub mod forest;
 pub mod layout;
@@ -60,6 +61,7 @@ impl Plugin for WorldPlugin {
                     layout::setup_targets.run_if(crate::scene::scene_has(|c| c.targets)),
                     layout::setup_pickups.run_if(crate::scene::scene_has(|c| c.pickups)),
                     layout::setup_forest.run_if(crate::scene::scene_has(|c| c.forest)),
+                    crags::setup_crags.run_if(crate::scene::scene_has(|c| c.crags)),
                 )
                     // `Actors`, not `Ground`: every one of these reads the
                     // terrain to sit on it, and in `Ground` the terrain is a

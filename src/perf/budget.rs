@@ -235,6 +235,9 @@ mod tests {
             if scene.contents.forest {
                 triangles += forest;
             }
+            if scene.contents.crags {
+                triangles += crate::world::crags::triangle_count();
+            }
             assert!(
                 triangles <= MOBILE_TRIANGLES,
                 "scene {} declares {triangles} triangles, over its {MOBILE_TRIANGLES} ceiling",

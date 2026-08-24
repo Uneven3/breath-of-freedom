@@ -90,6 +90,8 @@ pub struct Contents {
     pub card_mesh_lab: bool,
     /// The graybox enemy pair.
     pub enemies: bool,
+    /// Peñascos escalables: rocas, paredes y acantilados irregulares.
+    pub crags: bool,
     /// A rideable horse.
     pub horse: bool,
 }
@@ -105,6 +107,7 @@ impl Contents {
         meadow: false,
         card_mesh_lab: false,
         enemies: false,
+        crags: false,
         horse: false,
     };
 }
@@ -158,6 +161,7 @@ pub const SCENES: &[SceneDef] = &[
         hint: "curso y escaleras — locomoción sin nada más en pantalla",
         terrain_file: "assets/game/world/traversal.ron",
         contents: Contents {
+            crags: true,
             course: true,
             stairs: true,
             ..Contents::NONE
@@ -205,6 +209,7 @@ pub const SCENES: &[SceneDef] = &[
         hint: "World Lab: relieve y biomas — pintar cobertura y medir",
         terrain_file: "assets/game/world/sandbox.ron",
         contents: Contents {
+            crags: true,
             meadow: true,
             ..Contents::NONE
         },
@@ -216,6 +221,7 @@ pub const SCENES: &[SceneDef] = &[
         hint: "todo junto: curso, escaleras, bosque, pradera, enemigos, caballo",
         terrain_file: "assets/game/world/world.ron",
         contents: Contents {
+            crags: true,
             course: true,
             stairs: true,
             targets: true,

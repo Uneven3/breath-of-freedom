@@ -31,7 +31,7 @@ const VAULT_MATERIAL: &str = "GrayboxVault";
 /// against the world origin. On flat ground both anchors agree exactly, which
 /// is why the tables did not have to change a single number.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Anchor {
+pub(super) enum Anchor {
     /// `y` is a height over the terrain sampled beneath the piece.
     Ground,
     /// `y` is absolute. For pieces too large to sit on any one sample: the
@@ -293,7 +293,7 @@ pub(super) fn setup_sky(
 /// the ladder and the ramps. One of the pieces a scene row can ask for
 /// (`crate::scene`), so the traversal box can have it without the forest and
 /// the sandbox can have none of it.
-trait GroundHeight {
+pub(super) trait GroundHeight {
     fn sample_height(&self, world_xz: Vec2) -> Option<f32>;
 }
 
@@ -315,7 +315,7 @@ impl GroundHeight for super::TerrainAccess<'_, '_> {
 /// height at the piece's own XZ. Flat ground samples 0 and the position comes
 /// back unchanged, which is why sculpting a scene cannot silently move a course
 /// that was authored before the terrain existed.
-fn settle(pos: Vec3, anchor: Anchor, ground: Option<&impl GroundHeight>) -> Vec3 {
+pub(super) fn settle(pos: Vec3, anchor: Anchor, ground: Option<&impl GroundHeight>) -> Vec3 {
     match (anchor, ground) {
         (Anchor::Ground, Some(terrain)) => Vec3::new(
             pos.x,

@@ -224,24 +224,30 @@ mod scheduling_audit {
     /// Listadas por nombre el 2026-08-04 (activando la feature `debug` de
     /// `bevy_ecs` un rato, porque si no los nombres salen como placeholders):
     ///
-    /// - **78 son los trece `propose` escribiendo el `ProposalBuffer` del mismo
-    ///   actor.** No son deuda: la arbitración compara `(Priority, weight)` y
-    ///   `weight::co_proposing_motors_never_tie_on_priority_and_weight` prohíbe
-    ///   los empates, con su lista de excepciones mutuamente excluyentes. El
-    ///   orden de push no puede cambiar el ganador.
+    /// - **Los `propose` ya no aparecen.** Eran 78 de las 113 —los trece
+    ///   escribiendo el `ProposalBuffer` del mismo actor— y se resolvieron
+    ///   encadenándolos (`GatherProposals` ahora es `.chain()`). Nunca fueron
+    ///   una carrera real: la arbitración compara `(Priority, weight)` y
+    ///   `arbitration_matrix::co_proposing_motors_never_tie_on_priority_and_weight`
+    ///   prohíbe los empates, así que el orden de push no podía cambiar el
+    ///   ganador. Pero mientras estuvieran contadas, cada motor nuevo subía el
+    ///   número y obligaba a discutir una carrera que no existía — que es
+    ///   exactamente lo que pasó al entrar `slide` (habrían sido 127).
+    ///   Encadenarlos cuesta el paralelismo entre catorce sistemas que hacen un
+    ///   `if` y un `push`.
     /// - **25 son `rebuild_terrain_collider` contra sistemas que mueven
     ///   cuerpos.** Comparten el tipo `Collider`, no las entidades: uno es el
     ///   terreno, los otros son actores.
-    /// - Las 10 restantes se revisaron una por una. Cuatro tenían consecuencia
+    /// - Las 11 restantes se revisaron una por una. Cuatro tenían consecuencia
     ///   observable y se ordenaron (ver los `.after` de `resolve_facing`,
-    ///   `update_lock_on` e `InventorySet::Durability`); las otras seis son
-    ///   brains escribiendo `Intents` de entidades distintas —cubierto por los
-    ///   tests de aislamiento por actor—, el `CastTrace` de debug, y un sistema
+    ///   `update_lock_on` e `InventorySet::Durability`); las otras son brains
+    ///   escribiendo `Intents` de entidades distintas —cubierto por los tests
+    ///   de aislamiento por actor—, el `CastTrace` de debug, y un sistema
     ///   exclusivo, que conflictúa con todo por definición.
     ///
     /// Bajarlo es declarar un orden (`.before`/`.after`) o separar en fases.
     /// Subirlo es agregar una carrera nueva, y eso se discute, no se cuela.
-    const FIXED_UPDATE_AMBIGUITIES: usize = 113;
+    const FIXED_UPDATE_AMBIGUITIES: usize = 36;
 
     #[test]
     fn scheduling_ambiguities_only_shrink() {
@@ -320,7 +326,10 @@ mod scheduling_audit {
             },
         );
 
-        assert!(dot.contains("digraph"), "el volcado no es un grafo Graphviz");
+        assert!(
+            dot.contains("digraph"),
+            "el volcado no es un grafo Graphviz"
+        );
         // Sin la feature `debug` de `bevy_ecs` los nodos salen con nombres
         // genéricos: el archivo se ve perfecto y no se puede leer.
         assert!(

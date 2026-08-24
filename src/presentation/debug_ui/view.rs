@@ -14,7 +14,7 @@ use super::{
     FlythroughButton, KnobButton, KnobText, MaterialLabel, MaterialOmittedText, MaterialRow,
     MaterialSummaryText, MaterialSwatch, MaterialTerrainLabel, MaterialTerrainRow,
     MaterialTerrainSwatch, ReadoutText, ScrollPanel, TabButton, TabPane, TerrainViewButton,
-    TerrainViewText,
+    TerrainViewText, TuningButton, TuningText,
 };
 use crate::debug::MAX_MATERIAL_ROWS;
 use crate::debug::channel::{DebugAction, DebugActionRequest, DebugChannel, DebugChannelToggle};
@@ -23,6 +23,7 @@ use crate::perf::BenchSuite;
 use crate::perf::sequence::{BenchmarkRequest, VantageMode};
 use crate::perf::{FlythroughRequest, PerfKnob, PerfKnobCategory, PerfKnobToggle};
 use crate::visuals::terrain_material::{TerrainDebugView, TerrainDebugViewRequest};
+use bof_domain::movement::tuning::{TuningField, TuningNudge};
 
 use super::ActionButton;
 
@@ -169,6 +170,7 @@ pub(super) fn spawn_debug_ui(mut commands: Commands) {
                         tab_pane(scroll, DebugTab::Grass, grass_section);
                         tab_pane(scroll, DebugTab::Channels, channel_section);
                         tab_pane(scroll, DebugTab::Terrain, terrain_section);
+                        tab_pane(scroll, DebugTab::Locomotion, locomotion_section);
                         tab_pane(scroll, DebugTab::Materials, materials_section);
                         tab_pane(scroll, DebugTab::Actions, action_section);
                     });
@@ -665,4 +667,98 @@ fn action_section(panel: &mut ChildSpawnerCommands) {
                 });
             }
         });
+}
+
+/// Las perillas de locomoción: los números que las sesiones jugadas pusieron en
+/// duda, movibles sin relanzar.
+///
+/// Dos botones por fila en vez del click-que-avanza-un-paso de `PerfKnob`:
+/// afinar es ir y volver alrededor de un valor, y una perilla que sólo sube
+/// obliga a dar la vuelta entera para corregirse medio paso.
+fn locomotion_section(panel: &mut ChildSpawnerCommands) {
+    section_title(
+        panel,
+        "Locomoción",
+        "Se aplican al toque, sobre el perfil del actor. `BOF_TUNING=nombre=valor` \
+         fija los mismos números desde el arranque.",
+    );
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            ..default()
+        })
+        .with_children(|column| {
+            for field in TuningField::ALL {
+                tuning_row(column, field);
+            }
+        });
+}
+
+fn tuning_row(panel: &mut ChildSpawnerCommands, field: TuningField) {
+    let label = field.label();
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            column_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Text(label.to_string()),
+                ThemedText,
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+            ));
+            row.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                ..default()
+            })
+            .with_children(|controls| {
+                tuning_button(controls, field, -1, "−");
+                controls.spawn((
+                    Text("—".to_string()),
+                    ThemedText,
+                    TextFont {
+                        font_size: FontSize::Px(15.0),
+                        ..default()
+                    },
+                    TuningText(field),
+                ));
+                tuning_button(controls, field, 1, "+");
+            });
+        });
+}
+
+fn tuning_button(panel: &mut ChildSpawnerCommands, field: TuningField, steps: i32, glyph: &str) {
+    let glyph = glyph.to_string();
+    panel
+        .spawn(TuningButton { field, steps })
+        .apply_scene(bsn! {
+            @FeathersButton
+            Node { width: Val::Px(34.0), justify_content: JustifyContent::Center }
+            on(activate_tuning)
+            Children [
+                (Text({glyph}) ThemedText TextFont { font_size: FontSize::Px(15.0) })
+            ]
+        });
+}
+
+fn activate_tuning(
+    activate: On<Activate>,
+    buttons: Query<&TuningButton>,
+    mut writer: MessageWriter<TuningNudge>,
+) {
+    if let Ok(button) = buttons.get(activate.entity) {
+        writer.write(TuningNudge {
+            field: button.field,
+            steps: button.steps,
+        });
+    }
 }

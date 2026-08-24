@@ -15,6 +15,7 @@ pub mod proposal;
 pub mod sensing;
 pub mod stamina;
 pub mod state;
+pub mod tuning;
 
 pub const GRAVITY: f32 = 9.8;
 

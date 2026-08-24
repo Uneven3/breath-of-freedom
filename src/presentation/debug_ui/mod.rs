@@ -19,6 +19,9 @@ use crate::debug::channel::{DebugAction, DebugChannel, DebugConfigView};
 use crate::input::ModalInputFocusRequest;
 use crate::perf::{Benchmark, Flythrough, PerfKnob, PerfToggles};
 use crate::visuals::terrain_material::{TerrainDebugState, TerrainDebugView};
+use bof_domain::movement::abilities::SlideMovement;
+use bof_domain::movement::sensing::{GroundSensing, LedgeSensing};
+use bof_domain::movement::tuning::TuningField;
 
 mod hud_menu;
 mod overlay;
@@ -44,17 +47,19 @@ enum DebugTab {
     Grass,
     Channels,
     Terrain,
+    Locomotion,
     Materials,
     Actions,
 }
 
 impl DebugTab {
-    const ALL: [DebugTab; 7] = [
+    const ALL: [DebugTab; 8] = [
         DebugTab::Measurement,
         DebugTab::Render,
         DebugTab::Grass,
         DebugTab::Channels,
         DebugTab::Terrain,
+        DebugTab::Locomotion,
         DebugTab::Materials,
         DebugTab::Actions,
     ];
@@ -66,6 +71,7 @@ impl DebugTab {
             DebugTab::Grass => "Pradera",
             DebugTab::Channels => "Canales",
             DebugTab::Terrain => "Terreno",
+            DebugTab::Locomotion => "Locomoción",
             DebugTab::Materials => "Materiales",
             DebugTab::Actions => "Acciones",
         }
@@ -106,6 +112,17 @@ struct ReadoutText;
 
 #[derive(Component)]
 struct KnobButton(PerfKnob);
+
+/// Un botón de perilla de locomoción: qué campo y en qué sentido lo mueve.
+#[derive(Component, Clone, Copy)]
+struct TuningButton {
+    field: TuningField,
+    steps: i32,
+}
+
+/// El texto que muestra el valor vivo de una perilla de locomoción.
+#[derive(Component, Clone, Copy)]
+struct TuningText(TuningField);
 
 // `Clone, Default`: estos viven dentro de un `bsn!` (etiqueta de un botón de
 // Feathers, `presentation::debug_ui::view`), que los exige aunque el valor
@@ -260,17 +277,32 @@ fn sync_visibility(state: Res<DebugUiState>, mut root: Single<&mut Node, With<De
     }
 }
 
+/// Lectura del perfil vivo del actor para la pestaña de locomoción. Sólo LEE
+/// (§20): la fila muestra lo que el cuerpo está usando, y los botones piden el
+/// cambio por mensaje.
+type TunedActorView<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static GroundSensing,
+        Option<&'static LedgeSensing>,
+        Option<&'static SlideMovement>,
+    ),
+    With<bof_domain::movement::Actor>,
+>;
 #[allow(clippy::type_complexity)]
 fn sync_labels(
     perf: Res<PerfToggles>,
     config: DebugConfigView,
     benchmark: Res<Benchmark>,
     terrain_debug: Res<TerrainDebugState>,
+    tuned: TunedActorView,
     mut texts: ParamSet<(
         Query<(&mut Text, &KnobText)>,
         Query<(&mut Text, &ChannelText)>,
         Query<&mut Text, With<ReadoutText>>,
         Query<(&mut Text, &TerrainViewText)>,
+        Query<(&mut Text, &TuningText)>,
     )>,
 ) {
     for (mut text, knob) in &mut texts.p0() {
@@ -288,6 +320,24 @@ fn sync_labels(
             format!("{} · ACTIVO", view.0.label())
         } else {
             view.0.label().to_string()
+        };
+    }
+    // El valor **vivo del actor**, no el del recurso: el recurso sólo guarda lo
+    // que alguien tocó, así que una perilla sin tocar mostraría vacío mientras
+    // el juego corre con un número perfectamente real.
+    let live = tuned.iter().next();
+    for (mut text, tuning) in &mut texts.p4() {
+        text.0 = match live {
+            Some((ground, ledge, slide)) => format!(
+                "{:.2}",
+                bof_domain::movement::tuning::live_value(
+                    tuning.0,
+                    ground,
+                    ledge,
+                    slide.copied().unwrap_or(SlideMovement::PLAYER),
+                )
+            ),
+            None => "—".to_string(),
         };
     }
     // Button labels are static; only the readout reflects progress.

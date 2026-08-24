@@ -29,6 +29,7 @@ pub mod motors;
 pub mod probe;
 pub mod sensing;
 pub mod services;
+pub mod tuning;
 
 // SPIKE (throwaway, test-only): multi-actor dispatch proof. See spike.rs header.
 #[cfg(test)]
@@ -141,6 +142,12 @@ impl Plugin for MovementPlugin {
         app.add_message::<probe_data::ProbeToggleRequest>();
         app.add_systems(Update, probe::toggle_spawn);
 
+        // Tuning writes the per-actor profiles, so it runs outside the fixed
+        // tick and no motor gains a `Res<>` it could be missing (§18, §20).
+        app.init_resource::<tuning::MovementTuning>();
+        app.add_message::<tuning::TuningNudge>();
+        app.add_systems(Update, (tuning::apply_nudges, tuning::apply_tuning).chain());
+
         app.add_systems(
             FixedUpdate,
             (probe::drive_intents, brain::read_intents)
@@ -163,6 +170,7 @@ impl Plugin for MovementPlugin {
             (
                 motors::walk::propose,
                 motors::fall::propose,
+                motors::slide::propose,
                 motors::sprint::propose,
                 motors::sneak::propose,
                 motors::jump::propose,
@@ -175,6 +183,7 @@ impl Plugin for MovementPlugin {
                 motors::stairs::propose,
                 motors::ladder::propose,
             )
+                .chain()
                 .in_set(MovementSet::GatherProposals),
         );
         app.add_systems(FixedUpdate, arbitrate.in_set(MovementSet::Arbitrate));
@@ -202,6 +211,7 @@ impl Plugin for MovementPlugin {
                 motors::walk::tick_body,
                 motors::sprint::tick_body,
                 motors::fall::tick_body,
+                motors::slide::tick_body,
                 motors::jump::tick_body,
                 motors::auto_vault::tick_body,
                 motors::climb::tick_body,

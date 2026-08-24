@@ -21,6 +21,7 @@ mod debug;
 mod editor;
 mod input;
 mod inventory;
+mod movement_tuning;
 mod perf;
 mod presentation;
 mod scene;
@@ -65,6 +66,10 @@ fn main() -> AppExit {
             perf::PerfPlugin,
             scene::ScenePlugin,
         ));
+    // Después de `DefaultPlugins`: el parser reporta lo que aplicó y lo que
+    // rechazó, y antes de esa línea el `LogPlugin` de Bevy todavía no existe —
+    // los avisos se perderían justo cuando más importan.
+    app.insert_resource(movement_tuning::configured_tuning());
     if mode == scene::AppMode::Editor {
         app.add_plugins(editor::EditorPlugin);
     }
